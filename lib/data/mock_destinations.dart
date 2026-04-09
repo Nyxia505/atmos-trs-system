@@ -1,0 +1,88 @@
+import 'package:atmos_trs_system/models/destination.dart';
+
+/// Mock destinations for the home page. Replace with Firebase/Firestore later.
+List<Destination> getMockDestinations() {
+  return [
+    Destination(
+      id: '1',
+      name: 'Crystal Cove Beach',
+      category: 'Beach',
+      distance: '1.2 km',
+      rating: 4.8,
+      saved: true,
+      imageUrl: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=400',
+    ),
+    Destination(
+      id: '2',
+      name: 'Summit Peak Park',
+      category: 'Mountain',
+      distance: '5.4 km',
+      rating: 4.6,
+      saved: false,
+      imageUrl: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=400',
+    ),
+    Destination(
+      id: '3',
+      name: 'Twin Falls Reserve',
+      category: 'Falls',
+      distance: '3.1 km',
+      rating: 4.9,
+      saved: true,
+      imageUrl: 'https://images.unsplash.com/photo-1432405972618-c60b0225b8f9?w=400',
+    ),
+    Destination(
+      id: '4',
+      name: 'Heritage Old Town',
+      category: 'Historical',
+      distance: '2.0 km',
+      rating: 4.7,
+      saved: false,
+      imageUrl: 'https://images.unsplash.com/photo-1513635269975-59663e0ac291?w=400',
+    ),
+    Destination(
+      id: '5',
+      name: 'Sunset Beach',
+      category: 'Beach',
+      distance: '4.5 km',
+      rating: 4.5,
+      saved: false,
+      imageUrl: 'https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?w=400',
+    ),
+    Destination(
+      id: '6',
+      name: 'Eagle Mountain Trail',
+      category: 'Mountain',
+      distance: '8.2 km',
+      rating: 4.9,
+      saved: true,
+      imageUrl: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=400',
+    ),
+    Destination(
+      id: '7',
+      name: 'Silver Cascade Falls',
+      category: 'Falls',
+      distance: '6.0 km',
+      rating: 4.8,
+      saved: false,
+      imageUrl: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=400',
+    ),
+    Destination(
+      id: '8',
+      name: 'Fort Santiago Museum',
+      category: 'Historical',
+      distance: '1.8 km',
+      rating: 4.6,
+      saved: true,
+      imageUrl: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?w=400',
+    ),
+    Destination(
+      id: '9',
+      name: 'Tangub City Festival',
+      category: 'Festivals',
+      distance: '12 km',
+      rating: 4.9,
+      saved: false,
+      imageUrl: 'https://images.unsplash.com/photo-1533174072545-7a4b6ad7a6c3?w=400',
+    ),
+  ];
+}

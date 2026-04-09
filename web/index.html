@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="ATMOS TRS - Misamis Occidental Tourism Registration System">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="ATMOS TRS">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>ATMOS TRS - Misamis Occidental Tourism</title>
+  <link rel="manifest" href="manifest.json">
+
+  <!-- Google Maps JavaScript API for google_maps_flutter (web). Load without defer so the API is ready before Flutter runs. -->
+  <!-- Replace with your key from Google Cloud Console; enable "Maps JavaScript API" (see README or docs). -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCUX8WWB1AEQma7bF9-20kaExpXbfAxJGA"></script>
+</head>
+<body>
+  <!-- reCAPTCHA container for Firebase Phone Auth (required for web) -->
+  <div id="recaptcha-container"></div>
+  
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

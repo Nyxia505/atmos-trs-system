@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#F97316">
+  <title>360° VR Tour – Oroquieta City Plaza</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Top title bar -->
+    <header id="title-bar" class="title-bar">
+      <h1 id="title-text" class="title-text">Loading…</h1>
+    </header>
+
+    <!-- Collapsible left sidebar: scene list -->
+    <aside id="sidebar" class="sidebar">
+      <button id="sidebar-toggle" type="button" class="sidebar-toggle" aria-label="Toggle scene list">
+        <span class="sidebar-toggle-icon"></span>
+      </button>
+      <div class="sidebar-content">
+        <h2 class="sidebar-heading">Scenes</h2>
+        <ul id="scene-list" class="scene-list"></ul>
+      </div>
+    </aside>
+
+    <!-- 360 viewer -->
+    <div id="pano" class="pano"></div>
+
+    <!-- Zoom controls -->
+    <div class="controls-zoom">
+      <button id="zoom-in" type="button" class="control-btn" aria-label="Zoom in">+</button>
+      <button id="zoom-out" type="button" class="control-btn" aria-label="Zoom out">−</button>
+    </div>
+
+    <!-- Info hotspot popup -->
+    <div id="info-popup" class="info-popup" role="dialog" aria-labelledby="info-title" aria-modal="true">
+      <div class="info-popup-inner">
+        <div class="info-popup-header">
+          <h3 id="info-title" class="info-title"></h3>
+          <button id="info-close" type="button" class="info-close" aria-label="Close">×</button>
+        </div>
+        <p id="info-desc" class="info-desc"></p>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/marzipano@0.10.2/build/marzipano.min.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

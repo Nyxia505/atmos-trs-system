@@ -1,0 +1,95 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    /*
+     * TOURISTS
+     * - Create: doc id must be the signed-in user's uid, and firebaseUid field must match (signup flow).
+     * - Read/Update: any signed-in user (tourism dashboards list all; tighten later if needed).
+     */
+    match /tourists/{touristId} {
+      // Sign-up: doc id must be the caller's Auth uid (field checks alone can fail on web/SDK edge cases).
+      allow create: if isSignedIn() && touristId == request.auth.uid;
+      allow read, update: if isSignedIn();
+      allow delete: if false;
+    }
+
+    /*
+     * VR TOURS — used by tourism dashboard (was blocked by catch-all before).
+     */
+    match /vr_tours/{vrTourId} {
+      allow read: if true;
+      allow create, update, delete: if isSignedIn();
+    }
+
+    /*
+     * NOTIFICATIONS
+     */
+    match /notifications/{notificationId} {
+      allow read: if isSignedIn()
+                  && resource.data.user_id == request.auth.uid;
+      allow create: if isSignedIn()
+                    && request.resource.data.user_id == request.auth.uid;
+      allow update: if isSignedIn()
+                    && resource.data.user_id == request.auth.uid;
+      allow delete: if false;
+    }
+
+    /*
+     * ANNOUNCEMENTS
+     */
+    match /announcements/{announcementId} {
+      allow read: if true;
+      allow create, update, delete: if isSignedIn();
+    }
+
+    /*
+     * USERS — role + isVerified (canonical routing for all Firebase accounts).
+     */
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isSignedIn() && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
+    /*
+     * EMAIL OTPs — one doc per Auth uid; only that user may read/write.
+     */
+    match /email_otps/{otpUid} {
+      allow read, create, update, delete: if isSignedIn()
+                                          && request.auth.uid == otpUid;
+    }
+
+    /*
+     * CHECK-IN collections
+     */
+    match /check_ins/{docId} {
+      allow read, create, update: if isSignedIn();
+      allow delete: if false;
+    }
+
+    match /qr_checkins/{docId} {
+      allow read, create, update: if isSignedIn();
+      allow delete: if false;
+    }
+
+    /*
+     * TOURIST SPOTS
+     */
+    match /tourist_spots/{spotId} {
+      allow read: if true;
+      allow create, update, delete: if isSignedIn();
+    }
+
+    /*
+     * Default deny for everything else.
+     */
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

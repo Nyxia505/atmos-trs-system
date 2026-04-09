@@ -1,0 +1,88 @@
+name: atmos_trs_system
+description: "A new Flutter project."
+
+publish_to: 'none' 
+
+
+environment:
+  sdk: ^3.9.2
+
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  
+  form_validator: ^2.1.1
+  
+  step_progress_indicator: ^1.0.2
+  
+  shared_preferences: ^2.2.2
+  flutter_map: ^6.1.0
+  latlong2: ^0.9.0
+  google_maps_flutter: ^2.7.0
+  webview_flutter: ^4.4.2
+  webview_flutter_android: ^3.14.0
+  webview_flutter_wkwebview: ^3.9.0
+  url_launcher: ^6.2.4
+  firebase_core: ^3.6.0
+  cloud_firestore: ^5.4.4
+  qr_flutter: ^4.1.0
+  uuid: ^4.2.1
+  image_picker: ^1.0.7
+  panorama_viewer: ^2.0.7
+  firebase_auth: ^5.7.0
+  firebase_storage: ^12.3.6
+  image: ^4.1.3
+  mobile_scanner: ^7.2.0
+  printing: ^5.13.0
+  pdf: ^3.10.7
+  http: ^1.2.2
+  share_plus: ^12.0.1
+  path_provider: ^2.1.5
+  cross_file: ^0.3.5+2
+  video_player: ^2.9.2
+  geolocator: ^13.0.2
+  firebase_messaging: ^15.2.10
+  flutter_local_notifications: ^21.0.0
+
+# Run "dart run flutter_launcher_icons" to regenerate after changing the logo
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/images/logo.png"
+  remove_alpha_ios: true
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.0
+
+
+flutter:
+
+  uses-material-design: true
+
+  assets:
+    - assets/images/
+    - assets/vr_tour/
+    - assets/images/CALAMBA.jpg
+    - assets/images/conception.png
+    - assets/images/Panaon.webp
+    - assets/images/PLARIDEL.jpg
+    - assets/images/sinacaban.jpg
+    - assets/images/Tudela Village.webp
+    - assets/Onboarding_screen/Top-Tourist-Destinations-in-Misamis-Occidental.mp4
+
+  fonts:
+    - family: Sacrifice
+      fonts:
+        - asset: assets/fonts/sacrifice-font/SacrificeDemo-8Ox1B.ttf
+    - family: Ananda Black
+      fonts:
+        - asset: assets/fonts/ananda-black-font/AnandaBlackPersonalUseRegular-rg9Rx.ttf
+
+ 

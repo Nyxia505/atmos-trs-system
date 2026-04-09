@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "760231001760",
+    "project_id": "atmos-trs-system",
+    "storage_bucket": "atmos-trs-system.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:760231001760:android:7bec7cd7e6227d84cf13c5",
+        "android_client_info": {
+          "package_name": "com.atmos.trs"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBuYILpEr9o7m3KUblvE90KrPouvK4mHm0"
+        },
+        {
+          "current_key": "AIzaSyAGvHYluEoASOfd4gTZDgk5jzY4Lgqkgyk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:760231001760:android:7a1a7652e422be04cf13c5",
+        "android_client_info": {
+          "package_name": "com.example.flutter_application_1"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBuYILpEr9o7m3KUblvE90KrPouvK4mHm0"
+        },
+        {
+          "current_key": "AIzaSyAGvHYluEoASOfd4gTZDgk5jzY4Lgqkgyk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

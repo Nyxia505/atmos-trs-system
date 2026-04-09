@@ -1,0 +1,18 @@
+{
+  // Flutter / Dart launch configuration
+  // This lets Cursor/VS Code use the Dart debugger instead of a raw Chrome attach.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Flutter",
+      "request": "launch",
+      "type": "dart"
+    },
+    {
+      "name": "Flutter (Run without debugging)",
+      "request": "launch",
+      "type": "dart",
+      "noDebug": true
+    }
+  ]
+}

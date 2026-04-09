@@ -1,0 +1,13 @@
+{
+  "name": "atmos-trs-functions",
+  "description": "Sends FCM push when governor publishes an announcement",
+  "engines": {
+    "node": "20"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^12.6.0",
+    "firebase-functions": "^5.1.1"
+  },
+  "private": true
+}

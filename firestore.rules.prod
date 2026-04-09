@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    /*
+     * PRODUCTION-LEANING RULES
+     * Adjust role checks once custom claims/admin users are in place.
+     */
+
+    match /tourists/{touristId} {
+      // Signup: user can only create own profile.
+      allow create: if isSignedIn()
+                    && request.resource.data.firebaseUid == request.auth.uid;
+
+      // Read/update own record only.
+      allow read, update: if isOwner(resource.data.firebaseUid);
+      allow delete: if false;
+    }
+
+    match /notifications/{notificationId} {
+      allow read, create, update: if isSignedIn()
+                                  && (
+                                    resource.data.user_id == request.auth.uid ||
+                                    request.resource.data.user_id == request.auth.uid
+                                  );
+      allow delete: if false;
+    }
+
+    // Public read announcements, but lock writes.
+    match /announcements/{announcementId} {
+      allow read: if true;
+      allow create, update, delete: if false;
+    }
+
+    // Lock dashboard collections by default until role-based rules are added.
+    match /users/{userId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /check_ins/{docId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /qr_checkins/{docId} {
+      allow read, create, update, delete: if false;
+    }
+
+    match /tourist_spots/{spotId} {
+      allow read: if true;
+      allow create, update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
