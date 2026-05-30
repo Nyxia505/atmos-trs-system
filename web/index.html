@@ -18,7 +18,7 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="ATMOS TRS - Misamis Occidental Tourism Registration System">
+  <meta name="description" content="ATMOS TRS">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -29,17 +29,17 @@
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>ATMOS TRS - Misamis Occidental Tourism</title>
+  <title>ATMOS TRS</title>
   <link rel="manifest" href="manifest.json">
 
-  <!-- Google Maps JavaScript API for google_maps_flutter (web). Load without defer so the API is ready before Flutter runs. -->
-  <!-- Replace with your key from Google Cloud Console; enable "Maps JavaScript API" (see README or docs). -->
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCUX8WWB1AEQma7bF9-20kaExpXbfAxJGA"></script>
 </head>
 <body>
   <!-- reCAPTCHA container for Firebase Phone Auth (required for web) -->
   <div id="recaptcha-container"></div>
-  
-  <script src="flutter_bootstrap.js" async></script>
+  <!-- Load Maps JS before Flutter (blocking) so google.maps exists when the map widget mounts -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyABHzKStpFi9K-nIb0TS4kmedR-9_-zqh4&v=weekly"></script>
+  <!-- TripPlan trip route: DirectionsService (avoids CORS on directions/json) -->
+  <script src="directions_bridge.js"></script>
+  <script src="flutter_bootstrap.js"></script>
 </body>
 </html>

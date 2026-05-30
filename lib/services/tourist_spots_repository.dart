@@ -37,6 +37,19 @@ class TouristSpotsRepository {
     }
   }
 
+  /// Loads a single spot by Firestore document id (QR check-in spot id).
+  static Future<TouristSpotFirestore?> getSpotById(String spotId) async {
+    if (!_isFirebaseInitialized || spotId.trim().isEmpty) return null;
+    try {
+      final doc = await _firestore.collection(_collectionId).doc(spotId).get();
+      final data = doc.data();
+      if (!doc.exists || data == null) return null;
+      return TouristSpotFirestore.fromFirestore(data, doc.id);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// One-time fetch (e.g. for initial load).
   /// Returns empty list if Firebase is not initialized.
   static Future<List<TouristSpotFirestore>> getTouristSpots() async {

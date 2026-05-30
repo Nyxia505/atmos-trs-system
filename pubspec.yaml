@@ -1,5 +1,5 @@
 name: atmos_trs_system
-description: "A new Flutter project."
+description: "ATMOS TRS"
 
 publish_to: 'none' 
 
@@ -21,13 +21,14 @@ dependencies:
   shared_preferences: ^2.2.2
   flutter_map: ^6.1.0
   latlong2: ^0.9.0
-  google_maps_flutter: ^2.7.0
+  google_maps_flutter: 2.10.1
   webview_flutter: ^4.4.2
   webview_flutter_android: ^3.14.0
   webview_flutter_wkwebview: ^3.9.0
   url_launcher: ^6.2.4
   firebase_core: ^3.6.0
   cloud_firestore: ^5.4.4
+  cloud_functions: ^5.1.4
   qr_flutter: ^4.1.0
   uuid: ^4.2.1
   image_picker: ^1.0.7
@@ -46,6 +47,12 @@ dependencies:
   geolocator: ^13.0.2
   firebase_messaging: ^15.2.10
   flutter_local_notifications: ^21.0.0
+  image_gallery_saver_plus: ^4.0.1
+  trip_plan:
+    path: lib/tripplan/main
+  smooth_page_indicator: ^1.1.0
+  cached_network_image: ^3.4.1
+  fl_chart: ^0.69.0
 
 # Run "dart run flutter_launcher_icons" to regenerate after changing the logo
 flutter_launcher_icons:
@@ -61,6 +68,10 @@ dev_dependencies:
   flutter_lints: ^5.0.0
   flutter_launcher_icons: ^0.14.0
 
+# google_maps_flutter_web 0.6+ pulls `google_maps` 8.x (web-only JS interop),
+# which breaks Android/iOS builds. Stay on 0.5.x until upstream fixes platform scoping.
+dependency_overrides:
+  google_maps_flutter_web: 0.5.14+2
 
 flutter:
 
@@ -69,13 +80,7 @@ flutter:
   assets:
     - assets/images/
     - assets/vr_tour/
-    - assets/images/CALAMBA.jpg
-    - assets/images/conception.png
-    - assets/images/Panaon.webp
-    - assets/images/PLARIDEL.jpg
-    - assets/images/sinacaban.jpg
-    - assets/images/Tudela Village.webp
-    - assets/Onboarding_screen/Top-Tourist-Destinations-in-Misamis-Occidental.mp4
+    - assets/Onboarding_screen/
 
   fonts:
     - family: Sacrifice
@@ -84,5 +89,8 @@ flutter:
     - family: Ananda Black
       fonts:
         - asset: assets/fonts/ananda-black-font/AnandaBlackPersonalUseRegular-rg9Rx.ttf
+    - family: HolidayCalling
+      fonts:
+        - asset: assets/fonts/holiday-calling-non-commercial-use.noncommercialuse.ttf
 
  

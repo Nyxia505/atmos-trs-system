@@ -13,11 +13,16 @@ class SpotPosterItem {
     required this.name,
     required this.municipality,
     this.municipalityId = '',
+    this.latitude,
+    this.longitude,
   });
+
   final String id;
   final String name;
   final String municipality;
   final String municipalityId;
+  final double? latitude;
+  final double? longitude;
 }
 
 // Theme: ATMOS TRS orange and white
@@ -44,8 +49,19 @@ Future<pw.Document> buildSpotPosterPdfDocument(
     final municipalityId = spot.municipalityId.isNotEmpty
         ? spot.municipalityId
         : '';
+    final lat = spot.latitude;
+    final lng = spot.longitude;
+    final hasCoords = lat != null &&
+        lng != null &&
+        lat.abs() > 1e-7 &&
+        lng.abs() > 1e-7;
     final qrData = municipalityId.isNotEmpty
-        ? spotQrData(municipalityId, spot.id)
+        ? spotQrData(
+            municipalityId,
+            spot.id,
+            latitude: hasCoords ? lat : null,
+            longitude: hasCoords ? lng : null,
+          )
         : '';
     pw.Image? qrImage;
     if (qrData.isNotEmpty) {

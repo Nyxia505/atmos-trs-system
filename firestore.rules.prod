@@ -9,28 +9,87 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == uid;
     }
 
+    function userDocPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function userExists() {
+      return isSignedIn() && exists(userDocPath());
+    }
+
+    function staffRole() {
+      return userExists() ? get(userDocPath()).data.get('role', '') : '';
+    }
+
+    function isStaffRoleValue(role) {
+      return role is string
+        && (
+          role.matches('(?i)^\\s*governor\\s*$')
+          || role.matches('(?i)^\\s*tourism(_office)?\\s*$')
+        );
+    }
+
+    function isProvincialStaffFromUserDoc() {
+      return userExists() && isStaffRoleValue(staffRole());
+    }
+
+    function hasStaffCustomClaim() {
+      return isSignedIn()
+        && request.auth.token.get('staff', false) == true;
+    }
+
+    function isKnownStaffEmail() {
+      return isSignedIn()
+        && request.auth.token.email != null
+        && (
+          request.auth.token.email.matches('(?i)^governor\\.atmos@misocc-demo\\.ph$')
+          || request.auth.token.email.matches('(?i)^tourismoffice\\.atmos@misocc-demo\\.ph$')
+          || request.auth.token.email.matches('(?i)^tourism\\.[^@]+@.+$')
+        );
+    }
+
+    function isProvincialStaff() {
+      return isSignedIn()
+        && (
+          hasStaffCustomClaim()
+          || isProvincialStaffFromUserDoc()
+          || isKnownStaffEmail()
+        );
+    }
+
     /*
      * PRODUCTION-LEANING RULES
-     * Adjust role checks once custom claims/admin users are in place.
      */
 
     match /tourists/{touristId} {
-      // Signup: user can only create own profile.
-      allow create: if isSignedIn()
-                    && request.resource.data.firebaseUid == request.auth.uid;
-
-      // Read/update own record only.
-      allow read, update: if isOwner(resource.data.firebaseUid);
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && request.auth.uid == touristId;
       allow delete: if false;
     }
 
     match /notifications/{notificationId} {
-      allow read, create, update: if isSignedIn()
-                                  && (
-                                    resource.data.user_id == request.auth.uid ||
-                                    request.resource.data.user_id == request.auth.uid
-                                  );
-      allow delete: if false;
+      allow read: if isSignedIn()
+                  && resource.data.user_id == request.auth.uid;
+      allow create: if isSignedIn()
+                    && request.resource.data.user_id == request.auth.uid;
+      allow update: if isSignedIn()
+                    && resource.data.user_id == request.auth.uid;
+      allow delete: if isSignedIn()
+                     && resource.data.user_id == request.auth.uid;
+    }
+
+    match /vr_tours/{vrTourId} {
+      allow read: if true;
+      allow create, update, delete: if isSignedIn();
+    }
+
+    match /tourist_activity/{userId} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    match /email_otps/{otpUid} {
+      allow read, create, update, delete: if isSignedIn()
+                                          && request.auth.uid == otpUid;
     }
 
     // Public read announcements, but lock writes.
@@ -41,20 +100,54 @@ service cloud.firestore {
 
     // Lock dashboard collections by default until role-based rules are added.
     match /users/{userId} {
-      allow read, create, update, delete: if false;
+      allow read, create, update: if isSignedIn() && request.auth.uid == userId;
+      allow delete: if false;
     }
 
     match /check_ins/{docId} {
-      allow read, create, update, delete: if false;
+      allow read, create, update: if isSignedIn();
+      allow delete: if false;
     }
 
+    // Canonical check-in audit rows written by mobile scanner.
+    match /checkins/{docId} {
+      allow read: if isProvincialStaff();
+      allow read: if isSignedIn()
+                  && resource.data.user_id == request.auth.uid;
+      allow create: if isSignedIn()
+                    && request.resource.data.user_id == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // Per-scan records used by dashboards and recent activity.
     match /qr_checkins/{docId} {
-      allow read, create, update, delete: if false;
+      allow read: if isProvincialStaff();
+      allow read: if isSignedIn()
+                  && resource.data.get('tourist_id', '') == request.auth.uid;
+      allow create: if isSignedIn()
+                    && (
+                      request.resource.data.userId == request.auth.uid ||
+                      request.resource.data.tourist_id == request.auth.uid
+                    );
+      allow update: if false;
+      allow delete: if false;
     }
 
+    // Tourism dashboard “Sync now” seeds canonical spots (slug doc ids). Reads stay public.
+    // TODO: replace isSignedIn() with admin/tourism custom claims when available.
     match /tourist_spots/{spotId} {
       allow read: if true;
-      allow create, update, delete: if false;
+      allow create, update, delete: if isSignedIn();
+    }
+
+    match /tourist_qr_codes/{touristId} {
+      allow read, create, update: if isOwner(touristId);
+      allow delete: if false;
+    }
+
+    match /tourist_qr_codes/{touristId}/history/{historyId} {
+      allow read, create: if isOwner(touristId);
+      allow update, delete: if false;
     }
 
     match /{document=**} {

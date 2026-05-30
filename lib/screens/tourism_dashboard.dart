@@ -1,32 +1,37 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'dart:async';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
+import 'package:cross_file/cross_file.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
+import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:atmos_trs_system/widgets/app_search_bar.dart';
+import 'package:atmos_trs_system/widgets/app_logout_button.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
 import 'package:atmos_trs_system/utils/spot_qr_helper.dart';
 import 'package:atmos_trs_system/utils/logo_utils.dart';
+import 'package:atmos_trs_system/services/registration_municipality_resolver.dart';
+import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
+import 'package:atmos_trs_system/utils/tourist_id_helper.dart';
 import 'package:atmos_trs_system/models/tourist_spot.dart';
 import 'package:atmos_trs_system/services/tourist_spots_firestore_service.dart';
-import 'package:atmos_trs_system/services/spot_qr_poster_pdf.dart';
 import 'package:atmos_trs_system/utils/csv_file_download.dart';
-import 'package:atmos_trs_system/utils/qr_png_bytes.dart';
 import 'package:atmos_trs_system/utils/lgu_qr_export.dart';
-import 'package:atmos_trs_system/utils/spot_qr_export.dart';
-import 'package:atmos_trs_system/widgets/app_logout_button.dart';
+import 'package:atmos_trs_system/services/vr_tour_firestore_service.dart';
+import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
 import 'package:image_picker/image_picker.dart';
 
 class TourismDashboard extends StatefulWidget {
@@ -40,6 +45,7 @@ class _TourismDashboardState extends State<TourismDashboard>
     with SingleTickerProviderStateMixin {
   int _selectedIndex = 0;
   bool _isSidebarExpanded = true;
+  bool _didInitializeSidebarForViewport = false;
   late AnimationController _animationController;
 
   // Theme colors - FlexiMart style with Orange
@@ -52,16 +58,31 @@ class _TourismDashboardState extends State<TourismDashboard>
   static const Color _darkBg = Color(0xFFFFF7ED); // cream background
   static const Color _cardBg = Color(0xFFFFFBF7); // soft white cards
   static const Color _sidebarBg = Color(0xFFEA580C); // dark orange sidebar
-  static const Color _sidebarHover = Color(
-    0xFFC2410C,
-  ); // darker orange for hover
   static const Color _textDark = Color(0xFF1A1A1A);
   static const Color _textMuted = Color(0xFF6B7280);
-  static const Color _cardBorder = Color(0xFFFFEDD5); // soft orange border
+  static const Color _kAnalyticsSurfaceBorder = Color(0xFFE5E7EB);
+  static const Color _kpiGreen = Color(0xFF9CCC65);
+  static const Color _kpiOrange = Color(0xFFFFB74D);
+  static const Color _kpiBlue = Color(0xFF64B5F6);
+  static const Color _kpiPurple = Color(0xFF9575CD);
+  static const Color _surfaceBg = Color(0xFFF4F4F5);
+  static const Color _panelBorder = Color(0xFFE4E4E7);
 
-  /// Large rounded UI (dashboard reference): main panel + sidebar curve.
-  static const double _tdHeroRadius = 42;
-  static const double _tdSidebarOuterRadius = 32;
+  BoxDecoration _tourismPanelDecoration() => BoxDecoration(
+    color: Colors.white,
+    borderRadius: BorderRadius.circular(12),
+    border: Border.all(color: _panelBorder),
+  );
+
+  Widget _wrapTourismPanel(Widget child, {EdgeInsets? padding}) {
+    return Container(
+      padding: padding ?? EdgeInsets.all(_isMobile ? 14 : 16),
+      decoration: _tourismPanelDecoration(),
+      child: child,
+    );
+  }
+
+  /// Large rounded UI (dashboard reference): main panel.
 
   // Data states
   bool _isLoading = true;
@@ -77,13 +98,15 @@ class _TourismDashboardState extends State<TourismDashboard>
   List<Map<String, dynamic>> _checkIns = [];
   List<TouristSpot> _touristSpots = [];
   List<Map<String, dynamic>> _tourists = [];
+  final Map<String, Map<String, dynamic>> _touristProfileByUid = {};
   List<Map<String, dynamic>> _vrTours = [];
   List<Map<String, dynamic>> _recentActivity = [];
   List<Map<String, dynamic>> _notifications = [];
 
   /// For real-time check-in notifications: newest check-in doc id we've seen.
   String? _lastSeenCheckInId;
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _qrCheckInsSubscription;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
+  _qrCheckInsSubscription;
   StreamSubscription<List<TouristSpot>>? _touristSpotsSubscription;
   String? _storedMunicipalityId;
   List<TouristSpot> _allTouristSpots = [];
@@ -93,7 +116,6 @@ class _TourismDashboardState extends State<TourismDashboard>
   final _spotsSearchController = TextEditingController();
   final _touristsSearchController = TextEditingController();
   final _vrToursSearchController = TextEditingController();
-  final _globalSearchController = TextEditingController();
 
   // Filter states
   String _checkInStatusFilter = 'All';
@@ -105,6 +127,14 @@ class _TourismDashboardState extends State<TourismDashboard>
   // Export states
   bool _isExporting = false;
   double _exportProgress = 0.0;
+
+  /// Full Reports tab (quick exports + custom report) for PNG screenshot.
+  final GlobalKey _reportsRepaintKey = GlobalKey();
+  bool _reportsScreenshotBusy = false;
+
+  /// One-shot Firestore sync for `qrValue` / `qr_payload` / `createdAt` on `tourist_spots`.
+  bool _isBackfillingSpotQr = false;
+  bool _didAutoBackfillSpotQr = false;
 
   // Settings (local prefs; same pattern as governor dashboard)
   bool _emailNotifications = true;
@@ -118,17 +148,17 @@ class _TourismDashboardState extends State<TourismDashboard>
 
   final List<_NavItem> _navItems = [
     _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
-    _NavItem(icon: Icons.qr_code_scanner_rounded, label: 'Check-ins'),
+    _NavItem(icon: Icons.qr_code_scanner_rounded, label: 'Visit log'),
     _NavItem(icon: Icons.place_rounded, label: 'Tourist Spots'),
     _NavItem(icon: Icons.qr_code_2_rounded, label: 'Spot QR Codes'),
-    _NavItem(icon: Icons.people_alt_rounded, label: 'Tourists'),
+    _NavItem(icon: Icons.people_alt_rounded, label: 'Visitors'),
     _NavItem(icon: Icons.vrpano_rounded, label: 'VR Tours'),
     _NavItem(icon: Icons.analytics_rounded, label: 'Analytics'),
     _NavItem(icon: Icons.assessment_rounded, label: 'Reports'),
-    _NavItem(icon: Icons.settings_rounded, label: 'Settings'),
   ];
 
   static const int _mainNavCount = 7; // Dashboard through Analytics
+  static const int _touristSpotsNavIndex = 2;
   static const int _spotQRCodesIndex = 3;
   static const int _analyticsIndex = 6;
   static const int _reportsIndex = 7;
@@ -144,7 +174,7 @@ class _TourismDashboardState extends State<TourismDashboard>
   ];
   final List<String> _reportTypes = [
     'All Data',
-    'Check-ins Only',
+    'Visits only',
     'Tourists Only',
     'Tourist Spots Only',
   ];
@@ -162,12 +192,22 @@ class _TourismDashboardState extends State<TourismDashboard>
     _loadData();
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_didInitializeSidebarForViewport) return;
+    _didInitializeSidebarForViewport = true;
+    // Start collapsed on phones so content is visible immediately.
+    if (_isMobile) _isSidebarExpanded = false;
+  }
+
   Future<void> _loadTourismSettings() async {
     final prefs = await SharedPreferences.getInstance();
     final email = await SessionStorage.getStoredEmail();
     if (!mounted) return;
     setState(() {
-      _emailNotifications = prefs.getBool('tourism_email_notifications') ?? true;
+      _emailNotifications =
+          prefs.getBool('tourism_email_notifications') ?? true;
       _pushNotifications = prefs.getBool('tourism_push_notifications') ?? true;
       _weeklyReports = prefs.getBool('tourism_weekly_reports') ?? false;
       _lastBackupDate = prefs.getString('tourism_last_backup_date');
@@ -175,11 +215,13 @@ class _TourismDashboardState extends State<TourismDashboard>
       if (savedName != null && savedName.isNotEmpty) {
         _profileName = savedName;
       } else {
-        _profileName = _municipalityName != null && _municipalityName!.isNotEmpty
+        _profileName =
+            _municipalityName != null && _municipalityName!.isNotEmpty
             ? _municipalityName!
             : 'Tourism Office';
       }
-      _profileEmail = prefs.getString('tourism_profile_email') ??
+      _profileEmail =
+          prefs.getString('tourism_profile_email') ??
           email ??
           FirebaseAuth.instance.currentUser?.email?.trim() ??
           '';
@@ -214,23 +256,35 @@ class _TourismDashboardState extends State<TourismDashboard>
 
   void _subscribeToTouristSpots() {
     _touristSpotsSubscription?.cancel();
-    _touristSpotsSubscription = TouristSpotsFirestoreService.streamTouristSpots().listen((list) {
-      if (!mounted) return;
-      final filtered = _filterSpotsByMunicipality(list, _storedMunicipalityId);
-      setState(() {
-        _allTouristSpots = list;
-        _touristSpots = filtered;
-        _activeSpots = _touristSpots.where((s) => s.status == 'Active').length;
-        if (_activeSpots == 0 && _touristSpots.isNotEmpty) {
-          _activeSpots = _touristSpots.length;
-        }
-      });
-    }, onError: (Object e) {
-      debugPrint('tourist_spots stream error: $e');
-    });
+    _touristSpotsSubscription =
+        TouristSpotsFirestoreService.streamTouristSpots().listen(
+          (list) {
+            if (!mounted) return;
+            final filtered = _filterSpotsByMunicipality(
+              list,
+              _storedMunicipalityId,
+            );
+            setState(() {
+              _allTouristSpots = list;
+              _touristSpots = filtered;
+              _activeSpots = _touristSpots
+                  .where((s) => s.status == 'Active')
+                  .length;
+              if (_activeSpots == 0 && _touristSpots.isNotEmpty) {
+                _activeSpots = _touristSpots.length;
+              }
+            });
+          },
+          onError: (Object e) {
+            debugPrint('tourist_spots stream error: $e');
+          },
+        );
   }
 
-  List<TouristSpot> _filterSpotsByMunicipality(List<TouristSpot> spots, String? municipalityId) {
+  List<TouristSpot> _filterSpotsByMunicipality(
+    List<TouristSpot> spots,
+    String? municipalityId,
+  ) {
     if (municipalityId == null || municipalityId.isEmpty) return spots;
     final queryIds = municipalityIdsForQuery(municipalityId);
     String? municipalityNameForFilter;
@@ -240,13 +294,18 @@ class _TourismDashboardState extends State<TourismDashboard>
         break;
       }
     }
-    final idsForFilter = queryIds.isNotEmpty ? queryIds : [normalizeMunicipalityId(municipalityId)];
+    final idsForFilter = queryIds.isNotEmpty
+        ? queryIds
+        : [normalizeMunicipalityId(municipalityId)];
     return spots.where((s) {
-      final mid = normalizeMunicipalityId(s.municipalityId.isNotEmpty ? s.municipalityId : null);
+      final mid = normalizeMunicipalityId(
+        s.municipalityId.isNotEmpty ? s.municipalityId : null,
+      );
       final mName = s.municipality.toLowerCase();
       if (mid.isNotEmpty && idsForFilter.contains(mid)) return true;
       if (municipalityNameForFilter != null &&
-          mName.contains(municipalityNameForFilter.toLowerCase())) return true;
+          mName.contains(municipalityNameForFilter.toLowerCase()))
+        return true;
       return false;
     }).toList();
   }
@@ -260,7 +319,6 @@ class _TourismDashboardState extends State<TourismDashboard>
     _spotsSearchController.dispose();
     _touristsSearchController.dispose();
     _vrToursSearchController.dispose();
-    _globalSearchController.dispose();
     super.dispose();
   }
 
@@ -271,7 +329,8 @@ class _TourismDashboardState extends State<TourismDashboard>
 
   // When true, show banner that we're showing all data (no municipality filter)
   bool _showAllDataBanner = false;
-  String? _municipalityName; // Display name for current filter (e.g. "Oroquieta City")
+  String?
+  _municipalityName; // Display name for current filter (e.g. "Oroquieta City")
 
   Future<void> _loadData() async {
     setState(() {
@@ -281,12 +340,70 @@ class _TourismDashboardState extends State<TourismDashboard>
 
     try {
       if (Firebase.apps.isEmpty) {
-        _useMockData();
+        setState(() {
+          _errorMessage = 'Firebase is not initialized yet.';
+          _isLoading = false;
+        });
         return;
       }
 
+      final authUser = FirebaseAuth.instance.currentUser;
+      if (authUser == null) {
+        setState(() {
+          _errorMessage =
+              'Your session expired. Please sign in again to load dashboard data.';
+          _isLoading = false;
+        });
+        return;
+      }
+      AuthConfig.currentUserUid = authUser.uid;
+
+      await authUser.getIdToken(true);
+      final authEmail =
+          authUser.email?.trim() ?? (await SessionStorage.getStoredEmail()) ?? '';
+
       final firestore = FirebaseFirestore.instance;
-      final municipalityId = await SessionStorage.getStoredMunicipalityId();
+      var municipalityId = await SessionStorage.getStoredMunicipalityId();
+      if (municipalityId == null || municipalityId.isEmpty) {
+        municipalityId = SessionStorage.getMunicipalityIdFromTourismEmail(
+          authEmail,
+        );
+        if (municipalityId != null && municipalityId.isNotEmpty) {
+          final uid = AuthConfig.currentUserUid;
+          if (uid != null && uid.isNotEmpty) {
+            await SessionStorage.saveSession(
+              uid,
+              role: UserRole.tourism,
+              email: authEmail,
+              municipalityId: municipalityId,
+            );
+          }
+        }
+      }
+
+      final staffReady =
+          await UserDirectoryService.prepareProvincialStaffFirestoreAccess(
+        uid: authUser.uid,
+        email: authEmail.isNotEmpty ? authEmail : SessionStorage.tourismEmail,
+        roleRaw: 'tourism',
+        fullName: _profileName,
+        municipalityId: municipalityId,
+      );
+      if (!staffReady) {
+        debugPrint(
+          '[TourismDashboard] staff Firestore access not ready (email=$authEmail)',
+        );
+        if (!mounted) return;
+        setState(() {
+          _errorMessage =
+              'Could not verify tourism office access in Firestore. '
+              'Log out and sign in with your tourism account (e.g. tourism.oroquieta@… '
+              'or tourismoffice.atmos@misocc-demo.ph), then try again.';
+          _isLoading = false;
+        });
+        return;
+      }
+
       _storedMunicipalityId = municipalityId;
       _showAllDataBanner = municipalityId == null;
       String? munName;
@@ -298,10 +415,24 @@ class _TourismDashboardState extends State<TourismDashboard>
       }
       _municipalityName = munName ?? municipalityId;
       // Re-apply municipality filter to spots when municipality changes (e.g. after login)
-      _touristSpots = _filterSpotsByMunicipality(_allTouristSpots, _storedMunicipalityId);
+      _touristSpots = _filterSpotsByMunicipality(
+        _allTouristSpots,
+        _storedMunicipalityId,
+      );
       _activeSpots = _touristSpots.where((s) => s.status == 'Active').length;
       if (_activeSpots == 0 && _touristSpots.isNotEmpty) {
         _activeSpots = _touristSpots.length;
+      }
+
+      // Ensure all existing spot docs carry qrValue/qr_payload/createdAt.
+      // Run once per dashboard session to keep Firestore complete.
+      if (!_didAutoBackfillSpotQr) {
+        _didAutoBackfillSpotQr = true;
+        try {
+          await _runBackfillSpotQrMetadata(showSnack: false);
+        } catch (e) {
+          debugPrint('Spot QR metadata backfill skipped: $e');
+        }
       }
 
       if (municipalityId != null) {
@@ -309,78 +440,94 @@ class _TourismDashboardState extends State<TourismDashboard>
         // Tourist spots are loaded via stream in _subscribeToTouristSpots() and filtered there.
         final queryIds = municipalityIdsForQuery(municipalityId);
         if (queryIds.isNotEmpty) {
-          final Query<Map<String, dynamic>> checkInsQuery = queryIds.length == 1
-              ? firestore
-                  .collection('qr_checkins')
-                  .where('municipalityId', isEqualTo: queryIds.first)
-              : firestore
-                  .collection('qr_checkins')
-                  .where('municipalityId', whereIn: queryIds);
-          final checkInsSnapshot = await checkInsQuery.get();
-          _checkIns = checkInsSnapshot.docs
-              .map((doc) => _normalizeCheckInForUi({'id': doc.id, ...doc.data()}))
-              .toList();
-          _checkIns.sort((a, b) {
-            final ta = a['timestamp'];
-            final tb = b['timestamp'];
-            if (ta is Timestamp && tb is Timestamp) {
-              return tb.compareTo(ta);
+          try {
+            final Query<Map<String, dynamic>> checkInsQuery =
+                queryIds.length == 1
+                ? firestore
+                      .collection('qr_checkins')
+                      .where('municipalityId', isEqualTo: queryIds.first)
+                : firestore
+                      .collection('qr_checkins')
+                      .where('municipalityId', whereIn: queryIds);
+            final checkInsSnapshot = await checkInsQuery.get();
+            _checkIns = checkInsSnapshot.docs
+                .map(
+                  (doc) =>
+                      _normalizeCheckInForUi({'id': doc.id, ...doc.data()}),
+                )
+                .toList();
+            _checkIns = _dedupeCheckInsByTouristSpotAndDay(_checkIns);
+            _checkIns.sort((a, b) {
+              final ta = a['timestamp'];
+              final tb = b['timestamp'];
+              if (ta is Timestamp && tb is Timestamp) {
+                return tb.compareTo(ta);
+              }
+              return 0;
+            });
+            if (_checkIns.length > 100) {
+              _checkIns = _checkIns.take(100).toList();
             }
-            return 0;
-          });
-          if (_checkIns.length > 100) {
-            _checkIns = _checkIns.take(100).toList();
+            _lastSeenCheckInId = _checkIns.isNotEmpty
+                ? (_checkIns.first['id'] as String?)
+                : null;
+            _subscribeToCheckIns(queryIds);
+          } catch (e) {
+            debugPrint('Failed loading qr_checkins for dashboard: $e');
+            _checkIns = [];
+            _lastSeenCheckInId = null;
           }
-          _lastSeenCheckInId = _checkIns.isNotEmpty ? (_checkIns.first['id'] as String?) : null;
-          _subscribeToCheckIns(queryIds);
         }
 
-        final userIds = _checkIns
-            .map((c) => c['userId']?.toString())
+        final checkInUserIds = _checkIns
+            .map((c) => c['userId']?.toString().trim())
             .whereType<String>()
-            .toSet()
-            .toList();
-        final touristsSnapshot = await firestore.collection('tourists').get();
-        final allTourists = touristsSnapshot.docs
-            .map((doc) => {'id': doc.id, ...doc.data()})
-            .toList();
-        if (userIds.isEmpty) {
-          _tourists = [];
-        } else {
-          _tourists = allTourists.where((t) {
-            final uid = t['firebaseUid']?.toString() ?? t['id']?.toString();
-            return uid != null && userIds.contains(uid);
-          }).toList();
+            .where((id) => id.isNotEmpty)
+            .toSet();
+        try {
+          _tourists = await _loadRegisteredTouristsForMunicipality(
+            firestore: firestore,
+            queryIds: queryIds,
+            checkInUserIds: checkInUserIds,
+          );
           _tourists = _mergeTouristVisitsFromCheckIns(_tourists);
+        } catch (e) {
+          debugPrint('Failed loading tourists for dashboard: $e');
+          _tourists = [];
         }
 
-        final vrToursSnapshot = await firestore.collection('vr_tours').get();
-        _vrTours = vrToursSnapshot.docs
-            .map((doc) => {'id': doc.id, ...doc.data()})
-            .toList();
+        await _finalizeCheckInAndTouristData();
+
+        await _reloadVrToursFromDatabase();
       } else {
         // No municipality filter: load from check_ins (legacy) and all spots/tourists
         _qrCheckInsSubscription?.cancel();
         _qrCheckInsSubscription = null;
         _lastSeenCheckInId = null;
-        final checkInsSnapshot = await firestore
-            .collection('check_ins')
-            .orderBy('timestamp', descending: true)
-            .limit(100)
-            .get();
-        _checkIns = checkInsSnapshot.docs
-            .map((doc) => _normalizeCheckInForUi({'id': doc.id, ...doc.data()}))
-            .toList();
+        try {
+          final checkInsSnapshot = await firestore
+              .collection('check_ins')
+              .orderBy('timestamp', descending: true)
+              .limit(100)
+              .get();
+          _checkIns = checkInsSnapshot.docs
+              .map(
+                (doc) => _normalizeCheckInForUi({'id': doc.id, ...doc.data()}),
+              )
+              .toList();
+          _checkIns = _dedupeCheckInsByTouristSpotAndDay(_checkIns);
+          await _finalizeCheckInAndTouristData();
+        } catch (e) {
+          debugPrint('Failed loading legacy check_ins for dashboard: $e');
+          _checkIns = [];
+        }
 
         // Tourist spots are loaded via stream in _subscribeToTouristSpots()
 
         // Full `tourists` registration directory is Governor (admin) only — not exposed on LGU.
         _tourists = [];
 
-        final vrToursSnapshot = await firestore.collection('vr_tours').get();
-        _vrTours = vrToursSnapshot.docs
-            .map((doc) => {'id': doc.id, ...doc.data()})
-            .toList();
+        await _reloadVrToursFromDatabase();
       }
 
       // Calculate stats
@@ -403,36 +550,27 @@ class _TourismDashboardState extends State<TourismDashboard>
       }
       _totalVRTours = _vrTours.length;
 
-      // Generate recent activity (qr_checkins has userId, spotId, municipalityId; check_ins has touristName, location)
-      _recentActivity = _checkIns.take(5).map((c) {
-        final spotId = c['spotId']?.toString() ?? '';
-        final location = spotId.isNotEmpty ? spotId.replaceAll('_', ' ') : (c['location'] ?? 'Unknown');
-        return <String, dynamic>{
-          'icon': Icons.qr_code_scanner_rounded,
-          'color': _primaryOrange,
-          'title': c['touristName'] ?? c['userId']?.toString() ?? 'Tourist',
-          'description': 'Checked in at $location',
-          'time': _formatTime(c['timestamp']),
-        };
-      }).toList();
+      // Generate recent activity (location = spot name from qr_checkins)
+      _recentActivity = _checkIns.take(5).map(_recentActivityFromCheckIn).toList();
 
-      _notifications = [
-        {
-          'title': 'New Check-in',
-          'message': '${_todayCheckIns} tourists checked in today',
-          'time': 'Just now',
-        },
-        {
-          'title': 'System Update',
-          'message': 'Dashboard data refreshed',
-          'time': '5 min ago',
-        },
-      ];
-
-      setState(() => _isLoading = false);
+      setState(() {
+        _errorMessage = null;
+        _isLoading = false;
+      });
       await _loadTourismSettings();
     } catch (e) {
-      _useMockData();
+      debugPrint('Error loading tourism dashboard data: $e');
+      if (mounted) {
+        setState(() {
+          _errorMessage =
+              'Could not load dashboard data. Pull to refresh or sign in again.';
+          _isLoading = false;
+        });
+      }
+    } finally {
+      if (mounted && _isLoading) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -445,211 +583,79 @@ class _TourismDashboardState extends State<TourismDashboard>
     final now = DateTime.now();
     final Query<Map<String, dynamic>> subscriptionQuery = queryIds.length == 1
         ? FirebaseFirestore.instance
-            .collection('qr_checkins')
-            .where('municipalityId', isEqualTo: queryIds.first)
+              .collection('qr_checkins')
+              .where('municipalityId', isEqualTo: queryIds.first)
         : FirebaseFirestore.instance
-            .collection('qr_checkins')
-            .where('municipalityId', whereIn: queryIds);
+              .collection('qr_checkins')
+              .where('municipalityId', whereIn: queryIds);
     _qrCheckInsSubscription = subscriptionQuery
         .orderBy('timestamp', descending: true)
         .limit(50)
         .snapshots()
-        .listen((QuerySnapshot<Map<String, dynamic>> snapshot) {
-      if (!mounted) return;
-      final docs = snapshot.docs;
-      final checkIns = docs
-          .map((d) => _normalizeCheckInForUi({'id': d.id, ...d.data()}))
-          .toList();
-      final previousFirstId = _lastSeenCheckInId;
-      _lastSeenCheckInId = docs.isEmpty ? null : docs.first.id;
-      _checkIns = checkIns;
-      _tourists = _mergeTouristVisitsFromCheckIns(_tourists);
-      _todayCheckIns = _checkIns.where((c) {
-        final timestamp = c['timestamp'];
-        if (timestamp is Timestamp) {
-          final date = timestamp.toDate();
-          return date.day == now.day && date.month == now.month && date.year == now.year;
-        }
-        return false;
-      }).length;
-      _recentActivity = _checkIns.take(5).map((c) {
-        final spotId = c['spotId']?.toString() ?? '';
-        final location = spotId.isNotEmpty ? spotId.replaceAll('_', ' ') : (c['location'] ?? 'Unknown');
-        return <String, dynamic>{
-          'icon': Icons.qr_code_scanner_rounded,
-          'color': _primaryOrange,
-          'title': c['touristName'] ?? c['userId']?.toString() ?? 'Tourist',
-          'description': 'Checked in at $location',
-          'time': _formatTime(c['timestamp']),
-        };
-      }).toList();
-      if (previousFirstId != null && docs.isNotEmpty && docs.first.id != previousFirstId) {
-        int newCount = 0;
-        for (var d in docs) {
-          if (d.id == previousFirstId) break;
-          newCount++;
-          final spotId = d.data()['spotId']?.toString() ?? 'spot';
-          final spotLabel = spotId.replaceAll('_', ' ');
-          _notifications.insert(0, {
-            'title': 'New check-in',
-            'message': 'Check-in at $spotLabel',
-            'time': 'Just now',
-          });
-        }
-        if (newCount > 0 && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                newCount == 1
-                    ? 'New check-in in your municipality!'
-                    : '$newCount new check-ins in your municipality!',
-              ),
-              backgroundColor: _primaryOrange,
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        }
-      }
-      setState(() {});
-    }, onError: (Object e) {
-      debugPrint('qr_checkins stream error: $e');
-    });
-  }
-
-  void _useMockData() {
-    final now = DateTime.now();
-    final names = [
-      'Juan Dela Cruz',
-      'Maria Santos',
-      'Pedro Garcia',
-      'Ana Reyes',
-      'Jose Rizal',
-    ];
-    final touristIds = ['ABC123', 'DEF456', 'GHI789', 'JKL012', 'MNO345'];
-    final locations = [
-      'Azure Coast',
-      'Baliangao Beach',
-      'Oroquieta City Capitol',
-      'Crystal Cove',
-      'Sapang Dalaga Falls',
-    ];
-
-    _checkIns = List.generate(20, (i) {
-      return <String, dynamic>{
-        'id': 'CHK-${1000 + i}',
-        'touristName': names[i % 5],
-        'touristId': 'ATMOS-${touristIds[i % 5]}',
-        'location': locations[i % 5],
-        'timestamp': now.subtract(Duration(hours: i * 2)),
-        'status': i % 4 == 0 ? 'Pending' : 'Verified',
-      };
-    });
-
-    _allTouristSpots = [];
-    _touristSpots = [];
-
-    final touristNames = [
-      'Juan Dela Cruz',
-      'Maria Santos',
-      'Pedro Garcia',
-      'Ana Reyes',
-      'Jose Rizal',
-      'Elena Cruz',
-      'Carlos Tan',
-      'Rosa Lim',
-    ];
-    final prefixes = ['ABC', 'DEF', 'GHI', 'JKL', 'MNO'];
-    final origins = ['Manila', 'Cebu', 'Davao', 'Cagayan de Oro', 'Iloilo'];
-
-    _tourists = List.generate(15, (i) {
-      return <String, dynamic>{
-        'id': 'ATMOS-${prefixes[i % 5]}${100 + i}',
-        'name': touristNames[i % 8],
-        'email': 'tourist${i + 1}@email.com',
-        'origin': origins[i % 5],
-        'visits': (i + 1) * 2,
-        'registeredDate': now.subtract(Duration(days: i * 10)),
-      };
-    });
-
-    _vrTours = [
-      {
-        'id': 'VR-001',
-        'name': 'Azure Coast VR Experience',
-        'spotId': 'SPOT-001',
-        'spotName': 'Azure Coast',
-        'vrUrl': 'https://example.com/vr/azure',
-        'thumbnail': '',
-        'views': 1234,
-        'status': 'Active',
-      },
-      {
-        'id': 'VR-002',
-        'name': 'Baliangao Beach Tour',
-        'spotId': 'SPOT-002',
-        'spotName': 'Baliangao Beach',
-        'vrUrl': 'https://example.com/vr/baliangao',
-        'thumbnail': '',
-        'views': 987,
-        'status': 'Active',
-      },
-      {
-        'id': 'VR-003',
-        'name': 'Falls Adventure 360',
-        'spotId': 'SPOT-003',
-        'spotName': 'Sapang Dalaga Falls',
-        'vrUrl': 'https://example.com/vr/falls',
-        'thumbnail': '',
-        'views': 654,
-        'status': 'Active',
-      },
-      {
-        'id': 'VR-004',
-        'name': 'Historical Plaza Walk',
-        'spotId': 'SPOT-004',
-        'spotName': 'Oroquieta City Capitol',
-        'vrUrl': 'https://example.com/vr/plaza',
-        'thumbnail': '',
-        'views': 432,
-        'status': 'Inactive',
-      },
-    ];
-
-    _todayCheckIns = _checkIns.where((c) => c['status'] == 'Verified').length;
-    _totalTourists = _tourists.length;
-    _activeSpots = _touristSpots.where((s) => s.status == 'Active').length;
-    _totalVRTours = _vrTours.length;
-
-    _recentActivity = _checkIns.take(5).map((c) {
-      return <String, dynamic>{
-        'icon': Icons.qr_code_scanner_rounded,
-        'color': _primaryOrange,
-        'title': c['touristName'],
-        'description': 'Checked in at ${c['location']}',
-        'time': _formatTime(c['timestamp']),
-      };
-    }).toList();
-
-    _notifications = [
-      {
-        'title': 'New Check-in',
-        'message': '$_todayCheckIns tourists checked in today',
-        'time': 'Just now',
-      },
-      {
-        'title': 'New Tourist',
-        'message': 'Maria Santos registered',
-        'time': '10 min ago',
-      },
-      {
-        'title': 'VR Tour View',
-        'message': 'Azure Coast VR viewed 50 times',
-        'time': '1 hour ago',
-      },
-    ];
-
-    setState(() => _isLoading = false);
-    _loadTourismSettings();
+        .listen(
+          (QuerySnapshot<Map<String, dynamic>> snapshot) {
+            if (!mounted) return;
+            final docs = snapshot.docs;
+            final checkIns = docs
+                .map((d) => _normalizeCheckInForUi({'id': d.id, ...d.data()}))
+                .toList();
+            final previousFirstId = _lastSeenCheckInId;
+            _lastSeenCheckInId = docs.isEmpty ? null : docs.first.id;
+            _checkIns = _dedupeCheckInsByTouristSpotAndDay(checkIns);
+            _tourists = _mergeTouristVisitsFromCheckIns(_tourists);
+            _rebuildTouristProfileIndex();
+            _applyTouristProfilesToCheckIns();
+            _todayCheckIns = _checkIns.where((c) {
+              final timestamp = c['timestamp'];
+              if (timestamp is Timestamp) {
+                final date = timestamp.toDate();
+                return date.day == now.day &&
+                    date.month == now.month &&
+                    date.year == now.year;
+              }
+              return false;
+            }).length;
+            _recentActivity =
+                _checkIns.take(5).map(_recentActivityFromCheckIn).toList();
+            if (previousFirstId != null &&
+                docs.isNotEmpty &&
+                docs.first.id != previousFirstId) {
+              int newCount = 0;
+              for (var d in docs) {
+                if (d.id == previousFirstId) break;
+                newCount++;
+                final row = _normalizeCheckInForUi({'id': d.id, ...d.data()});
+                final spotLabel =
+                    row['location']?.toString().trim().isNotEmpty == true
+                    ? row['location'].toString()
+                    : (row['spotId']?.toString() ?? 'spot')
+                          .replaceAll('_', ' ');
+                _notifications.insert(0, {
+                  'title': 'New check-in',
+                  'message': 'Check-in at $spotLabel',
+                  'time': 'Just now',
+                });
+              }
+              if (newCount > 0 && mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      newCount == 1
+                          ? 'New check-in in your municipality!'
+                          : '$newCount new check-ins in your municipality!',
+                    ),
+                    backgroundColor: _primaryOrange,
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            }
+            setState(() {});
+          },
+          onError: (Object e) {
+            debugPrint('qr_checkins stream error: $e');
+          },
+        );
   }
 
   String _formatTime(dynamic timestamp) {
@@ -694,7 +700,20 @@ class _TourismDashboardState extends State<TourismDashboard>
   /// Short display format for date picker trigger, e.g. "Mon, Mar 2"
   String _formatDateDisplay(DateTime date) {
     const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
     return '${weekdays[date.weekday % 7]}, ${months[date.month - 1]} ${date.day}';
   }
 
@@ -710,29 +729,199 @@ class _TourismDashboardState extends State<TourismDashboard>
   Map<String, dynamic> _normalizeCheckInForUi(Map<String, dynamic> row) {
     final touristNameRaw = row['touristName']?.toString().trim() ?? '';
     final userIdRaw =
-        row['userId']?.toString().trim() ?? row['tourist_id']?.toString().trim() ?? '';
+        row['userId']?.toString().trim() ??
+        row['tourist_id']?.toString().trim() ??
+        '';
     final spotNameRaw = row['spot_name']?.toString().trim() ?? '';
     final locationRaw = row['location']?.toString().trim() ?? '';
-    final spotIdRaw = row['spotId']?.toString().trim() ?? row['spot_id']?.toString().trim() ?? '';
+    final spotIdRaw =
+        row['spotId']?.toString().trim() ??
+        row['spot_id']?.toString().trim() ??
+        '';
     final statusRaw = row['status']?.toString().trim() ?? '';
 
     final touristName = touristNameRaw.isNotEmpty
         ? touristNameRaw
         : (userIdRaw.isNotEmpty
-            ? 'User ${userIdRaw.length > 8 ? userIdRaw.substring(0, 8) : userIdRaw}'
-            : 'Tourist');
+              ? 'User ${userIdRaw.length > 8 ? userIdRaw.substring(0, 8) : userIdRaw}'
+              : 'Tourist');
     final location = locationRaw.isNotEmpty
         ? locationRaw
         : (spotNameRaw.isNotEmpty
-            ? spotNameRaw
-            : (spotIdRaw.isNotEmpty ? spotIdRaw.replaceAll('_', ' ') : 'Unknown location'));
+              ? spotNameRaw
+              : (spotIdRaw.isNotEmpty
+                    ? spotIdRaw.replaceAll('_', ' ')
+                    : 'Unknown location'));
 
     return <String, dynamic>{
       ...row,
       'touristName': touristName,
+      'touristId': row['touristId']?.toString() ?? '',
       'location': location,
       // `qr_checkins` typically has no explicit status; default to verified.
       'status': statusRaw.isNotEmpty ? statusRaw : 'Verified',
+    };
+  }
+
+  void _rebuildTouristProfileIndex() {
+    _touristProfileByUid.clear();
+    for (final t in _tourists) {
+      final uid =
+          t['firebaseUid']?.toString().trim() ?? t['id']?.toString().trim() ?? '';
+      if (uid.isNotEmpty) {
+        _touristProfileByUid[uid] = t;
+      }
+    }
+  }
+
+  Future<void> _hydrateMissingTouristProfilesForCheckIns() async {
+    if (Firebase.apps.isEmpty || _checkIns.isEmpty) return;
+    final missing = <String>{};
+    for (final c in _checkIns) {
+      final uid =
+          c['userId']?.toString().trim() ??
+          c['tourist_id']?.toString().trim() ??
+          '';
+      if (uid.isNotEmpty && !_touristProfileByUid.containsKey(uid)) {
+        missing.add(uid);
+      }
+    }
+    if (missing.isEmpty) return;
+
+    final firestore = FirebaseFirestore.instance;
+    final extraTourists = <Map<String, dynamic>>[];
+    for (final uid in missing) {
+      try {
+        final snap = await firestore.collection('tourists').doc(uid).get();
+        if (!snap.exists || snap.data() == null) continue;
+        final row = <String, dynamic>{'id': snap.id, ...snap.data()!};
+        _touristProfileByUid[uid] = row;
+        extraTourists.add(row);
+      } catch (e) {
+        debugPrint('Tourism: tourists/$uid load failed: $e');
+      }
+    }
+    if (extraTourists.isNotEmpty) {
+      _tourists = _mergeTouristVisitsFromCheckIns([
+        ..._tourists,
+        ...extraTourists,
+      ]);
+      _totalTourists = _tourists.length;
+    }
+  }
+
+  Map<String, dynamic> _enrichCheckInWithTouristProfile(
+    Map<String, dynamic> c,
+  ) {
+    final uid =
+        c['userId']?.toString().trim() ??
+        c['tourist_id']?.toString().trim() ??
+        '';
+    if (uid.isEmpty) return c;
+    final profile = _touristProfileByUid[uid];
+    if (profile == null) return c;
+    final name = _getTouristDisplayName(profile);
+    return <String, dynamic>{
+      ...c,
+      'touristName': name,
+      'touristId': TouristIdHelper.displayForTourist(profile),
+      'touristProfile': profile,
+      'profilePhotoUrl': profile['profilePhotoUrl'],
+      'profileImageBase64': profile['profileImageBase64'],
+      'touristEmail': profile['email']?.toString() ?? '',
+      'touristOrigin': _getTouristOrigin(profile),
+    };
+  }
+
+  void _applyTouristProfilesToCheckIns() {
+    if (_checkIns.isEmpty) return;
+    _checkIns =
+        _checkIns.map(_enrichCheckInWithTouristProfile).toList(growable: false);
+    _recentActivity =
+        _checkIns.take(5).map(_recentActivityFromCheckIn).toList();
+  }
+
+  Future<void> _finalizeCheckInAndTouristData() async {
+    _rebuildTouristProfileIndex();
+    await _hydrateMissingTouristProfilesForCheckIns();
+    _rebuildTouristProfileIndex();
+    _applyTouristProfilesToCheckIns();
+  }
+
+  Widget _buildCheckInProfileAvatar(
+    Map<String, dynamic> c, {
+    double radius = 20,
+  }) {
+    final profile = c['touristProfile'] as Map<String, dynamic>?;
+    final row = profile ?? c;
+    final avatar = _touristAvatarImage(row);
+    final name = c['touristName']?.toString() ?? '?';
+    final initial =
+        name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : '?';
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: _primaryOrange.withOpacity(0.15),
+      backgroundImage: avatar,
+      child: avatar == null
+          ? Text(
+              initial,
+              style: TextStyle(
+                color: _primaryOrange,
+                fontWeight: FontWeight.bold,
+                fontSize: radius * 0.85,
+              ),
+            )
+          : null,
+    );
+  }
+
+  Widget _buildCheckInTouristCell(Map<String, dynamic> c) {
+    final name = c['touristName']?.toString() ?? 'Tourist';
+    final email = c['touristEmail']?.toString() ?? '';
+    return Row(
+      children: [
+        _buildCheckInProfileAvatar(c),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                name,
+                style: const TextStyle(
+                  color: _textDark,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (email.isNotEmpty)
+                Text(
+                  email,
+                  style: TextStyle(color: _textMuted, fontSize: 11),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Map<String, dynamic> _recentActivityFromCheckIn(Map<String, dynamic> c) {
+    final location = c['location']?.toString().trim();
+    final spotLabel = (location != null && location.isNotEmpty)
+        ? location
+        : (c['spotId']?.toString() ?? '').replaceAll('_', ' ');
+    return <String, dynamic>{
+      'icon': Icons.qr_code_scanner_rounded,
+      'color': _primaryOrange,
+      'title': c['touristName'] ?? c['userId']?.toString() ?? 'Tourist',
+      'description': 'Checked in at ${spotLabel.isNotEmpty ? spotLabel : 'Unknown spot'}',
+      'time': _formatTime(c['timestamp']),
     };
   }
 
@@ -743,27 +932,77 @@ class _TourismDashboardState extends State<TourismDashboard>
   ) {
     if (tourists.isEmpty) return tourists;
 
+    final deduped = _dedupeCheckInsByTouristSpotAndDay(_checkIns);
     final Map<String, int> visitsByUid = <String, int>{};
-    for (final c in _checkIns) {
-      final uid = (c['userId']?.toString().trim() ??
-              c['tourist_id']?.toString().trim() ??
-              '')
-          .trim();
+    for (final c in deduped) {
+      final uid =
+          (c['userId']?.toString().trim() ??
+                  c['tourist_id']?.toString().trim() ??
+                  '')
+              .trim();
       if (uid.isEmpty) continue;
       visitsByUid[uid] = (visitsByUid[uid] ?? 0) + 1;
     }
 
     return tourists.map((t) {
       final uid =
-          (t['firebaseUid']?.toString().trim() ?? t['id']?.toString().trim() ?? '')
+          (t['firebaseUid']?.toString().trim() ??
+                  t['id']?.toString().trim() ??
+                  '')
               .trim();
       final visits = uid.isNotEmpty ? (visitsByUid[uid] ?? 0) : 0;
-      return <String, dynamic>{
-        ...t,
-        'visits': visits,
-        'totalVisits': visits,
-      };
+      return <String, dynamic>{...t, 'visits': visits, 'totalVisits': visits};
     }).toList();
+  }
+
+  /// Keeps at most one check-in per (tourist, spot, local calendar day).
+  /// If duplicates exist, keeps the latest timestamp entry.
+  List<Map<String, dynamic>> _dedupeCheckInsByTouristSpotAndDay(
+    List<Map<String, dynamic>> rows,
+  ) {
+    final Map<String, Map<String, dynamic>> bestByKey =
+        <String, Map<String, dynamic>>{};
+    final Map<String, DateTime> bestTimeByKey = <String, DateTime>{};
+
+    for (final c in rows) {
+      final uid =
+          (c['userId']?.toString().trim() ??
+                  c['tourist_id']?.toString().trim() ??
+                  '')
+              .trim();
+      final spot =
+          (c['spotId']?.toString().trim() ??
+                  c['spot_id']?.toString().trim() ??
+                  '')
+              .trim();
+      final t = _parseCheckInTimestamp(c);
+      if (uid.isEmpty || spot.isEmpty || t == null) {
+        // Keep non-standard rows with a unique synthetic key.
+        final key = 'raw:${c['id'] ?? c.hashCode}';
+        bestByKey[key] = c;
+        bestTimeByKey[key] = t ?? DateTime.fromMillisecondsSinceEpoch(0);
+        continue;
+      }
+      final dayKey =
+          '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
+      final key = '$uid|$spot|$dayKey';
+      final prevTime = bestTimeByKey[key];
+      if (prevTime == null || t.isAfter(prevTime)) {
+        bestByKey[key] = c;
+        bestTimeByKey[key] = t;
+      }
+    }
+
+    final out = bestByKey.values.toList();
+    out.sort((a, b) {
+      final ta = _parseCheckInTimestamp(a);
+      final tb = _parseCheckInTimestamp(b);
+      if (ta == null && tb == null) return 0;
+      if (ta == null) return 1;
+      if (tb == null) return -1;
+      return tb.compareTo(ta);
+    });
+    return out;
   }
 
   /// Display label for analytics "top spots" (name over raw spot id).
@@ -830,7 +1069,23 @@ class _TourismDashboardState extends State<TourismDashboard>
       }
     }
     if (counts.isEmpty) return '—';
-    return counts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+    final top = counts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+    return _compactOriginForAnalyticsCard(top);
+  }
+
+  /// Short label for analytics cards (avoids overflow on long addresses).
+  String _compactOriginForAnalyticsCard(String origin) {
+    final trimmed = origin.trim();
+    if (trimmed.isEmpty || trimmed == '—') return '—';
+    final parts = trimmed
+        .split(',')
+        .map((p) => p.trim())
+        .where((p) => p.isNotEmpty)
+        .toList();
+    if (parts.isEmpty) return trimmed;
+    if (parts.length == 1) return parts.first;
+    if (parts.length == 2) return '${parts[0]}\n${parts[1]}';
+    return '${parts[0]}\n${parts[1]}';
   }
 
   List<double> get _lguAnalyticsTrendValues {
@@ -840,8 +1095,7 @@ class _TourismDashboardState extends State<TourismDashboard>
     for (final c in _checkIns) {
       final d = _parseCheckInTimestamp(c);
       if (d != null) {
-        final diff =
-            today.difference(DateTime(d.year, d.month, d.day)).inDays;
+        final diff = today.difference(DateTime(d.year, d.month, d.day)).inDays;
         if (diff >= 0 && diff < days) counts[days - 1 - diff] += 1;
       }
     }
@@ -863,7 +1117,10 @@ class _TourismDashboardState extends State<TourismDashboard>
   }
 
   /// Check-ins with [timestamp] in [start]–[end] inclusive (by local calendar day).
-  List<Map<String, dynamic>> _checkInsInDateRange(DateTime start, DateTime end) {
+  List<Map<String, dynamic>> _checkInsInDateRange(
+    DateTime start,
+    DateTime end,
+  ) {
     final startNorm = DateTime(start.year, start.month, start.day);
     final endNorm = DateTime(end.year, end.month, end.day, 23, 59, 59, 999);
     return _checkIns.where((c) {
@@ -896,119 +1153,104 @@ class _TourismDashboardState extends State<TourismDashboard>
 
   @override
   Widget build(BuildContext context) {
+    final outerPadding = _isMobile
+        ? EdgeInsets.zero
+        : const EdgeInsets.only(top: 25, right: 25, bottom: 25);
     return Container(
-      decoration: BoxDecoration(
-        border: Border.all(color: _primaryOrange, width: 3),
-      ),
+      color: _primaryOrange,
+      padding: outerPadding,
       child: Scaffold(
         backgroundColor: _darkBg,
-        drawer: _isMobile ? _buildDrawer() : null,
-        body: Row(
-          children: [
-            if (!_isMobile) _buildSidebar(),
-            Expanded(child: _buildMainContent()),
-          ],
-        ),
-        bottomNavigationBar: _isMobile ? _buildBottomNav() : null,
+        body: _isMobile
+            ? _buildMobileBody()
+            : Row(
+                children: [
+                  if (_isSidebarExpanded) _buildSidebar(),
+                  if (_isSidebarExpanded)
+                    const SizedBox(
+                      width: 1,
+                      child: ColoredBox(color: _sidebarBg),
+                    ),
+                  Expanded(child: _buildMainContent()),
+                ],
+              ),
+        bottomNavigationBar: null,
       ),
     );
   }
 
-  Widget _buildDrawer() {
-    return Drawer(
-      backgroundColor: _sidebarBg,
-      child: Column(
-        children: [
-          const SizedBox(height: 12),
-          _buildLogoRow(expanded: true),
-          const SizedBox(height: 16),
-          _buildUserInfo(expanded: true),
-          const SizedBox(height: 16),
-          _buildSidebarNavScroll(expanded: true),
-          const SizedBox(height: 12),
-        ],
-      ),
-    );
-  }
+  Widget _buildMobileBody() {
+    final screenW = MediaQuery.of(context).size.width;
+    final drawerWidth = (screenW * 0.8).clamp(240.0, 300.0);
 
-  Widget _buildBottomNav() {
-    return Container(
-      decoration: BoxDecoration(
-        color: _sidebarBg,
-        border: Border(top: BorderSide(color: Colors.grey.shade200)),
-      ),
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: List.generate(_navItems.length, (index) {
-              final item = _navItems[index];
-              final isSelected = _selectedIndex == index;
-              return InkWell(
-                onTap: () => setState(() => _selectedIndex = index),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? _primaryOrange.withOpacity(0.15)
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        item.icon,
-                        color: isSelected ? _primaryOrange : Colors.white54,
-                        size: 22,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        item.label,
-                        style: TextStyle(
-                          color: isSelected ? _primaryOrange : Colors.white54,
-                          fontSize: 10,
-                          fontWeight: isSelected
-                              ? FontWeight.w600
-                              : FontWeight.normal,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }),
+    return Stack(
+      children: [
+        Positioned.fill(child: _buildMainContent()),
+        if (_isSidebarExpanded)
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _toggleSidebar,
+              child: Container(color: Colors.black.withOpacity(0.28)),
+            ),
+          ),
+        AnimatedPositioned(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOutCubic,
+          left: _isSidebarExpanded ? 0 : -drawerWidth,
+          top: 0,
+          bottom: 0,
+          width: drawerWidth,
+          child: Material(
+            color: _sidebarBg,
+            elevation: 12,
+            child: SafeArea(
+              bottom: false,
+              child: Column(
+                children: [
+                  const SizedBox(height: 8),
+                  _buildLogoRow(expanded: true),
+                  _buildSidebarProfileStrip(),
+                  _buildSidebarNavScroll(expanded: true),
+                  const SizedBox(height: 10),
+                  _buildLogoutButton(expanded: true),
+                  const SizedBox(height: 12),
+                ],
+              ),
+            ),
           ),
         ),
+      ],
+    );
+  }
+
+  Widget _buildLogoutButton({required bool expanded}) {
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: expanded ? 16 : 8),
+      child: AppLogoutButton(
+        style: AppLogoutStyle.sidebarOnOrange,
+        expanded: expanded,
+        onPressed: _logout,
       ),
     );
   }
 
   Widget _buildSidebar() {
-    return ClipRRect(
-      borderRadius: BorderRadius.only(
-        topRight: Radius.circular(_tdSidebarOuterRadius),
-        bottomRight: Radius.circular(_tdSidebarOuterRadius),
-      ),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 250),
-        width: _isSidebarExpanded ? 260 : 80,
-        color: _sidebarBg,
-        child: Column(
-          children: [
-            const SizedBox(height: 12),
-            _buildLogoRow(expanded: _isSidebarExpanded),
-            const SizedBox(height: 16),
-            if (_isSidebarExpanded) _buildUserInfo(expanded: true),
-            if (_isSidebarExpanded) const SizedBox(height: 16),
-            _buildSidebarNavScroll(expanded: _isSidebarExpanded),
-            const SizedBox(height: 12),
-          ],
-        ),
+    final expanded = _isSidebarExpanded;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
+      width: expanded ? 260 : 80,
+      color: _sidebarBg,
+      child: Column(
+        children: [
+          const SizedBox(height: 8),
+          _buildLogoRow(expanded: expanded),
+          if (expanded) _buildSidebarProfileStrip(),
+          _buildSidebarNavScroll(expanded: expanded),
+          const SizedBox(height: 10),
+          _buildLogoutButton(expanded: expanded),
+          const SizedBox(height: 12),
+        ],
       ),
     );
   }
@@ -1025,17 +1267,15 @@ class _TourismDashboardState extends State<TourismDashboard>
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(
-                  onTap: () {
-                    if (_isMobile) {
-                      Navigator.pop(context);
-                    } else {
-                      _toggleSidebar();
-                    }
-                  },
+                  onTap: _toggleSidebar,
                   borderRadius: BorderRadius.circular(14),
                   child: Padding(
                     padding: const EdgeInsets.all(8),
-                    child: Icon(Icons.close_rounded, color: Colors.white, size: 20),
+                    child: Icon(
+                      Icons.close_rounded,
+                      color: Colors.white,
+                      size: 20,
+                    ),
                   ),
                 ),
               ),
@@ -1050,7 +1290,11 @@ class _TourismDashboardState extends State<TourismDashboard>
                   borderRadius: BorderRadius.circular(14),
                   child: Padding(
                     padding: const EdgeInsets.all(8),
-                    child: Icon(Icons.menu_rounded, color: Colors.white, size: 20),
+                    child: Icon(
+                      Icons.menu_rounded,
+                      color: Colors.white,
+                      size: 20,
+                    ),
                   ),
                 ),
               ),
@@ -1061,200 +1305,211 @@ class _TourismDashboardState extends State<TourismDashboard>
   }
 
   Widget _buildLogo({required bool expanded}) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final maxW = constraints.maxWidth.isFinite && constraints.maxWidth > 0
-            ? constraints.maxWidth
-            : (expanded ? 220.0 : 48.0);
-        final maxWidth = expanded ? maxW.clamp(48.0, 220.0) : 48.0;
-        final h = expanded ? 56.0 : 48.0;
-        if (!expanded) {
-          return Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: SizedBox(
-              width: 36,
-              height: 36,
-              child: TransparentLogo(
-                width: 36,
-                height: 36,
-                fit: BoxFit.contain,
-                errorIcon: Icons.travel_explore,
-                errorIconSize: 22,
-                errorIconColor: Colors.white,
-              ),
-            ),
-          );
-        }
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    const logoSize = 40.0;
+    const logoSizeCollapsed = 32.0;
+
+    if (!expanded) {
+      return Center(
+        child: Container(
+          padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: _sidebarHover,
-            borderRadius: BorderRadius.circular(22),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.15),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
+            color: Colors.white.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: TransparentLogo(
+            width: logoSizeCollapsed,
+            height: logoSizeCollapsed,
+            fit: BoxFit.contain,
+            errorIcon: Icons.travel_explore,
+            errorIconSize: 20,
+            errorIconColor: Colors.white,
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: TransparentLogo(
+            width: logoSize,
+            height: logoSize,
+            fit: BoxFit.contain,
+            errorIcon: Icons.travel_explore,
+            errorIconSize: 24,
+            errorIconColor: Colors.white,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'ATMOS TRS',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.3,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+              Text(
+                'Tourism Office',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.82),
+                  fontSize: 12,
+                ),
+                overflow: TextOverflow.ellipsis,
               ),
             ],
           ),
-          child: SizedBox(
-            width: maxWidth,
-            height: h,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(14),
-                    child: TransparentLogo(
-                      width: 36,
-                      height: 36,
-                      fit: BoxFit.contain,
-                      errorIcon: Icons.travel_explore,
-                      errorIconSize: 28,
-                      errorIconColor: Colors.white,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Flexible(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text(
-                        'ATMOS TRS',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.5,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      Text(
-                        'Tourism Office',
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.85),
-                          fontSize: 13,
-                          fontWeight: FontWeight.w400,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+        ),
+      ],
     );
   }
 
-  Widget _buildUserInfo({required bool expanded}) {
-    if (!expanded) return const SizedBox.shrink();
+  /// Profile row under logo — flat strip, no nested card box.
+  Widget _buildSidebarProfileStrip() {
+    final city = _municipalityName?.trim();
+    final displayName = _profileName.isNotEmpty
+        ? _profileName
+        : (city != null && city.isNotEmpty ? city : 'Tourism Office');
+    final subtitle = city != null && city.isNotEmpty
+        ? 'Tourism Office · $city'
+        : 'Misamis Occidental';
 
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: _accentOrange,
-        borderRadius: BorderRadius.circular(26),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.12),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Row(
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      child: Column(
         children: [
-          _buildSidebarAvatar(size: 46),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
+          Divider(color: Colors.white.withOpacity(0.22), height: 1),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              _buildSidebarAvatar(size: 40),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Flexible(
-                      child: Text(
-                        _profileName.isNotEmpty
-                            ? _profileName
-                            : (_municipalityName?.isNotEmpty == true
-                                ? _municipalityName!
-                                : 'Tourism Office'),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
+                    Text(
+                      displayName,
+                      style: const TextStyle(
                         color: Colors.white,
-                        borderRadius: BorderRadius.circular(28),
-                        border: Border.all(color: _primaryOrange, width: 1.5),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
                       ),
-                      child: const Text(
-                        'Staff',
-                        style: TextStyle(
-                          color: _primaryOrange,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                        ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.78),
+                        fontSize: 11,
                       ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
-                Text(
-                  _municipalityName?.isNotEmpty == true
-                      ? 'Tourism Office · Misamis Occidental'
-                      : 'Misamis Occidental',
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.9),
-                    fontSize: 12,
-                  ),
-                  overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.white.withOpacity(0.45)),
                 ),
-              ],
-            ),
+                child: const Text(
+                  'Staff',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  /// Sidebar + drawer: one scrollable column so Reports/Settings sit under Analytics
-  /// without a tall empty flex gap (ListView in [Expanded] used to reserve that space).
+  Future<void> _reloadVrToursFromDatabase() async {
+    _vrTours = await VrTourFirestoreService.loadForTourism(
+      municipalityId: _storedMunicipalityId,
+      spots: _touristSpots,
+    );
+    _totalVRTours = _vrTours.length;
+  }
+
+  /// Registered visitors + check-in profiles for this LGU (no full-collection scan).
+  Future<List<Map<String, dynamic>>> _loadRegisteredTouristsForMunicipality({
+    required FirebaseFirestore firestore,
+    required List<String> queryIds,
+    required Set<String> checkInUserIds,
+  }) async {
+    final byId = <String, Map<String, dynamic>>{};
+
+    for (final mid in queryIds) {
+      try {
+        final snap = await firestore
+            .collection('tourists')
+            .where('registrationMunicipalityId', isEqualTo: mid)
+            .limit(250)
+            .get()
+            .timeout(const Duration(seconds: 20));
+        for (final doc in snap.docs) {
+          byId[doc.id] = {'id': doc.id, ...doc.data()};
+        }
+      } catch (e) {
+        debugPrint('Tourism: tourists registrationMunicipalityId=$mid: $e');
+      }
+    }
+
+    for (final uid in checkInUserIds) {
+      if (byId.containsKey(uid)) continue;
+      try {
+        final doc = await firestore
+            .collection('tourists')
+            .doc(uid)
+            .get()
+            .timeout(const Duration(seconds: 12));
+        if (!doc.exists || doc.data() == null) continue;
+        final row = <String, dynamic>{'id': doc.id, ...doc.data()!};
+        if (RegistrationMunicipalityResolver.touristMatchesMunicipality(
+          tourist: row,
+          queryIds: queryIds,
+          checkInUserIds: checkInUserIds,
+        )) {
+          byId[uid] = row;
+        }
+      } catch (e) {
+        debugPrint('Tourism: tourists/$uid: $e');
+      }
+    }
+
+    return byId.values.toList();
+  }
+
+  /// Sidebar + drawer: scrollable nav; Settings is header icon only (not listed here).
   Widget _buildSidebarNavScroll({required bool expanded}) {
     final bottomInset = MediaQuery.paddingOf(context).bottom;
     return Expanded(
       child: SingleChildScrollView(
-        padding: EdgeInsets.only(
-          top: 4,
-          bottom: 20 + bottomInset,
-        ),
+        padding: EdgeInsets.only(top: 20, bottom: 20 + bottomInset),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
@@ -1265,19 +1520,19 @@ class _TourismDashboardState extends State<TourismDashboard>
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   for (int i = 0; i < _mainNavCount; i++)
-                    _buildTourismNavItem(index: i, expanded: expanded),
+                    _buildTourismNavItem(
+                      index: i,
+                      expanded: expanded,
+                      bottomMargin: i == 0 ? 14 : 6,
+                    ),
                   const SizedBox(height: 4),
-                  _buildTourismNavItem(index: _reportsIndex, expanded: expanded),
                   _buildTourismNavItem(
-                    index: _settingsIndex,
+                    index: _reportsIndex,
                     expanded: expanded,
-                    bottomMargin: 0,
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 10),
-            _buildLogoutButton(expanded: expanded),
           ],
         ),
       ),
@@ -1287,32 +1542,36 @@ class _TourismDashboardState extends State<TourismDashboard>
   Widget _buildTourismNavItem({
     required int index,
     required bool expanded,
-    double bottomMargin = 4,
+    double bottomMargin = 6,
   }) {
     final item = _navItems[index];
     final isSelected = _selectedIndex == index;
     return Container(
       margin: EdgeInsets.only(bottom: bottomMargin),
-      child: Material(
-        color: Colors.transparent,
-        child: Tooltip(
-          message: !expanded ? item.label : '',
+      child: Tooltip(
+        message: expanded ? '' : item.label,
+        child: Material(
+          color: Colors.transparent,
           child: InkWell(
             onTap: () {
               setState(() => _selectedIndex = index);
-              if (_isMobile) Navigator.pop(context);
+              if (_isMobile && _isSidebarExpanded) {
+                _toggleSidebar();
+              }
             },
-            borderRadius: BorderRadius.circular(32),
-            hoverColor: Colors.white.withOpacity(0.1),
-            splashColor: Colors.white.withOpacity(0.15),
+            borderRadius: BorderRadius.circular(12),
+            hoverColor: Colors.white.withOpacity(0.08),
+            splashColor: Colors.white.withOpacity(0.12),
             child: Container(
               padding: EdgeInsets.symmetric(
-                horizontal: expanded ? 16 : 0,
-                vertical: 10,
+                horizontal: expanded ? 12 : 10,
+                vertical: expanded ? 11 : 12,
               ),
               decoration: BoxDecoration(
-                color: isSelected ? _primaryOrange : Colors.transparent,
-                borderRadius: BorderRadius.circular(32),
+                color: isSelected
+                    ? Colors.white
+                    : Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
                 mainAxisAlignment: expanded
@@ -1322,22 +1581,25 @@ class _TourismDashboardState extends State<TourismDashboard>
                   Icon(
                     item.icon,
                     color: isSelected
-                        ? Colors.white
-                        : Colors.white.withOpacity(0.85),
+                        ? _primaryOrange
+                        : Colors.white.withOpacity(0.75),
                     size: 22,
                   ),
                   if (expanded) ...[
-                    const SizedBox(width: 14),
-                    Text(
-                      item.label,
-                      style: TextStyle(
-                        color: isSelected
-                            ? Colors.white
-                            : Colors.white.withOpacity(0.85),
-                        fontSize: 15,
-                        fontWeight: isSelected
-                            ? FontWeight.w600
-                            : FontWeight.w400,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        item.label,
+                        style: TextStyle(
+                          color: isSelected
+                              ? _primaryOrange
+                              : Colors.white.withOpacity(0.88),
+                          fontSize: 14,
+                          fontWeight: isSelected
+                              ? FontWeight.w600
+                              : FontWeight.w500,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ],
@@ -1345,23 +1607,6 @@ class _TourismDashboardState extends State<TourismDashboard>
               ),
             ),
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLogoutButton({required bool expanded}) {
-    return Padding(
-      padding: EdgeInsets.only(
-        left: expanded ? 16 : 0,
-        right: expanded ? 16 : 0,
-      ),
-      child: Tooltip(
-        message: expanded ? '' : 'Logout',
-        child: AppLogoutButton(
-          style: AppLogoutStyle.sidebarOnOrange,
-          expanded: expanded,
-          onPressed: _logout,
         ),
       ),
     );
@@ -1423,76 +1668,105 @@ class _TourismDashboardState extends State<TourismDashboard>
     }
   }
 
+  Widget _buildFramedContentShell({
+    required String title,
+    String? subtitle,
+    List<Widget>? actions,
+    bool showAddSpotButton = false,
+    Widget? preBody,
+    required Widget body,
+    Decoration? bodyDecoration,
+    List<BoxShadow>? frameShadow,
+  }) {
+    final mergedActions = <Widget>[
+      if (actions != null) ...actions,
+      if (_isMobile) ...[
+        if (actions != null && actions.isNotEmpty) const SizedBox(width: 8),
+        _buildMobileHeaderProfileAction(),
+      ],
+    ];
+
+    return Container(
+      margin: EdgeInsets.all(_isMobile ? 10 : 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _panelBorder),
+        boxShadow:
+            frameShadow ??
+            [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.04),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          _buildHeader(
+            title,
+            subtitle: subtitle,
+            actions: mergedActions.isEmpty ? null : mergedActions,
+            showAddSpotButton: showAddSpotButton,
+          ),
+          if (preBody != null) preBody,
+          Expanded(
+            child: Container(
+              decoration:
+                  bodyDecoration ?? const BoxDecoration(color: _surfaceBg),
+              child: body,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ==================== DASHBOARD SECTION ====================
   Widget _buildDashboardContent() {
     return RefreshIndicator(
       onRefresh: _loadData,
       color: _primaryOrange,
-      child: Container(
-        margin: EdgeInsets.all(_isMobile ? 12 : 24),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(_tdHeroRadius),
-          border: Border.all(
-            color: _primaryOrange.withOpacity(0.5),
-            width: 2,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.1),
-              blurRadius: 28,
-              offset: const Offset(0, 8),
-              spreadRadius: 0,
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(_tdHeroRadius),
-          child: Column(
-            children: [
-              _buildHeader(
-                'Dashboard',
-                subtitle: _municipalityName != null
-                    ? '$_municipalityName – Tourism Office'
-                    : 'Tourism Office Management Panel',
-              ),
-              if (_showAllDataBanner)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  color: _accentOrange.withOpacity(0.2),
-                  child: Row(
-                    children: [
-                      Icon(Icons.info_outline, color: _primaryOrange, size: 20),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Showing all data. Use a municipality-specific account (e.g. tourism.oroquieta@misocc.gov.ph) to see only your municipality\'s check-ins and spots.',
-                          style: TextStyle(fontSize: 13, color: _textDark),
-                        ),
+      child: _buildFramedContentShell(
+        title: 'Dashboard',
+        subtitle: _municipalityName != null
+            ? '$_municipalityName – Tourism Office'
+            : 'Tourism Office Management Panel',
+        preBody: _showAllDataBanner
+            ? Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
+                color: _accentOrange.withOpacity(0.2),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, color: _primaryOrange, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Showing all data. Use a municipality-specific account (e.g. tourism.oroquieta@misocc.gov.ph) to see only your municipality\'s check-ins and spots.',
+                        style: TextStyle(fontSize: 13, color: _textDark),
                       ),
-                    ],
-                  ),
-                ),
-              Expanded(
-                child: Container(
-                  color: const Color(0xFFF5F5F5),
-                  child: SingleChildScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: EdgeInsets.all(_isMobile ? 16 : 24),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _buildQuickStats(),
-                        const SizedBox(height: 24),
-                        _buildSpotQRCodesDashboardCard(),
-                        const SizedBox(height: 24),
-                        _buildRecentActivity(),
-                      ],
                     ),
-                  ),
+                  ],
                 ),
-              ),
+              )
+            : null,
+        body: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.all(_isMobile ? 16 : 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildQuickStats(),
+              const SizedBox(height: 24),
+              _buildSpotQRCodesDashboardCard(),
+              const SizedBox(height: 24),
+              _buildRecentActivity(),
             ],
           ),
         ),
@@ -1505,7 +1779,6 @@ class _TourismDashboardState extends State<TourismDashboard>
     String? subtitle,
     List<Widget>? actions,
     bool showAddSpotButton = false,
-    bool showHeaderProfile = true,
   }) {
     return Container(
       padding: EdgeInsets.symmetric(
@@ -1515,9 +1788,6 @@ class _TourismDashboardState extends State<TourismDashboard>
       decoration: BoxDecoration(
         // Pure white header background (reference style)
         color: Colors.white,
-        border: Border(
-          bottom: BorderSide(color: Colors.grey.shade300),
-        ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.06),
@@ -1528,9 +1798,9 @@ class _TourismDashboardState extends State<TourismDashboard>
       ),
       child: Row(
         children: [
-          if (_isMobile)
+          if (!_isSidebarExpanded)
             IconButton(
-              onPressed: () => Scaffold.of(context).openDrawer(),
+              onPressed: _toggleSidebar,
               icon: Icon(Icons.menu, color: _textDark),
             ),
           Expanded(
@@ -1549,30 +1819,31 @@ class _TourismDashboardState extends State<TourismDashboard>
                   Text(
                     subtitle,
                     style: TextStyle(
-                      color: _textMuted,
+                      color: const Color(0xFF374151),
                       fontSize: _isMobile ? 12 : 14,
+                      fontWeight: FontWeight.w500,
+                      height: 1.35,
                     ),
                   ),
               ],
             ),
           ),
           if (actions != null) ...actions,
+          _buildHeaderAction(
+            Icons.settings_outlined,
+            highlighted: _selectedIndex == _settingsIndex,
+            onTap: _openSettings,
+          ),
+          const SizedBox(width: 8),
           if (!_isMobile) ...[
             _buildHeaderAction(
               Icons.notifications_outlined,
-              badge: _notifications.isNotEmpty ? '${_notifications.length}' : null,
-              showRedDot: _notifications.isNotEmpty,
+              badge: _notifications.isNotEmpty
+                  ? '${_notifications.length}'
+                  : null,
               onTap: _showNotificationsDialog,
             ),
             const SizedBox(width: 12),
-            _buildHeaderAction(
-              Icons.search_rounded,
-              onTap: _showGlobalSearchDialog,
-            ),
-            if (showHeaderProfile) ...[
-              const SizedBox(width: 12),
-              _buildHeaderProfileChip(),
-            ],
             if (showAddSpotButton) ...[
               const SizedBox(width: 12),
               ElevatedButton.icon(
@@ -1592,14 +1863,102 @@ class _TourismDashboardState extends State<TourismDashboard>
                 ),
               ),
             ],
+            const SizedBox(width: 12),
+            _buildDesktopHeaderProfileMenu(),
           ],
           if (_isMobile && showAddSpotButton)
             IconButton(
               tooltip: 'Add tourist spot',
               onPressed: _showAddSpotDialog,
-              icon: Icon(Icons.add_circle_outline, color: _primaryOrange, size: 28),
+              icon: Icon(
+                Icons.add_circle_outline,
+                color: _primaryOrange,
+                size: 28,
+              ),
             ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildDesktopHeaderProfileMenu() {
+    return PopupMenuButton<String>(
+      tooltip: 'Account',
+      onSelected: _handleProfileMenuSelection,
+      itemBuilder: (context) => _buildProfileMenuItems(),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildSidebarAvatar(size: 30),
+            const SizedBox(width: 8),
+            Text(
+              _profileName.isNotEmpty ? _profileName : 'Tourism',
+              style: const TextStyle(
+                color: _textDark,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 6),
+            const Icon(
+              Icons.keyboard_arrow_down_rounded,
+              color: _textDark,
+              size: 18,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  List<PopupMenuEntry<String>> _buildProfileMenuItems() {
+    return const [
+      PopupMenuItem<String>(
+        value: 'logout',
+        child: ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(Icons.logout_rounded, color: Colors.redAccent),
+          title: Text('Logout'),
+        ),
+      ),
+    ];
+  }
+
+  void _handleProfileMenuSelection(String value) {
+    if (value == 'logout') {
+      _logout();
+    }
+  }
+
+  void _openSettings() {
+    setState(() => _selectedIndex = _settingsIndex);
+  }
+
+  Widget _buildMobileHeaderProfileAction() {
+    return PopupMenuButton<String>(
+      tooltip: 'Account',
+      onSelected: _handleProfileMenuSelection,
+      itemBuilder: (context) => _buildProfileMenuItems(),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildSidebarAvatar(size: 30),
+            const SizedBox(width: 6),
+            Icon(Icons.keyboard_arrow_down_rounded, color: _textDark, size: 18),
+          ],
+        ),
       ),
     );
   }
@@ -1607,12 +1966,16 @@ class _TourismDashboardState extends State<TourismDashboard>
   Widget _buildHeaderAction(
     IconData icon, {
     String? badge,
-    bool showRedDot = false,
+    bool highlighted = false,
     VoidCallback? onTap,
   }) {
+    final isSettings = icon == Icons.settings_outlined;
+    final isNotifications = icon == Icons.notifications_outlined;
     return Tooltip(
-      message: icon == Icons.notifications_outlined
+      message: isNotifications
           ? 'Notifications'
+          : isSettings
+          ? 'Settings'
           : 'Search',
       child: InkWell(
         onTap: onTap,
@@ -1623,25 +1986,18 @@ class _TourismDashboardState extends State<TourismDashboard>
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.grey.shade200,
+                color: highlighted
+                    ? _primaryOrange.withOpacity(0.15)
+                    : Colors.grey.shade200,
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: Icon(icon, color: _textMuted, size: 22),
+              child: Icon(
+                icon,
+                color: highlighted ? _primaryOrange : _textMuted,
+                size: 22,
+              ),
             ),
-            if (showRedDot)
-              Positioned(
-                right: -2,
-                top: -2,
-                child: Container(
-                  width: 10,
-                  height: 10,
-                  decoration: const BoxDecoration(
-                    color: Colors.redAccent,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              )
-            else if (badge != null && badge != '0')
+            if (badge != null && badge != '0')
               Positioned(
                 right: 0,
                 top: 0,
@@ -1669,67 +2025,165 @@ class _TourismDashboardState extends State<TourismDashboard>
 
   Widget _buildQuickStats() {
     final activeVrCount = _vrTours.where((v) => v['status'] == 'Active').length;
+    final inactiveSpots = (_touristSpots.length - _activeSpots).clamp(0, 999);
     final stats = [
       _StatCard(
-        title: 'Today\'s Check-ins',
+        title: 'Today\'s visits',
         value: '$_todayCheckIns',
-        change: '+${(_todayCheckIns * 0.15).toInt()}',
+        subtitle: 'Recorded today',
         icon: Icons.qr_code_scanner_rounded,
-        color: _primaryOrange,
+        color: _kpiOrange,
       ),
       _StatCard(
         title: _storedMunicipalityId != null
-            ? 'Visitors (check-ins only)'
-            : 'Visitors (use Governor for full registry)',
+            ? 'Visitors'
+            : 'Visitors (province)',
         value: '$_totalTourists',
-        change: '+${(_totalTourists * 0.05).toInt()}',
+        subtitle: 'Linked to QR visits',
         icon: Icons.people_alt_rounded,
-        color: Colors.blue,
+        color: _kpiBlue,
       ),
       _StatCard(
         title: 'Active Spots',
         value: '$_activeSpots',
-        change: '${_touristSpots.length - _activeSpots} inactive',
+        subtitle: inactiveSpots > 0
+            ? '$inactiveSpots inactive'
+            : 'All spots active',
         icon: Icons.place_rounded,
-        color: Colors.orange,
+        color: _kpiGreen,
       ),
       _StatCard(
         title: 'VR Tours',
         value: '$_totalVRTours',
-        change: '$activeVrCount active',
+        subtitle: activeVrCount > 0
+            ? '$activeVrCount active'
+            : 'None active yet',
         icon: Icons.vrpano_rounded,
-        color: Colors.purple,
-        isPositiveOverride: activeVrCount > 0,
+        color: _kpiPurple,
       ),
     ];
+
+    final crossCount = _isMobile ? 2 : (_isTablet ? 2 : 4);
+    final childAspectRatio = crossCount == 2 ? (_isMobile ? 1.05 : 1.2) : 1.55;
 
     return GridView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: _isMobile ? 2 : (_isTablet ? 2 : 4),
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-        childAspectRatio: _isMobile ? 0.88 : 1.3,
+        crossAxisCount: crossCount,
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 12,
+        childAspectRatio: childAspectRatio,
       ),
       itemCount: stats.length,
       itemBuilder: (context, index) => _buildStatCard(stats[index]),
     );
   }
 
+  List<double> _last7DayCheckInCounts() {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final counts = List<double>.filled(7, 0);
+    for (final c in _checkIns) {
+      final ts = c['timestamp'];
+      DateTime? date;
+      if (ts is Timestamp) {
+        date = ts.toDate();
+      } else if (ts is DateTime) {
+        date = ts;
+      }
+      if (date == null) continue;
+      final day = DateTime(date.year, date.month, date.day);
+      final diff = today.difference(day).inDays;
+      if (diff >= 0 && diff < 7) {
+        counts[6 - diff] += 1;
+      }
+    }
+    return counts;
+  }
+
+  List<double> _statSparklineValues(_StatCard stat) {
+    if (stat.title.contains('visit') || stat.title.contains('Check-in')) {
+      final week = _last7DayCheckInCounts();
+      if (week.any((v) => v > 0)) return week;
+    }
+    final n = double.tryParse(stat.value.replaceAll(',', '')) ?? 0;
+    final base = n > 0 ? n : 1.0;
+    return List.generate(8, (i) => base * (0.82 + 0.18 * (i / 7)));
+  }
+
+  /// LGU id for QR: prefer session, else any loaded spot with [municipalityId].
+  String? _effectiveLguMunicipalityId() {
+    final s = _storedMunicipalityId?.trim();
+    if (s != null && s.isNotEmpty) return s;
+    for (final spot in _allTouristSpots) {
+      final m = spot.municipalityId.trim();
+      if (m.isNotEmpty) return m;
+    }
+    for (final spot in _touristSpots) {
+      final m = spot.municipalityId.trim();
+      if (m.isNotEmpty) return m;
+    }
+    return null;
+  }
+
+  String? _effectiveLguQrDisplayName() {
+    final mid = _effectiveLguMunicipalityId();
+    if (mid == null) return null;
+    if (_storedMunicipalityId == mid &&
+        _municipalityName != null &&
+        _municipalityName!.trim().isNotEmpty) {
+      return _municipalityName;
+    }
+    for (final spot in _allTouristSpots) {
+      if (spot.municipalityId == mid && spot.municipality.trim().isNotEmpty) {
+        return spot.municipality;
+      }
+    }
+    for (final spot in _touristSpots) {
+      if (spot.municipalityId == mid && spot.municipality.trim().isNotEmpty) {
+        return spot.municipality;
+      }
+    }
+    for (final m in getMisamisOccidentalMunicipalities()) {
+      if (m.id == mid) return m.name;
+    }
+    return mid;
+  }
+
+  String _lguQrPayloadString(String municipalityId) {
+    final coords = getMunicipalityAnchorCoordinates(municipalityId);
+    if (coords != null) {
+      return lguQrData(
+        municipalityId,
+        anchorLat: coords.lat,
+        anchorLng: coords.lng,
+      );
+    }
+    return lguQrData(municipalityId);
+  }
+
   Widget _buildSpotQRCodesDashboardCard() {
+    final mid = _effectiveLguMunicipalityId();
+    final lguQrDataStr = mid != null ? _lguQrPayloadString(mid) : null;
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: _primaryOrange.withOpacity(0.35), width: 2),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.08),
             blurRadius: 18,
-            offset: const Offset(0, 5),
+            offset: const Offset(0, 8),
+          ),
+          BoxShadow(
+            color: _primaryOrange.withOpacity(0.08),
+            blurRadius: 24,
+            offset: const Offset(0, 10),
+            spreadRadius: -10,
           ),
         ],
       ),
@@ -1745,12 +2199,16 @@ class _TourismDashboardState extends State<TourismDashboard>
                         color: _primaryOrange.withOpacity(0.15),
                         borderRadius: BorderRadius.circular(24),
                       ),
-                      child: Icon(Icons.qr_code_2_rounded, color: _primaryOrange, size: 36),
+                      child: Icon(
+                        Icons.qr_code_2_rounded,
+                        color: _primaryOrange,
+                        size: 36,
+                      ),
                     ),
                     const SizedBox(width: 16),
                     const Expanded(
                       child: Text(
-                        'Spot QR codes',
+                        'Municipality QR code',
                         style: TextStyle(
                           color: _textDark,
                           fontSize: 18,
@@ -1760,18 +2218,51 @@ class _TourismDashboardState extends State<TourismDashboard>
                     ),
                   ],
                 ),
+                if (lguQrDataStr != null) ...[
+                  const SizedBox(height: 16),
+                  Center(
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.grey.shade200),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.06),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: QrImageView(
+                        data: lguQrDataStr,
+                        version: QrVersions.auto,
+                        size: 120,
+                        backgroundColor: Colors.white,
+                        errorCorrectionLevel: QrErrorCorrectLevel.H,
+                      ),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 Text(
-                  'Print or download unique QR codes for each tourist spot in your municipality.',
-                  style: TextStyle(color: _textMuted, fontSize: 14, height: 1.4),
+                  'Use one official QR code for your municipality. Download PNG or PDF for posters and sharing.',
+                  style: TextStyle(
+                    color: Color(0xFF4B5563),
+                    fontSize: 14,
+                    height: 1.45,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
                 const SizedBox(height: 16),
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
-                    onPressed: () => setState(() => _selectedIndex = _spotQRCodesIndex),
+                    onPressed: () =>
+                        setState(() => _selectedIndex = _spotQRCodesIndex),
                     icon: const Icon(Icons.qr_code_2_rounded, size: 20),
-                    label: const Text('View & print spot QR codes'),
+                    label: const Text('View & download municipality QR'),
                     style: FilledButton.styleFrom(
                       backgroundColor: _primaryOrange,
                       foregroundColor: Colors.white,
@@ -1785,22 +2276,51 @@ class _TourismDashboardState extends State<TourismDashboard>
               ],
             )
           : Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: _primaryOrange.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(24),
+                if (lguQrDataStr != null)
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.grey.shade200),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.06),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: QrImageView(
+                      data: lguQrDataStr,
+                      version: QrVersions.auto,
+                      size: 100,
+                      backgroundColor: Colors.white,
+                      errorCorrectionLevel: QrErrorCorrectLevel.H,
+                    ),
+                  )
+                else
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: _primaryOrange.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    child: Icon(
+                      Icons.qr_code_2_rounded,
+                      color: _primaryOrange,
+                      size: 36,
+                    ),
                   ),
-                  child: Icon(Icons.qr_code_2_rounded, color: _primaryOrange, size: 36),
-                ),
                 const SizedBox(width: 20),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Spot QR codes',
+                        'Municipality QR code',
                         style: TextStyle(
                           color: _textDark,
                           fontSize: 18,
@@ -1809,20 +2329,29 @@ class _TourismDashboardState extends State<TourismDashboard>
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'Print or download unique QR codes for each tourist spot in your municipality.',
-                        style: TextStyle(color: _textMuted, fontSize: 14, height: 1.4),
+                        'Use one official QR code for your municipality. Download PNG or PDF for posters and sharing.',
+                        style: const TextStyle(
+                          color: Color(0xFF4B5563),
+                          fontSize: 14,
+                          height: 1.45,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ],
                   ),
                 ),
                 FilledButton.icon(
-                  onPressed: () => setState(() => _selectedIndex = _spotQRCodesIndex),
+                  onPressed: () =>
+                      setState(() => _selectedIndex = _spotQRCodesIndex),
                   icon: const Icon(Icons.qr_code_2_rounded, size: 20),
-                  label: const Text('View & print spot QR codes'),
+                  label: const Text('View & download municipality QR'),
                   style: FilledButton.styleFrom(
                     backgroundColor: _primaryOrange,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 14,
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(22),
                     ),
@@ -1834,98 +2363,82 @@ class _TourismDashboardState extends State<TourismDashboard>
   }
 
   Widget _buildStatCard(_StatCard stat) {
-    final isPositive = stat.isPositiveOverride ?? stat.change.startsWith('+');
+    final sparkH = _isMobile ? 22.0 : 28.0;
+    final valueSize = _isMobile ? 22.0 : 26.0;
+    final labelSize = _isMobile ? 10.5 : 11.0;
+
     return Container(
-      padding: EdgeInsets.all(_isMobile ? 14 : 18),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: _cardBorder, width: 1.5),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        color: stat.color,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      clipBehavior: Clip.antiAlias,
+      padding: EdgeInsets.fromLTRB(
+        _isMobile ? 12 : 14,
+        _isMobile ? 10 : 12,
+        _isMobile ? 12 : 14,
+        _isMobile ? 8 : 10,
       ),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: EdgeInsets.all(_isMobile ? 10 : 14),
-            decoration: BoxDecoration(
-              color: stat.color,
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: [
-                BoxShadow(
-                  color: stat.color.withOpacity(0.3),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Icon(
-              stat.icon,
-              color: Colors.white,
-              size: _isMobile ? 22 : 28,
-            ),
-          ),
-          SizedBox(height: _isMobile ? 8 : 12),
-          Text(
-            stat.title,
-            textAlign: TextAlign.center,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: _textDark,
-              fontSize: _isMobile ? 12 : 14,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            stat.value,
-            style: TextStyle(
-              color: _textDark,
-              fontSize: _isMobile ? 18 : 24,
-              fontWeight: FontWeight.bold,
-              letterSpacing: -0.5,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: isPositive
-                  ? const Color(0xFFDCFCE7)
-                  : const Color(0xFFFEE2E2),
-              borderRadius: BorderRadius.circular(28),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  isPositive
-                      ? Icons.trending_up_rounded
-                      : Icons.trending_down_rounded,
-                  color: isPositive
-                      ? const Color(0xFF16A34A)
-                      : const Color(0xFFDC2626),
-                  size: 14,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  stat.change,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  stat.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: isPositive
-                        ? const Color(0xFF16A34A)
-                        : const Color(0xFFDC2626),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
+                    color: Colors.white.withOpacity(0.92),
+                    fontSize: labelSize,
+                    fontWeight: FontWeight.w500,
+                    height: 1.2,
                   ),
                 ),
-              ],
+              ),
+              Icon(
+                stat.icon,
+                color: Colors.white.withOpacity(0.35),
+                size: _isMobile ? 18 : 20,
+              ),
+            ],
+          ),
+          SizedBox(height: _isMobile ? 4 : 6),
+          Text(
+            stat.value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: valueSize,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.5,
+              height: 1.05,
+            ),
+          ),
+          if (stat.subtitle != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              stat.subtitle!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.78),
+                fontSize: _isMobile ? 9.5 : 10,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+          const Spacer(),
+          SizedBox(
+            height: sparkH,
+            width: double.infinity,
+            child: CustomPaint(
+              painter: _TourismMiniSparklinePainter(
+                values: _statSparklineValues(stat),
+              ),
             ),
           ),
         ],
@@ -1940,7 +2453,7 @@ class _TourismDashboardState extends State<TourismDashboard>
         Text(
           'Recent Activity',
           style: TextStyle(
-            color: _textDark,
+            color: const Color(0xFF111827),
             fontSize: 18,
             fontWeight: FontWeight.bold,
           ),
@@ -1961,9 +2474,15 @@ class _TourismDashboardState extends State<TourismDashboard>
                 borderRadius: BorderRadius.circular(26),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.06),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
+                    color: Colors.black.withOpacity(0.08),
+                    blurRadius: 16,
+                    offset: const Offset(0, 6),
+                  ),
+                  BoxShadow(
+                    color: _primaryOrange.withOpacity(0.05),
+                    blurRadius: 18,
+                    offset: const Offset(0, 8),
+                    spreadRadius: -10,
                   ),
                 ],
               ),
@@ -1998,10 +2517,7 @@ class _TourismDashboardState extends State<TourismDashboard>
                         const SizedBox(height: 2),
                         Text(
                           activity['description']?.toString() ?? '',
-                          style: TextStyle(
-                            color: _textMuted,
-                            fontSize: 13,
-                          ),
+                          style: TextStyle(color: _textMuted, fontSize: 13),
                         ),
                       ],
                     ),
@@ -2009,10 +2525,7 @@ class _TourismDashboardState extends State<TourismDashboard>
                   if (activity['time'] != null)
                     Text(
                       activity['time']?.toString() ?? '',
-                      style: TextStyle(
-                        color: _textMuted,
-                        fontSize: 11,
-                      ),
+                      style: TextStyle(color: _textMuted, fontSize: 11),
                     ),
                 ],
               ),
@@ -2022,15 +2535,49 @@ class _TourismDashboardState extends State<TourismDashboard>
     );
   }
 
-  Widget _buildEmptyState(String message, {IconData? icon}) {
+  Widget _buildEmptyState(
+    String message, {
+    IconData? icon,
+    Color? iconColor,
+    String? subtitle,
+  }) {
+    final accent = iconColor ?? _primaryOrange;
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(32),
+        padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon ?? Icons.inbox_rounded, color: Colors.white24, size: 48),
-            const SizedBox(height: 16),
-            Text(message, style: const TextStyle(color: _textMuted)),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: accent.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon ?? Icons.inbox_rounded, color: accent, size: 36),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: _textDark,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (subtitle != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                subtitle,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: _textMuted,
+                  fontSize: 13,
+                  height: 1.4,
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -2046,7 +2593,13 @@ class _TourismDashboardState extends State<TourismDashboard>
           (c['touristName']?.toString() ?? '').toLowerCase().contains(
             searchQuery,
           ) ||
-          (c['location']?.toString() ?? '').toLowerCase().contains(searchQuery);
+          (c['touristId']?.toString() ?? '').toLowerCase().contains(
+            searchQuery,
+          ) ||
+          (c['userId']?.toString() ?? '').toLowerCase().contains(searchQuery) ||
+          (c['location']?.toString() ?? '').toLowerCase().contains(searchQuery) ||
+          (c['spot_name']?.toString() ?? '').toLowerCase().contains(searchQuery) ||
+          (c['spotId']?.toString() ?? '').toLowerCase().contains(searchQuery);
 
       final matchesStatus =
           _checkInStatusFilter == 'All' || c['status'] == _checkInStatusFilter;
@@ -2057,56 +2610,33 @@ class _TourismDashboardState extends State<TourismDashboard>
     return RefreshIndicator(
       onRefresh: _loadData,
       color: _primaryOrange,
-      child: Container(
-        margin: EdgeInsets.all(_isMobile ? 12 : 24),
-        decoration: BoxDecoration(
-          color: const Color(0xFFFFFBF5),
-          borderRadius: BorderRadius.circular(36),
-          border: Border.all(color: _primaryOrange, width: 1.5),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(34),
-          child: Container(
-            color: const Color(0xFFF7F0E8),
-            child: Column(
+      child: _buildFramedContentShell(
+        title: 'Visit log',
+        subtitle:
+            'Shows QR visits at tourist spots in your municipality only '
+            '(${_municipalityName ?? _storedMunicipalityId ?? 'your LGU'}). '
+            'A scan at a spot in another town appears on that town\'s tourism dashboard.',
+        body: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.all(_isMobile ? 12 : 16),
+          child: _wrapTourismPanel(
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _buildHeader('Check-in Logs', subtitle: 'Manage tourist check-ins'),
-                Expanded(
-                  child: SingleChildScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: EdgeInsets.all(_isMobile ? 16 : 24),
-                    child: Container(
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: _cardBg,
-                        borderRadius: BorderRadius.circular(28),
-                        border: Border.all(color: Colors.grey.shade200),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.04),
-                            blurRadius: 12,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        children: [
-                          _buildCheckInsFilters(),
-                          const SizedBox(height: 20),
-                          if (filteredCheckIns.isEmpty)
-                            _buildEmptyState(
-                              'No check-ins found',
-                              icon: Icons.qr_code_scanner_rounded,
-                            )
-                          else if (_isMobile)
-                            _buildCheckInsListMobile(filteredCheckIns)
-                          else
-                            _buildCheckInsTable(filteredCheckIns),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
+                _buildCheckInsFilters(),
+                const SizedBox(height: 16),
+                if (filteredCheckIns.isEmpty)
+                  _buildEmptyState(
+                    'No visits found',
+                    icon: Icons.qr_code_scanner_rounded,
+                    iconColor: _primaryOrange,
+                    subtitle:
+                        'Scans from your municipality QR will appear here.',
+                  )
+                else if (_isMobile)
+                  _buildCheckInsListMobile(filteredCheckIns)
+                else
+                  _buildCheckInsTable(filteredCheckIns),
               ],
             ),
           ),
@@ -2116,54 +2646,76 @@ class _TourismDashboardState extends State<TourismDashboard>
   }
 
   Widget _buildCheckInsFilters() {
-    return Wrap(
-      spacing: 16,
-      runSpacing: 16,
-      children: [
-        SizedBox(
-          width: _isMobile ? double.infinity : 320,
-          child: AppSearchBar(
-            controller: _checkInsSearchController,
-            hintText: 'Search by name or location...',
-            onChanged: (value) => setState(() {}),
-            horizontalPadding: 0,
-            backgroundColor: Colors.white,
-            showMicrophone: true,
-            height: 48,
+    final searchField = AppSearchBar(
+      controller: _checkInsSearchController,
+      hintText: 'Search by name, ID, or location...',
+      onChanged: (value) => setState(() {}),
+      horizontalPadding: 0,
+      backgroundColor: Colors.white,
+      borderColor: _panelBorder,
+      showMicrophone: false,
+      height: 48,
+      showShadow: false,
+    );
+
+    final filterChip = Container(
+      height: 48,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      alignment: Alignment.centerLeft,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _panelBorder),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: _checkInStatusFilter,
+          isExpanded: true,
+          borderRadius: BorderRadius.circular(14),
+          dropdownColor: Colors.white,
+          icon: Icon(Icons.expand_more_rounded, color: _textDark, size: 22),
+          style: const TextStyle(
+            color: _textDark,
+            fontWeight: FontWeight.w600,
+            fontSize: 14,
           ),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF0F0F0),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.grey.shade300),
-          ),
-          child: DropdownButton<String>(
-            value: _checkInStatusFilter,
-            dropdownColor: Colors.white,
-            underline: const SizedBox(),
-            icon: Icon(Icons.keyboard_arrow_down_rounded, color: _textDark),
-            style: const TextStyle(
-              color: _textDark,
-              fontWeight: FontWeight.w500,
-              fontSize: 14,
-            ),
-            items: [
-              'All',
-              'Verified',
-              'Pending',
-            ]
-                .map(
-                  (s) => DropdownMenuItem(
-                    value: s,
-                    child: Text(s),
+          items: ['All', 'Verified', 'Pending']
+              .map(
+                (s) => DropdownMenuItem<String>(
+                  value: s,
+                  child: Text(
+                    s,
+                    style: const TextStyle(
+                      color: _textDark,
+                      fontWeight: FontWeight.w500,
+                      fontSize: 14,
+                    ),
                   ),
-                )
-                .toList(),
-            onChanged: (value) => setState(() => _checkInStatusFilter = value!),
-          ),
+                ),
+              )
+              .toList(),
+          onChanged: (value) => setState(() => _checkInStatusFilter = value!),
         ),
+      ),
+    );
+
+    if (_isMobile) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          searchField,
+          const SizedBox(height: 12),
+          SizedBox(width: double.infinity, child: filterChip),
+        ],
+      );
+    }
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(child: searchField),
+        const SizedBox(width: 14),
+        SizedBox(width: 168, child: filterChip),
       ],
     );
   }
@@ -2178,12 +2730,12 @@ class _TourismDashboardState extends State<TourismDashboard>
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.grey.shade200),
+                border: Border.all(color: _kAnalyticsSurfaceBorder, width: 1),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withOpacity(0.05),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
                   ),
                 ],
               ),
@@ -2194,15 +2746,10 @@ class _TourismDashboardState extends State<TourismDashboard>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          c['touristName'],
-                          style: const TextStyle(
-                            color: _textDark,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
+                        Expanded(child: _buildCheckInTouristCell(c)),
+                        const SizedBox(width: 8),
                         _buildStatusBadge(c['status']),
                       ],
                     ),
@@ -2236,114 +2783,176 @@ class _TourismDashboardState extends State<TourismDashboard>
   }
 
   Widget _buildCheckInsTable(List<Map<String, dynamic>> checkIns) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: DataTable(
-        headingRowColor: WidgetStateProperty.all(Colors.grey.shade100),
-        headingTextStyle: const TextStyle(
-          color: _textDark,
-          fontWeight: FontWeight.w600,
-          fontSize: 13,
+    const headerBg = Color(0xFFFFF4E8);
+    const stripe = Color(0xFFFFFBF7);
+    const tableHeadingStyle = TextStyle(
+      color: _textDark,
+      fontWeight: FontWeight.w800,
+      fontSize: 12,
+      letterSpacing: 0.35,
+    );
+
+    const minTableWidth = 760.0;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: _primaryOrange.withOpacity(0.12), width: 1),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 14,
+              offset: const Offset(0, 4),
+            ),
+            BoxShadow(
+              color: _primaryOrange.withOpacity(0.06),
+              blurRadius: 18,
+              offset: const Offset(0, 6),
+            ),
+          ],
         ),
-        dataTextStyle: const TextStyle(
-          color: _textDark,
-          fontSize: 13,
-        ),
-        dividerThickness: 1,
-        columns: const [
-          DataColumn(
-            label: Text('Tourist Name'),
-          ),
-          DataColumn(
-            label: Text('Tourist ID'),
-          ),
-          DataColumn(
-            label: Text('Location'),
-          ),
-          DataColumn(
-            label: Text('Time'),
-          ),
-          DataColumn(
-            label: Text('Status'),
-          ),
-          DataColumn(
-            label: Text('Actions'),
-          ),
-        ],
-        rows: checkIns
-            .map(
-              (c) => DataRow(
-                cells: [
-                  DataCell(
-                    Text(
-                      c['touristName'] ?? '',
-                      style: const TextStyle(color: _textDark),
-                    ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final cw = constraints.maxWidth;
+            final tableWidth = cw.isFinite && cw > 0
+                ? (cw < minTableWidth ? minTableWidth : cw)
+                : minTableWidth;
+
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: tableWidth,
+                child: DataTable(
+                  headingRowColor: WidgetStateProperty.all(headerBg),
+                  headingRowHeight: 48,
+                  dataRowMinHeight: 54,
+                  dataRowMaxHeight: 88,
+                  horizontalMargin: 20,
+                  columnSpacing: 24,
+                  headingTextStyle: tableHeadingStyle,
+                  dataTextStyle: const TextStyle(
+                    color: _textDark,
+                    fontSize: 13,
                   ),
-                  DataCell(
-                    Text(
-                      c['touristId'] ?? 'N/A',
-                      style: const TextStyle(color: _textMuted),
+                  dividerThickness: 1,
+                  border: TableBorder(
+                    horizontalInside: BorderSide(
+                      color: _primaryOrange.withOpacity(0.10),
                     ),
+                    top: BorderSide(color: _primaryOrange.withOpacity(0.12)),
+                    bottom: BorderSide(color: _primaryOrange.withOpacity(0.12)),
                   ),
-                  DataCell(
-                    Text(
-                      c['location'] ?? '',
-                      style: const TextStyle(color: _textDark),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      _formatTime(c['timestamp']),
-                      style: const TextStyle(color: _textMuted),
-                    ),
-                  ),
-                  DataCell(_buildStatusBadge(c['status'])),
-                  DataCell(
-                    IconButton(
-                      onPressed: () => _showCheckInDetailsDialog(c),
-                      icon: const Icon(
-                        Icons.visibility_rounded,
-                        color: Colors.blue,
-                        size: 22,
-                      ),
-                      tooltip: 'View Details',
-                      style: IconButton.styleFrom(
-                        backgroundColor: Colors.blue.withOpacity(0.08),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
+                  columns: [
+                    const DataColumn(label: Text('Tourist')),
+                    const DataColumn(label: Text('Tourist ID')),
+                    const DataColumn(label: Text('Location')),
+                    const DataColumn(label: Text('Time')),
+                    const DataColumn(label: Text('Status')),
+                    DataColumn(
+                      label: SizedBox(
+                        width: 88,
+                        child: Center(
+                          child: Text('Actions', style: tableHeadingStyle),
                         ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                  rows: [
+                    for (var i = 0; i < checkIns.length; i++)
+                      _buildCheckInDataRow(checkIns[i], i, stripe),
+                  ],
+                ),
               ),
-            )
-            .toList(),
+            );
+          },
+        ),
       ),
+    );
+  }
+
+  DataRow _buildCheckInDataRow(
+    Map<String, dynamic> c,
+    int index,
+    Color stripeColor,
+  ) {
+    final rowBg = index.isOdd ? stripeColor : const Color(0xFFFFFFFF);
+    return DataRow(
+      color: WidgetStateProperty.all(rowBg),
+      cells: [
+        DataCell(_buildCheckInTouristCell(c)),
+        DataCell(
+          SelectableText(
+            c['touristId'] ?? 'N/A',
+            style: const TextStyle(
+              color: _textMuted,
+              fontWeight: FontWeight.w500,
+              fontSize: 12,
+            ),
+          ),
+        ),
+        DataCell(
+          Text(c['location'] ?? '', style: const TextStyle(color: _textDark)),
+        ),
+        DataCell(
+          Text(
+            _formatTime(c['timestamp']),
+            style: const TextStyle(color: _textMuted, fontSize: 13),
+          ),
+        ),
+        DataCell(_buildStatusBadge(c['status'])),
+        DataCell(
+          SizedBox(
+            width: 88,
+            child: Center(
+              child: Tooltip(
+                message: 'View details',
+                child: Material(
+                  color: _primaryOrange.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  child: InkWell(
+                    onTap: () => _showCheckInDetailsDialog(c),
+                    borderRadius: BorderRadius.circular(12),
+                    child: const Padding(
+                      padding: EdgeInsets.all(8),
+                      child: Icon(
+                        Icons.visibility_rounded,
+                        color: _primaryOrange,
+                        size: 20,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
   Widget _buildStatusBadge(String status) {
     final isVerified = status == 'Verified';
+    final bg = isVerified ? const Color(0xFFDCFCE7) : const Color(0xFFFFEDD5);
+    final fg = isVerified ? const Color(0xFF15803D) : const Color(0xFFC2410C);
+    final border = isVerified
+        ? const Color(0xFF86EFAC).withOpacity(0.9)
+        : const Color(0xFFFDBA74).withOpacity(0.85);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: isVerified
-            ? _primaryOrange.withOpacity(0.18)
-            : Colors.orange.withOpacity(0.18),
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(
-          color: (isVerified ? _primaryOrange : Colors.orange).withOpacity(0.4),
-          width: 1,
-        ),
+        color: bg,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: border, width: 1),
       ),
       child: Text(
         status,
         style: TextStyle(
-          color: isVerified ? _primaryOrange : Colors.orange.shade800,
+          color: fg,
           fontSize: 12,
-          fontWeight: FontWeight.w600,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.2,
         ),
       ),
     );
@@ -2354,16 +2963,46 @@ class _TourismDashboardState extends State<TourismDashboard>
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: _cardBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text(
-          'Check-in Details',
-          style: TextStyle(color: Colors.white),
+          'Visit details',
+          style: TextStyle(
+            color: _textDark,
+            fontWeight: FontWeight.w800,
+            fontSize: 20,
+          ),
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildDetailRow('Tourist Name', checkIn['touristName']),
+            Center(child: _buildCheckInProfileAvatar(checkIn, radius: 36)),
+            const SizedBox(height: 12),
+            Center(
+              child: Text(
+                checkIn['touristName']?.toString() ?? 'Tourist',
+                style: const TextStyle(
+                  color: _textDark,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            if ((checkIn['touristEmail']?.toString() ?? '').isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Center(
+                  child: Text(
+                    checkIn['touristEmail'].toString(),
+                    style: TextStyle(color: _textMuted, fontSize: 12),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 12),
             _buildDetailRow('Tourist ID', checkIn['touristId'] ?? 'N/A'),
+            if ((checkIn['touristOrigin']?.toString() ?? '').isNotEmpty)
+              _buildDetailRow('Origin', checkIn['touristOrigin'].toString()),
             _buildDetailRow('Location', checkIn['location']),
             _buildDetailRow('Time', _formatTime(checkIn['timestamp'])),
             _buildDetailRow('Status', checkIn['status']),
@@ -2418,13 +3057,198 @@ class _TourismDashboardState extends State<TourismDashboard>
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Check-in verified successfully'),
+        content: Text('Visit verified successfully'),
         backgroundColor: _primaryOrange,
       ),
     );
   }
 
   // ==================== TOURIST SPOTS SECTION ====================
+  Future<void> _runBackfillSpotQrMetadata({bool showSnack = true}) async {
+    if (_isBackfillingSpotQr) return;
+    setState(() => _isBackfillingSpotQr = true);
+    try {
+      final result =
+          await TouristSpotsFirestoreService.enforceCanonicalSpotDocuments();
+      if (!mounted || !showSnack) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            (result.upserted == 0 &&
+                    result.removed == 0 &&
+                    result.backfilled == 0)
+                ? 'No spot changes needed (or you may be offline).'
+                : 'Strict sync complete: kept ${result.upserted} canonical spot(s) '
+                      '(slug document ids), removed ${result.removed} other doc(s), '
+                      'updated ${result.backfilled} QR field set(s).',
+          ),
+          backgroundColor: _primaryOrange,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      if (!mounted || !showSnack) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not sync QR fields: $e'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isBackfillingSpotQr = false);
+      }
+    }
+  }
+
+  /// Banner: backfill `qrValue`, `qr_payload`, `createdAt` for older `tourist_spots` docs.
+  Widget _buildSpotQrFirestoreSyncBanner() {
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF7ED),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _panelBorder),
+        ),
+        child: _isMobile
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.cloud_sync_rounded,
+                        color: _primaryOrange,
+                        size: 22,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Sync QR fields to Firestore',
+                          style: TextStyle(
+                            color: _textDark,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Strict mode: enforces exactly 17 canonical tourist spots in tourist_spots '
+                    '(document ids are spot slugs like oroquieta_city_boulevard_and_peoples_park, not municipality names). '
+                    'Other documents are removed; then qrValue, qr_payload, and createdAt are filled.',
+                    style: TextStyle(
+                      color: _textMuted,
+                      fontSize: 12,
+                      height: 1.35,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _isBackfillingSpotQr
+                          ? null
+                          : _runBackfillSpotQrMetadata,
+                      icon: _isBackfillingSpotQr
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.play_arrow_rounded, size: 20),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: _primaryOrange,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      label: Text(
+                        _isBackfillingSpotQr ? 'Syncing…' : 'Sync now',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            : Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.cloud_sync_rounded,
+                    color: _primaryOrange,
+                    size: 26,
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Sync QR fields to Firestore',
+                          style: TextStyle(
+                            color: _textDark,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Strict mode keeps only the 17 canonical spot documents (ids are spot slugs; '
+                          'each row still has municipalityId for dashboards). Other tourist_spots docs '
+                          'are deleted, then qrValue, qr_payload, and createdAt are filled. '
+                          'Open Firebase Console → Firestore → tourist_spots to verify.',
+                          style: TextStyle(
+                            color: _textMuted,
+                            fontSize: 13,
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  FilledButton.icon(
+                    onPressed: _isBackfillingSpotQr
+                        ? null
+                        : _runBackfillSpotQrMetadata,
+                    icon: _isBackfillingSpotQr
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.play_arrow_rounded, size: 20),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _primaryOrange,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 12,
+                      ),
+                    ),
+                    label: Text(
+                      _isBackfillingSpotQr ? 'Syncing…' : 'Sync now',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
+
   Widget _buildTouristSpotsContent() {
     final filteredSpots = _touristSpots.where((s) {
       final searchQuery = _spotsSearchController.text.toLowerCase();
@@ -2442,118 +3266,139 @@ class _TourismDashboardState extends State<TourismDashboard>
     return RefreshIndicator(
       onRefresh: _loadData,
       color: _primaryOrange,
-      child: Container(
-        color: _darkBg,
-        child: Column(
-          children: [
-            _buildHeader(
-              'Tourist Spots',
-              subtitle: 'Manage tourist destinations',
+      child: _buildFramedContentShell(
+        title: 'Tourist Spots',
+        subtitle: 'Manage tourist destinations',
+        body: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.all(_isMobile ? 12 : 16),
+          child: _wrapTourismPanel(
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildSpotsFilters(),
+                const SizedBox(height: 14),
+                _buildSpotQrFirestoreSyncBanner(),
+                const SizedBox(height: 16),
+                if (filteredSpots.isEmpty)
+                  _buildEmptyState(
+                    'No tourist spots found',
+                    icon: Icons.place_rounded,
+                    iconColor: _primaryOrange,
+                    subtitle:
+                        'Add a spot or run Sync to load canonical destinations.',
+                  )
+                else if (_isMobile)
+                  _buildSpotsGridMobile(filteredSpots)
+                else
+                  _buildSpotsTable(filteredSpots),
+              ],
             ),
-            Expanded(
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: EdgeInsets.all(_isMobile ? 16 : 24),
-                child: Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: _cardBg,
-                    borderRadius: BorderRadius.circular(28),
-                    border: Border.all(color: _cardBorder),
-                  ),
-                  child: Column(
-                    children: [
-                      _buildSpotsFilters(),
-                      const SizedBox(height: 20),
-                      if (filteredSpots.isEmpty)
-                        _buildEmptyState(
-                          'No tourist spots found',
-                          icon: Icons.place_rounded,
-                        )
-                      else if (_isMobile)
-                        _buildSpotsGridMobile(filteredSpots)
-                      else
-                        _buildSpotsTable(filteredSpots),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 
   /// One QR per LGU (`ATMOS-TRS-LGU:municipalityId` + optional anchor) — downloadable PNG/PDF.
-  Widget _buildLguQrCardForDashboard(String municipalityId, String displayName) {
+  Widget _buildLguQrCardForDashboard(
+    String municipalityId,
+    String displayName,
+  ) {
     final coords = getMunicipalityAnchorCoordinates(municipalityId);
-    final qrData = coords != null
-        ? lguQrData(municipalityId, anchorLat: coords.lat, anchorLng: coords.lng)
-        : lguQrData(municipalityId);
+    final qrData = _lguQrPayloadString(municipalityId);
     return Container(
       padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(26),
-        border: Border.all(color: _cardBorder),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
+      decoration: _tourismPanelDecoration(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Text(
-            'Your LGU QR code',
-            style: TextStyle(
-              color: _textDark,
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: _primaryOrange.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.location_city_rounded,
+                  color: _primaryOrange,
+                  size: 16,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Your LGU QR code',
+                  style: TextStyle(
+                    color: _primaryOrange,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 10),
           Text(
             displayName,
             style: TextStyle(
-              color: _primaryOrange,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
+              color: _textDark,
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.2,
             ),
           ),
           const SizedBox(height: 4),
           Text(
             'Unique to your municipality — download for posters, flyers, or social media.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: _textMuted, fontSize: 13),
+            style: TextStyle(
+              color: _textMuted,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 18),
           Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.grey.shade300),
+              border: Border.all(color: Colors.grey.shade200),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.07),
+                  blurRadius: 14,
+                  offset: const Offset(0, 5),
+                ),
+              ],
             ),
             child: QrImageView(
               data: qrData,
               version: QrVersions.auto,
-              size: 200,
+              size: _isMobile ? 190 : 210,
               backgroundColor: Colors.white,
               errorCorrectionLevel: QrErrorCorrectLevel.H,
             ),
           ),
           const SizedBox(height: 12),
-          SelectableText(
-            qrData,
-            style: TextStyle(
-              color: _textMuted,
-              fontSize: 11,
-              fontFamily: 'monospace',
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.75),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.grey.shade200),
+            ),
+            child: SelectableText(
+              qrData,
+              style: TextStyle(
+                color: _textMuted,
+                fontSize: 11,
+                fontFamily: 'monospace',
+                height: 1.25,
+              ),
             ),
           ),
           const SizedBox(height: 16),
@@ -2562,7 +3407,7 @@ class _TourismDashboardState extends State<TourismDashboard>
             runSpacing: 8,
             alignment: WrapAlignment.center,
             children: [
-              OutlinedButton.icon(
+              ElevatedButton.icon(
                 onPressed: () async {
                   await downloadLguQrPng(
                     municipalityId,
@@ -2581,10 +3426,29 @@ class _TourismDashboardState extends State<TourismDashboard>
                     );
                   }
                 },
-                icon: Icon(Icons.download_rounded, color: _primaryOrange, size: 20),
-                label: Text(
+                icon: Icon(
+                  Icons.download_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
+                label: const Text(
                   'Download PNG',
-                  style: TextStyle(color: _primaryOrange, fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _primaryOrange,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 12,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(999),
+                  ),
                 ),
               ),
               OutlinedButton.icon(
@@ -2596,10 +3460,27 @@ class _TourismDashboardState extends State<TourismDashboard>
                     anchorLng: coords?.lng,
                   );
                 },
-                icon: Icon(Icons.picture_as_pdf_rounded, color: _primaryOrange, size: 20),
+                icon: Icon(
+                  Icons.picture_as_pdf_rounded,
+                  color: _primaryOrange,
+                  size: 20,
+                ),
                 label: Text(
                   'Download PDF',
-                  style: TextStyle(color: _primaryOrange, fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                    color: _primaryOrange,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: _primaryOrange.withOpacity(0.45)),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 12,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(999),
+                  ),
                 ),
               ),
             ],
@@ -2610,503 +3491,50 @@ class _TourismDashboardState extends State<TourismDashboard>
   }
 
   Widget _buildSpotQRCodesContent() {
-    return FutureBuilder<String?>(
-      future: SessionStorage.getStoredMunicipalityId(),
-      builder: (context, snapshot) {
-        final storedMunicipalityId = snapshot.data;
-        final spots = _touristSpots;
-        String? municipalityDisplayName = _municipalityName;
-        if (storedMunicipalityId == null && spots.isNotEmpty) {
-          municipalityDisplayName = null;
-        }
+    final effectiveMunicipalityId = _effectiveLguMunicipalityId();
+    final municipalityDisplayName =
+        _effectiveLguQrDisplayName() ?? effectiveMunicipalityId;
 
-        return RefreshIndicator(
-          onRefresh: _loadData,
-          color: _primaryOrange,
-          child: Container(
-            color: _darkBg,
-            child: Column(
-              children: [
-                _buildHeader(
-                  'Spot QR Codes',
-                  subtitle: municipalityDisplayName != null
-                      ? 'LGU QR for $municipalityDisplayName, then unique QR per tourist spot — PNG/PDF on each card (same as Governor portal)'
-                      : 'Your municipality LGU QR below, then one QR per spot — download PNG or PDF on each card',
-                  actions: [
-                    TextButton.icon(
-                      onPressed: () => _printSpotPosters(storedMunicipalityId),
-                      icon: const Icon(Icons.picture_as_pdf_rounded, size: 20),
-                      label: const Text('Print posters (A4)'),
-                      style: TextButton.styleFrom(
-                        foregroundColor: _primaryOrange,
-                      ),
-                    ),
-                    TextButton.icon(
-                      onPressed: () => _printSpotQRCodes(storedMunicipalityId),
-                      icon: const Icon(Icons.print_rounded, size: 20),
-                      label: const Text('Print'),
-                      style: TextButton.styleFrom(
-                        foregroundColor: _primaryOrange,
-                      ),
-                    ),
-                  ],
-                ),
-                Expanded(
-                  child: spots.isEmpty && storedMunicipalityId == null
-                      ? Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.qr_code_2_rounded, size: 64, color: _textMuted),
-                              const SizedBox(height: 16),
-                              Text(
-                                'No tourist spots to show QR codes',
-                                style: TextStyle(color: _textMuted, fontSize: 16),
-                              ),
-                              const SizedBox(height: 8),
-                              Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 24),
-                                child: Text(
-                                  'Add spots in Firestore with municipalityId for your municipality. Use Print above when you have spots.',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(color: _textMuted, fontSize: 14),
-                                ),
-                              ),
-                            ],
-                          ),
-                        )
-                      : SingleChildScrollView(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          padding: EdgeInsets.all(_isMobile ? 16 : 24),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              if (storedMunicipalityId != null &&
-                                  storedMunicipalityId.isNotEmpty)
-                                Padding(
-                                  padding: const EdgeInsets.only(bottom: 24),
-                                  child: _buildLguQrCardForDashboard(
-                                    storedMunicipalityId,
-                                    municipalityDisplayName ??
-                                        storedMunicipalityId,
-                                  ),
-                                ),
-                              if (spots.isNotEmpty) ...[
-                                Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Text(
-                                    'Tourist spots (unique QR each)',
-                                    style: TextStyle(
-                                      color: _textDark,
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  'Each code is unique to that location — use PNG or PDF for posters and signage.',
-                                  style: TextStyle(color: _textMuted, fontSize: 13),
-                                ),
-                                const SizedBox(height: 16),
-                              ],
-                              if (spots.isEmpty)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 8),
-                                  child: Column(
-                                    children: [
-                                      Icon(Icons.place_rounded,
-                                          size: 48, color: _textMuted),
-                                      const SizedBox(height: 12),
-                                      Text(
-                                        'No individual spot QR codes yet',
-                                        style: TextStyle(
-                                            color: _textMuted, fontSize: 16),
-                                      ),
-                                      const SizedBox(height: 8),
-                                      Text(
-                                        'Add tourist_spots in Firestore for your LGU to print per-location codes.',
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                            color: _textMuted, fontSize: 14),
-                                      ),
-                                    ],
-                                  ),
-                                )
-                              else if (_isMobile)
-                                _buildSpotQRCodesGridMobile(
-                                    spots, storedMunicipalityId)
-                              else
-                                _buildSpotQRCodesGrid(
-                                    spots, storedMunicipalityId),
-                            ],
-                          ),
-                        ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Future<Uint8List?> _qrDataToPngBytes(String qrData, {int size = 200}) async {
-    return qrDataToPngBytes(qrData, size: size);
-  }
-
-  /// Prints A4 portrait posters (one page per spot) for posting at entrances.
-  Future<void> _printSpotPosters(String? storedMunicipalityId) async {
-    final spots = _touristSpots;
-    if (spots.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'No tourist spots yet. Add spots in Firestore with municipalityId, then use Print posters.',
-            ),
-            backgroundColor: _primaryOrange,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-      return;
-    }
-    final posterItems = spots.map((s) => SpotPosterItem(
-      id: s.id,
-      name: s.name.isNotEmpty ? s.name : 'Tourist Spot',
-      municipality: s.municipality.isNotEmpty ? s.municipality : (_municipalityName ?? ''),
-      municipalityId: s.municipalityId.isNotEmpty ? s.municipalityId : (storedMunicipalityId ?? ''),
-    )).toList();
-    try {
-      final pdf = await buildSpotPosterPdfDocument(
-        posterItems,
-        (String qrData, int size) => _qrDataToPngBytes(qrData, size: size),
-      );
-      await Printing.layoutPdf(
-        onLayout: (PdfPageFormat format) async => pdf.save(),
-        name: 'ATMOS-TRS-Spot-Posters.pdf',
-      );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Generated ${spots.length} poster page(s). Print or save as PDF.'),
-            backgroundColor: _primaryOrange,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Print posters failed: $e'),
-            backgroundColor: Colors.red,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _printSpotQRCodes(String? storedMunicipalityId) async {
-    final spots = _touristSpots;
-    if (spots.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'No tourist spots yet. Add spots in Firestore with municipalityId for your municipality, then use Print to generate QR codes.',
-            ),
-            backgroundColor: _primaryOrange,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-      return;
-    }
-    final pdf = pw.Document();
-    const qrSize = 120.0;
-    final municipalityName = _municipalityName ?? storedMunicipalityId ?? '';
-
-    for (var i = 0; i < spots.length; i++) {
-      final spot = spots[i];
-      final spotId = spot.id;
-      final municipalityId = spot.municipalityId.isNotEmpty
-          ? spot.municipalityId
-          : (storedMunicipalityId ?? '');
-      final spotName = spot.name.isNotEmpty ? spot.name : 'Spot';
-      final qrData = municipalityId.isNotEmpty ? spotQrData(municipalityId, spotId) : '';
-      pw.Widget? qrImage;
-      if (qrData.isNotEmpty) {
-        final bytes = await _qrDataToPngBytes(qrData, size: qrSize.toInt());
-        if (bytes != null && bytes.isNotEmpty) {
-          qrImage = pw.Image(pw.MemoryImage(bytes), width: qrSize, height: qrSize);
-        }
-      }
-      pdf.addPage(
-        pw.Page(
-          pageFormat: PdfPageFormat.a4,
-          build: (pw.Context context) {
-            return pw.Center(
-              child: pw.Column(
-                mainAxisSize: pw.MainAxisSize.min,
-                children: [
-                  pw.Text(
-                    'Spot QR Code – $municipalityName',
-                    style: pw.TextStyle(fontSize: 12),
-                  ),
-                  pw.SizedBox(height: 8),
-                  pw.Text(
-                    spotName,
-                    style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
-                    textAlign: pw.TextAlign.center,
-                  ),
-                  pw.SizedBox(height: 16),
-                  if (qrImage != null) qrImage else pw.Text('Set municipalityId in Firestore', style: pw.TextStyle(fontSize: 10)),
-                ],
-              ),
-            );
-          },
-        ),
-      );
-    }
-
-    try {
-      await Printing.layoutPdf(
-        onLayout: (PdfPageFormat format) async => pdf.save(),
-        name: 'Spot-QR-Codes-$municipalityName.pdf',
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Print failed: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
-  Widget _buildSpotQRCodesGrid(List<TouristSpot> spots, String? storedMunicipalityId) {
-    return Wrap(
-      spacing: 24,
-      runSpacing: 24,
-      children: spots.map((spot) {
-        final spotId = spot.id;
-        final municipalityId = spot.municipalityId.isNotEmpty
-            ? spot.municipalityId
-            : (storedMunicipalityId ?? '');
-        final spotName = spot.name.isNotEmpty ? spot.name : 'Spot';
-        final municipalityName = spot.municipality.isNotEmpty
-            ? spot.municipality
-            : (_municipalityName ?? municipalityId);
-        final qrData = municipalityId.isNotEmpty ? spotQrData(municipalityId, spotId) : '';
-
-        return Container(
-          width: 220,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: _cardBg,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: _cardBorder),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (qrData.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(
-                    'Set municipalityId in Firestore',
-                    style: TextStyle(color: Colors.orange.shade800, fontSize: 11),
-                  ),
-                ),
-              Text(
-                spotName,
-                style: const TextStyle(
-                  color: _textDark,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
-                ),
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 4),
-              Text(
-                municipalityName,
-                style: TextStyle(color: _textMuted, fontSize: 12),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-              if (qrData.isNotEmpty)
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: QrImageView(
-                    data: qrData,
-                    version: QrVersions.auto,
-                    size: 200,
-                    backgroundColor: Colors.white,
-                    errorCorrectionLevel: QrErrorCorrectLevel.H,
-                  ),
-                ),
-              if (qrData.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      color: _primaryOrange,
+      child: _buildFramedContentShell(
+        title: 'Spot QR Codes',
+        subtitle: municipalityDisplayName != null
+            ? 'One official LGU QR for $municipalityDisplayName only — use PNG/PDF for sharing and posters.'
+            : 'One official municipality QR only — use PNG/PDF for sharing and posters.',
+        body: effectiveMunicipalityId == null || effectiveMunicipalityId.isEmpty
+            ? Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    TextButton(
-                      onPressed: () async {
-                        await downloadSpotQrPng(municipalityId, spotId);
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'PNG ready — check downloads or share sheet',
-                              ),
-                              backgroundColor: _primaryOrange,
-                            ),
-                          );
-                        }
-                      },
-                      child: Text(
-                        'PNG',
-                        style: TextStyle(color: _primaryOrange),
-                      ),
+                    Icon(Icons.qr_code_2_rounded, size: 64, color: _textMuted),
+                    const SizedBox(height: 16),
+                    Text(
+                      'No municipality QR available yet',
+                      style: TextStyle(color: _textMuted, fontSize: 16),
                     ),
-                    TextButton(
-                      onPressed: () async {
-                        await downloadSpotQrPdf(
-                          municipalityId: municipalityId,
-                          spotId: spotId,
-                          spotName: spotName,
-                          municipalityDisplayName: municipalityName,
-                        );
-                      },
+                    const SizedBox(height: 8),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
                       child: Text(
-                        'PDF',
-                        style: TextStyle(color: _primaryOrange),
+                        'Set your LGU municipality on the account (or ensure at least one tourist spot includes a municipality) so the official QR can load.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: _textMuted, fontSize: 14),
                       ),
                     ),
                   ],
                 ),
-              ],
-            ],
-          ),
-        );
-      }).toList(),
-    );
-  }
-
-  Widget _buildSpotQRCodesGridMobile(List<TouristSpot> spots, String? storedMunicipalityId) {
-    return Column(
-      children: spots.map((spot) {
-        final spotId = spot.id;
-        final municipalityId = spot.municipalityId.isNotEmpty
-            ? spot.municipalityId
-            : (storedMunicipalityId ?? '');
-        final spotName = spot.name.isNotEmpty ? spot.name : 'Spot';
-        final municipalityName = spot.municipality.isNotEmpty
-            ? spot.municipality
-            : (_municipalityName ?? municipalityId);
-        final qrData = municipalityId.isNotEmpty ? spotQrData(municipalityId, spotId) : '';
-
-        return Container(
-          margin: const EdgeInsets.only(bottom: 16),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: _cardBg,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: _cardBorder),
-          ),
-          child: Column(
-            children: [
-              Text(
-                spotName,
-                style: const TextStyle(
-                  color: _textDark,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 16,
+              )
+            : SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: EdgeInsets.all(_isMobile ? 12 : 16),
+                child: _buildLguQrCardForDashboard(
+                  effectiveMunicipalityId,
+                  municipalityDisplayName ?? effectiveMunicipalityId,
                 ),
-                textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 4),
-              Text(
-                municipalityName,
-                style: TextStyle(color: _textMuted, fontSize: 13),
-              ),
-              const SizedBox(height: 16),
-              if (qrData.isNotEmpty)
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: QrImageView(
-                    data: qrData,
-                    version: QrVersions.auto,
-                    size: 200,
-                    backgroundColor: Colors.white,
-                    errorCorrectionLevel: QrErrorCorrectLevel.H,
-                  ),
-                )
-              else
-                Text(
-                  'Set municipalityId in Firestore for this spot',
-                  style: TextStyle(color: Colors.orange.shade800, fontSize: 12),
-                ),
-              if (qrData.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    TextButton(
-                      onPressed: () async {
-                        await downloadSpotQrPng(municipalityId, spotId);
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'PNG ready — check downloads or share sheet',
-                              ),
-                              backgroundColor: _primaryOrange,
-                            ),
-                          );
-                        }
-                      },
-                      child: Text(
-                        'PNG',
-                        style: TextStyle(color: _primaryOrange),
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () async {
-                        await downloadSpotQrPdf(
-                          municipalityId: municipalityId,
-                          spotId: spotId,
-                          spotName: spotName,
-                          municipalityDisplayName: municipalityName,
-                        );
-                      },
-                      child: Text(
-                        'PDF',
-                        style: TextStyle(color: _primaryOrange),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ],
-          ),
-        );
-      }).toList(),
+      ),
     );
   }
 
@@ -3124,21 +3552,45 @@ class _TourismDashboardState extends State<TourismDashboard>
             horizontalPadding: 0,
           ),
         ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          decoration: BoxDecoration(
-            color: Colors.grey.shade200,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: DropdownButton<String>(
-            value: _spotCategoryFilter,
-            dropdownColor: _cardBg,
-            underline: const SizedBox(),
-            style: const TextStyle(color: Colors.white),
-            items: _categories
-                .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                .toList(),
-            onChanged: (value) => setState(() => _spotCategoryFilter = value!),
+        SizedBox(
+          width: _isMobile ? double.infinity : 160,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _panelBorder),
+            ),
+            child: DropdownButton<String>(
+              value: _spotCategoryFilter,
+              isExpanded: true,
+              borderRadius: BorderRadius.circular(12),
+              dropdownColor: Colors.white,
+              underline: const SizedBox(),
+              icon: Icon(Icons.expand_more_rounded, color: _textDark, size: 22),
+              style: const TextStyle(
+                color: _textDark,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+              items: _categories
+                  .map(
+                    (c) => DropdownMenuItem<String>(
+                      value: c,
+                      child: Text(
+                        c,
+                        style: const TextStyle(
+                          color: _textDark,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) =>
+                  setState(() => _spotCategoryFilter = value!),
+            ),
           ),
         ),
         ElevatedButton.icon(
@@ -3166,7 +3618,7 @@ class _TourismDashboardState extends State<TourismDashboard>
               margin: const EdgeInsets.only(bottom: 12),
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.03),
+                color: Colors.grey.shade50,
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Column(
@@ -3245,44 +3697,68 @@ class _TourismDashboardState extends State<TourismDashboard>
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: DataTable(
-        headingRowColor: WidgetStateProperty.all(
-          Colors.white.withOpacity(0.03),
-        ),
+        headingRowColor: WidgetStateProperty.all(Colors.grey.shade100),
+        dataTextStyle: const TextStyle(color: _textDark, fontSize: 13),
+        dividerThickness: 0,
         columns: const [
           DataColumn(
             label: Text(
               'Spot Name',
-              style: TextStyle(color: _textMuted, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: _textDark,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
             ),
           ),
           DataColumn(
             label: Text(
               'Category',
-              style: TextStyle(color: _textMuted, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: _textDark,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
             ),
           ),
           DataColumn(
             label: Text(
               'Location',
-              style: TextStyle(color: _textMuted, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: _textDark,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
             ),
           ),
           DataColumn(
             label: Text(
               'Visitors',
-              style: TextStyle(color: _textMuted, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: _textDark,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
             ),
           ),
           DataColumn(
             label: Text(
               'Status',
-              style: TextStyle(color: _textMuted, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: _textDark,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
             ),
           ),
           DataColumn(
             label: Text(
               'Actions',
-              style: TextStyle(color: _textMuted, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: _textDark,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
             ),
           ),
         ],
@@ -3293,7 +3769,10 @@ class _TourismDashboardState extends State<TourismDashboard>
                   DataCell(
                     Text(
                       s.name,
-                      style: const TextStyle(color: Colors.white),
+                      style: const TextStyle(
+                        color: _textDark,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   DataCell(
@@ -3318,13 +3797,16 @@ class _TourismDashboardState extends State<TourismDashboard>
                   DataCell(
                     Text(
                       s.municipality,
-                      style: const TextStyle(color: Colors.white),
+                      style: const TextStyle(color: _textDark),
                     ),
                   ),
                   DataCell(
                     Text(
                       '${s.visitors}',
-                      style: TextStyle(color: _textMuted),
+                      style: const TextStyle(
+                        color: _textDark,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   DataCell(_buildStatusBadge(s.status)),
@@ -3384,6 +3866,8 @@ class _TourismDashboardState extends State<TourismDashboard>
     final descriptionController = TextEditingController();
     final imageUrlController = TextEditingController();
     final vrLinkController = TextEditingController();
+    final latController = TextEditingController();
+    final lngController = TextEditingController();
     String selectedCategory = 'Beach';
 
     showDialog(
@@ -3406,7 +3890,11 @@ class _TourismDashboardState extends State<TourismDashboard>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _buildDialogTextField(nameController, 'Spot Name', Icons.place),
+                    _buildDialogTextField(
+                      nameController,
+                      'Spot Name',
+                      Icons.place,
+                    ),
                     const SizedBox(height: 16),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -3422,7 +3910,9 @@ class _TourismDashboardState extends State<TourismDashboard>
                         style: TextStyle(color: _textDark, fontSize: 16),
                         items: _categories
                             .where((c) => c != 'All')
-                            .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                            .map(
+                              (c) => DropdownMenuItem(value: c, child: Text(c)),
+                            )
                             .toList(),
                         onChanged: (value) =>
                             setDialogState(() => selectedCategory = value!),
@@ -3465,8 +3955,14 @@ class _TourismDashboardState extends State<TourismDashboard>
                     const SizedBox(height: 16),
                     _buildDialogTextField(
                       vrLinkController,
-                      'VR Link (optional)',
+                      'VR Tour URL (only place to set VR)',
                       Icons.vrpano,
+                      hintText: 'https://tiiny.host/… or your published tiiny.site URL',
+                    ),
+                    const SizedBox(height: 16),
+                    _buildSpotGpsFields(
+                      latController: latController,
+                      lngController: lngController,
                     ),
                   ],
                 ),
@@ -3474,7 +3970,10 @@ class _TourismDashboardState extends State<TourismDashboard>
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel', style: TextStyle(color: _textMuted)),
+                  child: const Text(
+                    'Cancel',
+                    style: TextStyle(color: _textMuted),
+                  ),
                 ),
                 ElevatedButton(
                   onPressed: () async {
@@ -3488,6 +3987,22 @@ class _TourismDashboardState extends State<TourismDashboard>
                       );
                       return;
                     }
+
+                    final coordError = _validateSpotCoordinates(
+                      latController.text,
+                      lngController.text,
+                    );
+                    if (coordError != null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(coordError),
+                          backgroundColor: Colors.redAccent,
+                        ),
+                      );
+                      return;
+                    }
+                    final lat = _tryParseCoord(latController.text)!;
+                    final lng = _tryParseCoord(lngController.text)!;
 
                     final cityTrim = cityController.text.trim();
                     String municipalityId = normalizedStored;
@@ -3513,8 +4028,8 @@ class _TourismDashboardState extends State<TourismDashboard>
                       municipality: cityTrim,
                       description: descriptionController.text.trim(),
                       rating: 0,
-                      latitude: 0,
-                      longitude: 0,
+                      latitude: lat,
+                      longitude: lng,
                       imageUrl: imageUrlController.text.trim().isNotEmpty
                           ? imageUrlController.text.trim()
                           : null,
@@ -3525,7 +4040,18 @@ class _TourismDashboardState extends State<TourismDashboard>
                       visitors: 0,
                       municipalityId: municipalityId,
                     );
-                    final docId = await TouristSpotsFirestoreService.addSpot(spot);
+                    final docId = await TouristSpotsFirestoreService.addSpot(
+                      spot,
+                    );
+                    if (docId != null && spot.vrLink != null && spot.vrLink!.isNotEmpty) {
+                      await VrTourFirestoreService.syncAnalyticsDocForSpot(
+                        spotId: docId,
+                        spotName: spot.name,
+                        vrUrl: spot.vrLink!,
+                        municipalityId: municipalityId,
+                      );
+                    }
+                    if (docId != null) await _loadData();
                     Navigator.pop(context);
                     if (docId != null && mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -3543,7 +4069,9 @@ class _TourismDashboardState extends State<TourismDashboard>
                       );
                     }
                   },
-                  style: ElevatedButton.styleFrom(backgroundColor: _primaryOrange),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _primaryOrange,
+                  ),
                   child: const Text('Add'),
                 ),
               ],
@@ -3558,10 +4086,14 @@ class _TourismDashboardState extends State<TourismDashboard>
     final nameController = TextEditingController(text: spot.name);
     final cityController = TextEditingController(text: spot.municipality);
     final descriptionController = TextEditingController(text: spot.description);
-    final imageUrlController = TextEditingController(
-      text: spot.imageUrl ?? '',
-    );
+    final imageUrlController = TextEditingController(text: spot.imageUrl ?? '');
     final vrLinkController = TextEditingController(text: spot.vrLink ?? '');
+    final latController = TextEditingController(
+      text: _formatCoordForField(spot.latitude),
+    );
+    final lngController = TextEditingController(
+      text: _formatCoordForField(spot.longitude),
+    );
     String selectedCategory = spot.category;
 
     showDialog(
@@ -3584,7 +4116,11 @@ class _TourismDashboardState extends State<TourismDashboard>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _buildDialogTextField(nameController, 'Spot Name', Icons.place),
+                    _buildDialogTextField(
+                      nameController,
+                      'Spot Name',
+                      Icons.place,
+                    ),
                     const SizedBox(height: 16),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -3600,7 +4136,9 @@ class _TourismDashboardState extends State<TourismDashboard>
                         style: TextStyle(color: _textDark, fontSize: 16),
                         items: _categories
                             .where((c) => c != 'All')
-                            .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                            .map(
+                              (c) => DropdownMenuItem(value: c, child: Text(c)),
+                            )
                             .toList(),
                         onChanged: (value) =>
                             setDialogState(() => selectedCategory = value!),
@@ -3628,52 +4166,113 @@ class _TourismDashboardState extends State<TourismDashboard>
                     const SizedBox(height: 16),
                     _buildDialogTextField(
                       vrLinkController,
-                      'VR Link',
+                      'VR Tour URL',
                       Icons.vrpano,
+                      hintText: 'https://tiiny.host/… or your published tiiny.site URL',
+                    ),
+                    const SizedBox(height: 16),
+                    _buildSpotGpsFields(
+                      latController: latController,
+                      lngController: lngController,
                     ),
                   ],
                 ),
               ),
               actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel', style: TextStyle(color: _textMuted)),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                final ok = await TouristSpotsFirestoreService.updateSpot(
-                  spot.id,
-                  {
-                    'name': nameController.text.trim(),
-                    'category': selectedCategory,
-                    'municipality': cityController.text.trim(),
-                    'description': descriptionController.text.trim(),
-                    'image_url': imageUrlController.text.trim().isNotEmpty
-                        ? imageUrlController.text.trim()
-                        : null,
-                    'vr_link': vrLinkController.text.trim().isNotEmpty
-                        ? vrLinkController.text.trim()
-                        : null,
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text(
+                    'Cancel',
+                    style: TextStyle(color: _textMuted),
+                  ),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    final coordError = _validateSpotCoordinates(
+                      latController.text,
+                      lngController.text,
+                    );
+                    if (coordError != null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(coordError),
+                          backgroundColor: Colors.redAccent,
+                        ),
+                      );
+                      return;
+                    }
+                    final lat = _tryParseCoord(latController.text)!;
+                    final lng = _tryParseCoord(lngController.text)!;
+
+                    final cityTrim = cityController.text.trim();
+                    var municipalityId = spot.municipalityId;
+                    if (cityTrim.isNotEmpty) {
+                      final fromCity = getMunicipalityIdFromName(cityTrim);
+                      if (fromCity.isNotEmpty) municipalityId = fromCity;
+                    }
+                    final ok =
+                        await TouristSpotsFirestoreService.updateSpot(spot.id, {
+                          'name': nameController.text.trim(),
+                          'category': selectedCategory,
+                          'municipality': cityTrim,
+                          'description': descriptionController.text.trim(),
+                          'latitude': lat,
+                          'longitude': lng,
+                          'image_url': imageUrlController.text.trim().isNotEmpty
+                              ? imageUrlController.text.trim()
+                              : null,
+                          'vr_link': vrLinkController.text.trim().isNotEmpty
+                              ? vrLinkController.text.trim()
+                              : null,
+                          if (municipalityId.isNotEmpty)
+                            'municipalityId': municipalityId,
+                          'qrValue': spot.id,
+                          'qr_payload': spotQrData(
+                            municipalityId,
+                            spot.id,
+                            latitude: lat,
+                            longitude: lng,
+                          ),
+                          'hasVR': vrLinkController.text.trim().isNotEmpty,
+                        });
+                    if (ok) {
+                      final vr = vrLinkController.text.trim();
+                      if (vr.isNotEmpty) {
+                        await VrTourFirestoreService.syncAnalyticsDocForSpot(
+                          spotId: spot.id,
+                          spotName: nameController.text.trim(),
+                          vrUrl: vr,
+                          municipalityId: municipalityId,
+                        );
+                      } else {
+                        await VrTourFirestoreService.clearVrLinkForSpot(
+                          spot.id,
+                        );
+                      }
+                      await _loadData();
+                    }
+                    Navigator.pop(context);
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            ok
+                                ? 'Tourist spot updated successfully'
+                                : 'Failed to update. Check Firebase.',
+                          ),
+                          backgroundColor: ok
+                              ? _primaryOrange
+                              : Colors.redAccent,
+                        ),
+                      );
+                    }
                   },
-                );
-                Navigator.pop(context);
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        ok
-                            ? 'Tourist spot updated successfully'
-                            : 'Failed to update. Check Firebase.',
-                      ),
-                      backgroundColor: ok ? _primaryOrange : Colors.redAccent,
-                    ),
-                  );
-                }
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: _primaryOrange),
-              child: const Text('Save'),
-            ),
-          ],
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _primaryOrange,
+                  ),
+                  child: const Text('Save'),
+                ),
+              ],
             ),
           ),
         ),
@@ -3710,7 +4309,9 @@ class _TourismDashboardState extends State<TourismDashboard>
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(
-                      ok ? 'Tourist spot deleted' : 'Failed to delete. Check Firebase.',
+                      ok
+                          ? 'Tourist spot deleted'
+                          : 'Failed to delete. Check Firebase.',
                     ),
                     backgroundColor: ok ? Colors.redAccent : Colors.redAccent,
                   ),
@@ -3727,7 +4328,10 @@ class _TourismDashboardState extends State<TourismDashboard>
 
   void _toggleSpotStatus(TouristSpot spot) async {
     final newStatus = spot.status == 'Active' ? 'Inactive' : 'Active';
-    final ok = await TouristSpotsFirestoreService.updateSpotStatus(spot.id, newStatus);
+    final ok = await TouristSpotsFirestoreService.updateSpotStatus(
+      spot.id,
+      newStatus,
+    );
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -3742,20 +4346,103 @@ class _TourismDashboardState extends State<TourismDashboard>
     }
   }
 
+  double? _tryParseCoord(String raw) {
+    final t = raw.trim().replaceAll(',', '.');
+    return double.tryParse(t);
+  }
+
+  String? _validateSpotCoordinates(String latRaw, String lngRaw) {
+    if (latRaw.trim().isEmpty || lngRaw.trim().isEmpty) {
+      return 'Latitude and longitude are required so tourists can check in on site.';
+    }
+    final lat = _tryParseCoord(latRaw);
+    final lng = _tryParseCoord(lngRaw);
+    if (lat == null || lng == null) {
+      return 'Enter valid numbers (e.g. 8.486000 and 123.804800).';
+    }
+    if (lat.abs() <= 1e-7 && lng.abs() <= 1e-7) {
+      return 'Coordinates cannot be 0,0. Copy from Google Maps at the tourist spot.';
+    }
+    if (lat < -90 || lat > 90) {
+      return 'Latitude must be between -90 and 90.';
+    }
+    if (lng < -180 || lng > 180) {
+      return 'Longitude must be between -180 and 180.';
+    }
+    return null;
+  }
+
+  String _formatCoordForField(double value) {
+    if (value.abs() <= 1e-7) return '';
+    return value.toStringAsFixed(6);
+  }
+
+  Widget _buildSpotGpsFields({
+    required TextEditingController latController,
+    required TextEditingController lngController,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'GPS coordinates (required for QR check-in)',
+          style: TextStyle(
+            color: _textMuted,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'In Google Maps: long-press the spot → copy coordinates. '
+          'Tourists must be within about 5 m to scan.',
+          style: TextStyle(color: _textMuted, fontSize: 11, height: 1.35),
+        ),
+        const SizedBox(height: 12),
+        _buildDialogTextField(
+          latController,
+          'Latitude',
+          Icons.my_location,
+          keyboardType: const TextInputType.numberWithOptions(
+            decimal: true,
+            signed: true,
+          ),
+          hintText: 'e.g. 8.486000',
+        ),
+        const SizedBox(height: 16),
+        _buildDialogTextField(
+          lngController,
+          'Longitude',
+          Icons.explore_outlined,
+          keyboardType: const TextInputType.numberWithOptions(
+            decimal: true,
+            signed: true,
+          ),
+          hintText: 'e.g. 123.804800',
+        ),
+      ],
+    );
+  }
+
   Widget _buildDialogTextField(
     TextEditingController controller,
     String label,
     IconData icon, {
     int maxLines = 1,
     bool readOnly = false,
+    TextInputType? keyboardType,
+    String? hintText,
   }) {
     return TextField(
       controller: controller,
       maxLines: maxLines,
       readOnly: readOnly,
+      keyboardType: keyboardType,
       decoration: InputDecoration(
         labelText: label,
+        hintText: hintText,
         labelStyle: TextStyle(color: _textMuted),
+        hintStyle: TextStyle(color: _textMuted.withValues(alpha: 0.7)),
         prefixIcon: Icon(icon, color: _primaryOrange),
         filled: true,
         fillColor: Colors.grey.shade200,
@@ -3765,51 +4452,6 @@ class _TourismDashboardState extends State<TourismDashboard>
         ),
       ),
       style: TextStyle(color: _textDark, fontSize: 16),
-    );
-  }
-
-  Widget _buildTouristSpotSelector({
-    required String? selectedSpotId,
-    required VoidCallback onTap,
-  }) {
-    TouristSpot? spot;
-    if (selectedSpotId != null) {
-      try {
-        spot = _touristSpots.firstWhere(
-          (s) => s.id == selectedSpotId,
-        );
-      } catch (_) {}
-    }
-    final label = spot != null
-        ? (spot.name.isNotEmpty ? spot.name : 'Unnamed')
-        : 'Select Tourist Spot';
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-        decoration: BoxDecoration(
-          color: Colors.grey.shade200,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.place, color: _primaryOrange),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                label,
-                style: TextStyle(
-                  color: spot != null ? _textDark : _textMuted,
-                  fontSize: 16,
-                ),
-              ),
-            ),
-            Icon(Icons.arrow_drop_down, color: _textMuted),
-          ],
-        ),
-      ),
     );
   }
 
@@ -3833,7 +4475,7 @@ class _TourismDashboardState extends State<TourismDashboard>
     final filteredTourists = _tourists.where((t) {
       final searchQuery = _touristsSearchController.text.toLowerCase();
       final name = t['fullName']?.toString() ?? t['name']?.toString() ?? '';
-      final id = t['touristId']?.toString() ?? t['id']?.toString() ?? '';
+      final id = TouristIdHelper.displayForTourist(t);
       final origin = t['city']?.toString() ?? t['origin']?.toString() ?? '';
       final email = t['email']?.toString() ?? '';
       return searchQuery.isEmpty ||
@@ -3846,50 +4488,43 @@ class _TourismDashboardState extends State<TourismDashboard>
     return RefreshIndicator(
       onRefresh: _loadData,
       color: _primaryOrange,
-      child: Container(
-        color: _darkBg,
-        child: Column(
-          children: [
-            _buildHeader(
-              _storedMunicipalityId != null
-                  ? 'Check-in visitors'
-                  : 'Visitors',
-              subtitle: _storedMunicipalityId != null
-                  ? 'Tourists who checked in at your locations — full app registration list is visible only on the Governor admin dashboard'
-                  : 'Province-wide app registrations are on the Governor dashboard only — assign your LGU municipality to see visitors linked to your check-ins',
+      child: _buildFramedContentShell(
+        title: _storedMunicipalityId != null ? 'Registered visitors' : 'Visitors',
+        subtitle: _storedMunicipalityId != null
+            ? 'Tourists who registered via your municipality QR or selected your '
+                  'city as a prior destination, plus anyone with a check-in here. '
+                  'Province-wide list: Governor dashboard only.'
+            : 'Assign an LGU municipality to your account to see visitor '
+                  'profiles tied to your check-ins. Province-wide registrations '
+                  'are on the Governor dashboard only.',
+        body: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.all(_isMobile ? 12 : 16),
+          child: _wrapTourismPanel(
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildTouristsFilters(),
+                const SizedBox(height: 16),
+                if (filteredTourists.isEmpty)
+                  _buildEmptyState(
+                    _storedMunicipalityId != null
+                        ? 'No visitors yet'
+                        : 'No visitors loaded',
+                    icon: Icons.people_alt_rounded,
+                    iconColor: _primaryOrange,
+                    subtitle: _storedMunicipalityId != null
+                        ? 'New sign-ups from your QR appear here after registration. '
+                              'QR visits also appear in the Visit log.'
+                        : 'Assign your LGU municipality to load visitor profiles from check-ins.',
+                  )
+                else if (_isMobile)
+                  _buildTouristsListMobile(filteredTourists)
+                else
+                  _buildTouristsTable(filteredTourists),
+              ],
             ),
-            Expanded(
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: EdgeInsets.all(_isMobile ? 16 : 24),
-                child: Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: _cardBg,
-                    borderRadius: BorderRadius.circular(28),
-                    border: Border.all(color: _cardBorder),
-                  ),
-                  child: Column(
-                    children: [
-                      _buildTouristsFilters(),
-                      const SizedBox(height: 20),
-                      if (filteredTourists.isEmpty)
-                        _buildEmptyState(
-                          _storedMunicipalityId != null
-                              ? 'No check-in visitors yet — the full list of app registrants is on Governor admin only'
-                              : 'No visitor list — full app registrations are on Governor admin. Assign a municipality to your LGU account to see visitors who checked in at your sites.',
-                          icon: Icons.people_alt_rounded,
-                        )
-                      else if (_isMobile)
-                        _buildTouristsListMobile(filteredTourists)
-                      else
-                        _buildTouristsTable(filteredTourists),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -3931,9 +4566,10 @@ class _TourismDashboardState extends State<TourismDashboard>
             foregroundColor: Colors.white,
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(999),
             ),
-            elevation: 0,
+            elevation: 2,
+            shadowColor: const Color(0xFF0EA5E9).withOpacity(0.35),
           ),
         ),
       ],
@@ -3947,14 +4583,14 @@ class _TourismDashboardState extends State<TourismDashboard>
       if (v is num) return v.toInt();
       return int.tryParse(v.toString()) ?? 0;
     }
+
     final sorted = List<Map<String, dynamic>>.from(tourists)
       ..sort((a, b) => visitCount(b).compareTo(visitCount(a)));
 
     return Column(
       children: sorted.map((t) {
         final name = _getTouristDisplayName(t);
-        final touristId =
-            t['touristId']?.toString() ?? t['id']?.toString() ?? 'N/A';
+        final touristId = TouristIdHelper.displayForTourist(t);
         final origin = _getTouristOrigin(t);
         final visits = t['totalVisits'] ?? t['visits'] ?? 0;
         final isLocal = t['isLocal'] == true || t['localOrForeign'] == 'Local';
@@ -3967,7 +4603,6 @@ class _TourismDashboardState extends State<TourismDashboard>
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.grey.shade200),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withOpacity(0.04),
@@ -4069,17 +4704,11 @@ class _TourismDashboardState extends State<TourismDashboard>
                 const SizedBox(height: 4),
                 Text(
                   'Date: ${_formatRegisteredDateOnlyDisplay(_registeredDateTimeNullableFromTourist(t))}',
-                  style: TextStyle(
-                    color: _textMuted,
-                    fontSize: 11,
-                  ),
+                  style: TextStyle(color: _textMuted, fontSize: 11),
                 ),
                 Text(
                   'Time: ${_formatRegisteredTimeOnlyDisplay(_registeredDateTimeNullableFromTourist(t))}',
-                  style: TextStyle(
-                    color: _textMuted,
-                    fontSize: 11,
-                  ),
+                  style: TextStyle(color: _textMuted, fontSize: 11),
                 ),
               ],
             ),
@@ -4097,6 +4726,7 @@ class _TourismDashboardState extends State<TourismDashboard>
       if (v is num) return v.toInt();
       return int.tryParse(v.toString()) ?? 0;
     }
+
     final sorted = List<Map<String, dynamic>>.from(tourists)
       ..sort((a, b) => visitCount(b).compareTo(visitCount(a)));
 
@@ -4104,7 +4734,6 @@ class _TourismDashboardState extends State<TourismDashboard>
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.grey.shade200),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.04),
@@ -4125,42 +4754,24 @@ class _TourismDashboardState extends State<TourismDashboard>
               fontSize: 13,
             ),
             dataTextStyle: TextStyle(color: _textDark, fontSize: 14),
-            dividerThickness: 1,
+            dividerThickness: 0,
             horizontalMargin: 20,
             columnSpacing: 28,
             columns: const [
-              DataColumn(
-                label: Text('Name'),
-              ),
-              DataColumn(
-                label: Text('Tourist ID'),
-              ),
-              DataColumn(
-                label: Text('Type'),
-              ),
-              DataColumn(
-                label: Text('Origin'),
-              ),
-              DataColumn(
-                label: Text('Date'),
-              ),
-              DataColumn(
-                label: Text('Time'),
-              ),
-              DataColumn(
-                label: Text('Visits'),
-              ),
-              DataColumn(
-                label: Text('Status'),
-              ),
-              DataColumn(
-                label: Text('Actions'),
-              ),
+              DataColumn(label: Text('Name')),
+              DataColumn(label: Text('Tourist ID')),
+              DataColumn(label: Text('Type')),
+              DataColumn(label: Text('Origin')),
+              DataColumn(label: Text('Date')),
+              DataColumn(label: Text('Time')),
+              DataColumn(label: Text('Visits')),
+              DataColumn(label: Text('Status')),
+              DataColumn(label: Text('Actions')),
             ],
             rows: sorted.map((t) {
               final name = _getTouristDisplayName(t);
               final touristId =
-                  t['touristId']?.toString() ?? t['id']?.toString() ?? 'N/A';
+                  TouristIdHelper.displayForTourist(t);
               final origin = _getTouristOrigin(t);
               final visits = t['totalVisits'] ?? t['visits'] ?? 0;
               final regDt = _registeredDateTimeNullableFromTourist(t);
@@ -4264,19 +4875,13 @@ class _TourismDashboardState extends State<TourismDashboard>
                   DataCell(
                     Text(
                       _formatRegisteredDateOnlyDisplay(regDt),
-                      style: const TextStyle(
-                        color: _textDark,
-                        fontSize: 13,
-                      ),
+                      style: const TextStyle(color: _textDark, fontSize: 13),
                     ),
                   ),
                   DataCell(
                     Text(
                       _formatRegisteredTimeOnlyDisplay(regDt),
-                      style: const TextStyle(
-                        color: _textDark,
-                        fontSize: 13,
-                      ),
+                      style: const TextStyle(color: _textDark, fontSize: 13),
                     ),
                   ),
                   DataCell(
@@ -4333,7 +4938,9 @@ class _TourismDashboardState extends State<TourismDashboard>
                       ),
                       tooltip: 'View Details',
                       style: IconButton.styleFrom(
-                        backgroundColor: const Color(0xFF0EA5E9).withOpacity(0.1),
+                        backgroundColor: const Color(
+                          0xFF0EA5E9,
+                        ).withOpacity(0.1),
                       ),
                     ),
                   ),
@@ -4382,8 +4989,7 @@ class _TourismDashboardState extends State<TourismDashboard>
 
   void _showTouristDetailsDialog(Map<String, dynamic> tourist) {
     final name = _getTouristDisplayName(tourist);
-    final touristId =
-        tourist['touristId']?.toString() ?? tourist['id']?.toString() ?? 'N/A';
+    final touristId = TouristIdHelper.displayForTourist(tourist);
     final email = tourist['email']?.toString() ?? 'N/A';
     final mobile = tourist['mobile']?.toString() ?? 'N/A';
     final nationality = tourist['nationality']?.toString() ?? 'N/A';
@@ -4582,8 +5188,7 @@ class _TourismDashboardState extends State<TourismDashboard>
         'Tourist ID,Full Name,Email,Mobile,Nationality,Type,Origin,Visits,Status,Registered Date,Registered Time\n';
     for (final t in _tourists) {
       final name = _getTouristDisplayName(t);
-      final touristId =
-          t['touristId']?.toString() ?? t['id']?.toString() ?? 'N/A';
+      final touristId = TouristIdHelper.displayForTourist(t);
       final email = t['email']?.toString() ?? '';
       final mobile = t['mobile']?.toString() ?? '';
       final nationality = t['nationality']?.toString() ?? '';
@@ -4632,8 +5237,7 @@ class _TourismDashboardState extends State<TourismDashboard>
     final rows = <DataRow>[];
     for (final t in _tourists) {
       final name = _getTouristDisplayName(t);
-      final touristId =
-          t['touristId']?.toString() ?? t['id']?.toString() ?? 'N/A';
+      final touristId = TouristIdHelper.displayForTourist(t);
       final email = t['email']?.toString() ?? '—';
       final mobile = t['mobile']?.toString() ?? '—';
       final nationality = t['nationality']?.toString() ?? '—';
@@ -4677,9 +5281,9 @@ class _TourismDashboardState extends State<TourismDashboard>
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                'Tourists export',
+                'Visitors export',
                 style: const TextStyle(
-                  color: Colors.white,
+                  color: _textDark,
                   fontSize: 20,
                   fontWeight: FontWeight.w700,
                 ),
@@ -4702,7 +5306,7 @@ class _TourismDashboardState extends State<TourismDashboard>
                 child: _tourists.isEmpty
                     ? Center(
                         child: Text(
-                          'No tourists to export.',
+                          'No visitors to export.',
                           style: TextStyle(color: _textMuted, fontSize: 16),
                         ),
                       )
@@ -4718,35 +5322,45 @@ class _TourismDashboardState extends State<TourismDashboard>
                               dataRowMinHeight: 44,
                               horizontalMargin: 16,
                               columnSpacing: 20,
-                              border: TableBorder.symmetric(
-                                inside: BorderSide(
-                                  color: _cardBorder.withValues(alpha: 0.8),
-                                ),
-                              ),
+                              dividerThickness: 0,
+                              border: const TableBorder(),
                               columns: [
                                 DataColumn(
-                                    label: Text('Tourist ID', style: headerStyle)),
+                                  label: Text('Tourist ID', style: headerStyle),
+                                ),
                                 DataColumn(
-                                    label: Text('Full name', style: headerStyle)),
+                                  label: Text('Full name', style: headerStyle),
+                                ),
                                 DataColumn(
-                                    label: Text('Email', style: headerStyle)),
+                                  label: Text('Email', style: headerStyle),
+                                ),
                                 DataColumn(
-                                    label: Text('Mobile', style: headerStyle)),
+                                  label: Text('Mobile', style: headerStyle),
+                                ),
                                 DataColumn(
-                                    label:
-                                        Text('Nationality', style: headerStyle)),
+                                  label: Text(
+                                    'Nationality',
+                                    style: headerStyle,
+                                  ),
+                                ),
                                 DataColumn(
-                                    label: Text('Type', style: headerStyle)),
+                                  label: Text('Type', style: headerStyle),
+                                ),
                                 DataColumn(
-                                    label: Text('Origin', style: headerStyle)),
+                                  label: Text('Origin', style: headerStyle),
+                                ),
                                 DataColumn(
-                                    label: Text('Visits', style: headerStyle)),
+                                  label: Text('Visits', style: headerStyle),
+                                ),
                                 DataColumn(
-                                    label: Text('Status', style: headerStyle)),
+                                  label: Text('Status', style: headerStyle),
+                                ),
                                 DataColumn(
-                                    label: Text('Date', style: headerStyle)),
+                                  label: Text('Date', style: headerStyle),
+                                ),
                                 DataColumn(
-                                    label: Text('Time', style: headerStyle)),
+                                  label: Text('Time', style: headerStyle),
+                                ),
                               ],
                               rows: rows,
                             ),
@@ -4848,12 +5462,12 @@ class _TourismDashboardState extends State<TourismDashboard>
               decoration: BoxDecoration(
                 color: const Color(0xFFF8FAFC),
                 borderRadius: BorderRadius.circular(12),
-                border: Border(
-                  left: BorderSide(color: _primaryOrange, width: 3),
-                ),
               ),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
                 child: SelectableText(
                   line.trim(),
                   style: const TextStyle(
@@ -4916,9 +5530,6 @@ class _TourismDashboardState extends State<TourismDashboard>
       decoration: BoxDecoration(
         color: _primaryOrange.withOpacity(0.12),
         borderRadius: BorderRadius.circular(14),
-        border: Border(
-          left: BorderSide(color: _primaryOrange, width: 4),
-        ),
       ),
       child: Text(
         title.toUpperCase(),
@@ -5006,7 +5617,10 @@ class _TourismDashboardState extends State<TourismDashboard>
         final dialogW = math.min(720.0, mq.size.width - 40);
         return Dialog(
           backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 20,
+            vertical: 24,
+          ),
           child: SizedBox(
             width: dialogW,
             height: maxH,
@@ -5084,7 +5698,6 @@ class _TourismDashboardState extends State<TourismDashboard>
                             decoration: BoxDecoration(
                               color: Colors.white,
                               borderRadius: BorderRadius.circular(4),
-                              border: Border.all(color: const Color(0xFFD4D4D4)),
                               boxShadow: const [
                                 BoxShadow(
                                   color: Color(0x1A000000),
@@ -5101,11 +5714,11 @@ class _TourismDashboardState extends State<TourismDashboard>
                   ),
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFFBF7),
-                      border: Border(top: BorderSide(color: _cardBorder)),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
                     ),
+                    decoration: BoxDecoration(color: const Color(0xFFFFFBF7)),
                     child: Wrap(
                       alignment: WrapAlignment.end,
                       spacing: 8,
@@ -5133,7 +5746,11 @@ class _TourismDashboardState extends State<TourismDashboard>
                                 ),
                               );
                             },
-                            icon: Icon(Icons.download_rounded, color: _primaryOrange, size: 20),
+                            icon: Icon(
+                              Icons.download_rounded,
+                              color: _primaryOrange,
+                              size: 20,
+                            ),
                             label: Text(
                               'Download check-ins CSV',
                               style: TextStyle(
@@ -5176,44 +5793,35 @@ class _TourismDashboardState extends State<TourismDashboard>
     return RefreshIndicator(
       onRefresh: _loadData,
       color: _primaryOrange,
-      child: Container(
-        color: _darkBg,
-        child: Column(
-          children: [
-            _buildHeader(
-              'VR Tours',
-              subtitle: 'Manage virtual reality experiences',
+      child: _buildFramedContentShell(
+        title: 'VR Tours',
+        subtitle:
+            'Spots with a VR link from Tourist Spots — add or change the link there',
+        body: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.all(_isMobile ? 16 : 24),
+          child: Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: _cardBg,
+              borderRadius: BorderRadius.circular(28),
             ),
-            Expanded(
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: EdgeInsets.all(_isMobile ? 16 : 24),
-                child: Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: _cardBg,
-                    borderRadius: BorderRadius.circular(28),
-                    border: Border.all(color: _cardBorder),
-                  ),
-                  child: Column(
-                    children: [
-                      _buildVRToursFilters(),
-                      const SizedBox(height: 20),
-                      if (filteredTours.isEmpty)
-                        _buildEmptyState(
-                          'No VR tours found',
-                          icon: Icons.vrpano_rounded,
-                        )
-                      else if (_isMobile)
-                        _buildVRToursListMobile(filteredTours)
-                      else
-                        _buildVRToursTable(filteredTours),
-                    ],
-                  ),
-                ),
-              ),
+            child: Column(
+              children: [
+                _buildVRToursFilters(),
+                const SizedBox(height: 20),
+                if (filteredTours.isEmpty)
+                  _buildEmptyState(
+                    'No VR tours yet. Open Tourist Spots, edit a spot, and paste your Teleport360 VR URL.',
+                    icon: Icons.vrpano_rounded,
+                  )
+                else if (_isMobile)
+                  _buildVRToursListMobile(filteredTours)
+                else
+                  _buildVRToursTable(filteredTours),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -5233,13 +5841,13 @@ class _TourismDashboardState extends State<TourismDashboard>
             horizontalPadding: 0,
           ),
         ),
-        ElevatedButton.icon(
-          onPressed: _showAddVRTourDialog,
-          icon: const Icon(Icons.add, size: 18),
-          label: const Text('Add VR Tour'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.purple,
-            foregroundColor: Colors.white,
+        OutlinedButton.icon(
+          onPressed: _goToTouristSpotsForVr,
+          icon: const Icon(Icons.place_rounded, size: 18),
+          label: const Text('Add VR on Tourist Spots'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Colors.purple,
+            side: const BorderSide(color: Colors.purple),
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
@@ -5269,7 +5877,7 @@ class _TourismDashboardState extends State<TourismDashboard>
                     children: [
                       Expanded(
                         child: Text(
-                          v['name'],
+                          v['spotName'] ?? v['name'],
                           style: const TextStyle(
                             color: _textDark,
                             fontWeight: FontWeight.w600,
@@ -5281,8 +5889,10 @@ class _TourismDashboardState extends State<TourismDashboard>
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Linked to: ${v['spotName']}',
-                    style: TextStyle(color: _textMuted),
+                    (v['vrUrl']?.toString() ?? '').length > 48
+                        ? '${(v['vrUrl']?.toString() ?? '').substring(0, 48)}…'
+                        : (v['vrUrl']?.toString() ?? ''),
+                    style: TextStyle(color: _textMuted, fontSize: 12),
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -5290,34 +5900,9 @@ class _TourismDashboardState extends State<TourismDashboard>
                     style: TextStyle(color: _textMuted, fontSize: 12),
                   ),
                   const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      IconButton(
-                        onPressed: () => _playVRTour(v),
-                        icon: const Icon(
-                          Icons.play_circle,
-                          color: Colors.purple,
-                          size: 24,
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () => _showEditVRTourDialog(v),
-                        icon: const Icon(
-                          Icons.edit,
-                          color: Colors.blue,
-                          size: 20,
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () => _showDeleteVRTourDialog(v),
-                        icon: const Icon(
-                          Icons.delete,
-                          color: Colors.redAccent,
-                          size: 20,
-                        ),
-                      ),
-                    ],
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: _buildVrTourActions(v),
                   ),
                 ],
               ),
@@ -5327,42 +5912,123 @@ class _TourismDashboardState extends State<TourismDashboard>
     );
   }
 
+  Widget _buildVrTourActions(Map<String, dynamic> tour) {
+    void run(String action) {
+      switch (action) {
+        case 'play':
+          _playVRTour(tour);
+        case 'edit':
+          _editVrTourSpot(tour);
+        case 'delete':
+          _showRemoveVrLinkDialog(tour);
+      }
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          onPressed: () => run('play'),
+          icon: const Icon(Icons.play_circle, color: Colors.purple, size: 22),
+          tooltip: 'Play VR tour',
+          visualDensity: VisualDensity.compact,
+        ),
+        IconButton(
+          onPressed: () => run('edit'),
+          icon: const Icon(Icons.edit_outlined, color: Colors.blue, size: 20),
+          tooltip: 'Edit spot & VR URL',
+          visualDensity: VisualDensity.compact,
+        ),
+        IconButton(
+          onPressed: () => run('delete'),
+          icon: const Icon(Icons.link_off, color: Colors.redAccent, size: 20),
+          tooltip: 'Remove VR link',
+          visualDensity: VisualDensity.compact,
+        ),
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert, color: _textMuted, size: 20),
+          tooltip: 'More actions',
+          onSelected: run,
+          itemBuilder: (_) => const [
+            PopupMenuItem(
+              value: 'play',
+              child: ListTile(
+                leading: Icon(Icons.play_circle, color: Colors.purple),
+                title: Text('Play'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              ),
+            ),
+            PopupMenuItem(
+              value: 'edit',
+              child: ListTile(
+                leading: Icon(Icons.edit, color: Colors.blue),
+                title: Text('Edit tourist spot'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              ),
+            ),
+            PopupMenuItem(
+              value: 'delete',
+              child: ListTile(
+                leading: Icon(Icons.link_off, color: Colors.redAccent),
+                title: Text('Remove VR link'),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   Widget _buildVRToursTable(List<Map<String, dynamic>> tours) {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: DataTable(
-        headingRowColor: WidgetStateProperty.all(
-          Colors.white.withOpacity(0.03),
-        ),
+        headingRowColor: WidgetStateProperty.all(Colors.grey.shade100),
+        dataTextStyle: const TextStyle(color: _textDark, fontSize: 13),
+        dividerThickness: 0,
         columns: const [
           DataColumn(
             label: Text(
-              'Tour Name',
-              style: TextStyle(color: _textMuted, fontWeight: FontWeight.w600),
-            ),
-          ),
-          DataColumn(
-            label: Text(
               'Tourist Spot',
-              style: TextStyle(color: _textMuted, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: _textDark,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
             ),
           ),
           DataColumn(
             label: Text(
               'Views',
-              style: TextStyle(color: _textMuted, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: _textDark,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
             ),
           ),
           DataColumn(
             label: Text(
               'Status',
-              style: TextStyle(color: _textMuted, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: _textDark,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
             ),
           ),
           DataColumn(
             label: Text(
               'Actions',
-              style: TextStyle(color: _textMuted, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: _textDark,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
             ),
           ),
         ],
@@ -5372,53 +6038,24 @@ class _TourismDashboardState extends State<TourismDashboard>
                 cells: [
                   DataCell(
                     Text(
-                      v['name'],
-                      style: const TextStyle(color: Colors.white),
+                      v['spotName'] ?? v['name'],
+                      style: const TextStyle(
+                        color: _textDark,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                  DataCell(
-                    Text(v['spotName'], style: TextStyle(color: _textMuted)),
                   ),
                   DataCell(
                     Text(
                       '${v['views']}',
-                      style: const TextStyle(color: Colors.white),
+                      style: const TextStyle(
+                        color: _textDark,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   DataCell(_buildStatusBadge(v['status'])),
-                  DataCell(
-                    Row(
-                      children: [
-                        IconButton(
-                          onPressed: () => _playVRTour(v),
-                          icon: const Icon(
-                            Icons.play_circle,
-                            color: Colors.purple,
-                            size: 18,
-                          ),
-                          tooltip: 'Play',
-                        ),
-                        IconButton(
-                          onPressed: () => _showEditVRTourDialog(v),
-                          icon: const Icon(
-                            Icons.edit,
-                            color: Colors.blue,
-                            size: 18,
-                          ),
-                          tooltip: 'Edit',
-                        ),
-                        IconButton(
-                          onPressed: () => _showDeleteVRTourDialog(v),
-                          icon: const Icon(
-                            Icons.delete,
-                            color: Colors.redAccent,
-                            size: 18,
-                          ),
-                          tooltip: 'Delete',
-                        ),
-                      ],
-                    ),
-                  ),
+                  DataCell(_buildVrTourActions(v)),
                 ],
               ),
             )
@@ -5427,308 +6064,55 @@ class _TourismDashboardState extends State<TourismDashboard>
     );
   }
 
-  void _showAddVRTourDialog() {
-    final nameController = TextEditingController();
-    final vrUrlController = TextEditingController();
-    final thumbnailController = TextEditingController();
-    String? selectedSpotId = _touristSpots.isNotEmpty
-        ? _touristSpots.first.id
-        : null;
-
-    showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: _cardBg,
-          title: const Text(
-            'Add VR Tour',
-            style: TextStyle(color: Colors.white),
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildDialogTextField(
-                  nameController,
-                  'Tour Name',
-                  Icons.vrpano,
-                ),
-                const SizedBox(height: 16),
-                _buildTouristSpotSelector(
-                  selectedSpotId: selectedSpotId,
-                  onTap: () async {
-                    if (_touristSpots.isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('No tourist spots available'),
-                          backgroundColor: Colors.orange,
-                        ),
-                      );
-                      return;
-                    }
-                    final picked = await showModalBottomSheet<String>(
-                      context: context,
-                      backgroundColor: _cardBg,
-                      shape: const RoundedRectangleBorder(
-                        borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
-                      ),
-                      builder: (ctx) => SafeArea(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Text(
-                                'Select Tourist Spot',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                            Flexible(
-                              child: ListView.builder(
-                                shrinkWrap: true,
-                                itemCount: _touristSpots.length,
-                                itemBuilder: (ctx, i) {
-                                  final s = _touristSpots[i];
-                                  final id = s.id;
-                                  final name = s.name.isNotEmpty ? s.name : 'Unnamed';
-                                  return ListTile(
-                                    title: Text(name, style: TextStyle(color: Colors.white)),
-                                    onTap: () => Navigator.pop(ctx, id),
-                                  );
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                    if (picked != null && mounted) {
-                      setDialogState(() => selectedSpotId = picked);
-                    }
-                  },
-                ),
-                const SizedBox(height: 16),
-                _buildDialogTextField(vrUrlController, 'VR URL', Icons.link),
-                const SizedBox(height: 16),
-                _buildDialogTextField(
-                  thumbnailController,
-                  'Thumbnail URL (optional)',
-                  Icons.image,
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel', style: TextStyle(color: _textMuted)),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                if (nameController.text.isEmpty ||
-                    vrUrlController.text.isEmpty ||
-                    selectedSpotId == null) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Please fill required fields'),
-                      backgroundColor: Colors.redAccent,
-                    ),
-                  );
-                  return;
-                }
-
-                final selectedSpot = _touristSpots.firstWhere(
-                  (s) => s.id == selectedSpotId,
-                );
-
-                setState(() {
-                  _vrTours.add({
-                    'id': 'VR-${DateTime.now().millisecondsSinceEpoch}',
-                    'name': nameController.text,
-                    'spotId': selectedSpotId,
-                    'spotName': selectedSpot.name,
-                    'vrUrl': vrUrlController.text,
-                    'thumbnail': thumbnailController.text,
-                    'views': 0,
-                    'status': 'Active',
-                  });
-                  _totalVRTours = _vrTours.length;
-                });
-
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('VR tour added successfully'),
-                    backgroundColor: _primaryOrange,
-                  ),
-                );
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.purple),
-              child: const Text('Add'),
-            ),
-          ],
+  void _goToTouristSpotsForVr() {
+    setState(() => _selectedIndex = _touristSpotsNavIndex);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Edit a tourist spot and paste your VR Tour URL (Teleport360 link).',
         ),
+        backgroundColor: Color(0xFFF97316),
+        duration: Duration(seconds: 4),
       ),
     );
   }
 
-  void _showEditVRTourDialog(Map<String, dynamic> tour) {
-    final nameController = TextEditingController(text: tour['name']);
-    final vrUrlController = TextEditingController(text: tour['vrUrl'] ?? '');
-    final thumbnailController = TextEditingController(
-      text: tour['thumbnail'] ?? '',
-    );
-    String? selectedSpotId = tour['spotId']?.toString();
-
-    showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: _cardBg,
-          title: const Text(
-            'Edit VR Tour',
-            style: TextStyle(color: Colors.white),
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildDialogTextField(
-                  nameController,
-                  'Tour Name',
-                  Icons.vrpano,
-                ),
-                const SizedBox(height: 16),
-                _buildTouristSpotSelector(
-                  selectedSpotId: selectedSpotId,
-                  onTap: () async {
-                    if (_touristSpots.isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('No tourist spots available'),
-                          backgroundColor: Colors.orange,
-                        ),
-                      );
-                      return;
-                    }
-                    final picked = await showModalBottomSheet<String>(
-                      context: context,
-                      backgroundColor: _cardBg,
-                      shape: const RoundedRectangleBorder(
-                        borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
-                      ),
-                      builder: (ctx) => SafeArea(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Text(
-                                'Select Tourist Spot',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                            Flexible(
-                              child: ListView.builder(
-                                shrinkWrap: true,
-                                itemCount: _touristSpots.length,
-                                itemBuilder: (ctx, i) {
-                                  final s = _touristSpots[i];
-                                  final id = s.id;
-                                  final name = s.name.isNotEmpty ? s.name : 'Unnamed';
-                                  return ListTile(
-                                    title: Text(name, style: TextStyle(color: Colors.white)),
-                                    onTap: () => Navigator.pop(ctx, id),
-                                  );
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                    if (picked != null && mounted) {
-                      setDialogState(() => selectedSpotId = picked);
-                    }
-                  },
-                ),
-                const SizedBox(height: 16),
-                _buildDialogTextField(vrUrlController, 'VR URL', Icons.link),
-                const SizedBox(height: 16),
-                _buildDialogTextField(
-                  thumbnailController,
-                  'Thumbnail URL',
-                  Icons.image,
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel', style: TextStyle(color: _textMuted)),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final selectedSpot = _touristSpots.firstWhere(
-                  (s) => s.id == selectedSpotId,
-                );
-
-                setState(() {
-                  final index = _vrTours.indexWhere(
-                    (v) => v['id'] == tour['id'],
-                  );
-                  if (index != -1) {
-                    _vrTours[index] = {
-                      ..._vrTours[index],
-                      'name': nameController.text,
-                      'spotId': selectedSpotId,
-                      'spotName': selectedSpot.name,
-                      'vrUrl': vrUrlController.text,
-                      'thumbnail': thumbnailController.text,
-                    };
-                  }
-                });
-
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('VR tour updated successfully'),
-                    backgroundColor: _primaryOrange,
-                  ),
-                );
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.purple),
-              child: const Text('Save'),
-            ),
-          ],
+  void _editVrTourSpot(Map<String, dynamic> tour) {
+    final spotId = tour['spotId']?.toString() ?? '';
+    if (spotId.isEmpty) {
+      _goToTouristSpotsForVr();
+      return;
+    }
+    try {
+      final spot = _touristSpots.firstWhere((s) => s.id == spotId);
+      _showEditSpotDialog(spot);
+    } catch (_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Tourist spot not found. Refresh and try again.'),
+          backgroundColor: Colors.redAccent,
         ),
-      ),
-    );
+      );
+    }
   }
 
-  void _showDeleteVRTourDialog(Map<String, dynamic> tour) {
+  void _showRemoveVrLinkDialog(Map<String, dynamic> tour) {
+    final spotName =
+        tour['spotName']?.toString() ?? tour['name']?.toString() ?? 'this spot';
+    final spotId = tour['spotId']?.toString() ?? '';
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: _cardBg,
         title: const Row(
           children: [
-            Icon(Icons.warning_amber_rounded, color: Colors.redAccent),
+            Icon(Icons.link_off, color: Colors.redAccent),
             SizedBox(width: 12),
-            Text('Delete VR Tour', style: TextStyle(color: Colors.white)),
+            Text('Remove VR link', style: TextStyle(color: _textDark)),
           ],
         ),
         content: Text(
-          'Are you sure you want to delete "${tour['name']}"? This action cannot be undone.',
+          'Remove the VR tour URL from "$spotName"? The tourist spot stays; only the VR link is cleared.',
           style: const TextStyle(color: _textMuted),
         ),
         actions: [
@@ -5737,59 +6121,69 @@ class _TourismDashboardState extends State<TourismDashboard>
             child: const Text('Cancel', style: TextStyle(color: _textMuted)),
           ),
           ElevatedButton(
-            onPressed: () {
-              setState(() {
-                _vrTours.removeWhere((v) => v['id'] == tour['id']);
-                _totalVRTours = _vrTours.length;
-              });
-
+            onPressed: () async {
+              if (spotId.isEmpty) {
+                Navigator.pop(context);
+                return;
+              }
+              final ok = await VrTourFirestoreService.clearVrLinkForSpot(spotId);
+              if (!context.mounted) return;
               Navigator.pop(context);
+              if (!ok) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Could not remove VR link'),
+                    backgroundColor: Colors.redAccent,
+                  ),
+                );
+                return;
+              }
+              await _loadData();
+              if (!mounted) return;
+              setState(() {});
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                  content: Text('VR tour deleted'),
-                  backgroundColor: Colors.redAccent,
+                  content: Text('VR link removed from tourist spot'),
+                  backgroundColor: Color(0xFFF97316),
                 ),
               );
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            child: const Text('Delete'),
+            child: const Text('Remove link'),
           ),
         ],
       ),
     );
   }
 
+
   void _playVRTour(Map<String, dynamic> tour) async {
-    // Increment view count
+    final tourId = tour['id']?.toString() ?? '';
+    final spotId = tour['spotId']?.toString() ?? '';
+    if (spotId.isNotEmpty) {
+      await VrTourFirestoreService.incrementViewsForSpot(spotId);
+    }
+    final spotName =
+        tour['spotName']?.toString() ?? tour['name']?.toString() ?? 'VR Tour';
+    await openVrForTouristSpot(
+      context,
+      spotId: spotId,
+      spotName: spotName,
+      vrLink: tour['vrUrl']?.toString(),
+      imageUrl: tour['thumbnail']?.toString(),
+    );
+
+    if (!mounted) return;
     setState(() {
-      final index = _vrTours.indexWhere((v) => v['id'] == tour['id']);
+      final index = _vrTours.indexWhere((v) => v['id'] == tourId);
       if (index != -1) {
-        _vrTours[index]['views'] = (_vrTours[index]['views'] as int) + 1;
+        final views = _vrTours[index]['views'];
+        final n = views is int
+            ? views
+            : (views is num ? views.toInt() : 0);
+        _vrTours[index] = {..._vrTours[index], 'views': n + 1};
       }
     });
-
-    final vrUrl = tour['vrUrl'] as String?;
-    if (vrUrl != null && vrUrl.isNotEmpty) {
-      final url = Uri.parse(vrUrl);
-      if (await canLaunchUrl(url)) {
-        await launchUrl(url);
-      } else {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not open VR tour'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-      }
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No VR URL available'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-    }
   }
 
   // ==================== ANALYTICS (LGU-scoped) ====================
@@ -5801,30 +6195,21 @@ class _TourismDashboardState extends State<TourismDashboard>
     return RefreshIndicator(
       onRefresh: _loadData,
       color: _primaryOrange,
-      child: Container(
-        color: _darkBg,
-        child: Column(
-          children: [
-            _buildHeader(
-              'Analytics',
-              subtitle: subtitle,
-            ),
-            Expanded(
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: EdgeInsets.all(_isMobile ? 16 : 24),
-                child: Column(
-                  children: [
-                    _buildLguAnalyticsCards(),
-                    const SizedBox(height: 24),
-                    _buildLguVisitorTrendsChart(),
-                    const SizedBox(height: 24),
-                    _buildLguTopSpotsChart(),
-                  ],
-                ),
-              ),
-            ),
-          ],
+      child: _buildFramedContentShell(
+        title: 'Analytics',
+        subtitle: subtitle,
+        body: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.all(_isMobile ? 16 : 24),
+          child: Column(
+            children: [
+              _buildLguAnalyticsCards(),
+              const SizedBox(height: 24),
+              _buildLguVisitorTrendsChart(),
+              const SizedBox(height: 24),
+              _buildLguTopSpotsChart(),
+            ],
+          ),
         ),
       ),
     );
@@ -5837,7 +6222,7 @@ class _TourismDashboardState extends State<TourismDashboard>
       crossAxisCount: _isMobile ? 2 : 4,
       crossAxisSpacing: 16,
       mainAxisSpacing: 16,
-      childAspectRatio: 1.5,
+      childAspectRatio: _isMobile ? 1.05 : 1.42,
       children: [
         _buildLguAnalyticsCard(
           'Daily Avg',
@@ -5873,33 +6258,101 @@ class _TourismDashboardState extends State<TourismDashboard>
     IconData icon,
     Color color,
   ) {
+    final softTint = Color.lerp(Colors.white, color, 0.07) ?? Colors.white;
+    final deepTint = Color.lerp(Colors.white, color, 0.13) ?? Colors.white;
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
       decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: _cardBorder),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: Color.lerp(_kAnalyticsSurfaceBorder, color, 0.35)!,
+        ),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Colors.white, softTint, deepTint],
+          stops: const [0.0, 0.48, 1.0],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: color.withOpacity(0.28),
+            blurRadius: 30,
+            offset: const Offset(0, 12),
+            spreadRadius: -8,
+          ),
+          BoxShadow(
+            color: Colors.black.withOpacity(0.12),
+            blurRadius: 22,
+            offset: const Offset(0, 9),
+          ),
+          BoxShadow(
+            color: Colors.white.withOpacity(0.74),
+            blurRadius: 14,
+            offset: const Offset(0, -2),
+            spreadRadius: -8,
+          ),
+        ],
       ),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Icon(icon, color: color, size: 28),
+          Container(
+            height: 3,
+            margin: const EdgeInsets.only(bottom: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              gradient: LinearGradient(
+                colors: [
+                  color.withOpacity(0.0),
+                  color.withOpacity(0.58),
+                  color.withOpacity(0.0),
+                ],
+              ),
+            ),
+          ),
+          Center(
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.16),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: color.withOpacity(0.24), width: 1),
+              ),
+              child: Icon(icon, color: color, size: 24),
+            ),
+          ),
           const SizedBox(height: 8),
+          Expanded(
+            child: Center(
+              child: Text(
+                value,
+                style: TextStyle(
+                  color: _textDark,
+                  fontSize: value.contains('\n') || value.length > 18
+                      ? 14
+                      : (value.length > 12 ? 17 : 22),
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.3,
+                  height: 1.2,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ),
           Text(
-            value,
-            style: const TextStyle(
-              color: _textDark,
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
+            label.toUpperCase(),
+            style: TextStyle(
+              color: _textMuted,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              height: 1.15,
+              letterSpacing: 0.7,
             ),
             textAlign: TextAlign.center,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-          ),
-          Text(
-            label,
-            style: const TextStyle(color: _textMuted, fontSize: 12),
-            textAlign: TextAlign.center,
           ),
         ],
       ),
@@ -5913,35 +6366,84 @@ class _TourismDashboardState extends State<TourismDashboard>
       decoration: BoxDecoration(
         color: _cardBg,
         borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: _cardBorder),
+        border: Border.all(color: _kAnalyticsSurfaceBorder, width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 14,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Visitor trends',
-            style: TextStyle(
-              color: _textDark,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Check-ins per day (last 14 days)',
-            style: TextStyle(color: _textMuted, fontSize: 12),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            height: 200,
-            child: CustomPaint(
-              size: const Size(double.infinity, 200),
-              painter: _TourismAnalyticsChartPainter(
-                color: _primaryOrange,
-                values: values,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Visitor trends',
+                      style: TextStyle(
+                        color: _textDark,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Visits per day (last 14 days, local time)',
+                      style: TextStyle(
+                        color: const Color(0xFF374151),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: _primaryOrange.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: _primaryOrange.withOpacity(0.35),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.trending_up_rounded,
+                      size: 16,
+                      color: _primaryOrange,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Total ${values.fold<double>(0, (a, b) => a + b).toStringAsFixed(0)}',
+                      style: const TextStyle(
+                        color: _textDark,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
+          const SizedBox(height: 18),
+          _AnalyticsTrendChart(values: values, color: _primaryOrange),
         ],
       ),
     );
@@ -5956,7 +6458,14 @@ class _TourismDashboardState extends State<TourismDashboard>
       decoration: BoxDecoration(
         color: _cardBg,
         borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: _cardBorder),
+        border: Border.all(color: _kAnalyticsSurfaceBorder, width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 14,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -5965,8 +6474,9 @@ class _TourismDashboardState extends State<TourismDashboard>
             'Most visited spots',
             style: TextStyle(
               color: _textDark,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
+              fontSize: 17,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.2,
             ),
           ),
           const SizedBox(height: 20),
@@ -5975,7 +6485,11 @@ class _TourismDashboardState extends State<TourismDashboard>
               padding: EdgeInsets.symmetric(vertical: 24),
               child: Text(
                 'No check-in data yet.',
-                style: TextStyle(color: _textMuted, fontSize: 14),
+                style: TextStyle(
+                  color: Color(0xFF374151),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             )
           else
@@ -6051,41 +6565,150 @@ class _TourismDashboardState extends State<TourismDashboard>
   }
 
   // ==================== REPORTS SECTION ====================
+  Future<void> _captureReportsSectionScreenshot() async {
+    if (_reportsScreenshotBusy) return;
+    setState(() => _reportsScreenshotBusy = true);
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      if (!mounted) return;
+      final boundary =
+          _reportsRepaintKey.currentContext?.findRenderObject()
+              as RenderRepaintBoundary?;
+      if (boundary == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Reports view is not ready yet. Try again.'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        return;
+      }
+      final pr = MediaQuery.devicePixelRatioOf(context).clamp(1.0, 2.5);
+      final ui.Image image = await boundary.toImage(pixelRatio: pr);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      final png = byteData?.buffer.asUint8List();
+      if (png == null || png.isEmpty) {
+        throw Exception('empty png');
+      }
+      final baseName =
+          'atmos_trs_reports_${DateTime.now().millisecondsSinceEpoch}';
+      final fileName = '$baseName.png';
+
+      if (kIsWeb) {
+        final xfile = XFile.fromData(
+          png,
+          mimeType: 'image/png',
+          name: fileName,
+        );
+        await SharePlus.instance.share(
+          ShareParams(
+            files: [xfile],
+            text: 'ATMOS TRS — Reports',
+            title: 'Reports screenshot',
+          ),
+        );
+      } else {
+        switch (defaultTargetPlatform) {
+          case TargetPlatform.android:
+          case TargetPlatform.iOS:
+            final result = await ImageGallerySaverPlus.saveImage(
+              png,
+              quality: 100,
+              name: baseName,
+            );
+            final ok =
+                result is Map &&
+                (result['isSuccess'] == true || result['success'] == true);
+            if (!ok) throw Exception('gallery save failed');
+            break;
+          default:
+            final xfile = XFile.fromData(
+              png,
+              mimeType: 'image/png',
+              name: fileName,
+            );
+            await SharePlus.instance.share(
+              ShareParams(
+                files: [xfile],
+                text: 'ATMOS TRS — Reports',
+                title: 'Reports screenshot',
+              ),
+            );
+        }
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            kIsWeb
+                ? 'Screenshot ready — use your browser or share dialog to save.'
+                : (defaultTargetPlatform == TargetPlatform.android ||
+                      defaultTargetPlatform == TargetPlatform.iOS)
+                ? 'Screenshot saved to gallery.'
+                : 'Screenshot ready to save or share.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not capture screenshot. Please try again.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _reportsScreenshotBusy = false);
+    }
+  }
+
   Widget _buildReportsContent() {
     return RefreshIndicator(
       onRefresh: _loadData,
       color: _primaryOrange,
-      child: Container(
-        margin: EdgeInsets.all(_isMobile ? 12 : 24),
-        decoration: BoxDecoration(
-          color: const Color(0xFFFFFBF5),
-          borderRadius: BorderRadius.circular(36),
-          border: Border.all(color: _primaryOrange, width: 1.5),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(34),
-          child: Container(
-            color: const Color(0xFFF7F0E8),
+      child: _buildFramedContentShell(
+        title: 'Reports',
+        subtitle:
+            'Check-in stats use your selected date range only (e.g. March 1–31). Use Custom for a full month.',
+        actions: [
+          Tooltip(
+            message:
+                'Save an image of this whole page (quick exports + custom report)',
+            child: IconButton(
+              onPressed: _reportsScreenshotBusy
+                  ? null
+                  : _captureReportsSectionScreenshot,
+              icon: _reportsScreenshotBusy
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: _primaryOrange,
+                      ),
+                    )
+                  : const Icon(Icons.screenshot_monitor_outlined),
+              color: _textDark,
+            ),
+          ),
+        ],
+        body: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.all(_isMobile ? 16 : 24),
+          child: RepaintBoundary(
+            key: _reportsRepaintKey,
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _buildHeader(
-                  'Reports',
-                  subtitle:
-                      'Check-in stats use your selected date range only (e.g. March 1–31). Use Custom for a full month.',
-                ),
-                Expanded(
-                  child: SingleChildScrollView(
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: EdgeInsets.all(_isMobile ? 16 : 24),
-                    child: Column(
-                      children: [
-                        _buildQuickReports(),
-                        const SizedBox(height: 24),
-                        _buildCustomReportGenerator(),
-                      ],
-                    ),
-                  ),
-                ),
+                _buildQuickReports(),
+                const SizedBox(height: 24),
+                _buildCustomReportGenerator(),
               ],
             ),
           ),
@@ -6095,101 +6718,89 @@ class _TourismDashboardState extends State<TourismDashboard>
   }
 
   Widget _buildQuickReports() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(26),
-        border: Border.all(color: _cardBorder, width: 1.5),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 14,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
+    return _wrapTourismPanel(
+      Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: _primaryOrange.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Icon(
-                    Icons.folder_open_rounded,
-                    color: _primaryOrange,
-                    size: 26,
-                  ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: _primaryOrange.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                const SizedBox(width: 14),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Quick export documents',
-                        style: TextStyle(
-                          color: _textDark,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.2,
-                        ),
-                      ),
-                      SizedBox(height: 6),
-                      Text(
-                        'Preset date windows — opens the same formatted report as “Preview”.',
-                        style: TextStyle(
-                          color: _textMuted,
-                          fontSize: 12,
-                          height: 1.4,
-                        ),
-                      ),
-                    ],
-                  ),
+                child: const Icon(
+                  Icons.folder_open_rounded,
+                  color: _primaryOrange,
+                  size: 20,
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Quick export documents',
+                      style: TextStyle(
+                        color: _textDark,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'Preset windows for fast exports. Tap a row to generate.',
+                      style: TextStyle(
+                        color: _textMuted,
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          Divider(height: 1, color: Colors.grey.shade200),
-          _buildQuickReportDocumentRow(
-            title: 'Daily Report',
-            subtitle: "Today's activity snapshot (check-ins filtered to today)",
-            icon: Icons.today_rounded,
-            accent: Colors.blue,
-            type: 'daily',
+          const SizedBox(height: 14),
+          Column(
+            children: [
+              _buildQuickReportDocumentRow(
+                title: 'Daily Report',
+                subtitle:
+                    "Today's activity snapshot (check-ins filtered to today)",
+                icon: Icons.today_rounded,
+                accent: Colors.blue,
+                type: 'daily',
+              ),
+              const SizedBox(height: 10),
+              _buildQuickReportDocumentRow(
+                title: 'Weekly Report',
+                subtitle: 'Last 7 days including today',
+                icon: Icons.date_range_rounded,
+                accent: Colors.orange,
+                type: 'weekly',
+              ),
+              const SizedBox(height: 10),
+              _buildQuickReportDocumentRow(
+                title: 'Monthly Report',
+                subtitle: 'From the 1st of this month through today',
+                icon: Icons.calendar_month_rounded,
+                accent: _primaryOrange,
+                type: 'monthly',
+              ),
+              const SizedBox(height: 10),
+              _buildQuickReportDocumentRow(
+                title: 'Annual Report',
+                subtitle: 'Year-to-date from January 1 through today',
+                icon: Icons.calendar_today_rounded,
+                accent: Colors.purple,
+                type: 'annual',
+              ),
+            ],
           ),
-          Divider(height: 1, indent: 16, endIndent: 16, color: Colors.grey.shade200),
-          _buildQuickReportDocumentRow(
-            title: 'Weekly Report',
-            subtitle: 'Last 7 days including today',
-            icon: Icons.date_range_rounded,
-            accent: Colors.orange,
-            type: 'weekly',
-          ),
-          Divider(height: 1, indent: 16, endIndent: 16, color: Colors.grey.shade200),
-          _buildQuickReportDocumentRow(
-            title: 'Monthly Report',
-            subtitle: 'From the 1st of this month through today',
-            icon: Icons.calendar_month_rounded,
-            accent: _primaryOrange,
-            type: 'monthly',
-          ),
-          Divider(height: 1, indent: 16, endIndent: 16, color: Colors.grey.shade200),
-          _buildQuickReportDocumentRow(
-            title: 'Annual Report',
-            subtitle: 'Year-to-date from January 1 through today',
-            icon: Icons.calendar_today_rounded,
-            accent: Colors.purple,
-            type: 'annual',
-          ),
-          const SizedBox(height: 8),
         ],
       ),
     );
@@ -6202,146 +6813,173 @@ class _TourismDashboardState extends State<TourismDashboard>
     required Color accent,
     required String type,
   }) {
-    final btn = OutlinedButton.icon(
-      onPressed: () => _generateQuickReport(type),
-      icon: Icon(Icons.download_rounded, size: 18, color: accent),
-      label: Text(
-        'Download',
-        style: TextStyle(
-          color: accent,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-      style: OutlinedButton.styleFrom(
-        foregroundColor: accent,
-        side: BorderSide(color: accent.withOpacity(0.45)),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-      ),
-    );
+    final rangeText = _quickReportRangeText(type);
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () => _generateQuickReport(type),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          child: _isMobile
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: accent.withOpacity(0.12),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Icon(icon, color: accent, size: 24),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                title,
-                                style: const TextStyle(
-                                  color: _textDark,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                subtitle,
-                                style: const TextStyle(
-                                  color: _textMuted,
-                                  fontSize: 12,
-                                  height: 1.35,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: btn,
-                    ),
-                  ],
-                )
-              : Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: accent.withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Icon(icon, color: accent, size: 24),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            title,
-                            style: const TextStyle(
-                              color: _textDark,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            subtitle,
-                            style: const TextStyle(
-                              color: _textMuted,
-                              fontSize: 12,
-                              height: 1.35,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    btn,
-                  ],
+    return InkWell(
+      onTap: () => _generateQuickReport(type),
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _panelBorder),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: accent.withOpacity(0.16),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(icon, color: accent, size: 18),
                 ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          color: _textDark,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        subtitle,
+                        style: const TextStyle(
+                          color: _textMuted,
+                          fontSize: 11,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (!_isMobile)
+                  Text(
+                    rangeText,
+                    style: TextStyle(
+                      color: accent.withOpacity(0.95),
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                if (_isMobile)
+                  Expanded(
+                    child: Text(
+                      rangeText,
+                      style: TextStyle(
+                        color: accent.withOpacity(0.95),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  )
+                else
+                  const Spacer(),
+                const SizedBox(width: 8),
+                FilledButton.icon(
+                  onPressed: () => _generateQuickReport(type),
+                  icon: const Icon(Icons.download_rounded, size: 14),
+                  label: const Text('Export'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: accent,
+                    foregroundColor: Colors.white,
+                    elevation: 2,
+                    shadowColor: accent.withOpacity(0.35),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
   }
 
+  String _quickReportRangeText(String type) {
+    final now = DateTime.now();
+    switch (type) {
+      case 'daily':
+        return '[${_formatDateDisplay(now)}]';
+      case 'weekly':
+        final start = now.subtract(const Duration(days: 6));
+        return '[${_formatDateDisplay(start)} – ${_formatDateDisplay(now)}]';
+      case 'monthly':
+        final start = DateTime(now.year, now.month, 1);
+        return '[${_formatDateDisplay(start)} – ${_formatDateDisplay(now)}]';
+      case 'annual':
+        final start = DateTime(now.year, 1, 1);
+        return '[${_formatDateDisplay(start)} – ${_formatDateDisplay(now)}]';
+      default:
+        return '[${_formatDateDisplay(now)}]';
+    }
+  }
+
   Widget _buildCustomReportGenerator() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: _cardBorder),
-      ),
-      child: Column(
+    return _wrapTourismPanel(
+      Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Generate Custom Report',
-            style: TextStyle(
-              color: _textDark,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-            ),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: _primaryOrange.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.tune_rounded,
+                  color: _primaryOrange,
+                  size: 16,
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Text(
+                'Generate Custom Report',
+                style: TextStyle(
+                  color: _textDark,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 4),
+          Text(
+            'Choose date range and report type, then export your file.',
+            style: TextStyle(color: _textMuted, fontSize: 11.5, height: 1.3),
+          ),
+          const SizedBox(height: 12),
           _isMobile ? _buildCustomReportMobile() : _buildCustomReportDesktop(),
         ],
       ),
@@ -6357,15 +6995,15 @@ class _TourismDashboardState extends State<TourismDashboard>
           _reportStartDate,
           (date) => setState(() => _reportStartDate = date),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         _buildDatePicker(
           'End Date',
           _reportEndDate,
           (date) => setState(() => _reportEndDate = date),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         _buildReportTypeDropdown(),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         SizedBox(
           width: double.infinity,
           child: ElevatedButton.icon(
@@ -6379,14 +7017,14 @@ class _TourismDashboardState extends State<TourismDashboard>
                       color: Colors.white,
                     ),
                   )
-                : const Icon(Icons.download, size: 18),
+                : const Icon(Icons.download, size: 17),
             label: Text(_isExporting ? 'Generating...' : 'Generate'),
             style: ElevatedButton.styleFrom(
               backgroundColor: _primaryOrange,
               foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 14),
+              padding: const EdgeInsets.symmetric(vertical: 12),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(14),
               ),
             ),
           ),
@@ -6396,52 +7034,65 @@ class _TourismDashboardState extends State<TourismDashboard>
   }
 
   Widget _buildCustomReportDesktop() {
-    return Row(
-      children: [
-        Expanded(
-          child: _buildDatePicker(
-            'Start Date',
-            _reportStartDate,
-            (date) => setState(() => _reportStartDate = date),
+    const fieldWidth = 200.0;
+    const typeWidth = 168.0;
+
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        crossAxisAlignment: WrapCrossAlignment.end,
+        children: [
+          SizedBox(
+            width: fieldWidth,
+            child: _buildDatePicker(
+              'Start Date',
+              _reportStartDate,
+              (date) => setState(() => _reportStartDate = date),
+            ),
           ),
-        ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: _buildDatePicker(
-            'End Date',
-            _reportEndDate,
-            (date) => setState(() => _reportEndDate = date),
+          SizedBox(
+            width: fieldWidth,
+            child: _buildDatePicker(
+              'End Date',
+              _reportEndDate,
+              (date) => setState(() => _reportEndDate = date),
+            ),
           ),
-        ),
-        const SizedBox(width: 16),
-        Expanded(child: _buildReportTypeDropdown()),
-        const SizedBox(width: 16),
-        Padding(
-          padding: const EdgeInsets.only(top: 24),
-          child: ElevatedButton.icon(
-            onPressed: _generateCustomReport,
-            icon: _isExporting
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.download, size: 18),
-            label: Text(_isExporting ? 'Generating...' : 'Generate'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _primaryOrange,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
+          SizedBox(width: typeWidth, child: _buildReportTypeDropdown()),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 1),
+            child: ElevatedButton.icon(
+              onPressed: _generateCustomReport,
+              icon: _isExporting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.download_rounded, size: 17),
+              label: Text(_isExporting ? 'Generating...' : 'Generate'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _primaryOrange,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 11,
+                ),
+                minimumSize: const Size(0, 40),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -6452,9 +7103,10 @@ class _TourismDashboardState extends State<TourismDashboard>
   ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Text(label, style: TextStyle(color: _textMuted, fontSize: 12)),
-        const SizedBox(height: 8),
+        Text(label, style: TextStyle(color: _textMuted, fontSize: 11)),
+        const SizedBox(height: 4),
         InkWell(
           onTap: () async {
             final date = await showDatePicker(
@@ -6495,25 +7147,35 @@ class _TourismDashboardState extends State<TourismDashboard>
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
                       ),
-                      dayStyle: const TextStyle(
-                        color: _textDark,
-                        fontSize: 14,
-                      ),
-                      dayForegroundColor: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
-                        if (states.contains(WidgetState.selected)) return Colors.white;
+                      dayStyle: const TextStyle(color: _textDark, fontSize: 14),
+                      dayForegroundColor: WidgetStateProperty.resolveWith((
+                        Set<WidgetState> states,
+                      ) {
+                        if (states.contains(WidgetState.selected))
+                          return Colors.white;
                         return null;
                       }),
-                      dayBackgroundColor: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
-                        if (states.contains(WidgetState.selected)) return _primaryOrange;
+                      dayBackgroundColor: WidgetStateProperty.resolveWith((
+                        Set<WidgetState> states,
+                      ) {
+                        if (states.contains(WidgetState.selected))
+                          return _primaryOrange;
                         return null;
                       }),
-                      todayForegroundColor: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
+                      todayForegroundColor: WidgetStateProperty.resolveWith((
+                        Set<WidgetState> states,
+                      ) {
                         return _primaryOrange;
                       }),
-                      todayBackgroundColor: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
+                      todayBackgroundColor: WidgetStateProperty.resolveWith((
+                        Set<WidgetState> states,
+                      ) {
                         return null;
                       }),
-                      todayBorder: const BorderSide(color: _primaryOrange, width: 2),
+                      todayBorder: const BorderSide(
+                        color: _primaryOrange,
+                        width: 2,
+                      ),
                       dividerColor: Colors.grey.shade300,
                       cancelButtonStyle: TextButton.styleFrom(
                         foregroundColor: _primaryOrange,
@@ -6532,36 +7194,41 @@ class _TourismDashboardState extends State<TourismDashboard>
             if (date != null) onSelect(date);
           },
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
               color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _kAnalyticsSurfaceBorder),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
+                  color: Colors.black.withOpacity(0.04),
+                  blurRadius: 6,
+                  offset: const Offset(0, 1),
                 ),
               ],
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  selectedDate != null
-                      ? _formatDateDisplay(selectedDate)
-                      : 'Select date',
-                  style: TextStyle(
-                    color: selectedDate != null ? _textDark : _textMuted,
-                    fontSize: selectedDate != null ? 15 : 14,
-                    fontWeight: selectedDate != null ? FontWeight.w600 : FontWeight.normal,
+                Expanded(
+                  child: Text(
+                    selectedDate != null
+                        ? _formatDateDisplay(selectedDate)
+                        : 'Select date',
+                    style: TextStyle(
+                      color: selectedDate != null ? _textDark : _textMuted,
+                      fontSize: 13,
+                      fontWeight: selectedDate != null
+                          ? FontWeight.w600
+                          : FontWeight.normal,
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 Icon(
                   Icons.calendar_today_rounded,
                   color: _primaryOrange,
-                  size: 20,
+                  size: 18,
                 ),
               ],
             ),
@@ -6574,30 +7241,35 @@ class _TourismDashboardState extends State<TourismDashboard>
   Widget _buildReportTypeDropdown() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Text('Report Type', style: TextStyle(color: _textMuted, fontSize: 12)),
-        const SizedBox(height: 8),
+        Text('Report Type', style: TextStyle(color: _textMuted, fontSize: 11)),
+        const SizedBox(height: 4),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             color: Colors.grey.shade200,
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey.shade300),
           ),
           child: DropdownButton<String>(
             value: _reportType,
             isExpanded: true,
+            isDense: true,
             dropdownColor: Colors.white,
             underline: const SizedBox(),
-            style: TextStyle(color: _textDark, fontSize: 14),
-            icon: Icon(Icons.keyboard_arrow_down, color: _textMuted),
+            style: const TextStyle(color: _textDark, fontSize: 13),
+            icon: Icon(Icons.keyboard_arrow_down, color: _textMuted, size: 20),
             items: _reportTypes
-                .map((t) => DropdownMenuItem(
-                      value: t,
-                      child: Text(
-                        t,
-                        style: TextStyle(color: _textDark, fontSize: 14),
-                      ),
-                    ))
+                .map(
+                  (t) => DropdownMenuItem(
+                    value: t,
+                    child: Text(
+                      t,
+                      style: const TextStyle(color: _textDark, fontSize: 13),
+                    ),
+                  ),
+                )
                 .toList(),
             onChanged: (value) => setState(() => _reportType = value!),
           ),
@@ -6703,14 +7375,15 @@ class _TourismDashboardState extends State<TourismDashboard>
         'Note: Check-in counts and lists below include ONLY records in this date range.\n\n';
 
     String? checkInsCsv;
-    if (type == 'All Data' || type == 'Check-ins Only') {
+    if (type == 'All Data' || type == 'Visits only') {
       report += '--- CHECK-INS (within period) ---\n';
       report += 'Count in period: ${filteredCheckIns.length}\n';
       final verified = filteredCheckIns
           .where((c) => c['status'] == 'Verified')
           .length;
-      final pending =
-          filteredCheckIns.where((c) => c['status'] == 'Pending').length;
+      final pending = filteredCheckIns
+          .where((c) => c['status'] == 'Pending')
+          .length;
       report += 'Verified (with status field): $verified\n';
       report += 'Pending (with status field): $pending\n\n';
 
@@ -6782,7 +7455,9 @@ class _TourismDashboardState extends State<TourismDashboard>
         'checkins_${_formatDate(startDate)}_to_${_formatDate(endDate)}.csv';
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('${period.capitalize()} report generated (${filteredCheckIns.length} check-ins in period)'),
+        content: Text(
+          '${period.capitalize()} report generated (${filteredCheckIns.length} check-ins in period)',
+        ),
         backgroundColor: _primaryOrange,
         action: SnackBarAction(
           label: 'Preview',
@@ -6900,254 +7575,15 @@ class _TourismDashboardState extends State<TourismDashboard>
     );
   }
 
-  void _showGlobalSearchDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: _cardBg,
-        title: const Text('Search', style: TextStyle(color: Colors.white)),
-        content: SizedBox(
-          width: 400,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: _globalSearchController,
-                autofocus: true,
-                decoration: InputDecoration(
-                  hintText: 'Search tourists, spots, check-ins...',
-                  hintStyle: TextStyle(color: _textMuted),
-                  prefixIcon: Icon(Icons.search, color: _textMuted),
-                  filled: true,
-                  fillColor: Colors.white.withOpacity(0.05),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-                style: const TextStyle(color: Colors.white),
-                onSubmitted: (value) {
-                  Navigator.pop(context);
-                  _performGlobalSearch(value);
-                },
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Press Enter to search across all data',
-                style: TextStyle(color: _textMuted, fontSize: 12),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel', style: TextStyle(color: _textMuted)),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _performGlobalSearch(_globalSearchController.text);
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: _primaryOrange),
-            child: const Text('Search'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _performGlobalSearch(String query) {
-    if (query.isEmpty) return;
-
-    final lowerQuery = query.toLowerCase();
-
-    // Search in tourists
-    final matchingTourists = _tourists
-        .where(
-          (t) =>
-              (t['name']?.toString() ?? '').toLowerCase().contains(
-                lowerQuery,
-              ) ||
-              (t['id']?.toString() ?? '').toLowerCase().contains(lowerQuery),
-        )
-        .toList();
-
-    // Search in spots
-    final matchingSpots = _touristSpots
-        .where(
-          (s) =>
-              s.name.toLowerCase().contains(lowerQuery) ||
-              s.municipality.toLowerCase().contains(lowerQuery),
-        )
-        .toList();
-
-    // Search in check-ins
-    final matchingCheckIns = _checkIns
-        .where(
-          (c) =>
-              (c['touristName']?.toString() ?? '').toLowerCase().contains(
-                lowerQuery,
-              ) ||
-              (c['location']?.toString() ?? '').toLowerCase().contains(
-                lowerQuery,
-              ),
-        )
-        .toList();
-
-    // Show results
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: _cardBg,
-        title: Text(
-          'Search Results for "$query"',
-          style: const TextStyle(color: Colors.white),
-        ),
-        content: SizedBox(
-          width: 400,
-          height: 400,
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (matchingTourists.isNotEmpty) ...[
-                  Text(
-                    'Tourists (${matchingTourists.length})',
-                    style: const TextStyle(
-                      color: _primaryOrange,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  ...matchingTourists
-                      .take(5)
-                      .map(
-                        (t) => ListTile(
-                          leading: const Icon(Icons.person, color: Colors.blue),
-                          title: Text(
-                            t['name'],
-                            style: const TextStyle(color: Colors.white),
-                          ),
-                          subtitle: Text(
-                            t['id'],
-                            style: TextStyle(color: _textMuted),
-                          ),
-                          onTap: () {
-                            Navigator.pop(context);
-                            setState(() => _selectedIndex = 4);
-                            _touristsSearchController.text = query;
-                          },
-                        ),
-                      ),
-                  const Divider(color: Colors.white24),
-                ],
-                if (matchingSpots.isNotEmpty) ...[
-                  Text(
-                    'Tourist Spots (${matchingSpots.length})',
-                    style: const TextStyle(
-                      color: _primaryOrange,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  ...matchingSpots
-                      .take(5)
-                      .map(
-                        (s) => ListTile(
-                          leading: const Icon(
-                            Icons.place,
-                            color: Colors.orange,
-                          ),
-                          title: Text(
-                            s.name,
-                            style: const TextStyle(color: Colors.white),
-                          ),
-                          subtitle: Text(
-                            s.municipality,
-                            style: TextStyle(color: _textMuted),
-                          ),
-                          onTap: () {
-                            Navigator.pop(context);
-                            setState(() => _selectedIndex = 2);
-                            _spotsSearchController.text = query;
-                          },
-                        ),
-                      ),
-                  const Divider(color: Colors.white24),
-                ],
-                if (matchingCheckIns.isNotEmpty) ...[
-                  Text(
-                    'Check-ins (${matchingCheckIns.length})',
-                    style: const TextStyle(
-                      color: _primaryOrange,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  ...matchingCheckIns
-                      .take(5)
-                      .map(
-                        (c) => ListTile(
-                          leading: const Icon(
-                            Icons.qr_code_scanner,
-                            color: _primaryOrange,
-                          ),
-                          title: Text(
-                            c['touristName'],
-                            style: const TextStyle(color: Colors.white),
-                          ),
-                          subtitle: Text(
-                            c['location'],
-                            style: TextStyle(color: _textMuted),
-                          ),
-                          onTap: () {
-                            Navigator.pop(context);
-                            setState(() => _selectedIndex = 1);
-                            _checkInsSearchController.text = query;
-                          },
-                        ),
-                      ),
-                ],
-                if (matchingTourists.isEmpty &&
-                    matchingSpots.isEmpty &&
-                    matchingCheckIns.isEmpty)
-                  const Center(
-                    child: Text(
-                      'No results found',
-                      style: TextStyle(color: _textMuted),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close', style: TextStyle(color: _primaryOrange)),
-          ),
-        ],
-      ),
-    );
-  }
-
   // --- Profile (header + sidebar; same pattern as governor dashboard) ---
   Widget _buildSidebarAvatar({required double size}) {
-    final borderColor = Colors.white.withOpacity(0.9);
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: borderColor, width: 2),
-      ),
+      decoration: BoxDecoration(shape: BoxShape.circle),
       child: ClipOval(
         child: _profilePhotoBytes != null
-            ? Image.memory(
-                _profilePhotoBytes!,
-                fit: BoxFit.cover,
-              )
+            ? Image.memory(_profilePhotoBytes!, fit: BoxFit.cover)
             : Container(
                 color: const Color(0xFFFFF7ED),
                 child: Center(
@@ -7167,157 +7603,91 @@ class _TourismDashboardState extends State<TourismDashboard>
     );
   }
 
-  Widget _buildHeaderProfileChip() {
-    return Tooltip(
-      message: _profileName,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(32),
-          border: Border.all(
-            color: _primaryOrange.withOpacity(0.25),
-            width: 1.5,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.06),
-              blurRadius: 10,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _buildSidebarAvatar(size: 36),
-            const SizedBox(width: 12),
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _profileName,
-                  style: const TextStyle(
-                    color: _textDark,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Tourism',
-                  style: TextStyle(
-                    color: _textMuted,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   // ==================== SETTINGS (aligned with governor) ====================
   Widget _buildSettingsContent() {
-    return Container(
-      color: _darkBg,
-      child: Column(
-        children: [
-          _buildHeader(
-            'Settings',
-            subtitle: 'System configuration and preferences',
-            showHeaderProfile: true,
-          ),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: EdgeInsets.all(_isMobile ? 16 : 24),
-              child: Column(
-                children: [
-                  _buildTourismSettingsSection('Account', [
-                    _buildTourismSettingsTile(
-                      'Change Password',
-                      Icons.lock_outline,
-                      _showTourismChangePasswordDialog,
-                    ),
-                    _buildTourismSettingsTile(
-                      'Profile Settings',
-                      Icons.person_outline,
-                      _showTourismProfileSettingsDialog,
-                    ),
-                  ]),
-                  const SizedBox(height: 16),
-                  _buildTourismSettingsSection('Notifications', [
-                    _buildTourismNotificationToggle(
-                      'Email Notifications',
-                      Icons.email_outlined,
-                      _emailNotifications,
-                      (value) {
-                        setState(() => _emailNotifications = value);
-                        _saveTourismSettings();
-                      },
-                    ),
-                    _buildTourismNotificationToggle(
-                      'Push Notifications',
-                      Icons.notifications_outlined,
-                      _pushNotifications,
-                      (value) {
-                        setState(() => _pushNotifications = value);
-                        _saveTourismSettings();
-                      },
-                    ),
-                    _buildTourismNotificationToggle(
-                      'Weekly Reports',
-                      Icons.assessment_outlined,
-                      _weeklyReports,
-                      (value) {
-                        setState(() => _weeklyReports = value);
-                        _saveTourismSettings();
-                      },
-                    ),
-                  ]),
-                  const SizedBox(height: 16),
-                  _buildTourismSettingsSection('Data', [
-                    _buildTourismSettingsTileWithSubtitle(
-                      'Export Data',
-                      Icons.download_outlined,
-                      _isExporting
-                          ? 'Exporting... ${(_exportProgress * 100).toInt()}%'
-                          : 'Export tourists and check-ins data',
-                      _showTourismExportDataDialog,
-                    ),
-                    _buildTourismSettingsTileWithSubtitle(
-                      'Backup Settings',
-                      Icons.backup_outlined,
-                      _lastBackupDate != null
-                          ? 'Last backup: $_lastBackupDate'
-                          : 'No backup yet',
-                      _showTourismBackupDialog,
-                    ),
-                  ]),
-                  const SizedBox(height: 16),
-                  _buildTourismSettingsSection('About', [
-                    _buildTourismSettingsTile(
-                      'System Information',
-                      Icons.info_outline,
-                      _showTourismSystemInfoDialog,
-                    ),
-                    _buildTourismSettingsTile(
-                      'Help & Support',
-                      Icons.help_outline,
-                      _showTourismHelpSupportDialog,
-                    ),
-                  ]),
-                ],
+    return _buildFramedContentShell(
+      title: 'Settings',
+      subtitle: 'System configuration and preferences',
+      body: SingleChildScrollView(
+        padding: EdgeInsets.all(_isMobile ? 16 : 24),
+        child: Column(
+          children: [
+            _buildTourismSettingsSection('Account', [
+              _buildTourismSettingsTile(
+                'Change Password',
+                Icons.lock_outline,
+                _showTourismChangePasswordDialog,
               ),
-            ),
-          ),
-        ],
+              _buildTourismSettingsTile(
+                'Profile Settings',
+                Icons.person_outline,
+                _showTourismProfileSettingsDialog,
+              ),
+            ]),
+            const SizedBox(height: 16),
+            _buildTourismSettingsSection('Notifications', [
+              _buildTourismNotificationToggle(
+                'Email Notifications',
+                Icons.email_outlined,
+                _emailNotifications,
+                (value) {
+                  setState(() => _emailNotifications = value);
+                  _saveTourismSettings();
+                },
+              ),
+              _buildTourismNotificationToggle(
+                'Push Notifications',
+                Icons.notifications_outlined,
+                _pushNotifications,
+                (value) {
+                  setState(() => _pushNotifications = value);
+                  _saveTourismSettings();
+                },
+              ),
+              _buildTourismNotificationToggle(
+                'Weekly Reports',
+                Icons.assessment_outlined,
+                _weeklyReports,
+                (value) {
+                  setState(() => _weeklyReports = value);
+                  _saveTourismSettings();
+                },
+              ),
+            ]),
+            const SizedBox(height: 16),
+            _buildTourismSettingsSection('Data', [
+              _buildTourismSettingsTileWithSubtitle(
+                'Export Data',
+                Icons.download_outlined,
+                _isExporting
+                    ? 'Exporting... ${(_exportProgress * 100).toInt()}%'
+                    : 'Export tourists and check-ins data',
+                _showTourismExportDataDialog,
+              ),
+              _buildTourismSettingsTileWithSubtitle(
+                'Backup Settings',
+                Icons.backup_outlined,
+                _lastBackupDate != null
+                    ? 'Last backup: $_lastBackupDate'
+                    : 'No backup yet',
+                _showTourismBackupDialog,
+              ),
+            ]),
+            const SizedBox(height: 16),
+            _buildTourismSettingsSection('About', [
+              _buildTourismSettingsTile(
+                'System Information',
+                Icons.info_outline,
+                _showTourismSystemInfoDialog,
+              ),
+              _buildTourismSettingsTile(
+                'Help & Support',
+                Icons.help_outline,
+                _showTourismHelpSupportDialog,
+              ),
+            ]),
+          ],
+        ),
       ),
     );
   }
@@ -7328,7 +7698,6 @@ class _TourismDashboardState extends State<TourismDashboard>
       decoration: BoxDecoration(
         color: _cardBg,
         borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: _cardBorder),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -7348,7 +7717,11 @@ class _TourismDashboardState extends State<TourismDashboard>
     );
   }
 
-  Widget _buildTourismSettingsTile(String title, IconData icon, VoidCallback onTap) {
+  Widget _buildTourismSettingsTile(
+    String title,
+    IconData icon,
+    VoidCallback onTap,
+  ) {
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -7617,7 +7990,10 @@ class _TourismDashboardState extends State<TourismDashboard>
             actions: [
               TextButton(
                 onPressed: isLoading ? null : () => Navigator.pop(context),
-                child: const Text('Cancel', style: TextStyle(color: _textMuted)),
+                child: const Text(
+                  'Cancel',
+                  style: TextStyle(color: _textMuted),
+                ),
               ),
               ElevatedButton(
                 onPressed: isLoading
@@ -7759,7 +8135,6 @@ class _TourismDashboardState extends State<TourismDashboard>
                         decoration: BoxDecoration(
                           color: _primaryOrange,
                           shape: BoxShape.circle,
-                          border: Border.all(color: _cardBg, width: 3),
                         ),
                         child: const Icon(
                           Icons.camera_alt,
@@ -7890,7 +8265,7 @@ class _TourismDashboardState extends State<TourismDashboard>
           mainAxisSize: MainAxisSize.min,
           children: [
             _buildTourismExportOption(
-              'Tourists Data (CSV)',
+              'Visitors data (CSV)',
               Icons.people_alt_rounded,
               () {
                 Navigator.pop(context);
@@ -7918,7 +8293,11 @@ class _TourismDashboardState extends State<TourismDashboard>
     );
   }
 
-  Widget _buildTourismExportOption(String title, IconData icon, VoidCallback onTap) {
+  Widget _buildTourismExportOption(
+    String title,
+    IconData icon,
+    VoidCallback onTap,
+  ) {
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -8017,18 +8396,243 @@ class _TourismDashboardState extends State<TourismDashboard>
   }
 }
 
-/// Line chart for LGU analytics (same visual language as Governor analytics).
+/// Visitor trend chart with Y-axis gutter, X labels, and hover readout.
+class _AnalyticsTrendChart extends StatefulWidget {
+  const _AnalyticsTrendChart({required this.values, required this.color});
+
+  final List<double> values;
+  final Color color;
+
+  @override
+  State<_AnalyticsTrendChart> createState() => _AnalyticsTrendChartState();
+}
+
+class _AnalyticsTrendChartState extends State<_AnalyticsTrendChart> {
+  int? _hoverIndex;
+  double? _hoverX;
+
+  int get _n => widget.values.length;
+
+  int _indexAtDx(double dx, double width) {
+    final n = _n;
+    if (n <= 1 || width <= 0) return 0;
+    final t = (dx / width).clamp(0.0, 1.0);
+    return ((n - 1) * t).round().clamp(0, n - 1);
+  }
+
+  String _dayLabel(int i) {
+    final d = DateTime.now().subtract(Duration(days: 13 - i));
+    return '${d.month}/${d.day}';
+  }
+
+  int get _maxY {
+    if (widget.values.isEmpty) return 1;
+    final m = widget.values.reduce(math.max);
+    return math.max(1, m.ceil());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final maxY = _maxY;
+    final midY = (maxY / 2).ceil();
+    const axisStyle = TextStyle(
+      color: Color(0xFF6B7280),
+      fontSize: 11,
+      fontWeight: FontWeight.w600,
+    );
+    const chartH = 208.0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: chartH,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                width: 40,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 6, top: 8, bottom: 4),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text('$maxY', style: axisStyle),
+                      Text(maxY > 1 ? '$midY' : ' ', style: axisStyle),
+                      const Text('0', style: axisStyle),
+                    ],
+                  ),
+                ),
+              ),
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: LayoutBuilder(
+                    builder: (context, cons) {
+                      return Listener(
+                        behavior: HitTestBehavior.opaque,
+                        onPointerDown: (e) {
+                          final i = _indexAtDx(
+                            e.localPosition.dx,
+                            cons.maxWidth,
+                          );
+                          setState(() {
+                            _hoverIndex = i;
+                            _hoverX = e.localPosition.dx;
+                          });
+                        },
+                        child: MouseRegion(
+                          onExit: (_) {
+                            setState(() {
+                              _hoverIndex = null;
+                              _hoverX = null;
+                            });
+                          },
+                          onHover: (event) {
+                            final dx = event.localPosition.dx;
+                            final i = _indexAtDx(dx, cons.maxWidth);
+                            setState(() {
+                              _hoverIndex = i;
+                              _hoverX = dx;
+                            });
+                          },
+                          child: Stack(
+                            clipBehavior: Clip.hardEdge,
+                            children: [
+                              CustomPaint(
+                                size: Size(cons.maxWidth, chartH),
+                                painter: _TourismAnalyticsChartPainter(
+                                  color: widget.color,
+                                  values: widget.values,
+                                  maxVal: maxY.toDouble(),
+                                  hoverX: _hoverX,
+                                ),
+                              ),
+                              if (_hoverIndex != null && _hoverX != null)
+                                Positioned(
+                                  top: 8,
+                                  left: (_hoverX!.clamp(
+                                    8.0,
+                                    cons.maxWidth - 132,
+                                  )).clamp(0.0, cons.maxWidth - 140),
+                                  child: Material(
+                                    elevation: 4,
+                                    borderRadius: BorderRadius.circular(10),
+                                    color: Colors.white,
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 8,
+                                      ),
+                                      child: Text(
+                                        '${_dayLabel(_hoverIndex!)} · ${widget.values[_hoverIndex!].toStringAsFixed(0)} check-ins',
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                          color: Color(0xFF111827),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(left: 40, top: 8, right: 4),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(_dayLabel(0), style: axisStyle),
+              Text(_dayLabel(6), style: axisStyle),
+              Text(_dayLabel(13), style: axisStyle),
+            ],
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.only(left: 40, top: 2),
+          child: Text(
+            'Date (oldest → today)',
+            style: TextStyle(
+              color: Color(0xFF9CA3AF),
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Line / area chart for LGU analytics (plotted area only; axes are Flutter widgets).
 class _TourismAnalyticsChartPainter extends CustomPainter {
   _TourismAnalyticsChartPainter({
     required this.color,
     this.values = const [],
+    this.maxVal,
+    this.hoverX,
   });
 
   final Color color;
   final List<double> values;
+  final double? maxVal;
+  final double? hoverX;
 
   @override
   void paint(Canvas canvas, Size size) {
+    final bg = RRect.fromRectAndRadius(
+      Offset.zero & size,
+      const Radius.circular(12),
+    );
+    canvas.drawRRect(bg, Paint()..color = const Color(0xFFF9FAFB));
+    canvas.drawRRect(
+      bg,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = const Color(0xFFE5E7EB),
+    );
+
+    final gridPaint = Paint()
+      ..color = const Color(0xFFE5E7EB)
+      ..strokeWidth = 1;
+
+    for (int i = 0; i < 5; i++) {
+      final y = size.height * i / 4;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+
+    double maxV = maxVal ?? 1;
+    if (maxV <= 0) maxV = 1;
+    if (values.isEmpty) {
+      final tp = TextPainter(
+        text: TextSpan(
+          text: 'No check-ins in the last 14 days',
+          style: TextStyle(
+            color: Colors.grey.shade600,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: size.width - 24);
+      tp.paint(
+        canvas,
+        Offset((size.width - tp.width) / 2, (size.height - tp.height) / 2),
+      );
+      return;
+    }
+
     final paint = Paint()
       ..color = color
       ..strokeWidth = 3
@@ -8039,26 +8643,14 @@ class _TourismAnalyticsChartPainter extends CustomPainter {
       ..shader = LinearGradient(
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
-        colors: [color.withOpacity(0.3), color.withOpacity(0.0)],
+        colors: [color.withOpacity(0.28), color.withOpacity(0.02)],
       ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
 
-    final gridPaint = Paint()
-      ..color = Colors.grey.shade300
-      ..strokeWidth = 1;
-
-    for (int i = 0; i < 5; i++) {
-      final y = size.height * i / 4;
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
-    }
-
-    final maxVal = values.isEmpty
-        ? 1.0
-        : values.reduce((a, b) => a > b ? a : b).clamp(1.0, double.infinity);
     final points = <Offset>[];
     if (values.length >= 2) {
       for (int i = 0; i < values.length; i++) {
         final x = size.width * (i / (values.length - 1));
-        final y = size.height * (1 - (values[i] / maxVal));
+        final y = size.height * (1 - (values[i] / maxV).clamp(0.0, 1.0));
         points.add(Offset(x, y));
       }
     } else {
@@ -8075,6 +8667,15 @@ class _TourismAnalyticsChartPainter extends CustomPainter {
     }
 
     if (points.isEmpty) return;
+
+    final hx = hoverX;
+    if (hx != null && hx >= 0 && hx <= size.width) {
+      final guide = Paint()
+        ..color = color.withOpacity(0.35)
+        ..strokeWidth = 1;
+      canvas.drawLine(Offset(hx, 0), Offset(hx, size.height), guide);
+    }
+
     final path = Path();
     path.moveTo(points.first.dx, points.first.dy);
     for (int i = 1; i < points.length; i++) {
@@ -8101,7 +8702,18 @@ class _TourismAnalyticsChartPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _TourismAnalyticsChartPainter oldDelegate) {
+    if (oldDelegate.color != color ||
+        oldDelegate.maxVal != maxVal ||
+        oldDelegate.hoverX != hoverX) {
+      return true;
+    }
+    if (oldDelegate.values.length != values.length) return true;
+    for (var i = 0; i < values.length; i++) {
+      if (oldDelegate.values[i] != values[i]) return true;
+    }
+    return false;
+  }
 }
 
 class _NavItem {
@@ -8113,18 +8725,57 @@ class _NavItem {
 class _StatCard {
   final String title;
   final String value;
-  final String change;
+  final String? subtitle;
   final IconData icon;
   final Color color;
-  final bool? isPositiveOverride;
   _StatCard({
     required this.title,
     required this.value,
-    required this.change,
+    this.subtitle,
     required this.icon,
     required this.color,
-    this.isPositiveOverride,
   });
+}
+
+/// White sparkline on flat KPI cards.
+class _TourismMiniSparklinePainter extends CustomPainter {
+  _TourismMiniSparklinePainter({required this.values});
+
+  final List<double> values;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (values.isEmpty) return;
+    final maxVal = values
+        .reduce((a, b) => a > b ? a : b)
+        .clamp(1.0, double.infinity);
+    final points = <Offset>[];
+    for (var i = 0; i < values.length; i++) {
+      final x = values.length == 1
+          ? size.width / 2
+          : size.width * (i / (values.length - 1));
+      final y = size.height * (1 - (values[i] / maxVal) * 0.85);
+      points.add(Offset(x, y));
+    }
+    if (points.length < 2) return;
+
+    final paint = Paint()
+      ..color = Colors.white.withOpacity(0.9)
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final path = Path()..moveTo(points.first.dx, points.first.dy);
+    for (var i = 1; i < points.length; i++) {
+      path.lineTo(points[i].dx, points[i].dy);
+    }
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _TourismMiniSparklinePainter oldDelegate) =>
+      oldDelegate.values != values;
 }
 
 extension StringExtension on String {

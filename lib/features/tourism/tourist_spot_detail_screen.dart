@@ -1,20 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:atmos_trs_system/config/app_theme.dart';
+import 'package:atmos_trs_system/config/vr_tour_config.dart';
 import 'package:atmos_trs_system/features/explore/explore_screen.dart'
-    show TouristSpot, kPrimaryOrange, kTextMuted;
-import 'package:atmos_trs_system/screens/simple_image_vr_screen.dart';
+    show TouristSpot, kTextMuted;
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart';
 
 class TouristSpotDetailScreen extends StatefulWidget {
-  const TouristSpotDetailScreen({
-    super.key,
-    required this.spot,
-  });
+  const TouristSpotDetailScreen({super.key, required this.spot});
 
   final TouristSpot spot;
 
   @override
-  State<TouristSpotDetailScreen> createState() => _TouristSpotDetailScreenState();
+  State<TouristSpotDetailScreen> createState() =>
+      _TouristSpotDetailScreenState();
 }
 
 class _TouristSpotDetailScreenState extends State<TouristSpotDetailScreen> {
@@ -53,7 +52,7 @@ class _TouristSpotDetailScreenState extends State<TouristSpotDetailScreen> {
         children: [
           // Hero image & overlay
           SizedBox(
-            height: 240,
+            height: MediaQuery.sizeOf(context).width < 600 ? 180 : 240,
             width: double.infinity,
             child: Stack(
               fit: StackFit.expand,
@@ -97,7 +96,9 @@ class _TouristSpotDetailScreenState extends State<TouristSpotDetailScreen> {
                             ),
                             const SizedBox(width: 6),
                             Text(
-                              spot.city.isNotEmpty ? spot.city : 'Misamis Occidental',
+                              spot.city.isNotEmpty
+                                  ? spot.city
+                                  : 'Misamis Occidental',
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 12,
@@ -136,13 +137,13 @@ class _TouristSpotDetailScreenState extends State<TouristSpotDetailScreen> {
                           vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          color: kPrimaryOrange.withOpacity(0.1),
+                          color: AppTheme.primary.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: Text(
                           spot.category,
-                          style: const TextStyle(
-                            color: kPrimaryOrange,
+                          style: TextStyle(
+                            color: AppTheme.primary,
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
                           ),
@@ -189,7 +190,7 @@ class _TouristSpotDetailScreenState extends State<TouristSpotDetailScreen> {
                       height: 1.4,
                     ),
                   ),
-                  if (spot.hasVR) ...[
+                  if (_spotHasHostedOrPreviewVr) ...[
                     const SizedBox(height: 24),
                     SizedBox(
                       width: double.infinity,
@@ -197,12 +198,12 @@ class _TouristSpotDetailScreenState extends State<TouristSpotDetailScreen> {
                         onPressed: () => _openVrForSpot(context),
                         icon: const Icon(Icons.vrpano_rounded, size: 20),
                         label: Text(
-                          spot.vrLink?.trim().isNotEmpty == true
-                              ? 'Launch VR tour'
+                          _spotHasHostedVr
+                              ? 'Open 360° VR in browser'
                               : 'View VR preview',
                         ),
                         style: FilledButton.styleFrom(
-                          backgroundColor: kPrimaryOrange,
+                          backgroundColor: AppTheme.primary,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(
@@ -221,29 +222,28 @@ class _TouristSpotDetailScreenState extends State<TouristSpotDetailScreen> {
     );
   }
 
+  bool get _spotHasHostedVr =>
+      resolveVrTourUrl(
+        vrLink: spot.vrLink,
+        spotId: spot.id,
+        spotName: spot.name,
+      ) !=
+      null;
+
+  bool get _spotHasHostedOrPreviewVr =>
+      _spotHasHostedVr ||
+      (spot.vrPanoramaUrl?.trim().isNotEmpty == true &&
+          !isOroquietaPlazaSpot(spotId: spot.id, spotName: spot.name));
+
   void _openVrForSpot(BuildContext context) {
-    final link = spot.vrLink?.trim();
-    if (link != null && link.isNotEmpty) {
-      openVrTour(context, url: link, title: spot.name);
-      return;
-    }
-    final pano = spot.vrPanoramaUrl?.trim();
-    if (pano != null && pano.isNotEmpty) {
-      Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(
-          builder: (_) => SimpleImageVrScreen(title: spot.name, imageUrl: pano),
-        ),
-      );
-      return;
-    }
-    final fallback = spot.imageUrl.trim();
-    if (fallback.isNotEmpty) {
-      Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(
-          builder: (_) => SimpleImageVrScreen(title: spot.name, imageUrl: fallback),
-        ),
-      );
-    }
+    openVrForTouristSpot(
+      context,
+      spotId: spot.id,
+      spotName: spot.name,
+      vrLink: spot.vrLink,
+      vrPanoramaUrl: spot.vrPanoramaUrl,
+      imageUrl: spot.imageUrl,
+    );
   }
 
   Widget _buildHeroImage() {
@@ -271,12 +271,7 @@ class _TouristSpotDetailScreenState extends State<TouristSpotDetailScreen> {
     return Container(
       color: Colors.black26,
       alignment: Alignment.center,
-      child: const Icon(
-        Icons.photo,
-        size: 64,
-        color: Colors.white70,
-      ),
+      child: const Icon(Icons.photo, size: 64, color: Colors.white70),
     );
   }
 }
-

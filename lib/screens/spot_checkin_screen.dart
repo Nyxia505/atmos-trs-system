@@ -25,6 +25,19 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
     if (_submitting) return;
     setState(() => _submitting = true);
     final s = widget.spotInfo;
+
+    final locationError = await QRCheckInService.verifyProximityToTouristSpot(
+      latitude: s.latitude ?? 0,
+      longitude: s.longitude ?? 0,
+      spotLabel: s.spotName.isNotEmpty ? s.spotName : s.spotId,
+    );
+    if (!mounted) return;
+    if (locationError != null) {
+      setState(() => _submitting = false);
+      showQRCheckInErrorDialog(context, locationError);
+      return;
+    }
+
     final ok = await performQRCheckIn(
       context,
       municipalityId: s.municipalityId,
@@ -50,7 +63,7 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
     return Scaffold(
       backgroundColor: AppTheme.scaffoldBackground,
       appBar: AppBar(
-        title: const Text('Check-in'),
+        title: const Text('Register visit'),
         backgroundColor: AppTheme.cardBackground,
         foregroundColor: _textDark,
         leading: IconButton(
@@ -85,7 +98,7 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
               ],
               const SizedBox(height: 24),
               Text(
-                'Tap Check-in to record your visit at this location.',
+                'Tap Register visit to record your visit at this location.',
                 style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 15, height: 1.4),
               ),
               const Spacer(),
@@ -103,7 +116,7 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
                         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                       )
                     : const Icon(Icons.check_circle_outline),
-                label: Text(_submitting ? 'Saving…' : 'Check-in'),
+                label: Text(_submitting ? 'Saving…' : 'Register visit'),
               ),
             ],
           ),

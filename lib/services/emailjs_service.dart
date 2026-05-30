@@ -80,10 +80,15 @@ class EmailjsService {
 
     Future<http.Response> postSend(Map<String, dynamic> payload) {
       debugPrint('[EmailJS] POST body keys: ${payload.keys.join(", ")}');
+      // EmailJS may return 403 for "non-browser" clients unless Account → Security allows it,
+      // or unless the request looks like a typical browser send.
       return http.post(
         Uri.parse(EmailjsConfig.sendUrl),
         headers: const {
           'Content-Type': 'application/json; charset=UTF-8',
+          'Accept': 'application/json',
+          'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         },
         body: jsonEncode(payload),
       );

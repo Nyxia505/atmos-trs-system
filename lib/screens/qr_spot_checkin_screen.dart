@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
 import 'package:atmos_trs_system/models/qr_tourist_spot.dart';
-import 'package:atmos_trs_system/services/local_qr_spot_checkin_service.dart';
-import 'package:atmos_trs_system/config/session_storage.dart';
+import 'package:atmos_trs_system/services/qr_checkin_ui.dart';
+import 'package:atmos_trs_system/utils/municipality_helper.dart';
 
 class QrSpotCheckInScreen extends StatelessWidget {
   const QrSpotCheckInScreen({
@@ -12,14 +12,8 @@ class QrSpotCheckInScreen extends StatelessWidget {
 
   final QrTouristSpot spot;
 
-  Future<String?> _getUserId() async {
-    return SessionStorage.getStoredUser();
-  }
-
   @override
   Widget build(BuildContext context) {
-    final service = LocalQRSpotCheckInService.instance;
-
     return Scaffold(
       appBar: AppBar(
         title: Text(spot.name),
@@ -67,17 +61,30 @@ class QrSpotCheckInScreen extends StatelessWidget {
             padding: const EdgeInsets.all(16),
             child: ElevatedButton.icon(
               icon: const Icon(Icons.check_circle_outline),
-              label: const Text('Check In'),
+              label: const Text('Register visit'),
               onPressed: () async {
-                final userId = await _getUserId() ?? 'mock_user';
-                final ok = service.checkIn(userId: userId, spot: spot);
-                final msg = ok
-                    ? 'Check-in successful!'
-                    : 'You have already checked in here today.';
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context)
-                      .showSnackBar(SnackBar(content: Text(msg)));
+                final municipalityId =
+                    getMunicipalityIdFromName(spot.municipality);
+                if (municipalityId.isEmpty) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Cannot check in: municipality mapping not found.',
+                        ),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  }
+                  return;
                 }
+                await performQRCheckIn(
+                  context,
+                  municipalityId: municipalityId,
+                  spotId: spot.id,
+                  spotName: spot.name,
+                  municipality: spot.municipality,
+                );
               },
             ),
           ),

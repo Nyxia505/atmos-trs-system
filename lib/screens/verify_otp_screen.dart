@@ -1,18 +1,22 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:flutter/services.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/navigation/role_router.dart';
 import 'package:atmos_trs_system/navigation/pending_checkin_navigation.dart';
-import 'package:atmos_trs_system/services/emailjs_service.dart';
+import 'package:atmos_trs_system/services/otp_delivery_service.dart';
+import 'package:atmos_trs_system/services/announcement_notification_sync.dart';
+import 'package:atmos_trs_system/services/push_notification_service.dart';
 import 'package:atmos_trs_system/services/otp_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/utils/email_utils.dart';
 
-/// Email OTP verification (EmailJS) before tourist dashboard access.
+/// OTP verification before tourist dashboard: code in Firestore + on-device notification
+/// (EmailJS email is optional backup).
 class VerifyOtpScreen extends StatefulWidget {
   const VerifyOtpScreen({super.key});
 
@@ -24,15 +28,27 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
   final _otpController = TextEditingController();
   bool _submitting = false;
   bool _resending = false;
+  bool _loadingDeviceOtp = false;
+  String? _deviceOtp;
   int _cooldown = 0;
 
-  static const Color _primaryOrange = Color(0xFFF97316);
   static const Color _background = Color(0xFFFFF7ED);
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _redirectIfVerifiedOrStaff());
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final u = FirebaseAuth.instance.currentUser;
+      if (u != null) {
+        await ensureEmailOtpNotificationSupport();
+        await syncFcmTokenToUserDoc(u.uid);
+        await AnnouncementNotificationSync.syncPublishedAnnouncementsToLocal(
+          userId: u.uid,
+        );
+      }
+      if (!mounted) return;
+      await _redirectIfVerifiedOrStaff();
+    });
   }
 
   /// Verified tourists and non-tourist roles should not stay on this screen.
@@ -231,25 +247,23 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
           ? profile!.fullName!.trim()
           : email.split('@').first;
 
-      final err = await EmailjsService.sendOtpEmail(
-        toEmail: email,
-        toName: name,
+      final delivery = await OtpDeliveryService.deliverVerificationCode(
+        uid: user.uid,
+        email: email,
+        displayName: name,
         otp: otp,
       );
-      if (err != null) {
-        if (mounted) _snack(err, isError: true);
-        if (kDebugMode) {
-          debugPrint(
-            '[OTP] EmailJS failed. If 404 Account not found, confirm public key in '
-            'lib/config/emailjs_config.dart or run with '
-            '--dart-define=EMAILJS_ACCESS_TOKEN=<private key from EmailJS Account>.',
-          );
-        }
-        return;
+      if (mounted) {
+        _snack(
+          delivery.messageForUser(email),
+          isError: !delivery.emailSent && !delivery.notificationShown,
+        );
+      }
+      if (!delivery.emailSent) {
+        debugPrint('[OTP] resend email failed: ${delivery.emailError}');
       }
 
       if (mounted) {
-        _snack('New code sent. Check your inbox (and spam).', isError: false);
         _startCooldown(60);
       }
     } catch (e) {
@@ -269,6 +283,44 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
       setState(() => _cooldown = _cooldown - 1);
       return _cooldown > 0;
     });
+  }
+
+  Future<void> _revealOtpOnThisDevice() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      _snack('Session expired. Please log in again.', isError: true);
+      return;
+    }
+
+    setState(() {
+      _loadingDeviceOtp = true;
+      _deviceOtp = null;
+    });
+    try {
+      try {
+        await user.reload();
+        await user.getIdToken(true);
+      } catch (_) {}
+
+      final code = await OtpService.fetchActiveOtpDigits(user.uid);
+      if (!mounted) return;
+      if (code == null) {
+        _snack(
+          'No active code found. Tap Resend code, then try again.',
+          isError: true,
+        );
+        return;
+      }
+      setState(() => _deviceOtp = code);
+      _otpController.text = code;
+      _snack('Code loaded — tap Verify & continue.', isError: false);
+    } catch (e) {
+      if (mounted) {
+        _snack('Could not load code: $e', isError: true);
+      }
+    } finally {
+      if (mounted) setState(() => _loadingDeviceOtp = false);
+    }
   }
 
   void _snack(String msg, {required bool isError}) {
@@ -292,7 +344,7 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: _primaryOrange.withValues(alpha: 0.12)),
+        border: Border.all(color: AppTheme.brandOrange.withValues(alpha: 0.12)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.06),
@@ -315,7 +367,10 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'We sent a 6-digit code to\n$emailText',
+            kIsWeb
+                ? 'We sent a 6-digit code to your email:\n$emailText'
+                : 'Open your mail app (Gmail, etc.) on this phone for the code.\n'
+                    'You will also get a notification with the code.\n$emailText',
             style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280), height: 1.4),
           ),
           const SizedBox(height: 24),
@@ -338,7 +393,7 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: _primaryOrange, width: 2),
+                borderSide: BorderSide(color: AppTheme.brandOrange, width: 2),
               ),
             ),
             onSubmitted: (_) => _submitting ? null : _submit(),
@@ -349,7 +404,7 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
             child: FilledButton(
               onPressed: _submitting ? null : _submit,
               style: FilledButton.styleFrom(
-                backgroundColor: _primaryOrange,
+                backgroundColor: AppTheme.brandOrange,
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
               ),
@@ -365,6 +420,31 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
                   : const Text('Verify & continue', style: TextStyle(fontWeight: FontWeight.w600)),
             ),
           ),
+          if (kIsWeb) ...[
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: _loadingDeviceOtp ? null : _revealOtpOnThisDevice,
+              child: _loadingDeviceOtp
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Text(
+                      _deviceOtp != null
+                          ? 'Code on this device: $_deviceOtp'
+                          : 'Show code on this device',
+                      style: TextStyle(
+                        color: AppTheme.brandOrange,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+            ),
+            const Text(
+              'Use this if Gmail did not arrive (spam folder) or email delivery failed.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF), height: 1.35),
+            ),
+          ],
           const SizedBox(height: 12),
           Row(
             children: [
@@ -380,7 +460,7 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
                         _cooldown > 0
                             ? 'Resend code in ${_cooldown}s'
                             : 'Resend code',
-                        style: const TextStyle(color: _primaryOrange, fontWeight: FontWeight.w600),
+                        style: TextStyle(color: AppTheme.brandOrange, fontWeight: FontWeight.w600),
                       ),
               ),
               const Spacer(),
@@ -402,26 +482,28 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
 
     final header = Container(
       width: double.infinity,
-      decoration: const BoxDecoration(
-        color: _primaryOrange,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      decoration: BoxDecoration(
+        color: AppTheme.brandOrange,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
       ),
       padding: const EdgeInsets.fromLTRB(24, 40, 24, 36),
-      child: const Column(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Verify your Gmail',
-            style: TextStyle(
+            kIsWeb ? 'Verify your Gmail' : 'Verify your account',
+            style: const TextStyle(
               fontSize: 26,
               fontWeight: FontWeight.w800,
               color: Colors.white,
             ),
           ),
-          SizedBox(height: 8),
+          const SizedBox(height: 8),
           Text(
-            'Use the code from your email. It expires in 5 minutes.',
-            style: TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
+            kIsWeb
+                ? 'Use the code from your email. It expires in 5 minutes.'
+                : 'Use the code from your notification (or email). It expires in 5 minutes.',
+            style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
           ),
         ],
       ),

@@ -1,11 +1,11 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
-import 'package:video_player/video_player.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
+import 'package:atmos_trs_system/widgets/hero_video_mute_control.dart';
+import 'package:atmos_trs_system/widgets/onboarding_hero_video.dart';
 
-/// First-launch screen: full-screen looping video, hero copy, [Explore] → landing.
-const String kOnboardingVideoAsset =
-    'assets/Onboarding_screen/Top-Tourist-Destinations-in-Misamis-Occidental.mp4';
-
+/// First-launch screen: hero video + welcome branding + Explore CTA.
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
 
@@ -13,295 +13,393 @@ class OnboardingScreen extends StatefulWidget {
   State<OnboardingScreen> createState() => _OnboardingScreenState();
 }
 
-class _OnboardingScreenState extends State<OnboardingScreen> {
-  VideoPlayerController? _controller;
-  bool _ready = false;
-  bool _failed = false;
+/// Responsive metrics for onboarding (mobile, tablet, desktop/web).
+class _OnboardingLayout {
+  _OnboardingLayout(BuildContext context)
+      : width = MediaQuery.sizeOf(context).width,
+        height = MediaQuery.sizeOf(context).height,
+        padding = MediaQuery.paddingOf(context),
+        isMobile = MediaQuery.sizeOf(context).width < 600,
+        isTablet = MediaQuery.sizeOf(context).width >= 600 &&
+            MediaQuery.sizeOf(context).width < 1100,
+        isDesktop = MediaQuery.sizeOf(context).width >= 1100,
+        stackLogoBelow = MediaQuery.sizeOf(context).width < 400;
 
-  /// Web browsers block autoplay with sound; we start muted, then user enables audio.
-  bool _webSoundOff = false;
+  final double width;
+  final double height;
+  final EdgeInsets padding;
+  final bool isMobile;
+  final bool isTablet;
+  final bool isDesktop;
+  final bool stackLogoBelow;
 
-  void _onControllerTick() {
-    if (mounted) setState(() {});
+  double get horizontalPad {
+    if (isMobile) return 20;
+    if (isTablet) return 40;
+    return 56;
   }
+
+  double get bottomSafePad => padding.bottom + (isMobile ? 12 : 20);
+
+  double get welcomeFontSize {
+    if (isMobile) return width < 360 ? 52 : 58;
+    if (isTablet) return 68;
+    return 76;
+  }
+
+  double get sublineFontSize {
+    if (isMobile) return 18;
+    if (isTablet) return 22;
+    return 24;
+  }
+
+  double get logoHeight {
+    if (isMobile) return stackLogoBelow ? 52 : 46;
+    if (isTablet) return 58;
+    return (width * 0.12).clamp(64.0, 96.0);
+  }
+
+  double get logoWidth => (width * 0.72).clamp(220.0, 520.0);
+
+  double get exploreFontSize {
+    if (isMobile) return 20;
+    if (isTablet) return 22;
+    return 24;
+  }
+
+  EdgeInsets get exploreButtonPadding => EdgeInsets.symmetric(
+        horizontal: isMobile ? 36 : 48,
+        vertical: isMobile ? 14 : 18,
+      );
+
+  double? get maxCtaWidth {
+    if (isDesktop) return 400;
+    if (isTablet) return 360;
+    return null;
+  }
+
+  double get muteIconSize => isMobile ? 22 : 24;
+}
+
+class _OnboardingScreenState extends State<OnboardingScreen> {
+  static const String _asensoLogo =
+      'assets/Onboarding_screen/asenso_logo.png';
+  static const String _asensoLogoWithSpace =
+      'assets/Onboarding_screen/asenso logo.png';
+  static const String _asensoLogoFallback =
+      'assets/images/asenso_misamis_occidental_wordmark.png';
+
+  static const List<Shadow> _textOutline = [
+    Shadow(
+      color: Color(0xE6000000),
+      offset: Offset(-1.5, -1.5),
+      blurRadius: 0,
+    ),
+    Shadow(
+      color: Color(0xE6000000),
+      offset: Offset(1.5, -1.5),
+      blurRadius: 0,
+    ),
+    Shadow(
+      color: Color(0xE6000000),
+      offset: Offset(-1.5, 1.5),
+      blurRadius: 0,
+    ),
+    Shadow(
+      color: Color(0xE6000000),
+      offset: Offset(1.5, 1.5),
+      blurRadius: 0,
+    ),
+    Shadow(
+      color: Color(0x99000000),
+      offset: Offset(0, 2),
+      blurRadius: 6,
+    ),
+  ];
 
   @override
   void initState() {
     super.initState();
-    _initVideo();
-  }
-
-  Future<void> _initVideo() async {
-    final c = VideoPlayerController.asset(
-      kOnboardingVideoAsset,
-      videoPlayerOptions: VideoPlayerOptions(
-        webOptions: const VideoPlayerWebOptions(allowContextMenu: false),
-      ),
-    );
-    try {
-      await c.initialize();
-      if (!c.value.isInitialized) {
-        throw StateError('Video failed to initialize');
-      }
-      c.addListener(_onControllerTick);
-      await c.setLooping(true);
-      // Web: must be muted for programmatic play() (autoplay policy). Mobile/desktop: full volume.
-      if (kIsWeb) {
-        await c.setVolume(0);
-      } else {
-        await c.setVolume(1.0);
-      }
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      setState(() {
-        _controller = c;
-        _ready = true;
-        _failed = false;
-        _webSoundOff = kIsWeb;
-      });
-      await c.play();
-    } catch (e, st) {
-      debugPrint('Onboarding video failed: $e\n$st');
       try {
-        c.removeListener(_onControllerTick);
-      } catch (_) {}
-      await c.dispose();
-      if (!mounted) return;
-      setState(() {
-        _failed = true;
-        _ready = true;
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller?.removeListener(_onControllerTick);
-    _controller?.dispose();
-    super.dispose();
-  }
-
-  Future<void> _enableWebSoundIfNeeded() async {
-    if (!kIsWeb || !_webSoundOff || _controller == null) return;
-    await _controller!.setVolume(1.0);
-    if (mounted) setState(() => _webSoundOff = false);
+        final hero = OnboardingHeroVideo.of(context);
+        await hero.ensureVideoPlaying();
+        await hero.applySessionAudioToController();
+      } catch (e, st) {
+        debugPrint('Onboarding hero video: $e\n$st');
+      }
+    });
   }
 
   Future<void> _goToLanding() async {
-    await _enableWebSoundIfNeeded();
     if (!mounted) return;
-    Navigator.of(context).pushReplacementNamed('/landing');
+    final hero = OnboardingHeroVideo.of(context);
+    final c = hero.controller;
+    if (c != null && c.value.isInitialized && !c.value.isPlaying) {
+      await c.play();
+    }
+    hero.rememberPlaybackPositionForLanding();
+    if (kIsWeb) {
+      await hero.ensureVideoPlaying();
+      if (!hero.isHeroVideoMuted) {
+        await hero.tryUnmuteAfterUserGesture();
+      }
+    }
+    if (!mounted) return;
+    final nextRoute = kIsWeb ? '/landing' : '/login';
+    Navigator.of(context).pushNamedAndRemoveUntil(nextRoute, (route) => false);
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          if (_ready && !_failed && _controller != null)
-            Positioned.fill(child: _VideoBackground(controller: _controller!))
-          else if (_failed || (_ready && _controller == null))
-            Positioned.fill(
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.orange.shade900.withValues(alpha: 0.85),
-                      Colors.black,
-                    ],
-                  ),
-                ),
-              ),
-            )
-          else
-            const Positioned.fill(child: ColoredBox(color: Colors.black)),
-          Positioned.fill(
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black.withValues(alpha: 0.18),
-                      Colors.black.withValues(alpha: 0.42),
-                    ],
-                  ),
-                ),
-              ),
+  Widget _buildVideoLayer(OnboardingHeroVideoData hero) {
+    final c = hero.controller;
+    if (hero.hasFailed || c == null || !c.value.isInitialized) {
+      return Positioned.fill(
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.orange.shade900.withValues(alpha: 0.85),
+                Colors.black,
+              ],
             ),
           ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: SizedBox(
-                  width: double.infinity,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                    Text(
-                      'MABUHAY!',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontFamily: 'Sacrifice',
-                        fontSize: _headlineSize(context),
-                        height: 1.05,
-                        color: Colors.white,
-                        letterSpacing: 1,
-                        shadows: const [
-                          Shadow(
-                            offset: Offset(0, 2),
-                            blurRadius: 8,
-                            color: Color(0x99000000),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'EXPLORE THE MISAMIS OCCIDENTAL',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontFamily: 'Sansita',
-                        fontSize: _subheadSize(context),
-                        height: 1.15,
-                        color: Colors.white,
-                        letterSpacing: 0.8,
-                        shadows: const [
-                          Shadow(
-                            offset: Offset(0, 2),
-                            blurRadius: 6,
-                            color: Color(0x99000000),
-                          ),
-                        ],
-                      ),
-                    ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+        ),
+      );
+    }
+    return Positioned.fill(
+      child: OnboardingVideoBackground(controller: c),
+    );
+  }
+
+  Widget _asensoLogoImage({required double height, required double width}) {
+    Widget load(String asset, {required Widget Function() orElse}) {
+      return Image.asset(
+        asset,
+        height: height,
+        width: width,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.high,
+        gaplessPlayback: true,
+        errorBuilder: (_, __, ___) => orElse(),
+      );
+    }
+
+    return SizedBox(
+      width: width,
+      height: height,
+      child: load(
+        _asensoLogo,
+        orElse: () => load(
+          _asensoLogoWithSpace,
+          orElse: () => load(
+            _asensoLogoFallback,
+            orElse: () => const SizedBox.shrink(),
           ),
-          if (kIsWeb && _webSoundOff && _ready && !_failed)
-            Positioned(
-              left: 20,
-              right: 20,
-              bottom: 100,
-              child: SafeArea(
-                top: false,
-                child: Center(
-                  child: FilledButton.tonal(
-                    onPressed: _enableWebSoundIfNeeded,
-                    style: FilledButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      backgroundColor: Colors.white.withValues(alpha: 0.22),
-                    ),
-                    child: const Text('Tap for sound'),
-                  ),
-                ),
-              ),
-            ),
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: SafeArea(
-              minimum: const EdgeInsets.only(bottom: 24),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: OutlinedButton(
-                  onPressed: _goToLanding,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    side: const BorderSide(color: Colors.white, width: 1.8),
-                    shape: const StadiumBorder(),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 44,
-                      vertical: 16,
-                    ),
-                  ),
-                  child: const Text(
-                    'Explore',
-                    style: TextStyle(
-                      fontFamily: 'Ananda Black',
-                      fontSize: 20,
-                      letterSpacing: 0.6,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          if (!_ready)
-            const Center(
-              child: CircularProgressIndicator(
-                color: Colors.white,
-                strokeWidth: 2,
-              ),
-            ),
-        ],
+        ),
       ),
     );
   }
 
-  double _headlineSize(BuildContext context) {
-    final w = MediaQuery.sizeOf(context).width;
-    if (w < 360) return 42;
-    if (w < 420) return 52;
-    return 58;
+  Widget _buildBrandingLines(_OnboardingLayout layout) {
+    final welcomeStyle = TextStyle(
+      fontFamily: 'Ananda Black',
+      color: Colors.white,
+      fontSize: layout.welcomeFontSize,
+      fontWeight: FontWeight.bold,
+      height: 1.05,
+      letterSpacing: 0.4,
+      shadows: _textOutline,
+    );
+
+    final sublineStyle = TextStyle(
+      color: Colors.white,
+      fontSize: layout.sublineFontSize,
+      fontWeight: FontWeight.w800,
+      letterSpacing: 0.2,
+      height: 1.1,
+      shadows: _textOutline,
+    );
+
+    final sublineText = Text('to the HOME of', style: sublineStyle);
+    final logo = _asensoLogoImage(
+      height: layout.logoHeight,
+      width: layout.logoWidth,
+    );
+
+    final secondLine = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        sublineText,
+        const SizedBox(height: 10),
+        logo,
+      ],
+    );
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text('Welcome!', textAlign: TextAlign.center, style: welcomeStyle),
+        SizedBox(height: layout.isMobile ? 10 : 16),
+        secondLine,
+      ],
+    );
   }
 
-  double _subheadSize(BuildContext context) {
-    final w = MediaQuery.sizeOf(context).width;
-    if (w < 360) return 18;
-    if (w < 420) return 20;
-    return 22;
+  /// Branding centered in the upper area; Explore pinned to the bottom (web-safe).
+  Widget _buildOnboardingOverlay(_OnboardingLayout layout) {
+    return Positioned.fill(
+      child: Padding(
+        padding: EdgeInsets.only(top: layout.padding.top),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: layout.horizontalPad),
+                child: Center(
+                  child: SingleChildScrollView(
+                    physics: const ClampingScrollPhysics(),
+                    child: _buildBrandingLines(layout),
+                  ),
+                ),
+              ),
+            ),
+            SafeArea(
+              top: false,
+              minimum: EdgeInsets.only(bottom: layout.bottomSafePad),
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  layout.horizontalPad,
+                  12,
+                  layout.horizontalPad,
+                  8,
+                ),
+                child: _buildExploreButtonContent(layout),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
-}
 
-class _VideoBackground extends StatelessWidget {
-  const _VideoBackground({required this.controller});
+  Widget _buildBottomScrim(_OnboardingLayout layout) {
+    final scrimHeight = layout.isMobile
+        ? layout.height * 0.32
+        : layout.isDesktop
+            ? 240.0
+            : 220.0;
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      height: scrimHeight.clamp(150.0, layout.height * 0.45),
+      child: IgnorePointer(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.transparent,
+                Colors.black.withValues(alpha: 0.25),
+                Colors.black.withValues(alpha: 0.75),
+              ],
+              stops: const [0.0, 0.4, 1.0],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
-  final VideoPlayerController controller;
+  Widget _buildMuteControl(_OnboardingLayout layout) {
+    return Positioned(
+      left: layout.isDesktop ? 24 : 12,
+      top: layout.padding.top + 8,
+      child: SafeArea(
+        bottom: false,
+        right: false,
+        child: HeroVideoMuteControl(iconSize: layout.muteIconSize),
+      ),
+    );
+  }
 
-  /// Layout size for [VideoPlayer]. Many decoders report 0×0 until the first frame;
-  /// we must still give the player non-zero bounds or it never paints.
-  static Size _layoutSize(VideoPlayerValue value) {
-    var w = value.size.width;
-    var h = value.size.height;
-    if (w > 0 && h > 0) return Size(w, h);
-    final ar = value.aspectRatio;
-    if (ar > 0 && ar.isFinite) {
-      w = 1920;
-      h = w / ar;
-      return Size(w, h);
+  Widget _buildExploreButton(_OnboardingLayout layout, {required bool fullWidth}) {
+    return OutlinedButton(
+      onPressed: _goToLanding,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.white,
+        side: const BorderSide(color: Colors.white, width: 2),
+        shape: const StadiumBorder(),
+        padding: layout.exploreButtonPadding,
+        minimumSize: Size(fullWidth ? double.infinity : 0, fullWidth ? 52 : 56),
+      ),
+      child: Text(
+        'Explore',
+        style: TextStyle(
+          fontFamily: 'Ananda Black',
+          fontSize: layout.exploreFontSize,
+          letterSpacing: 0.6,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildExploreButtonContent(_OnboardingLayout layout) {
+    final button = _buildExploreButton(layout, fullWidth: true);
+    final maxW = layout.maxCtaWidth;
+    if (maxW != null) {
+      return Center(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxW),
+          child: SizedBox(width: double.infinity, child: button),
+        ),
+      );
     }
-    return const Size(1920, 1080);
+    return SizedBox(width: double.infinity, child: button);
   }
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<VideoPlayerValue>(
-      valueListenable: controller,
-      builder: (context, value, _) {
-        if (!value.isInitialized) {
-          return const ColoredBox(color: Colors.black);
-        }
-        final s = _layoutSize(value);
-        return ClipRect(
-          child: FittedBox(
-            fit: BoxFit.cover,
-            clipBehavior: Clip.hardEdge,
-            alignment: Alignment.center,
-            child: SizedBox(
-              width: s.width,
-              height: s.height,
-              child: VideoPlayer(controller),
-            ),
+    final hero = OnboardingHeroVideo.of(context);
+    final ready = hero.isReady;
+    final showMute =
+        ready && !hero.hasFailed && hero.controller != null;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final layout = _OnboardingLayout(context);
+
+        return Scaffold(
+          backgroundColor: Colors.black,
+          body: ListenableBuilder(
+            listenable: hero,
+            builder: (context, _) {
+              return Stack(
+                fit: StackFit.expand,
+                children: [
+                  _buildVideoLayer(hero),
+                  _buildBottomScrim(layout),
+                  if (ready) ...[
+                    _buildOnboardingOverlay(layout),
+                    if (showMute) _buildMuteControl(layout),
+                  ],
+                  if (!ready)
+                    const Center(
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    ),
+                ],
+              );
+            },
           ),
         );
       },

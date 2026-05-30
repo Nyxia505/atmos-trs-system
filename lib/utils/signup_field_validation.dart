@@ -98,3 +98,36 @@ String? validatePhilippineStreet(String? v) {
   }
   return null;
 }
+
+/// City for non-PH residence (foreign nationals or Filipinos living abroad).
+String? validateInternationalCity(String? v) {
+  if (v == null || v.trim().isEmpty) {
+    return 'City is required.';
+  }
+  final s = v.trim();
+  if (s.length < 2) {
+    return 'Enter your city (at least 2 characters).';
+  }
+  if (s.length > 80) {
+    return 'City name is too long.';
+  }
+  if (!RegExp(r'[a-zA-Z\u00C0-\u024FñÑ]').hasMatch(s)) {
+    return 'Use letters for the city name.';
+  }
+  return null;
+}
+
+/// State / province / region outside the Philippines.
+String? validateInternationalRegion(String? v) {
+  if (v == null || v.trim().isEmpty) {
+    return 'State / province / region is required.';
+  }
+  final s = v.trim();
+  if (s.length < 2) {
+    return 'Enter at least 2 characters.';
+  }
+  if (s.length > 80) {
+    return 'Name is too long.';
+  }
+  return null;
+}

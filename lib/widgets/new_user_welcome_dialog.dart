@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:atmos_trs_system/config/app_theme.dart';
 
 /// One-time welcome for new visitors on the landing page.
 /// On web: strongly encourages installing the mobile app (QR scan, GPS check-in).
@@ -27,9 +28,9 @@ Future<void> showNewUserWelcomeDialog(BuildContext context) async {
                         color: const Color(0xFFFFF7ED),
                         borderRadius: BorderRadius.circular(14),
                       ),
-                      child: const Icon(
+                      child: Icon(
                         Icons.waving_hand_rounded,
-                        color: Color(0xFFF97316),
+                        color: AppTheme.brandOrange,
                         size: 28,
                       ),
                     ),
@@ -38,11 +39,9 @@ Future<void> showNewUserWelcomeDialog(BuildContext context) async {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            kIsWeb
-                                ? 'Welcome to ATMOS TRS!'
-                                : 'Welcome!',
-                            style: const TextStyle(
+                          const Text(
+                            'Welcome! to Asenso Misamis Occidental',
+                            style: TextStyle(
                               fontSize: 22,
                               fontWeight: FontWeight.w800,
                               color: Color(0xFF0F172A),
@@ -82,13 +81,17 @@ Future<void> showNewUserWelcomeDialog(BuildContext context) async {
                       color: const Color(0xFFFFF7ED),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: const Color(0xFFF97316).withOpacity(0.25),
+                        color: AppTheme.brandOrange.withValues(alpha: 0.25),
                       ),
                     ),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(Icons.phone_android_rounded, color: Colors.orange.shade800, size: 22),
+                        Icon(
+                          Icons.phone_android_rounded,
+                          color: AppTheme.brandOrange,
+                          size: 22,
+                        ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
@@ -110,7 +113,7 @@ Future<void> showNewUserWelcomeDialog(BuildContext context) async {
                         child: FilledButton.icon(
                           onPressed: null,
                           style: FilledButton.styleFrom(
-                            disabledBackgroundColor: const Color(0xFF334155),
+                            disabledBackgroundColor: AppTheme.brandOrangeDark,
                             disabledForegroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(
@@ -126,7 +129,7 @@ Future<void> showNewUserWelcomeDialog(BuildContext context) async {
                         child: FilledButton.icon(
                           onPressed: null,
                           style: FilledButton.styleFrom(
-                            disabledBackgroundColor: const Color(0xFF334155),
+                            disabledBackgroundColor: AppTheme.brandOrangeDark,
                             disabledForegroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(
@@ -155,10 +158,10 @@ Future<void> showNewUserWelcomeDialog(BuildContext context) async {
                   onPressed: () => Navigator.of(ctx).pop(),
                   child: Text(
                     kIsWeb ? 'Continue on website' : 'Let’s go',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontWeight: FontWeight.w700,
                       fontSize: 15,
-                      color: Color(0xFFF97316),
+                      color: AppTheme.brandOrange,
                     ),
                   ),
                 ),

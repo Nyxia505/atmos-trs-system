@@ -92,6 +92,24 @@ class OtpService {
     if (!_ready) return;
     await _db.collection(collectionId).doc(uid).delete();
   }
+
+  /// Returns the active 6-digit code for [uid], or null if missing/expired.
+  /// Used on web when email delivery fails (same data the user would get on mobile).
+  static Future<String?> fetchActiveOtpDigits(String uid) async {
+    if (!_ready || uid.isEmpty) return null;
+
+    final snap = await _db.collection(collectionId).doc(uid).get();
+    if (!snap.exists || snap.data() == null) return null;
+
+    final data = snap.data()!;
+    final expiresAt = data['expiresAt'];
+    if (expiresAt is Timestamp) {
+      if (DateTime.now().isAfter(expiresAt.toDate())) return null;
+    }
+
+    final digits = _digitsOnly(data['otp']?.toString() ?? '');
+    return digits.length == 6 ? digits : null;
+  }
 }
 
 /// Result of an OTP comparison (no side effects).

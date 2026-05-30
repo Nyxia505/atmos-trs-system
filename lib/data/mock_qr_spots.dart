@@ -17,11 +17,11 @@ final List<QrTouristSpot> mockQrTouristSpots = [
   ),
   QrTouristSpot(
     id: 'SPOT002',
-    name: 'Asenso Misamis Occidental Aquamarine Park',
+    name: 'AMORAP — Asenso Misamis Occidental Recreation and Adventure Park',
     municipality: 'Sinacaban',
     qrCodeValue: _deepLinkFor('SPOT002'),
     deepLink: _deepLinkFor('SPOT002'),
-    image: 'assets/images/sinacaban.jpg',
+    image: 'assets/images/AMORAP.jpg',
     description:
         'Aquamarine park with water attractions, marine exhibits, and coastal views.',
   ),
@@ -51,7 +51,7 @@ final List<QrTouristSpot> mockQrTouristSpots = [
     municipality: 'Oroquieta City',
     qrCodeValue: _deepLinkFor('SPOT005'),
     deepLink: _deepLinkFor('SPOT005'),
-    image: 'assets/images/oroquieta city.jpg',
+    image: 'assets/images/oroquieta City plaza.jpeg',
     description:
         'Seaside boulevard and central park popular for walks and community events.',
   ),

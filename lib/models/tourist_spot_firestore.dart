@@ -1,5 +1,6 @@
 /// Tourist spot from Firestore "tourist_spots" collection.
 /// Fields: id, name, category, latitude, longitude, image, rating, description, vr_link, municipality, municipalityId
+/// Optional: qrValue, qr_payload, createdAt (see [TouristSpot]).
 class TouristSpotFirestore {
   const TouristSpotFirestore({
     required this.id,
@@ -13,6 +14,8 @@ class TouristSpotFirestore {
     this.vrLink,
     this.municipality = '',
     this.municipalityId = '',
+    this.qrValue = '',
+    this.qrPayload,
   });
 
   final String id;
@@ -28,12 +31,18 @@ class TouristSpotFirestore {
   /// Municipality ID (e.g. oroquieta, ozamiz) for QR payload and filtering.
   final String municipalityId;
 
+  final String qrValue;
+  final String? qrPayload;
+
   factory TouristSpotFirestore.fromFirestore(Map<String, dynamic> data, String id) {
     final lat = data['latitude'];
     final lng = data['longitude'];
     final ratingData = data['rating'];
     final municipalityId = data['municipalityId'] as String? ?? '';
     final municipality = data['municipality'] as String? ?? '';
+    final qv =
+        (data['qrValue'] as String? ?? data['qr_value'] as String? ?? '').trim();
+    final qp = data['qr_payload'] as String? ?? data['qrPayload'] as String?;
     return TouristSpotFirestore(
       id: id,
       name: data['name'] as String? ?? '',
@@ -46,6 +55,8 @@ class TouristSpotFirestore {
       vrLink: data['vr_link'] as String? ?? data['vrTourUrl'] as String?,
       municipality: municipality,
       municipalityId: municipalityId,
+      qrValue: qv.isNotEmpty ? qv : id,
+      qrPayload: qp?.trim().isNotEmpty == true ? qp : null,
     );
   }
 }

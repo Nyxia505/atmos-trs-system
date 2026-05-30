@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:atmos_trs_system/models/notification_item.dart';
 
 const String _notificationsCollection = 'notifications';
@@ -120,6 +121,45 @@ class NotificationFirestoreService {
     } catch (_) {}
   }
 
+  /// Marks every Firestore notification for [userId] as read (batched).
+  static Future<void> markAllAsReadForUser(String userId) async {
+    if (!_isFirebaseInitialized || userId.isEmpty) return;
+    try {
+      final snap = await _firestore
+          .collection(_notificationsCollection)
+          .where('user_id', isEqualTo: userId)
+          .limit(100)
+          .get();
+      if (snap.docs.isEmpty) return;
+      var batch = _firestore.batch();
+      var ops = 0;
+      for (final d in snap.docs) {
+        final data = d.data();
+        if (data['is_read'] == true) continue;
+        batch.update(d.reference, {'is_read': true});
+        ops++;
+        if (ops >= 450) {
+          await batch.commit();
+          batch = _firestore.batch();
+          ops = 0;
+        }
+      }
+      if (ops > 0) await batch.commit();
+    } catch (e) {
+      debugPrint('NotificationFirestoreService.markAllAsReadForUser: $e');
+    }
+  }
+
+  /// Removes a user-owned notification document.
+  static Future<void> deleteUserNotification(String notificationId) async {
+    if (!_isFirebaseInitialized || notificationId.isEmpty) return;
+    try {
+      await _firestore.collection(_notificationsCollection).doc(notificationId).delete();
+    } catch (e) {
+      debugPrint('NotificationFirestoreService.deleteUserNotification: $e');
+    }
+  }
+
   static NotificationItem _docToNotificationItem(DocumentSnapshot<Map<String, dynamic>> d, {required bool isAnnouncement}) {
     final data = d.data() ?? {};
     final created = data['created_at'];
@@ -157,7 +197,8 @@ class NotificationFirestoreService {
       message: message,
       type: data['type'] as String? ?? 'General',
       createdAt: createdAt,
-      isRead: true,
+      // Per-user read state is applied in [AlertsTabPage] from local prefs.
+      isRead: false,
       userId: null,
       isAnnouncement: true,
     );

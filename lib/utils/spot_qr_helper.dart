@@ -1,4 +1,5 @@
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
+import 'package:atmos_trs_system/utils/qr_launch_query.dart';
 
 /// Public URL opened by device cameras when the app is not installed.
 /// Use hash route so Firebase Hosting always lands on the web app's landing page.
@@ -23,17 +24,83 @@ class LguQrPayload {
       anchorLng!.abs() > 1e-7;
 }
 
+/// Parsed spot check-in deep link / legacy QR payload.
+class SpotCheckInPayload {
+  const SpotCheckInPayload({
+    required this.spotId,
+    this.municipalityId,
+    this.qrLat,
+    this.qrLng,
+  });
+
+  final String spotId;
+  final String? municipalityId;
+  final double? qrLat;
+  final double? qrLng;
+}
+
 /// Helper for generating unique QR payloads per tourist spot.
-/// Scanner expects format: ATMOS-TRS-SPOT:municipalityId:spotId
-String spotQrData(String municipalityId, String spotId) {
+/// Scanner accepts URL `?type=spot&spot_id=…` or legacy `ATMOS-TRS-SPOT:municipalityId:spotId`.
+/// When [latitude]/[longitude] are set, they are embedded so old prints can be matched to Firestore.
+String spotQrData(
+  String municipalityId,
+  String spotId, {
+  double? latitude,
+  double? longitude,
+}) {
   final id = normalizeMunicipalityId(municipalityId.trim());
   final sid = spotId.trim();
-  // Use URL payload so phone camera apps can open web landing/check-in without the app.
-  return Uri.parse(_kPublicCheckInBaseUrl).replace(queryParameters: {
+  final params = <String, String>{
     'type': 'spot',
     'municipality_id': id,
     'spot_id': sid,
-  }).toString();
+  };
+  if (latitude != null &&
+      longitude != null &&
+      latitude.abs() > 1e-7 &&
+      longitude.abs() > 1e-7) {
+    params['lat'] = latitude.toStringAsFixed(6);
+    params['lng'] = longitude.toStringAsFixed(6);
+  }
+  return Uri.parse(_kPublicCheckInBaseUrl).replace(queryParameters: params).toString();
+}
+
+/// Parses spot QR (URL or `ATMOS-TRS-SPOT:…`).
+SpotCheckInPayload? parseSpotCheckInPayload(String raw) {
+  final s = raw.trim();
+  final uri = Uri.tryParse(s);
+  if (uri != null && (uri.scheme == 'http' || uri.scheme == 'https')) {
+    final q = mergedLaunchQueryParameters(uri);
+    final type = (q['type'] ?? '').trim().toLowerCase();
+    final spotId = (q['spot_id'] ?? q['spotId'] ?? '').trim();
+    if (spotId.isNotEmpty &&
+        (type == 'spot' || q.containsKey('spot_id') || q.containsKey('spotId'))) {
+      final midRaw = q['municipality_id'] ?? q['municipalityId'] ?? '';
+      final mid = midRaw.trim().isNotEmpty
+          ? normalizeMunicipalityId(midRaw)
+          : null;
+      final lat = double.tryParse((q['lat'] ?? '').trim());
+      final lng = double.tryParse((q['lng'] ?? '').trim());
+      return SpotCheckInPayload(
+        spotId: spotId,
+        municipalityId: mid,
+        qrLat: lat,
+        qrLng: lng,
+      );
+    }
+  }
+
+  final legacy = parseSpotQrPayload(s);
+  if (legacy.municipalityId != null || s.startsWith('ATMOS-TRS-SPOT:')) {
+    return SpotCheckInPayload(
+      spotId: legacy.spotId,
+      municipalityId: legacy.municipalityId,
+    );
+  }
+  if (legacy.spotId.isNotEmpty && legacy.spotId != s) {
+    return SpotCheckInPayload(spotId: legacy.spotId);
+  }
+  return null;
 }
 
 /// Unique QR per LGU (municipality). Scanner format: ATMOS-TRS-LGU:municipalityId
@@ -63,7 +130,7 @@ LguQrPayload? parseLguQrPayload(String raw) {
   final s = raw.trim();
   final uri = Uri.tryParse(s);
   if (uri != null && (uri.scheme == 'http' || uri.scheme == 'https')) {
-    final q = uri.queryParameters;
+    final q = mergedLaunchQueryParameters(uri);
     final type = (q['type'] ?? '').trim().toLowerCase();
     final midRaw = q['municipality_id'] ?? q['lgu_id'] ?? '';
     final id = normalizeMunicipalityId(midRaw);
@@ -134,6 +201,7 @@ String? parseLguMunicipalityId(String raw) => parseLguQrPayload(raw)?.municipali
 String? extractSpotIdFromCheckInDeepLink(String raw) {
   final uri = Uri.tryParse(raw.trim());
   if (uri == null) return null;
-  final id = uri.queryParameters['spot_id'] ?? uri.queryParameters['spotId'];
+  final q = mergedLaunchQueryParameters(uri);
+  final id = q['spot_id'] ?? q['spotId'];
   return id != null && id.isNotEmpty ? id : null;
 }

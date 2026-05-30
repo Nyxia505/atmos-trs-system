@@ -1,5 +1,13 @@
 import 'dart:convert';
+import 'dart:math' as math;
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'package:atmos_trs_system/config/auth_config.dart';
 
 /// Service to manage user activity data like visits, saved spots, and stats.
 class UserActivityService {
@@ -55,6 +63,7 @@ class UserActivityService {
       _keyRecentlyViewed,
       json.encode(list.map((v) => v.toJson()).toList()),
     );
+    _schedulePushActivityToCloud();
   }
 
   // ============ VISITED SPOTS ============
@@ -64,13 +73,260 @@ class UserActivityService {
     final prefs = await SharedPreferences.getInstance();
     final jsonString = prefs.getString(_keyVisitedSpots);
     if (jsonString == null || jsonString.isEmpty) return [];
-    
+
     try {
       final List<dynamic> jsonList = json.decode(jsonString);
       return jsonList.map((e) => VisitRecord.fromJson(e)).toList()
         ..sort((a, b) => b.visitedAt.compareTo(a.visitedAt));
     } catch (_) {
       return [];
+    }
+  }
+
+  /// Loads visit history from Firestore (qr_checkins, checkins, check_ins,
+  /// tourist_activity) and merges with local cache. Enriches from tourist_spots.
+  static Future<List<VisitRecord>> syncVisitedSpotsFromQrCheckins() async {
+    final uid = AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty || Firebase.apps.isEmpty) {
+      return getVisitedSpots();
+    }
+
+    final local = await getVisitedSpots();
+    final bySpot = <String, VisitRecord>{};
+    for (final v in local) {
+      if (v.spotId.isNotEmpty) {
+        _mergeVisitIntoMap(bySpot, v);
+      }
+    }
+
+    try {
+      await _mergeVisitsFromTouristActivityDoc(uid, bySpot);
+      await _mergeVisitsFromCollection(
+        collection: 'qr_checkins',
+        uid: uid,
+        bySpot: bySpot,
+        userFieldCandidates: const ['tourist_id', 'userId', 'user_id'],
+      );
+      await _mergeVisitsFromCollection(
+        collection: 'checkins',
+        uid: uid,
+        bySpot: bySpot,
+        userFieldCandidates: const ['user_id'],
+        locationIdField: 'location_id',
+      );
+      // Legacy `check_ins` is staff-only in security rules; tourists use the collections above.
+
+      await _enrichVisitsFromTouristSpots(bySpot);
+
+      if (bySpot.isEmpty) {
+        debugPrint(
+          'UserActivityService.syncVisitedSpots: no visits for uid=$uid',
+        );
+        return local;
+      }
+
+      final merged = bySpot.values.toList()
+        ..sort((a, b) => b.visitedAt.compareTo(a.visitedAt));
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _keyVisitedSpots,
+        json.encode(merged.map((v) => v.toJson()).toList()),
+      );
+      _schedulePushActivityToCloud();
+      debugPrint(
+        'UserActivityService.syncVisitedSpots: ${merged.length} spot(s) for uid=$uid',
+      );
+      return merged;
+    } catch (e, st) {
+      debugPrint('UserActivityService.syncVisitedSpotsFromQrCheckins: $e\n$st');
+      return local.isNotEmpty ? local : bySpot.values.toList();
+    }
+  }
+
+  static void _mergeVisitIntoMap(
+    Map<String, VisitRecord> bySpot,
+    VisitRecord visit,
+  ) {
+    if (visit.spotId.isEmpty) return;
+    final existing = bySpot[visit.spotId];
+    if (existing == null || visit.visitedAt.isAfter(existing.visitedAt)) {
+      bySpot[visit.spotId] = visit;
+    }
+  }
+
+  static Future<void> _mergeVisitsFromTouristActivityDoc(
+    String uid,
+    Map<String, VisitRecord> bySpot,
+  ) async {
+    try {
+      final act = await FirebaseFirestore.instance
+          .collection('tourist_activity')
+          .doc(uid)
+          .get();
+      final raw = act.data()?['visits'];
+      if (raw is! List) return;
+      for (final e in raw) {
+        if (e is! Map) continue;
+        final m = e is Map<String, dynamic>
+            ? e
+            : Map<String, dynamic>.from(e);
+        final v = VisitRecord.fromJson(m);
+        _mergeVisitIntoMap(bySpot, v);
+      }
+    } catch (e) {
+      debugPrint('UserActivityService tourist_activity: $e');
+    }
+  }
+
+  static Future<void> _mergeVisitsFromCollection({
+    required String collection,
+    required String uid,
+    required Map<String, VisitRecord> bySpot,
+    required List<String> userFieldCandidates,
+    String? locationIdField,
+  }) async {
+    QuerySnapshot<Map<String, dynamic>>? snap;
+    for (final field in userFieldCandidates) {
+      try {
+        snap = await FirebaseFirestore.instance
+            .collection(collection)
+            .where(field, isEqualTo: uid)
+            .limit(400)
+            .get();
+        if (snap.docs.isNotEmpty) break;
+      } catch (e) {
+        debugPrint(
+          'UserActivityService $collection.$field: $e',
+        );
+        snap = null;
+      }
+    }
+    if (snap == null || snap.docs.isEmpty) return;
+
+    for (final doc in snap.docs) {
+      final visit = _visitRecordFromCheckInData(
+        doc.data(),
+        fallbackSpotId: locationIdField != null
+            ? doc.data()[locationIdField]?.toString()
+            : null,
+      );
+      if (visit != null) {
+        _mergeVisitIntoMap(bySpot, visit);
+      }
+    }
+  }
+
+  static VisitRecord? _visitRecordFromCheckInData(
+    Map<String, dynamic> d, {
+    String? fallbackSpotId,
+  }) {
+    final spotId = (d['spotId'] ??
+            d['spot_id'] ??
+            d['location_id'] ??
+            fallbackSpotId ??
+            '')
+        .toString()
+        .trim();
+    if (spotId.isEmpty) return null;
+
+    var spotName = (d['spot_name'] ?? d['spotName'] ?? d['name'] ?? '')
+        .toString()
+        .trim();
+    if (spotName.isEmpty) {
+      spotName = spotId.replaceAll('_', ' ').replaceAll('-', ' ');
+    }
+
+    var category = (d['spotCategory'] ??
+            d['category'] ??
+            d['municipality'] ??
+            'Spot')
+        .toString()
+        .trim();
+    if (category.isEmpty) category = 'Spot';
+
+    final visitedAt = _parseCheckInTimestamp(
+      d['timestamp'] ??
+          d['checkin_time'] ??
+          d['checkedInAt'] ??
+          d['createdAt'],
+    );
+
+    final imageUrl = (d['image'] ?? d['imageUrl'] ?? d['spot_image'])
+        ?.toString()
+        .trim();
+
+    return VisitRecord(
+      spotId: spotId,
+      spotName: spotName,
+      category: category,
+      imageUrl: imageUrl != null && imageUrl.isNotEmpty ? imageUrl : null,
+      visitedAt: visitedAt,
+    );
+  }
+
+  static DateTime _parseCheckInTimestamp(dynamic ts) {
+    if (ts is Timestamp) return ts.toDate();
+    if (ts is DateTime) return ts;
+    if (ts is int) {
+      return DateTime.fromMillisecondsSinceEpoch(
+        ts > 9999999999 ? ts : ts * 1000,
+      );
+    }
+    final s = ts?.toString().trim() ?? '';
+    if (s.isNotEmpty) {
+      return DateTime.tryParse(s) ?? DateTime.now();
+    }
+    return DateTime.now();
+  }
+
+  /// Fills missing names/images from `tourist_spots` documents.
+  static Future<void> _enrichVisitsFromTouristSpots(
+    Map<String, VisitRecord> bySpot,
+  ) async {
+    if (bySpot.isEmpty || Firebase.apps.isEmpty) return;
+    final ids = bySpot.keys.toList();
+    const chunkSize = 10;
+    for (var i = 0; i < ids.length; i += chunkSize) {
+      final end = math.min(i + chunkSize, ids.length);
+      final chunk = ids.sublist(i, end);
+      try {
+        final docs = await Future.wait(
+          chunk.map(
+            (id) => FirebaseFirestore.instance
+                .collection('tourist_spots')
+                .doc(id)
+                .get(),
+          ),
+        );
+        for (final doc in docs) {
+          if (!doc.exists) continue;
+          final data = doc.data();
+          if (data == null) continue;
+          final existing = bySpot[doc.id];
+          if (existing == null) continue;
+
+          final name = data['name']?.toString().trim();
+          final category = data['category']?.toString().trim();
+          final image = (data['image'] ?? data['imageUrl'])?.toString().trim();
+
+          bySpot[doc.id] = VisitRecord(
+            spotId: doc.id,
+            spotName: (name != null && name.isNotEmpty)
+                ? name
+                : existing.spotName,
+            category: (category != null && category.isNotEmpty)
+                ? category
+                : existing.category,
+            imageUrl: (image != null && image.isNotEmpty)
+                ? image
+                : existing.imageUrl,
+            visitedAt: existing.visitedAt,
+          );
+        }
+      } catch (e) {
+        debugPrint('UserActivityService enrich tourist_spots: $e');
+      }
     }
   }
 
@@ -84,15 +340,10 @@ class UserActivityService {
     final prefs = await SharedPreferences.getInstance();
     final visits = await getVisitedSpots();
     
-    // Check if already visited today
-    final today = DateTime.now();
-    final alreadyVisitedToday = visits.any((v) =>
-        v.spotId == spotId &&
-        v.visitedAt.year == today.year &&
-        v.visitedAt.month == today.month &&
-        v.visitedAt.day == today.day);
-    
-    if (!alreadyVisitedToday) {
+    // Count each tourist spot only once in the visitor history.
+    final alreadyVisitedSpot = visits.any((v) => v.spotId == spotId);
+
+    if (!alreadyVisitedSpot) {
       visits.insert(0, VisitRecord(
         spotId: spotId,
         spotName: spotName,
@@ -108,7 +359,74 @@ class UserActivityService {
       
       // Check for badge achievements
       await _checkBadgeAchievements(visits.length);
+      _schedulePushActivityToCloud();
     }
+  }
+
+  /// Backs up visits + badges + recently viewed + saved spots so progress
+  /// survives reinstall / new device.
+  static Future<void> pushVisitAndBadgeSnapshotToCloud(String uid) async {
+    if (uid.isEmpty) return;
+    try {
+      if (Firebase.apps.isEmpty) return;
+      final visits = await getVisitedSpots();
+      final badges = await getEarnedBadges();
+      final recentlyViewed = await getRecentlyViewed();
+      final savedSpots = await getSavedSpotIds();
+      await FirebaseFirestore.instance.collection('tourist_activity').doc(uid).set(
+        {
+          'visits': visits.map((v) => v.toJson()).toList(),
+          'badges': badges.map((b) => b.toJson()).toList(),
+          'recentlyViewed': recentlyViewed.map((v) => v.toJson()).toList(),
+          'savedSpots': savedSpots,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    } catch (e) {
+      debugPrint('UserActivityService.pushVisitAndBadgeSnapshotToCloud: $e');
+    }
+  }
+
+  static void _schedulePushActivityToCloud() {
+    final uid = AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return;
+    pushVisitAndBadgeSnapshotToCloud(uid);
+  }
+
+  /// After merging local + server lists (login / app start).
+  static Future<void> applyMergedActivityFromCloud({
+    required List<VisitRecord> visits,
+    required List<Badge> badges,
+    required List<VisitRecord> recentlyViewed,
+    required List<String> savedSpotIds,
+    required String uid,
+  }) async {
+    if (uid.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final sorted = List<VisitRecord>.from(visits)
+      ..sort((a, b) => b.visitedAt.compareTo(a.visitedAt));
+    await prefs.setString(
+      _keyVisitedSpots,
+      json.encode(sorted.map((v) => v.toJson()).toList()),
+    );
+    await prefs.setString(
+      _keyBadges,
+      json.encode(badges.map((b) => b.toJson()).toList()),
+    );
+    final viewed = List<VisitRecord>.from(recentlyViewed)
+      ..sort((a, b) => b.visitedAt.compareTo(a.visitedAt));
+    await prefs.setString(
+      _keyRecentlyViewed,
+      json.encode(viewed.map((v) => v.toJson()).toList()),
+    );
+    await prefs.setStringList(_keySavedSpots, savedSpotIds.toSet().toList());
+    for (final t in [1, 5, 10, 25]) {
+      if (sorted.length >= t) {
+        await _checkBadgeAchievements(t);
+      }
+    }
+    await pushVisitAndBadgeSnapshotToCloud(uid);
   }
 
   /// Get unique places visited count
@@ -146,6 +464,7 @@ class UserActivityService {
     }
     
     await prefs.setStringList(_keySavedSpots, savedSpots);
+    _schedulePushActivityToCloud();
     return isSaved;
   }
 
@@ -350,6 +669,18 @@ class UserActivityService {
     }
   }
 
+  /// Marks every stored notification (e.g. announcements mirrored on Home) as read.
+  static Future<void> markAllNotificationsAsRead() async {
+    final prefs = await SharedPreferences.getInstance();
+    final notifications = await getNotifications();
+    if (notifications.isEmpty) return;
+    final updated = notifications.map((n) => n.copyWith(isRead: true)).toList();
+    await prefs.setString(
+      _keyNotifications,
+      json.encode(updated.map((n) => n.toJson()).toList()),
+    );
+  }
+
   /// Get unread notifications count
   static Future<int> getUnreadNotificationsCount() async {
     final notifications = await getNotifications();
@@ -366,7 +697,7 @@ class UserActivityService {
 
   /// Get all user stats at once
   static Future<UserStats> getUserStats() async {
-    final placesVisited = await getUniquePlacesVisited();
+    final placesVisited = await getTotalVisitsCount();
     final badgesEarned = await getBadgesCount();
     final daysAsTourist = await getDaysAsTourist();
     final savedSpots = await getSavedSpotsCount();
@@ -377,6 +708,23 @@ class UserActivityService {
       daysAsTourist: daysAsTourist,
       savedSpots: savedSpots,
     );
+  }
+
+  /// Durable total visits count (Firestore + local fallback).
+  /// Keeps user visit progress even when local cache changes.
+  static Future<int> getTotalVisitsCount() async {
+    final localCount = (await getVisitedSpots()).length;
+    final uid = AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty || Firebase.apps.isEmpty) return localCount;
+    try {
+      final doc = await FirebaseFirestore.instance.collection('tourists').doc(uid).get();
+      final data = doc.data();
+      final remoteRaw = data?['totalVisits'];
+      final remoteCount = remoteRaw is num ? remoteRaw.toInt() : 0;
+      return math.max(localCount, remoteCount);
+    } catch (_) {
+      return localCount;
+    }
   }
 
   /// Clear all user activity data

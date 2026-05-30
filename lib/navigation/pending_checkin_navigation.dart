@@ -16,7 +16,7 @@ Future<void> navigateToPendingSpotCheckInOrDashboard(
     await PendingSpotCheckInStorage.clear();
     await PendingLguCheckInStorage.clear();
     if (context.mounted) {
-      Navigator.pushReplacementNamed(context, defaultRoute);
+      Navigator.pushNamedAndRemoveUntil(context, defaultRoute, (route) => false);
     }
     return;
   }
@@ -59,6 +59,6 @@ Future<void> navigateToPendingSpotCheckInOrDashboard(
   }
 
   if (context.mounted) {
-    Navigator.pushReplacementNamed(context, defaultRoute);
+    Navigator.pushNamedAndRemoveUntil(context, defaultRoute, (route) => false);
   }
 }

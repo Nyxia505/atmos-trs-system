@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
+import 'package:atmos_trs_system/data/tourist_spots_by_municipality.dart';
 import 'package:atmos_trs_system/models/municipality.dart';
-import 'package:atmos_trs_system/features/explore/explore_screen.dart' show TouristSpot, kMockSpots;
+import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
+import 'package:atmos_trs_system/features/explore/explore_data.dart' show TouristSpot;
 import 'package:atmos_trs_system/features/tourism/tourist_spot_detail_screen.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart';
+import 'package:atmos_trs_system/widgets/misamis_occidental_explore_map.dart';
+import 'package:atmos_trs_system/widgets/tourist_spot_thumbnail.dart';
 
 /// Screen showing map centered on a municipality and its tourist spots (image + details).
 /// Opened from landing page destination cards or from map screens.
@@ -19,95 +22,84 @@ class MunicipalityMapAndSpotsScreen extends StatefulWidget {
   final String municipalityIdOrName;
 
   @override
-  State<MunicipalityMapAndSpotsScreen> createState() => _MunicipalityMapAndSpotsScreenState();
+  State<MunicipalityMapAndSpotsScreen> createState() =>
+      _MunicipalityMapAndSpotsScreenState();
 }
 
 class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsScreen> {
-  GoogleMapController? _mapController;
   Municipality? _municipality;
   List<TouristSpot> _spots = [];
   bool _recordedRecentlyViewed = false;
 
-  static const double _kMapZoom = 12.5;
+  static const double _kMapZoom = 13.5;
 
-  /// Optional hero image for recently viewed (aligned with Home featured assets where possible).
   static String? _previewImageForMunicipality(String id) {
     switch (id) {
       case 'oroquieta':
-        return 'assets/images/City PLaza Oroquieta.png';
+        return 'assets/images/oroquieta City plaza.jpeg';
+      case 'ozamiz':
+        return 'assets/images/ozamis city.webp';
+      case 'tangub':
+        return 'assets/images/Asenso Global Garden 1.png';
+      case 'baliangao':
+        return 'assets/images/Baliangao - Cabgan Island.jpg';
+      case 'calamba':
+        return 'assets/images/CALAMBA.jpg';
+      case 'clarin':
+        return 'assets/images/clarin.jpg';
+      case 'concepcion':
+        return 'assets/images/conception.png';
+      case 'dvc':
+        return 'assets/images/Piduan Falls Donvic.jpg';
+      case 'jimenez':
+        return 'assets/images/Jimenez - St. John the Baptist Church.jpg';
+      case 'panaon':
+        return 'assets/images/Panaon.webp';
+      case 'plaridel':
+        return 'assets/images/PLARIDEL.jpg';
       case 'sapangdalaga':
         return 'assets/images/Sapang Dalaga.png';
+      case 'sinacaban':
+        return 'assets/images/AMORAP.jpg';
+      case 'tudela':
+        return 'assets/images/Tudela Village.webp';
       default:
         return null;
     }
   }
 
-  Widget _buildMapControl(IconData icon, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.15),
-              blurRadius: 4,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Icon(icon, color: AppTheme.primary, size: 20),
-      ),
-    );
+  List<TouristSpotFirestore> _mapSpots(Municipality m) {
+    return _spots
+        .where((s) => s.latitude != 0 || s.longitude != 0)
+        .map(
+          (s) => TouristSpotFirestore(
+            id: s.id,
+            name: s.name,
+            category: s.category,
+            latitude: s.latitude,
+            longitude: s.longitude,
+            image: s.imageUrl,
+            rating: s.rating,
+            description: s.description,
+            vrLink: s.vrLink,
+            municipality: m.name,
+            municipalityId: m.id,
+          ),
+        )
+        .toList();
+  }
+
+  TouristSpot? _spotForFirestore(TouristSpotFirestore fs) {
+    for (final s in _spots) {
+      if (s.id == fs.id) return s;
+    }
+    return null;
   }
 
   @override
   void initState() {
     super.initState();
     _resolveMunicipality();
-  }
-
-  @override
-  void dispose() {
-    _mapController = null;
-    super.dispose();
-  }
-
-  Set<Marker> _buildMarkers(Municipality m) {
-    final Set<Marker> markers = {};
-    markers.add(
-      Marker(
-        markerId: const MarkerId('municipality_center'),
-        position: LatLng(m.lat, m.lng),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
-      ),
-    );
-    const String plazaSpotId = 'oro-4'; // Oroquieta City Plaza — highlight on map
-    for (final s in _spots) {
-      if (s.latitude == 0 && s.longitude == 0) continue;
-      final isPlazaHighlight = s.id == plazaSpotId;
-      markers.add(
-        Marker(
-          markerId: MarkerId(s.id),
-          position: LatLng(s.latitude, s.longitude),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            isPlazaHighlight ? BitmapDescriptor.hueViolet : BitmapDescriptor.hueOrange,
-          ),
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => TouristSpotDetailScreen(spot: s),
-              ),
-            );
-          },
-        ),
-      );
-    }
-    return markers;
   }
 
   void _resolveMunicipality() {
@@ -119,7 +111,8 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
         m = x;
         break;
       }
-      if (x.name.toLowerCase().contains(idOrName) || idOrName.contains(x.name.toLowerCase().split(' ').first)) {
+      if (x.name.toLowerCase().contains(idOrName) ||
+          idOrName.contains(x.name.toLowerCase().split(' ').first)) {
         m = x;
         break;
       }
@@ -137,12 +130,7 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
     if (!mounted) return;
     setState(() {
       _municipality = m;
-      if (m != null) {
-        final all = List<TouristSpot>.from(kMockSpots);
-        _spots = all.where((s) => _spotBelongsToMunicipality(s, m!)).toList();
-      } else {
-        _spots = [];
-      }
+      _spots = m != null ? getTouristSpotsForMunicipality(m) : [];
     });
     if (m != null && !_recordedRecentlyViewed) {
       _recordedRecentlyViewed = true;
@@ -164,15 +152,6 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
     }
   }
 
-  bool _spotBelongsToMunicipality(TouristSpot spot, Municipality m) {
-    final city = spot.city.trim().toLowerCase();
-    final name = m.name.toLowerCase();
-    if (city == name) return true;
-    if (name.startsWith(city) || city.startsWith(name.split(' ').first)) return true;
-    if (name.contains(city) || city.contains(name.split(' ').first)) return true;
-    return false;
-  }
-
   @override
   Widget build(BuildContext context) {
     final m = _municipality;
@@ -183,64 +162,43 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
       );
     }
 
+    final mapSpots = _mapSpots(m);
+
     return Scaffold(
       backgroundColor: AppTheme.scaffoldBackground,
       appBar: AppBar(
         title: Text(m.name),
-        backgroundColor: AppTheme.primary,
+        backgroundColor: AppTheme.brandOrange,
         foregroundColor: Colors.white,
         elevation: 0,
       ),
       body: Column(
         children: [
           SizedBox(
-            height: 220,
+            height: municipalityDetailMapHeight(context),
+            width: double.infinity,
             child: ClipRRect(
               borderRadius: const BorderRadius.only(
                 bottomLeft: Radius.circular(12),
                 bottomRight: Radius.circular(12),
               ),
-              child: Stack(
-                children: [
-                  GoogleMap(
-                    initialCameraPosition: CameraPosition(
-                      target: LatLng(m.lat, m.lng),
-                      zoom: _kMapZoom,
+              child: MisamisOccidentalExploreMap(
+                key: ValueKey('municipality-map-${m.id}'),
+                spots: mapSpots,
+                centerLat: m.lat,
+                centerLng: m.lng,
+                initialZoom: _kMapZoom,
+                onMapReady: (move) => move(m.lat, m.lng, zoom: _kMapZoom),
+                onSpotTap: (fs) {
+                  final spot = _spotForFirestore(fs);
+                  if (spot == null) return;
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => TouristSpotDetailScreen(spot: spot),
                     ),
-                    minMaxZoomPreference: const MinMaxZoomPreference(9, 18),
-                    markers: _buildMarkers(m),
-                    onMapCreated: (GoogleMapController controller) {
-                      _mapController = controller;
-                    },
-                    mapType: MapType.normal,
-                  ),
-                  Positioned(
-                    right: 10,
-                    bottom: 10,
-                    child: Column(
-                      children: [
-                        _buildMapControl(Icons.add, () {
-                          _mapController?.animateCamera(CameraUpdate.zoomIn());
-                        }),
-                        const SizedBox(height: 8),
-                        _buildMapControl(Icons.remove, () {
-                          _mapController?.animateCamera(CameraUpdate.zoomOut());
-                        }),
-                        const SizedBox(height: 8),
-                        _buildMapControl(Icons.my_location, () {
-                          _mapController?.animateCamera(
-                            CameraUpdate.newCameraPosition(
-                              CameraPosition(
-                                target: LatLng(m.lat, m.lng),
-                                zoom: _kMapZoom,
-                              ),
-                            ),
-                          );
-                        }),
-                      ],
-                    ),
-                  ),
-                ],
+                  );
+                },
               ),
             ),
           ),
@@ -262,7 +220,10 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
                     padding: const EdgeInsets.all(24),
                     child: Text(
                       'No tourist spots listed yet for ${m.name}.',
-                      style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 14),
+                      style: TextStyle(
+                        color: AppTheme.unselectedMuted,
+                        fontSize: 14,
+                      ),
                     ),
                   )
                 else
@@ -273,7 +234,8 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) => TouristSpotDetailScreen(spot: spot),
+                            builder: (context) =>
+                                TouristSpotDetailScreen(spot: spot),
                           ),
                         );
                       },
@@ -311,29 +273,22 @@ class _SpotCard extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: spot.imageUrl.startsWith('http')
-                    ? Image.network(
-                        spot.imageUrl,
-                        width: 72,
-                        height: 72,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => _placeholder(72),
-                      )
-                    : Image.asset(
-                        spot.imageUrl,
-                        width: 72,
-                        height: 72,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => _placeholder(72),
-                      ),
+              Builder(
+                builder: (context) {
+                  final thumb = MediaQuery.sizeOf(context).width < 600
+                      ? 72.0
+                      : 88.0;
+                  return touristSpotThumbnail(
+                    spot.imageUrl,
+                    size: thumb,
+                  );
+                },
               ),
               const SizedBox(width: 16),
               Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
                       spot.name,
                       style: const TextStyle(
@@ -344,14 +299,20 @@ class _SpotCard extends StatelessWidget {
                     ),
                     Text(
                       spot.category,
-                      style: TextStyle(color: AppTheme.primary.withOpacity(0.9), fontSize: 12),
+                      style: TextStyle(
+                        color: AppTheme.brandOrange.withValues(alpha: 0.9),
+                        fontSize: 12,
+                      ),
                     ),
                     if (spot.description.isNotEmpty)
                       Text(
                         spot.description,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 13),
+                        style: TextStyle(
+                          color: AppTheme.unselectedMuted,
+                          fontSize: 13,
+                        ),
                       ),
                   ],
                 ),
@@ -363,12 +324,4 @@ class _SpotCard extends StatelessWidget {
     );
   }
 
-  Widget _placeholder(double size) {
-    return Container(
-      width: size,
-      height: size,
-      color: AppTheme.unselectedMuted.withOpacity(0.2),
-      child: Icon(Icons.place, color: AppTheme.unselectedMuted, size: 32),
-    );
-  }
 }

@@ -1,11 +1,11 @@
 {
-    "name": "atmos_trs_system",
-    "short_name": "atmos_trs_system",
+    "name": "ATMOS TRS",
+    "short_name": "ATMOS TRS",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "ATMOS TRS",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

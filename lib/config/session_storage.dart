@@ -1,11 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// User roles for the ATMOS TRS system
-enum UserRole {
-  tourist,
-  governor,
-  tourism,
-}
+enum UserRole { tourist, governor, tourism }
 
 /// Persists login session so user stays logged in until they tap Logout.
 class SessionStorage {
@@ -55,7 +51,8 @@ class SessionStorage {
     if (normalizedEmail == governorEmail.toLowerCase()) {
       return UserRole.governor;
     }
-    if (normalizedEmail == tourismEmail.toLowerCase() || _isTourismMunicipalityEmail(email)) {
+    if (normalizedEmail == tourismEmail.toLowerCase() ||
+        _isTourismMunicipalityEmail(email)) {
       return UserRole.tourism;
     }
     return UserRole.tourist;
@@ -94,7 +91,8 @@ class SessionStorage {
     final normalizedEmail = email.toLowerCase().trim();
     final prefs = await SharedPreferences.getInstance();
     if (normalizedEmail == governorEmail.toLowerCase()) {
-      final effective = prefs.getString('governor_password') ?? governorPassword;
+      final effective =
+          prefs.getString('governor_password') ?? governorPassword;
       return password == effective;
     }
     if (normalizedEmail == tourismEmail.toLowerCase()) {
@@ -126,7 +124,12 @@ class SessionStorage {
   }
 
   /// Call after successful login to persist session across app restarts.
-  static Future<void> saveSession(String uid, {UserRole role = UserRole.tourist, String? email, String? municipalityId}) async {
+  static Future<void> saveSession(
+    String uid, {
+    UserRole role = UserRole.tourist,
+    String? email,
+    String? municipalityId,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_keyUserUid, uid);
     await prefs.setString(_keyUserRole, role.name);

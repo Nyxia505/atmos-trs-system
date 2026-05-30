@@ -18,7 +18,11 @@ import 'package:atmos_trs_system/utils/spot_qr_helper.dart';
 import 'package:atmos_trs_system/utils/lgu_qr_export.dart';
 import 'package:atmos_trs_system/utils/logo_utils.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
+import 'package:atmos_trs_system/utils/tourist_id_helper.dart';
 import 'package:atmos_trs_system/widgets/app_logout_button.dart';
+import 'package:atmos_trs_system/services/announcement_push_service.dart';
+import 'package:atmos_trs_system/services/governor_firestore_service.dart';
+import 'package:atmos_trs_system/services/user_directory_service.dart';
 
 class GovernorDashboard extends StatefulWidget {
   const GovernorDashboard({super.key});
@@ -38,6 +42,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   String? _errorMessage;
   int _totalTourists = 0;
   int _totalCheckIns = 0;
+
   /// Unique tourists who checked in today (one person = 1 even if they checked in at multiple municipalities).
   int _uniqueTouristsToday = 0;
   int _activeSpots = 17;
@@ -54,15 +59,21 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   static const Color _lightOrange = Color(
     0xFFFED7AA,
   ); // light orange (for icons bg)
-  static const Color _darkBg = Color(0xFFFFF7ED); // cream background
-  static const Color _cardBg = Color(0xFFFFFBF7); // soft white cards
+  static const Color _darkBg = Color(0xFFF4F4F5); // flat neutral background
+  static const Color _cardBg = Colors.white;
   static const Color _sidebarBg = Color(0xFFEA580C); // dark orange sidebar
   static const Color _sidebarHover = Color(
     0xFFC2410C,
   ); // darker orange for hover
   static const Color _textDark = Color(0xFF1A1A1A);
   static const Color _textMuted = Color(0xFF6B7280);
-  static const Color _cardBorder = Color(0xFFFFEDD5); // soft orange border
+  static const Color _cardBorder = Color(0xFFE4E4E7);
+
+  // Flat KPI card colors (minimal, easy on the eyes)
+  static const Color _kpiGreen = Color(0xFF9CCC65);
+  static const Color _kpiOrange = Color(0xFFFFB74D);
+  static const Color _kpiBlue = Color(0xFF64B5F6);
+  static const Color _kpiPurple = Color(0xFF9575CD);
 
   final List<_NavItem> _navItems = [
     _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
@@ -238,10 +249,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       ),
       child: ClipOval(
         child: _profilePhotoBytes != null
-            ? Image.memory(
-                _profilePhotoBytes!,
-                fit: BoxFit.cover,
-              )
+            ? Image.memory(_profilePhotoBytes!, fit: BoxFit.cover)
             : Container(
                 color: const Color(0xFFFFF7ED),
                 child: Center(
@@ -317,7 +325,9 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     if (isMisamisOccidentalMunicipalityId(spot['municipalityId']?.toString())) {
       return true;
     }
-    final fromName = getMunicipalityIdFromName(spot['municipality']?.toString());
+    final fromName = getMunicipalityIdFromName(
+      spot['municipality']?.toString(),
+    );
     return fromName.isNotEmpty && isMisamisOccidentalMunicipalityId(fromName);
   }
 
@@ -336,6 +346,12 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     return false;
   }
 
+  void _resetMunicipalityTouristCounts() {
+    for (final muni in _allMunicipalities) {
+      muni['tourists'] = 0;
+    }
+  }
+
   Future<void> _loadData() async {
     setState(() {
       _isLoading = true;
@@ -343,65 +359,90 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     });
 
     try {
-      // Check Firebase initialization
       if (Firebase.apps.isEmpty) {
-        // Use mock data if Firebase not available
-        _useMockData();
+        setState(() {
+          _errorMessage = 'Firebase is not initialized yet.';
+          _isLoading = false;
+        });
         return;
       }
 
-      final firestore = FirebaseFirestore.instance;
+      final authUser = FirebaseAuth.instance.currentUser;
+      if (authUser == null) {
+        setState(() {
+          _errorMessage =
+              'Sign in required to load provincial data from the database.';
+          _isLoading = false;
+        });
+        return;
+      }
 
-      // Load tourists — Governor portal: Misamis Occidental scope only
-      final touristsSnapshot = await firestore.collection('tourists').get();
-      _tourists = touristsSnapshot.docs
-          .map((doc) => {'id': doc.id, ...doc.data()})
-          .where(_isTouristInMisamisOccidentalScope)
-          .toList();
+      await authUser.getIdToken(true);
+      final email = authUser.email ?? '';
+      final staffReady =
+          await UserDirectoryService.prepareProvincialStaffFirestoreAccess(
+        uid: authUser.uid,
+        email: email.isNotEmpty ? email : SessionStorage.governorEmail,
+        roleRaw: 'governor',
+        fullName: _profileName,
+      );
+      if (!staffReady) {
+        debugPrint(
+          '[GovernorDashboard] users/${authUser.uid} missing staff role '
+          '(email=$email)',
+        );
+        if (!mounted) return;
+        setState(() {
+          _errorMessage =
+              'Could not verify governor access in Firestore (users/${authUser.uid} '
+              'needs role "governor"). Log out, sign in again, or check Firebase rules.';
+          _isLoading = false;
+        });
+        return;
+      }
+
+      final snapshot = await GovernorFirestoreService().loadProvincialSnapshot();
+
+      _tourists = snapshot.tourists;
+      _checkIns = snapshot.checkIns;
+      _governorAllSpots = snapshot.touristSpots;
+      _announcements = snapshot.announcements;
+
       _totalTourists = _tourists.length;
-
-      // Load check-ins — filter to province LGUs (municipalityId / municipality name)
-      final qrCheckInsSnapshot = await firestore.collection('qr_checkins').get();
-      _checkIns = qrCheckInsSnapshot.docs
-          .map((doc) => {'id': doc.id, ...doc.data()})
-          .where(_isQrCheckInInMisamisOccidental)
-          .toList();
       _totalCheckIns = _checkIns.length;
 
-      // Unique tourists today: same person checking in at Tangub, Ozamiz, Sapang Dalaga = 1 tourist
       final today = DateTime.now();
-      final todayCheckIns = _checkIns.where((c) {
-        final timestamp = c['timestamp'];
-        if (timestamp is Timestamp) {
-          final d = timestamp.toDate();
-          return d.year == today.year && d.month == today.month && d.day == today.day;
+      final todayUserIds = <String>{};
+      for (final c in _checkIns) {
+        final d = GovernorFirestoreService.parseCheckInTime(c);
+        if (d == null) continue;
+        if (d.year != today.year ||
+            d.month != today.month ||
+            d.day != today.day) {
+          continue;
         }
-        return false;
-      }).toList();
-      final todayUserIds = todayCheckIns
-          .map((c) => c['userId']?.toString())
-          .whereType<String>()
-          .toSet();
+        final uid = GovernorFirestoreService.checkInUserId(c);
+        if (uid.isNotEmpty) todayUserIds.add(uid);
+      }
       _uniqueTouristsToday = todayUserIds.length;
 
-      // Tourist spots — province list only (same 17 LGUs)
-      final spotsSnapshot = await firestore.collection('tourist_spots').get();
-      _governorAllSpots = spotsSnapshot.docs
-          .map((doc) => {'id': doc.id, ...doc.data()})
-          .where(_isTouristSpotInMisamisOccidental)
-          .toList();
-      _activeSpots = _governorAllSpots.isNotEmpty ? _governorAllSpots.length : 17;
+      _activeSpots = _governorAllSpots.isNotEmpty
+          ? _governorAllSpots.length
+          : 17;
 
-      // Load announcements
-      final announcementsSnapshot = await firestore
-          .collection('announcements')
-          .orderBy('createdAt', descending: true)
-          .get();
-      _announcements = announcementsSnapshot.docs
-          .map((doc) => {'id': doc.id, ...doc.data()})
-          .toList();
+      final profile = await UserDirectoryService.getProfileByUid(authUser.uid);
+      if (profile != null) {
+        final name = profile.fullName?.trim() ?? '';
+        if (name.isNotEmpty) {
+          _profileName = name;
+        }
+        _profileEmail = profile.email.isNotEmpty
+            ? profile.email
+            : (authUser.email ?? _profileEmail);
+      }
 
       // Calculate tourists per municipality from check-ins (qr_checkins has municipalityId)
+      _resetMunicipalityTouristCounts();
       final checkInsByCity = <String, int>{};
       for (var c in _checkIns) {
         final muniId = c['municipalityId']?.toString() ?? '';
@@ -438,76 +479,38 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         if (muniName == null) continue;
         for (var muni in _allMunicipalities) {
           if (muni['name'].toString().toLowerCase() == muniName.toLowerCase() ||
-              muniName.toLowerCase().contains(muni['name'].toString().toLowerCase())) {
+              muniName.toLowerCase().contains(
+                muni['name'].toString().toLowerCase(),
+              )) {
             muni['tourists'] = (muni['tourists'] as int) + entry.value;
             break;
           }
         }
       }
 
-      setState(() => _isLoading = false);
-    } catch (e) {
-      debugPrint('Error loading data: $e');
-      _useMockData();
-    }
-  }
-
-  void _useMockData() {
-    setState(() {
-      _totalTourists = 12458;
-      _totalCheckIns = 8234;
-      _uniqueTouristsToday = 312;
-      _activeSpots = 47;
-      _tourists = List.generate(
-        20,
-        (i) => {
-          'id': 'ATMOS-${(i + 1).toString().padLeft(4, '0')}',
-          'name': 'Tourist ${i + 1}',
-          'email': 'tourist${i + 1}@example.com',
-          'origin': ['Manila', 'Cebu', 'Davao', 'CDO'][i % 4],
-          'visits': (i % 10) + 1,
-          'province': 'Misamis Occidental',
-          'city': 'Oroquieta City',
-          'registeredAt': Timestamp.fromDate(
-            DateTime.now().subtract(
-              Duration(days: i * 2, hours: i % 12, minutes: i % 60),
-            ),
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = snapshot.loadWarnings.isNotEmpty
+            ? snapshot.loadWarnings.first
+            : null;
+        _isLoading = false;
+      });
+      if (snapshot.loadWarnings.length > 1 && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(snapshot.loadWarnings.join(' ')),
+            behavior: SnackBarBehavior.floating,
           ),
-        },
-      );
-      _checkIns = List.generate(
-        100,
-        (i) => {
-          'location': ['Baliangao Beach', 'Sapang Dalaga Falls', 'Oroquieta City Capitol', 'Panaon Island', 'Hoyohoy Highland'][i % 5],
-          'timestamp': Timestamp.fromDate(DateTime.now().subtract(Duration(days: i % 30))),
-          'city': ['Oroquieta City', 'Ozamis City', 'Baliangao', 'Sapang Dalaga'][i % 4],
-        },
-      );
-      _announcements = [
-        {
-          'id': '1',
-          'title': 'Welcome to ATMOS TRS',
-          'content': 'Tourism registration system is now live!',
-          'published': true,
-          'date': '2026-02-20',
-        },
-        {
-          'id': '2',
-          'title': 'New Tourist Spots Added',
-          'content': '5 new spots have been added to the system.',
-          'published': true,
-          'date': '2026-02-18',
-        },
-        {
-          'id': '3',
-          'title': 'System Maintenance',
-          'content': 'Scheduled maintenance on Feb 28.',
-          'published': false,
-          'date': '2026-02-15',
-        },
-      ];
-      _isLoading = false;
-    });
+        );
+      }
+    } catch (e) {
+      debugPrint('Error loading governor data: $e');
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'Could not load database: $e';
+        _isLoading = false;
+      });
+    }
   }
 
   void _toggleSidebar() {
@@ -527,10 +530,15 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       MediaQuery.of(context).size.width < 1024;
 
   int get _gridCrossAxisCount {
-    if (_isMobile) return 1;
+    if (_isMobile) return 2;
     if (_isTablet) return 2;
     return 4;
   }
+
+  /// Desktop/tablet wide layout: fit stats + all charts in one viewport (no scroll).
+  bool get _dashboardOnePage => MediaQuery.of(context).size.width >= 900;
+
+  double get _dashboardPanelPadding => _dashboardOnePage ? 12 : 20;
 
   @override
   Widget build(BuildContext context) {
@@ -566,57 +574,105 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   Widget _buildBottomNav() {
-    return Container(
-      decoration: BoxDecoration(
-        color: _sidebarBg,
-        border: Border(top: BorderSide(color: Colors.grey.shade300)),
-      ),
+    const Color bottomNavSelectedBg = Color(0xFFFFF7ED);
+    const Color bottomNavSelectedFg = Color(0xFFC2410C);
+    const Color bottomNavUnselected = Color(0xE6FFFFFF);
+    return Material(
+      color: _sidebarBg,
+      elevation: 8,
+      shadowColor: Colors.black26,
       child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: List.generate(_navItems.length.clamp(0, 5), (index) {
-              final item = _navItems[index];
-              final isSelected = _selectedIndex == index;
-              return InkWell(
-                onTap: () => setState(() => _selectedIndex = index),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? _primaryOrange.withOpacity(0.15)
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        item.icon,
-                        color: isSelected ? _primaryOrange : Colors.white54,
-                        size: 22,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        item.label,
-                        style: TextStyle(
-                          color: isSelected ? _primaryOrange : Colors.white54,
-                          fontSize: 10,
-                          fontWeight: isSelected
-                              ? FontWeight.w600
-                              : FontWeight.w400,
+        top: false,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final maxW = constraints.maxWidth;
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minWidth: maxW),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: List.generate(_navItems.length.clamp(0, 5), (
+                      index,
+                    ) {
+                      final item = _navItems[index];
+                      final isSelected = _selectedIndex == index;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () => setState(() => _selectedIndex = index),
+                            borderRadius: BorderRadius.circular(18),
+                            splashColor: Colors.white24,
+                            highlightColor: Colors.white12,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? bottomNavSelectedBg
+                                    : Colors.transparent,
+                                borderRadius: BorderRadius.circular(18),
+                                boxShadow: isSelected
+                                    ? [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.12),
+                                          blurRadius: 8,
+                                          offset: const Offset(0, 2),
+                                        ),
+                                      ]
+                                    : null,
+                              ),
+                              child: SizedBox(
+                                width: 76,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      item.icon,
+                                      color: isSelected
+                                          ? bottomNavSelectedFg
+                                          : bottomNavUnselected,
+                                      size: 24,
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      item.label,
+                                      textAlign: TextAlign.center,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: isSelected
+                                            ? bottomNavSelectedFg
+                                            : bottomNavUnselected,
+                                        fontSize: 10,
+                                        height: 1.15,
+                                        letterSpacing: 0.15,
+                                        fontWeight: isSelected
+                                            ? FontWeight.w700
+                                            : FontWeight.w500,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
                         ),
-                      ),
-                    ],
+                      );
+                    }),
                   ),
                 ),
-              );
-            }),
-          ),
+              ),
+            );
+          },
         ),
       ),
     );
@@ -682,63 +738,74 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   Widget _buildLogo({required bool expanded}) {
+    final logoSize = expanded ? 46.0 : 32.0;
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: expanded ? 16 : 12),
       child: Container(
-        padding: const EdgeInsets.all(12),
+        padding: EdgeInsets.all(expanded ? 12 : 8),
         decoration: BoxDecoration(
           color: Colors.white.withOpacity(0.06),
           borderRadius: BorderRadius.circular(18),
           border: Border.all(color: _primaryOrange.withOpacity(0.9), width: 1),
         ),
-        child: Row(
-          mainAxisAlignment:
-              expanded ? MainAxisAlignment.start : MainAxisAlignment.center,
-          children: [
-            SizedBox(
-              width: 46,
-              height: 46,
-              child: TransparentLogo(
-                width: 46,
-                height: 46,
-                fit: BoxFit.contain,
-                errorIcon: Icons.public,
-                errorIconSize: 26,
-                errorIconColor: _primaryOrange,
-              ),
-            ),
-            if (expanded) ...[
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'ATMOS TRS',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.5,
-                      ),
+        child: expanded
+            ? Row(
+                mainAxisAlignment: MainAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: logoSize,
+                    height: logoSize,
+                    child: TransparentLogo(
+                      width: logoSize,
+                      height: logoSize,
+                      fit: BoxFit.contain,
+                      errorIcon: Icons.public,
+                      errorIconSize: 26,
+                      errorIconColor: _primaryOrange,
                     ),
-                    Text(
-                      'Governor Portal',
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(0.8),
-                        fontSize: 12,
-                      ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'ATMOS TRS',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                        Text(
+                          'Governor Portal',
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.8),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
+                  const SizedBox(width: 8),
+                  _buildSidebarAvatar(size: 34),
+                ],
+              )
+            : Center(
+                child: SizedBox(
+                  width: logoSize,
+                  height: logoSize,
+                  child: TransparentLogo(
+                    width: logoSize,
+                    height: logoSize,
+                    fit: BoxFit.contain,
+                    errorIcon: Icons.public,
+                    errorIconSize: 22,
+                    errorIconColor: _primaryOrange,
+                  ),
                 ),
               ),
-              const SizedBox(width: 8),
-              _buildSidebarAvatar(size: 34),
-            ] else ...[
-              const SizedBox(width: 8),
-            ],
-          ],
-        ),
       ),
     );
   }
@@ -907,11 +974,16 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     }
   }
 
-  Widget _buildHeader(String title, {String? subtitle, List<Widget>? actions}) {
+  Widget _buildHeader(
+    String title, {
+    String? subtitle,
+    List<Widget>? actions,
+    bool compact = false,
+  }) {
     return Container(
       padding: EdgeInsets.symmetric(
         horizontal: _isMobile ? 16 : 24,
-        vertical: 16,
+        vertical: compact ? 10 : 16,
       ),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
@@ -919,9 +991,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        borderRadius: const BorderRadius.vertical(
-          bottom: Radius.circular(24),
-        ),
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.08),
@@ -932,11 +1002,6 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       ),
       child: Row(
         children: [
-          if (_isMobile)
-            IconButton(
-              onPressed: () => Scaffold.of(context).openDrawer(),
-              icon: Icon(Icons.menu, color: _textDark),
-            ),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -945,7 +1010,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                   title,
                   style: TextStyle(
                     color: Colors.white,
-                    fontSize: _isMobile ? 18 : 22,
+                    fontSize: compact ? 18 : (_isMobile ? 18 : 22),
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -954,23 +1019,21 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                     subtitle,
                     style: TextStyle(
                       color: Colors.white.withOpacity(0.8),
-                      fontSize: _isMobile ? 12 : 14,
+                      fontSize: compact ? 11 : (_isMobile ? 12 : 14),
                     ),
                   ),
               ],
             ),
           ),
           if (actions != null) ...actions,
+          if (_isMobile) ...[_buildMobileHeaderProfileAction()],
           if (!_isMobile) ...[
             _buildHeaderAction(
               Icons.notifications_outlined,
-              badge: _unreadNotificationCount > 0 ? '$_unreadNotificationCount' : null,
+              badge: _unreadNotificationCount > 0
+                  ? '$_unreadNotificationCount'
+                  : null,
               onPressed: _showNotificationsPanel,
-            ),
-            const SizedBox(width: 12),
-            _buildHeaderAction(
-              Icons.search_rounded,
-              onPressed: _showSearchPanel,
             ),
             const SizedBox(width: 12),
             _buildHeaderProfile(),
@@ -993,7 +1056,9 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         child: Material(
           color: Colors.transparent,
           child: Container(
-            width: MediaQuery.of(context).size.width > 600 ? 440 : MediaQuery.of(context).size.width * 0.9,
+            width: MediaQuery.of(context).size.width > 600
+                ? 440
+                : MediaQuery.of(context).size.width * 0.9,
             constraints: BoxConstraints(
               maxHeight: MediaQuery.of(context).size.height * 0.75,
             ),
@@ -1035,13 +1100,26 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                           minimumSize: Size.zero,
                           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
-                        child: const Text('View all', style: TextStyle(color: _primaryOrange, fontWeight: FontWeight.w600)),
+                        child: const Text(
+                          'View all',
+                          style: TextStyle(
+                            color: _primaryOrange,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.close_rounded, color: _textMuted, size: 22),
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          color: _textMuted,
+                          size: 22,
+                        ),
                         onPressed: () => Navigator.pop(context),
                         padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                        constraints: const BoxConstraints(
+                          minWidth: 36,
+                          minHeight: 36,
+                        ),
                       ),
                     ],
                   ),
@@ -1063,20 +1141,33 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                           shrinkWrap: true,
                           padding: const EdgeInsets.symmetric(vertical: 8),
                           itemCount: _announcements.length,
-                          separatorBuilder: (_, __) => Divider(height: 1, color: Colors.grey.shade200),
+                          separatorBuilder: (_, __) =>
+                              Divider(height: 1, color: Colors.grey.shade200),
                           itemBuilder: (context, i) {
                             final a = _announcements[i];
                             final type = a['type']?.toString() ?? 'General';
                             IconData icon = Icons.campaign_rounded;
-                            if (type == 'Promo') icon = Icons.local_offer_rounded;
-                            else if (type == 'Event') icon = Icons.event_rounded;
-                            else if (type == 'Alert') icon = Icons.warning_amber_rounded;
+                            if (type == 'Promo')
+                              icon = Icons.local_offer_rounded;
+                            else if (type == 'Event')
+                              icon = Icons.event_rounded;
+                            else if (type == 'Alert')
+                              icon = Icons.warning_amber_rounded;
                             return ListTile(
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 4,
+                              ),
                               leading: CircleAvatar(
                                 radius: 20,
-                                backgroundColor: _primaryOrange.withOpacity(0.15),
-                                child: Icon(icon, color: _primaryOrange, size: 20),
+                                backgroundColor: _primaryOrange.withOpacity(
+                                  0.15,
+                                ),
+                                child: Icon(
+                                  icon,
+                                  color: _primaryOrange,
+                                  size: 20,
+                                ),
                               ),
                               title: Text(
                                 a['title']?.toString() ?? 'Announcement',
@@ -1089,10 +1180,18 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                               subtitle: Padding(
                                 padding: const EdgeInsets.only(top: 4),
                                 child: Text(
-                                  a['content']?.toString().replaceAll('\n', ' ').trim() ?? '',
+                                  a['content']
+                                          ?.toString()
+                                          .replaceAll('\n', ' ')
+                                          .trim() ??
+                                      '',
                                   maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(color: _textMuted, fontSize: 12, height: 1.35),
+                                  style: const TextStyle(
+                                    color: _textMuted,
+                                    fontSize: 12,
+                                    height: 1.35,
+                                  ),
                                 ),
                               ),
                               onTap: () {
@@ -1111,59 +1210,14 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
-  void _showSearchPanel() {
-    final fieldController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: _cardBg,
-        title: const Text(
-          'Search',
-          style: TextStyle(color: _textDark, fontWeight: FontWeight.w600),
-        ),
-        content: TextField(
-          controller: fieldController,
-          autofocus: true,
-          decoration: InputDecoration(
-            hintText: 'Search tourists, announcements...',
-            prefixIcon: const Icon(Icons.search_rounded, color: _primaryOrange),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: Colors.grey.shade300),
-            ),
-          ),
-          style: const TextStyle(color: _textDark),
-          onSubmitted: (value) {
-            Navigator.pop(context);
-            _searchController.text = value;
-            setState(() => _selectedIndex = 1);
-          },
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel', style: TextStyle(color: _textDark)),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final value = fieldController.text.trim();
-              Navigator.pop(context);
-              _searchController.text = value;
-              setState(() => _selectedIndex = 1);
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: _primaryOrange),
-            child: const Text('Search'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHeaderAction(IconData icon, {String? badge, VoidCallback? onPressed}) {
+  Widget _buildHeaderAction(
+    IconData icon, {
+    String? badge,
+    VoidCallback? onPressed,
+  }) {
+    final isNotificationAction = icon == Icons.notifications_outlined;
     return Tooltip(
-      message: icon == Icons.notifications_outlined
-          ? 'Notifications'
-          : 'Search',
+      message: isNotificationAction ? 'Notifications' : 'Search',
       child: GestureDetector(
         onTap: onPressed,
         child: Stack(
@@ -1171,10 +1225,20 @@ class _GovernorDashboardState extends State<GovernorDashboard>
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: isNotificationAction ? Colors.transparent : Colors.white,
                 borderRadius: BorderRadius.circular(10),
+                border: isNotificationAction
+                    ? Border.all(
+                        color: Colors.white.withOpacity(0.75),
+                        width: 1.4,
+                      )
+                    : null,
               ),
-              child: Icon(icon, color: _primaryOrange, size: 22),
+              child: Icon(
+                icon,
+                color: isNotificationAction ? Colors.white : _primaryOrange,
+                size: 22,
+              ),
             ),
             if (badge != null)
               Positioned(
@@ -1265,55 +1329,156 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
+  Widget _buildMobileHeaderProfileAction() {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        onTap: _showMobileProfileActionsSheet,
+        borderRadius: BorderRadius.circular(18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildSidebarAvatar(size: 30),
+              const SizedBox(width: 6),
+              const Icon(
+                Icons.keyboard_arrow_down_rounded,
+                color: _textDark,
+                size: 18,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showMobileProfileActionsSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _cardBg,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  _buildSidebarAvatar(size: 42),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _profileName,
+                          style: const TextStyle(
+                            color: _textDark,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const Text(
+                          'Governor',
+                          style: TextStyle(color: _textMuted, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              ListTile(
+                leading: const Icon(
+                  Icons.settings_rounded,
+                  color: _primaryOrange,
+                ),
+                title: const Text('Settings'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  setState(() => _selectedIndex = 6);
+                },
+              ),
+              ListTile(
+                leading: const Icon(
+                  Icons.logout_rounded,
+                  color: Colors.redAccent,
+                ),
+                title: const Text('Logout'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _logout();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   // ==================== DASHBOARD SECTION ====================
   Widget _buildDashboardContent() {
     return RefreshIndicator(
       onRefresh: _loadData,
       color: _primaryOrange,
-      child: Container(
-        color: _darkBg,
+      child: _buildDashboardCanvas(
         child: Column(
           children: [
             _buildHeader(
               'Welcome back, Governor',
-              subtitle: 'Here\'s what\'s happening in Misamis Occidental today',
+              subtitle: _dashboardOnePage
+                  ? 'Misamis Occidental · provincial tourism overview'
+                  : 'Here\'s what\'s happening in Misamis Occidental today',
+              compact: _dashboardOnePage,
             ),
             Expanded(
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: EdgeInsets.all(_isMobile ? 16 : 24),
-                child: _isMobile
-                    ? Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildStatsGrid(),
-                          const SizedBox(height: 24),
-                          _buildChartsSection(),
-                          const SizedBox(height: 24),
-                          _buildGovernorHeroPanel(),
-                        ],
-                      )
-                    : Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            flex: 3,
+              child: LayoutBuilder(
+                builder: (context, viewport) {
+                  final body = _dashboardOnePage
+                      ? SizedBox(
+                          height: viewport.maxHeight,
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 _buildStatsGrid(),
-                                const SizedBox(height: 24),
-                                _buildChartsSection(),
+                                const SizedBox(height: 10),
+                                Expanded(child: _buildDashboardOnePageCharts()),
                               ],
                             ),
                           ),
-                          const SizedBox(width: 24),
-                          Expanded(
-                            flex: 2,
-                            child: _buildGovernorHeroPanel(),
+                        )
+                      : SingleChildScrollView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding: EdgeInsets.all(_isMobile ? 16 : 24),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildStatsGrid(),
+                              const SizedBox(height: 20),
+                              _buildChartsSection(),
+                              const SizedBox(height: 20),
+                              _buildVisitorDemographicsSection(),
+                            ],
                           ),
-                        ],
-                      ),
+                        );
+                  if (_dashboardOnePage) {
+                    return SingleChildScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      child: body,
+                    );
+                  }
+                  return body;
+                },
               ),
             ),
           ],
@@ -1322,101 +1487,40 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
-  /// Right-side hero panel for governor dashboard (image + call-to-action)
-  Widget _buildGovernorHeroPanel() {
-    return Container(
-      height: _isMobile ? 220 : 260,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        gradient: const LinearGradient(
-          colors: [_accentOrange, _primaryOrange],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+  Widget _buildDashboardCanvas({required Widget child}) {
+    return ColoredBox(color: _darkBg, child: child);
+  }
+
+  /// All chart panels in two rows — fills remaining viewport height.
+  Widget _buildDashboardOnePageCharts() {
+    return Column(
+      children: [
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(flex: 3, child: _buildTouristArrivalsChart(dense: true)),
+              const SizedBox(width: 10),
+              Expanded(flex: 2, child: _buildTopCategoriesCard(dense: true)),
+            ],
+          ),
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.12),
-            blurRadius: 20,
-            offset: const Offset(0, 6),
+        const SizedBox(height: 10),
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: _buildGenderPieChart(dense: true)),
+              const SizedBox(width: 10),
+              Expanded(child: _buildAgeRangeBarChart(dense: true)),
+              const SizedBox(width: 10),
+              Expanded(child: _buildLocalForeignPieChart(dense: true)),
+              const SizedBox(width: 10),
+              Expanded(child: _buildCityRankingBarChart(dense: true)),
+            ],
           ),
-        ],
-      ),
-      child: Stack(
-        children: [
-          Align(
-            alignment: Alignment.centerRight,
-            child: Opacity(
-              opacity: 0.18,
-              child: Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: Icon(
-                  Icons.leaderboard_rounded,
-                  size: _isMobile ? 140 : 180,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    Text(
-                      'Tell the Province\'s story',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      'Upload a featured image and message to highlight your priorities for Misamis Occidental.',
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 13,
-                        height: 1.4,
-                      ),
-                    ),
-                  ],
-                ),
-                Align(
-                  alignment: Alignment.bottomLeft,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      _showCreateAnnouncementDialog();
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      foregroundColor: _primaryOrange,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 18,
-                        vertical: 12,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                    ),
-                    icon: const Icon(Icons.image_outlined, size: 18),
-                    label: const Text(
-                      'Add banner or message',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -1426,18 +1530,14 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       _StatCard(
         title: 'Total Tourists',
         value: _formatNumber(_totalTourists),
-        change: '—',
-        isPositive: true,
         icon: Icons.people_alt_rounded,
-        color: _primaryOrange,
+        color: _kpiGreen,
       ),
       _StatCard(
-        title: 'Tourists today',
+        title: 'Tourists Today',
         value: _formatNumber(_uniqueTouristsToday),
-        change: 'Unique (1 per person across all LGUs)',
-        isPositive: true,
         icon: Icons.qr_code_scanner_rounded,
-        color: Colors.blue,
+        color: _kpiOrange,
       ),
       _StatCard(
         title: 'Total Check-ins',
@@ -1445,17 +1545,29 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         change: checkInTrend.text,
         isPositive: checkInTrend.isPositive,
         icon: Icons.touch_app_rounded,
-        color: _accentOrange,
+        color: _kpiBlue,
       ),
       _StatCard(
         title: 'Active Spots',
         value: '$_activeSpots',
-        change: '—',
-        isPositive: true,
         icon: Icons.location_on_rounded,
-        color: _accentOrange,
+        color: _kpiPurple,
       ),
     ];
+
+    if (_dashboardOnePage) {
+      return SizedBox(
+        height: 96,
+        child: Row(
+          children: [
+            for (var i = 0; i < stats.length; i++) ...[
+              if (i > 0) const SizedBox(width: 10),
+              Expanded(child: _buildStatCard(stats[i], compact: true)),
+            ],
+          ],
+        ),
+      );
+    }
 
     return GridView.builder(
       shrinkWrap: true,
@@ -1464,12 +1576,105 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         crossAxisCount: _gridCrossAxisCount,
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,
-        childAspectRatio: _isMobile ? 0.72 : 0.95,
+        childAspectRatio: _isMobile ? 1.35 : 1.55,
       ),
       itemCount: stats.length,
       itemBuilder: (context, index) => _buildStatCard(stats[index]),
     );
   }
+
+  BoxDecoration _dashboardPanelDecoration({Color? accent}) {
+    return BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: _cardBorder),
+      boxShadow: const [
+        BoxShadow(
+          color: Color(0x0A000000),
+          blurRadius: 8,
+          offset: Offset(0, 2),
+        ),
+      ],
+    );
+  }
+
+  Widget _wrapDashboardRichPanel({
+    required Widget child,
+    Color? accent,
+    EdgeInsetsGeometry? padding,
+  }) {
+    return Container(
+      padding: padding ?? EdgeInsets.all(_dashboardPanelPadding),
+      decoration: _dashboardPanelDecoration(accent: accent),
+      child: child,
+    );
+  }
+
+  Widget _buildChartPlotArea({
+    required Widget child,
+    Color? tint,
+    bool dense = false,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFFAFAFA),
+        borderRadius: BorderRadius.circular(dense ? 8 : 10),
+        border: Border.all(color: _cardBorder),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(dense ? 8 : 10),
+        child: child,
+      ),
+    );
+  }
+
+  List<double> _statSparklineValues(_StatCard stat) {
+    if (stat.title.contains('Check-in')) {
+      final v = _dashboardTrendValues;
+      if (v.isNotEmpty && v.any((e) => e > 0)) return v;
+    }
+    final n = double.tryParse(stat.value.replaceAll(',', '')) ?? 0;
+    final base = n > 0 ? n : 1.0;
+    return List.generate(10, (i) => base * (0.82 + 0.18 * (i / 9)));
+  }
+
+  Widget _dashboardSectionTitle({
+    required String title,
+    required IconData icon,
+    Widget? trailing,
+    bool dense = false,
+  }) {
+    final box = dense ? 28.0 : 36.0;
+    final iconSize = dense ? 15.0 : 18.0;
+    return Row(
+      children: [
+        Container(
+          width: box,
+          height: box,
+          decoration: BoxDecoration(
+            color: _primaryOrange.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(dense ? 8 : 10),
+          ),
+          child: Icon(icon, color: _primaryOrange, size: iconSize),
+        ),
+        SizedBox(width: dense ? 8 : 10),
+        Expanded(
+          child: Text(
+            title,
+            style: TextStyle(
+              color: _textDark,
+              fontSize: dense ? 13 : 15,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        if (trailing != null) trailing,
+      ],
+    );
+  }
+
+  bool get _hasArrivalChartData =>
+      _dashboardTrendValues.any((value) => value > 0);
 
   String _formatNumber(int number) {
     if (number >= 1000000) {
@@ -1520,8 +1725,10 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       final d = _checkInTimestamp(c);
       if (d == null) continue;
       final diff = now.difference(DateTime(d.year, d.month, d.day)).inDays;
-      if (diff >= 0 && diff < 7) thisWeek++;
-      else if (diff >= 7 && diff < 14) lastWeek++;
+      if (diff >= 0 && diff < 7)
+        thisWeek++;
+      else if (diff >= 7 && diff < 14)
+        lastWeek++;
     }
     if (lastWeek == 0) return (text: '—', isPositive: true);
     final pct = ((thisWeek - lastWeek) / lastWeek) * 100;
@@ -1533,7 +1740,10 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   List<Map<String, dynamic>> get _dashboardCategoryStats {
     final byCategory = <String, int>{};
     for (var c in _checkIns) {
-      final cat = c['spotCategory']?.toString().trim() ?? c['category']?.toString().trim() ?? 'Other';
+      final cat =
+          c['spotCategory']?.toString().trim() ??
+          c['category']?.toString().trim() ??
+          'Other';
       final key = cat.isEmpty ? 'Other' : cat;
       byCategory[key] = (byCategory[key] ?? 0) + 1;
     }
@@ -1548,171 +1758,666 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       ];
     }
     return byCategory.entries
-        .map((e) => {
-              'name': e.key,
-              'count': e.value,
-              'percentage': e.value / total,
-            })
+        .map(
+          (e) => {
+            'name': e.key,
+            'count': e.value,
+            'percentage': e.value / total,
+          },
+        )
         .toList()
-      ..sort((a, b) => (b['percentage'] as double).compareTo(a['percentage'] as double));
+      ..sort(
+        (a, b) =>
+            (b['percentage'] as double).compareTo(a['percentage'] as double),
+      );
   }
 
-  Widget _buildStatCard(_StatCard stat) {
-    return Container(
-      padding: EdgeInsets.all(_isMobile ? 14 : 18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: stat.color.withOpacity(0.08),
-          width: 1,
+  static const Color _genderMaleColor = Color(0xFFEF4444);
+  static const Color _genderFemaleColor = Color(0xFF06B6D4);
+  static const Color _genderOtherColor = Color(0xFF84CC16);
+  static const Color _localVisitorColor = Color(0xFF29B6F6);
+  static const Color _foreignVisitorColor = Color(0xFFFF8C32);
+
+  int? _touristAgeYears(Map<String, dynamic> tourist) {
+    final dob = tourist['dateOfBirth']?.toString().trim();
+    if (dob == null || dob.isEmpty) return null;
+    try {
+      final parts = dob.split('-');
+      if (parts.length < 3) return null;
+      final birth = DateTime(
+        int.parse(parts[0]),
+        int.parse(parts[1]),
+        int.parse(parts[2]),
+      );
+      final now = DateTime.now();
+      var age = now.year - birth.year;
+      if (now.month < birth.month ||
+          (now.month == birth.month && now.day < birth.day)) {
+        age--;
+      }
+      return age < 0 ? null : age;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _normalizeGender(Map<String, dynamic> tourist) {
+    final raw = (tourist['sex'] ?? tourist['gender'] ?? '')
+        .toString()
+        .trim()
+        .toLowerCase();
+    if (raw.contains('female') || raw == 'f') return 'Female';
+    if (raw.contains('male') || raw == 'm') return 'Male';
+    if (raw.isNotEmpty) return 'Others';
+    return 'Others';
+  }
+
+  bool? _isLocalTourist(Map<String, dynamic> tourist) {
+    final isLocal = tourist['isLocal'];
+    if (isLocal is bool) return isLocal;
+    final label = tourist['localOrForeign']?.toString().toLowerCase() ?? '';
+    if (label.contains('local')) return true;
+    if (label.contains('foreign')) return false;
+    final nationality = tourist['nationality']?.toString().toLowerCase() ?? '';
+    if (nationality.contains('filipin') || nationality == 'ph') return true;
+    if (nationality.isNotEmpty) return false;
+    return null;
+  }
+
+  String _ageBucketForTourist(int? age) {
+    if (age == null) return 'Unknown';
+    if (age < 18) return '18-35';
+    if (age <= 35) return '18-35';
+    if (age <= 50) return '36-50';
+    if (age <= 64) return '51-64';
+    return '65+';
+  }
+
+  Map<String, int> get _genderCounts {
+    final counts = <String, int>{'Male': 0, 'Female': 0, 'Others': 0};
+    for (final tourist in _tourists) {
+      final key = _normalizeGender(tourist);
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  List<({String label, int male, int female, int others})>
+  get _ageGenderSeries {
+    const labels = ['18-35', '36-50', '51-64', '65+'];
+    final data = <String, ({int male, int female, int others})>{
+      for (final label in labels) label: (male: 0, female: 0, others: 0),
+    };
+    for (final tourist in _tourists) {
+      final bucket = _ageBucketForTourist(_touristAgeYears(tourist));
+      if (!data.containsKey(bucket)) continue;
+      final gender = _normalizeGender(tourist);
+      final current = data[bucket]!;
+      if (gender == 'Male') {
+        data[bucket] = (
+          male: current.male + 1,
+          female: current.female,
+          others: current.others,
+        );
+      } else if (gender == 'Female') {
+        data[bucket] = (
+          male: current.male,
+          female: current.female + 1,
+          others: current.others,
+        );
+      } else {
+        data[bucket] = (
+          male: current.male,
+          female: current.female,
+          others: current.others + 1,
+        );
+      }
+    }
+    return labels.map((label) {
+      final row = data[label]!;
+      return (
+        label: label,
+        male: row.male,
+        female: row.female,
+        others: row.others,
+      );
+    }).toList();
+  }
+
+  Map<String, int> get _localForeignCounts {
+    var local = 0;
+    var foreign = 0;
+    for (final tourist in _tourists) {
+      if (_isLocalTourist(tourist) == true) {
+        local++;
+      } else {
+        foreign++;
+      }
+    }
+    return {'Local': local, 'Foreign': foreign};
+  }
+
+  List<({String name, int count})> get _cityRankingData {
+    final counts = <String, int>{};
+    for (final muni in _allMunicipalities) {
+      final name = muni['name']?.toString().trim() ?? '';
+      final value = (muni['tourists'] as num?)?.toInt() ?? 0;
+      if (name.isNotEmpty && value > 0) counts[name] = value;
+    }
+    if (counts.isEmpty) {
+      for (final tourist in _tourists) {
+        final city = tourist['city']?.toString().trim() ?? '';
+        if (city.isEmpty) continue;
+        counts[city] = (counts[city] ?? 0) + 1;
+      }
+    }
+    final sorted = counts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return sorted.take(6).map((e) => (name: e.key, count: e.value)).toList();
+  }
+
+  List<({Color color, double fraction})> _segmentsFromCounts(
+    Map<String, int> counts,
+    Map<String, Color> colors,
+  ) {
+    final total = counts.values.fold<int>(0, (a, b) => a + b);
+    if (total == 0) return [];
+    return [
+      for (final entry in counts.entries)
+        if (entry.value > 0)
+          (
+            color: colors[entry.key] ?? Colors.grey,
+            fraction: entry.value / total,
+          ),
+    ];
+  }
+
+  Widget _buildVisitorDemographicsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Visitor Demographics',
+          style: TextStyle(
+            color: _textDark,
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+          ),
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-          BoxShadow(
-            color: stat.color.withOpacity(0.06),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
-          ),
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 24,
-            offset: const Offset(0, 10),
+        const SizedBox(height: 12),
+        _buildDemographicsChartsGrid(),
+      ],
+    );
+  }
+
+  Widget _buildDemographicsChartsGrid() {
+    final charts = [
+      _buildGenderPieChart(),
+      _buildAgeRangeBarChart(),
+      _buildLocalForeignPieChart(),
+      _buildCityRankingBarChart(),
+    ];
+
+    if (_isMobile) {
+      return Column(
+        children: [
+          for (var i = 0; i < charts.length; i++) ...[
+            if (i > 0) const SizedBox(height: 16),
+            charts[i],
+          ],
+        ],
+      );
+    }
+
+    return Column(
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: charts[0]),
+            const SizedBox(width: 16),
+            Expanded(child: charts[1]),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: charts[2]),
+            const SizedBox(width: 16),
+            Expanded(child: charts[3]),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDemographicsChartShell({
+    required String title,
+    required IconData icon,
+    required Widget child,
+    bool dense = false,
+    Color? accent,
+  }) {
+    return _wrapDashboardRichPanel(
+      accent: accent,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _dashboardSectionTitle(title: title, icon: icon, dense: dense),
+          SizedBox(height: dense ? 6 : 12),
+          Expanded(
+            child: _buildChartPlotArea(
+              dense: dense,
+              tint: accent,
+              child: child,
+            ),
           ),
         ],
       ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          return FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.center,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  padding: EdgeInsets.all(_isMobile ? 12 : 16),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: stat.color.withOpacity(0.35),
-                        blurRadius: 16,
-                        offset: const Offset(0, 4),
-                      ),
-                      BoxShadow(
-                        color: stat.color.withOpacity(0.2),
-                        blurRadius: 24,
-                        offset: const Offset(0, 6),
-                      ),
-                    ],
-                    gradient: RadialGradient(
-                      center: Alignment.topLeft,
-                      radius: 1.2,
-                      colors: [
-                        stat.color.withOpacity(0.45),
-                        stat.color.withOpacity(0.28),
-                        stat.color.withOpacity(0.15),
-                      ],
-                      stops: const [0.0, 0.5, 1.0],
+    );
+  }
+
+  Widget _buildDonutChartContent({
+    required List<({Color color, double fraction})> segments,
+    required int total,
+    required List<Widget> legendRows,
+    required String emptyMessage,
+    bool dense = false,
+  }) {
+    if (total == 0) {
+      return _buildDemographicsEmptyState(emptyMessage);
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final maxPie = dense
+            ? math.min(constraints.maxHeight - 8, 120.0)
+            : 168.0;
+        final pieSize = (constraints.maxWidth * (dense ? 0.38 : 0.42)).clamp(
+          dense ? 72.0 : 120.0,
+          maxPie,
+        );
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: pieSize,
+              height: pieSize,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  CustomPaint(
+                    size: Size(pieSize, pieSize),
+                    painter: _CategoryPiePainter(
+                      segments: segments,
+                      holeColor: Colors.white,
                     ),
                   ),
-                  child: Icon(
-                    stat.icon,
-                    color: Colors.white,
-                    size: _isMobile ? 26 : 32,
-                  ),
-                ),
-                SizedBox(height: _isMobile ? 10 : 14),
-                Text(
-                  stat.title,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: const Color(0xFF374151),
-                    fontSize: _isMobile ? 13 : 15,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.2,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  stat.value,
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: const Color(0xFF111827),
-                    fontSize: _isMobile ? 22 : 28,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.5,
-                    height: 1.15,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: stat.isPositive
-                          ? [
-                              const Color(0xFFD1FAE5),
-                              const Color(0xFFA7F3D0),
-                            ]
-                          : [
-                              const Color(0xFFFECACA),
-                              const Color(0xFFFCA5A5),
-                            ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: (stat.isPositive
-                                ? const Color(0xFF16A34A)
-                                : const Color(0xFFDC2626))
-                            .withOpacity(0.15),
-                        blurRadius: 6,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Row(
+                  Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(
-                        stat.isPositive
-                            ? Icons.trending_up_rounded
-                            : Icons.trending_down_rounded,
-                        color: stat.isPositive
-                            ? const Color(0xFF059669)
-                            : const Color(0xFFB91C1C),
-                        size: 14,
-                      ),
-                      const SizedBox(width: 5),
                       Text(
-                        stat.change,
+                        _formatNumber(total),
                         style: TextStyle(
-                          color: stat.isPositive
-                              ? const Color(0xFF047857)
-                              : const Color(0xFF991B1B),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
+                          color: _textDark,
+                          fontSize: dense ? 16 : 20,
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
+                      Text(
+                        'Total',
+                        style: TextStyle(
+                          color: _textMuted.withOpacity(0.9),
+                          fontSize: dense ? 9 : 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: SingleChildScrollView(
+                physics: dense ? const NeverScrollableScrollPhysics() : null,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: legendRows,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildDemographicsLegendRow(
+    String label,
+    Color color,
+    int count,
+    int total, {
+    bool dense = false,
+  }) {
+    final pct = total > 0 ? (count / total * 100) : 0.0;
+    final pctLabel = pct >= 10 || pct == 0
+        ? '${pct.round()}%'
+        : '${pct.toStringAsFixed(1)}%';
+    return Padding(
+      padding: EdgeInsets.only(bottom: dense ? 4 : 10),
+      child: Row(
+        children: [
+          Container(
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: _textMuted,
+                fontSize: dense ? 10 : 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          Text(
+            '${_formatNumber(count)} · $pctLabel',
+            style: TextStyle(
+              color: _textDark,
+              fontSize: dense ? 9 : 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDemographicsEmptyState(String message) {
+    return Center(
+      child: Text(
+        message,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: _textMuted.withOpacity(0.9),
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGenderPieChart({bool dense = false}) {
+    final counts = _genderCounts;
+    final total = counts.values.fold<int>(0, (a, b) => a + b);
+    final segments = _segmentsFromCounts(counts, {
+      'Male': _genderMaleColor,
+      'Female': _genderFemaleColor,
+      'Others': _genderOtherColor,
+    });
+    final chart = _buildDemographicsChartShell(
+      dense: dense,
+      accent: _genderMaleColor,
+      title: 'Gender',
+      icon: Icons.wc_rounded,
+      child: _buildDonutChartContent(
+        dense: dense,
+        segments: segments,
+        total: total,
+        emptyMessage: 'No gender data yet',
+        legendRows: [
+          _buildDemographicsLegendRow(
+            'Male',
+            _genderMaleColor,
+            counts['Male'] ?? 0,
+            total,
+            dense: dense,
+          ),
+          _buildDemographicsLegendRow(
+            'Female',
+            _genderFemaleColor,
+            counts['Female'] ?? 0,
+            total,
+            dense: dense,
+          ),
+          _buildDemographicsLegendRow(
+            'Others',
+            _genderOtherColor,
+            counts['Others'] ?? 0,
+            total,
+            dense: dense,
+          ),
+        ],
+      ),
+    );
+    if (dense) return chart;
+    return SizedBox(height: _isMobile ? 260 : 300, child: chart);
+  }
+
+  Widget _buildLocalForeignPieChart({bool dense = false}) {
+    final counts = _localForeignCounts;
+    final total = counts.values.fold<int>(0, (a, b) => a + b);
+    final segments = _segmentsFromCounts(counts, {
+      'Local': _localVisitorColor,
+      'Foreign': _foreignVisitorColor,
+    });
+    final chart = _buildDemographicsChartShell(
+      dense: dense,
+      accent: _foreignVisitorColor,
+      title: 'Local vs Foreign',
+      icon: Icons.public_rounded,
+      child: _buildDonutChartContent(
+        dense: dense,
+        segments: segments,
+        total: total,
+        emptyMessage: 'No local/foreign data yet',
+        legendRows: [
+          _buildDemographicsLegendRow(
+            'Local',
+            _localVisitorColor,
+            counts['Local'] ?? 0,
+            total,
+            dense: dense,
+          ),
+          _buildDemographicsLegendRow(
+            'Foreign',
+            _foreignVisitorColor,
+            counts['Foreign'] ?? 0,
+            total,
+            dense: dense,
+          ),
+        ],
+      ),
+    );
+    if (dense) return chart;
+    return SizedBox(height: _isMobile ? 260 : 300, child: chart);
+  }
+
+  Widget _buildAgeRangeBarChart({bool dense = false}) {
+    final series = _ageGenderSeries;
+    final total = series.fold<int>(
+      0,
+      (sum, row) => sum + row.male + row.female + row.others,
+    );
+    final chart = _buildDemographicsChartShell(
+      dense: dense,
+      accent: const Color(0xFF7C3AED),
+      title: 'Age Range',
+      icon: Icons.calendar_view_month_rounded,
+      child: total == 0
+          ? _buildDemographicsEmptyState('Add date of birth on registration')
+          : Column(
+              children: [
+                Expanded(
+                  child: CustomPaint(
+                    painter: _GroupedAgeGenderBarPainter(
+                      series: series,
+                      maleColor: _genderMaleColor,
+                      femaleColor: _genderFemaleColor,
+                      otherColor: _genderOtherColor,
+                    ),
+                    child: Container(),
+                  ),
+                ),
+                SizedBox(
+                  height: dense ? 14 : 24,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _buildAgeGenderLegendChip('Male', _genderMaleColor),
+                      SizedBox(width: dense ? 6 : 12),
+                      _buildAgeGenderLegendChip('Female', _genderFemaleColor),
+                      SizedBox(width: dense ? 6 : 12),
+                      _buildAgeGenderLegendChip('Others', _genderOtherColor),
                     ],
                   ),
                 ),
               ],
             ),
-          );
-        },
+    );
+    if (dense) return chart;
+    return SizedBox(height: _isMobile ? 280 : 300, child: chart);
+  }
+
+  Widget _buildAgeGenderLegendChip(String label, Color color) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 5),
+        Text(
+          label,
+          style: const TextStyle(
+            color: _textMuted,
+            fontSize: 11,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCityRankingBarChart({bool dense = false}) {
+    final cities = _cityRankingData;
+    final maxCount = cities.isEmpty
+        ? 1
+        : cities.map((e) => e.count).reduce((a, b) => a > b ? a : b);
+    const barColors = [
+      Color(0xFF66D2B3),
+      Color(0xFFFF8C32),
+      Color(0xFF8E44AD),
+      Color(0xFF29B6F6),
+      Color(0xFFFFC107),
+      Color(0xFF0D9488),
+    ];
+
+    final chart = _buildDemographicsChartShell(
+      dense: dense,
+      accent: const Color(0xFF0D9488),
+      title: 'City Ranking',
+      icon: Icons.location_city_rounded,
+      child: cities.isEmpty
+          ? _buildDemographicsEmptyState('Check-ins will rank cities here')
+          : Column(
+              children: [
+                Expanded(
+                  child: CustomPaint(
+                    painter: _CityRankingBarPainter(
+                      cities: cities,
+                      maxCount: maxCount,
+                      colors: barColors,
+                    ),
+                    child: Container(),
+                  ),
+                ),
+                if (!dense)
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      for (var i = 0; i < cities.length && i < 4; i++)
+                        _buildAgeGenderLegendChip(
+                          _shortCityLabel(cities[i].name),
+                          barColors[i % barColors.length],
+                        ),
+                    ],
+                  ),
+              ],
+            ),
+    );
+    if (dense) return chart;
+    return SizedBox(height: _isMobile ? 280 : 300, child: chart);
+  }
+
+  String _shortCityLabel(String name) {
+    if (name.length <= 14) return name;
+    return '${name.substring(0, 12)}…';
+  }
+
+  Widget _buildStatCard(_StatCard stat, {bool compact = false}) {
+    final sparkH = compact ? 26.0 : 34.0;
+    final valueSize = compact ? 22.0 : (_isMobile ? 26.0 : 28.0);
+    final labelSize = compact ? 11.0 : 12.0;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: stat.color,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      clipBehavior: Clip.antiAlias,
+      padding: EdgeInsets.fromLTRB(
+        compact ? 12 : 16,
+        compact ? 10 : 14,
+        compact ? 12 : 16,
+        compact ? 8 : 10,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            stat.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.92),
+              fontSize: labelSize,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          SizedBox(height: compact ? 4 : 6),
+          Text(
+            stat.value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: valueSize,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.5,
+              height: 1.05,
+            ),
+          ),
+          const Spacer(),
+          SizedBox(
+            height: sparkH,
+            width: double.infinity,
+            child: CustomPaint(
+              painter: _MiniSparklinePainter(
+                values: _statSparklineValues(stat),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1737,73 +2442,139 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
-  Widget _buildTouristArrivalsChart() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _cardBorder),
-      ),
+  Widget _buildTouristArrivalsChart({bool dense = false}) {
+    return _wrapDashboardRichPanel(
+      accent: _primaryOrange,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'Tourist Arrivals',
-                style: TextStyle(
-                  color: _textDark,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
+          _dashboardSectionTitle(
+            title: 'Tourist Arrivals',
+            icon: Icons.show_chart_rounded,
+            trailing: _buildTimeFilterDropdown(dense: dense),
+            dense: dense,
+          ),
+          SizedBox(height: dense ? 6 : 12),
+          if (dense)
+            Expanded(
+              child: _buildChartPlotArea(
+                dense: true,
+                child: LayoutBuilder(
+                  builder: (context, constraints) => _buildArrivalsChartStack(
+                    width: constraints.maxWidth,
+                    height: constraints.maxHeight,
+                    dense: true,
+                  ),
                 ),
               ),
-              _buildTimeFilterDropdown(),
-            ],
-          ),
-          const SizedBox(height: 24),
-          SizedBox(
-            height: 200,
-            child: CustomPaint(
-              size: const Size(double.infinity, 200),
-              painter: _ChartPainter(color: _primaryOrange, values: _dashboardTrendValues),
+            )
+          else
+            _buildChartPlotArea(
+              child: SizedBox(
+                height: 200,
+                child: LayoutBuilder(
+                  builder: (context, constraints) => _buildArrivalsChartStack(
+                    width: constraints.maxWidth,
+                    height: 200,
+                    dense: false,
+                  ),
+                ),
+              ),
             ),
-          ),
         ],
       ),
     );
   }
 
-  Widget _buildTimeFilterDropdown() {
+  Widget _buildArrivalsChartStack({
+    required double width,
+    required double height,
+    required bool dense,
+  }) {
+    return Stack(
+      children: [
+        CustomPaint(
+          size: Size(width, height),
+          painter: _ChartPainter(
+            color: _primaryOrange,
+            values: _dashboardTrendValues,
+            showPlaceholder: !_hasArrivalChartData,
+          ),
+        ),
+        if (!_hasArrivalChartData)
+          Positioned.fill(
+            child: Center(
+              child: Text(
+                'No arrivals in this period',
+                style: TextStyle(
+                  color: _textMuted,
+                  fontSize: dense ? 11 : 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildTimeFilterDropdown({bool dense = false}) {
     return PopupMenuButton<String>(
       initialValue: _selectedTimeFilter,
       onSelected: (value) => setState(() => _selectedTimeFilter = value),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       itemBuilder: (context) => ['This Week', 'This Month', 'This Year']
-          .map((filter) => PopupMenuItem(value: filter, child: Text(filter)))
+          .map(
+            (filter) => PopupMenuItem(
+              value: filter,
+              child: Text(
+                filter,
+                style: TextStyle(
+                  fontWeight: filter == _selectedTimeFilter
+                      ? FontWeight.w700
+                      : FontWeight.w500,
+                  color: filter == _selectedTimeFilter
+                      ? _primaryOrange
+                      : _textDark,
+                ),
+              ),
+            ),
+          )
           .toList(),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: EdgeInsets.symmetric(
+          horizontal: dense ? 8 : 12,
+          vertical: dense ? 4 : 8,
+        ),
         decoration: BoxDecoration(
-          color: Colors.grey.shade200,
-          borderRadius: BorderRadius.circular(8),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(dense ? 8 : 10),
+          border: Border.all(color: _cardBorder),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
               _selectedTimeFilter,
-              style: const TextStyle(color: _textMuted, fontSize: 12),
+              style: TextStyle(
+                color: _primaryOrange,
+                fontSize: dense ? 10 : 12,
+                fontWeight: FontWeight.w600,
+              ),
             ),
-            const SizedBox(width: 4),
-            const Icon(Icons.keyboard_arrow_down, color: _textMuted, size: 18),
+            const SizedBox(width: 2),
+            const Icon(
+              Icons.keyboard_arrow_down_rounded,
+              color: _primaryOrange,
+              size: 18,
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildTopCategoriesCard() {
+  Widget _buildTopCategoriesCard({bool dense = false}) {
     final stats = _dashboardCategoryStats.take(5).toList();
     final sumP = stats.fold<double>(
       0,
@@ -1823,123 +2594,160 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       segments.add((color: _categoryColor(name), fraction: frac));
     }
 
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _cardBorder),
-      ),
+    return _wrapDashboardRichPanel(
+      accent: _accentOrange,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'Top Categories',
+          _dashboardSectionTitle(
+            title: 'Top Categories',
+            icon: Icons.donut_large_rounded,
+            dense: dense,
+            trailing: TextButton(
+              onPressed: () => setState(() => _selectedIndex = 4),
+              style: TextButton.styleFrom(
+                foregroundColor: _primaryOrange,
+                padding: EdgeInsets.symmetric(horizontal: dense ? 6 : 10),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Text(
+                'View All',
                 style: TextStyle(
-                  color: _textDark,
-                  fontSize: 16,
                   fontWeight: FontWeight.w600,
+                  fontSize: dense ? 11 : 13,
                 ),
               ),
-              TextButton(
-                onPressed: () => setState(() => _selectedIndex = 4),
-                child: const Text(
-                  'View All',
-                  style: TextStyle(color: _primaryOrange),
-                ),
-              ),
-            ],
+            ),
           ),
-          const SizedBox(height: 16),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final w = constraints.maxWidth;
-              final pieSize = (w < 420 ? w * 0.72 : 200.0)
-                  .clamp(160.0, 240.0)
-                  .toDouble();
-              final chart = SizedBox(
-                width: pieSize,
-                height: pieSize,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    CustomPaint(
-                      size: Size(pieSize, pieSize),
-                      painter: _CategoryPiePainter(
+          SizedBox(height: dense ? 6 : 12),
+          if (dense)
+            Expanded(
+              child: _buildChartPlotArea(
+                dense: true,
+                tint: _accentOrange,
+                child: LayoutBuilder(
+                  builder: (context, constraints) =>
+                      _buildTopCategoriesChartBody(
+                        constraints: constraints,
+                        dense: true,
+                        stats: stats,
                         segments: segments,
-                        holeColor: _cardBg,
-                        isEmpty: totalCount == 0,
+                        totalCount: totalCount,
+                        sumP: sumP,
                       ),
-                    ),
-                    if (totalCount == 0)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.pie_chart_outline_rounded,
-                              color: Colors.grey.shade400,
-                              size: 28,
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              'No check-in data yet',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: Colors.grey.shade600,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
                 ),
-              );
-              final legend = Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (var i = 0; i < stats.length; i++)
-                    _buildCategoryLegendRow(
-                      stats[i]['name'] as String,
-                      totalCount == 0
-                          ? 0.0
-                          : (sumP > 0
-                              ? (stats[i]['percentage'] as double) / sumP
-                              : (stats.isEmpty
-                                  ? 0.0
-                                  : 1.0 / stats.length)),
-                      _categoryColor(stats[i]['name'] as String),
-                    ),
-                ],
-              );
-              if (w < 420) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Center(child: chart),
-                    const SizedBox(height: 18),
-                    legend,
-                  ],
-                );
-              }
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  chart,
-                  const SizedBox(width: 20),
-                  Expanded(child: legend),
-                ],
-              );
-            },
-          ),
+              ),
+            )
+          else
+            _buildChartPlotArea(
+              tint: _accentOrange,
+              child: SizedBox(
+                height: 220,
+                child: LayoutBuilder(
+                  builder: (context, constraints) =>
+                      _buildTopCategoriesChartBody(
+                        constraints: constraints,
+                        dense: false,
+                        stats: stats,
+                        segments: segments,
+                        totalCount: totalCount,
+                        sumP: sumP,
+                      ),
+                ),
+              ),
+            ),
         ],
       ),
+    );
+  }
+
+  Widget _buildTopCategoriesChartBody({
+    required BoxConstraints constraints,
+    required bool dense,
+    required List<Map<String, dynamic>> stats,
+    required List<({Color color, double fraction})> segments,
+    required int totalCount,
+    required double sumP,
+  }) {
+    final w = constraints.maxWidth;
+    final h = constraints.maxHeight;
+    final pieSize = dense
+        ? math.min(w * 0.55, h - 8).clamp(64.0, 120.0)
+        : (w < 420 ? w * 0.72 : 200.0).clamp(160.0, 240.0);
+    final chart = SizedBox(
+      width: pieSize,
+      height: pieSize,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          CustomPaint(
+            size: Size(pieSize, pieSize),
+            painter: _CategoryPiePainter(
+              segments: segments,
+              holeColor: Colors.white,
+              isEmpty: totalCount == 0,
+            ),
+          ),
+          if (totalCount == 0 && !dense)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.pie_chart_outline_rounded,
+                    color: _primaryOrange.withOpacity(0.55),
+                    size: 24,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'No check-in data yet',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: _textMuted.withOpacity(0.9),
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    final legend = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < stats.length; i++)
+          _buildCategoryLegendRow(
+            stats[i]['name'] as String,
+            totalCount == 0
+                ? 0.0
+                : (sumP > 0
+                      ? (stats[i]['percentage'] as double) / sumP
+                      : (stats.isEmpty ? 0.0 : 1.0 / stats.length)),
+            _categoryColor(stats[i]['name'] as String),
+          ),
+      ],
+    );
+    if (w < 420 || dense) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          chart,
+          SizedBox(width: dense ? 10 : 20),
+          Expanded(child: legend),
+        ],
+      );
+    }
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        chart,
+        const SizedBox(width: 20),
+        Expanded(child: legend),
+      ],
     );
   }
 
@@ -1964,22 +2772,26 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         ? '${pct.round()}%'
         : '${pct.toStringAsFixed(1)}%';
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         children: [
           Container(
-            width: 10,
-            height: 10,
+            width: 8,
+            height: 8,
             decoration: BoxDecoration(
               color: color,
-              shape: BoxShape.circle,
+              borderRadius: BorderRadius.circular(2),
             ),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               name,
-              style: const TextStyle(color: _textMuted, fontSize: 13),
+              style: const TextStyle(
+                color: _textMuted,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -1987,7 +2799,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
             pctLabel,
             style: const TextStyle(
               color: _textDark,
-              fontSize: 13,
+              fontSize: 11,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -2112,37 +2924,237 @@ class _GovernorDashboardState extends State<GovernorDashboard>
           _buildHeader(
             'Registered Tourists',
             subtitle:
-                'Misamis Occidental — tourists whose profile lists this province or a municipality/city in the province.',
+                'Misamis Occidental — tourists registered in the province',
           ),
           Expanded(
-            child: SingleChildScrollView(
-              padding: EdgeInsets.all(_isMobile ? 16 : 24),
-              child: Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: _cardBg,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: _cardBorder),
-                ),
-                child: Column(
-                  children: [
-                    _buildSearchBar('Search tourists...'),
-                    const SizedBox(height: 20),
-                    if (filteredTourists.isEmpty)
-                      _buildEmptyState(
-                        'No tourists found',
-                        Icons.people_outline,
-                      )
-                    else
-                      _isMobile
-                          ? _buildTouristsListMobile(filteredTourists)
-                          : _buildTouristsTableDesktop(filteredTourists),
-                  ],
-                ),
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                _isMobile ? 12 : 20,
+                12,
+                _isMobile ? 12 : 20,
+                16,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildTouristsSummaryBar(filteredTourists.length),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: Container(
+                      decoration: _dashboardPanelDecoration(),
+                      clipBehavior: Clip.antiAlias,
+                      child: Column(
+                        children: [
+                          Padding(
+                            padding: EdgeInsets.fromLTRB(
+                              _isMobile ? 12 : 16,
+                              14,
+                              _isMobile ? 12 : 16,
+                              10,
+                            ),
+                            child: _buildSearchBar('Search tourists...'),
+                          ),
+                          const Divider(height: 1, color: _cardBorder),
+                          Expanded(
+                            child: filteredTourists.isEmpty
+                                ? _buildEmptyState(
+                                    'No tourists match your search',
+                                    Icons.people_outline_rounded,
+                                  )
+                                : _isMobile
+                                ? _buildTouristsListMobile(filteredTourists)
+                                : _buildTouristsTableDesktop(filteredTourists),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildTouristsSummaryBar(int visibleCount) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _cardBorder),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: _primaryOrange.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(
+              Icons.people_alt_rounded,
+              color: _primaryOrange,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '$visibleCount of ${_tourists.length} tourists',
+              style: const TextStyle(
+                color: _textDark,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: _kpiGreen.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: const Text(
+              'Province scope',
+              style: TextStyle(
+                color: Color(0xFF558B2F),
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  int _touristVisitCount(Map<String, dynamic> t) {
+    final v = t['totalVisits'] ?? t['visits'] ?? 0;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse(v.toString()) ?? 0;
+  }
+
+  List<Map<String, dynamic>> _sortedTouristsByVisits(
+    List<Map<String, dynamic>> tourists,
+  ) {
+    final sorted = List<Map<String, dynamic>>.from(tourists)
+      ..sort((a, b) => _touristVisitCount(b).compareTo(_touristVisitCount(a)));
+    return sorted;
+  }
+
+  Widget _touristAvatar(Map<String, dynamic> t, {double radius = 18}) {
+    final name = _getTouristDisplayName(t);
+    final initial =
+        name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : '?';
+    final url = t['profilePhotoUrl']?.toString().trim() ?? '';
+    if (url.isNotEmpty) {
+      return CircleAvatar(
+        radius: radius,
+        backgroundColor: _primaryOrange.withOpacity(0.12),
+        child: ClipOval(
+          child: Image.network(
+            url,
+            width: radius * 2,
+            height: radius * 2,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => Text(
+              initial,
+              style: TextStyle(
+                color: _primaryOrange,
+                fontWeight: FontWeight.w700,
+                fontSize: radius * 0.85,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    final b64 = t['profileImageBase64']?.toString();
+    if (b64 != null && b64.isNotEmpty) {
+      try {
+        return CircleAvatar(
+          radius: radius,
+          backgroundColor: _primaryOrange.withOpacity(0.12),
+          backgroundImage: MemoryImage(base64Decode(b64)),
+        );
+      } catch (_) {}
+    }
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: _primaryOrange.withOpacity(0.12),
+      child: Text(
+        initial,
+        style: TextStyle(
+          color: _primaryOrange,
+          fontWeight: FontWeight.w700,
+          fontSize: radius * 0.85,
+        ),
+      ),
+    );
+  }
+
+  Widget _touristIdChip(String id, {double? maxWidth}) {
+    final text = id.trim().isEmpty ? '—' : id;
+    final chip = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: _primaryOrange.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: _primaryOrange.withOpacity(0.22)),
+      ),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          color: _primaryOrange,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          fontFamily: 'monospace',
+        ),
+      ),
+    );
+    if (maxWidth == null) return chip;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxWidth),
+      child: chip,
+    );
+  }
+
+  Widget _visitCountBadge(int count) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: count > 0 ? const Color(0xFFE3F2FD) : const Color(0xFFF4F4F5),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        '$count',
+        style: TextStyle(
+          color: count > 0 ? const Color(0xFF1565C0) : _textMuted,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Widget _touristViewButton({required VoidCallback onPressed}) {
+    return Material(
+      color: _primaryOrange,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(20),
+        child: const SizedBox(
+          width: 36,
+          height: 36,
+          child: Icon(Icons.visibility_rounded, color: Colors.white, size: 18),
+        ),
       ),
     );
   }
@@ -2157,302 +3169,330 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   Widget _buildEmptyState(String message, IconData icon) {
-    return Container(
-      padding: const EdgeInsets.all(40),
-      child: Column(
-        children: [
-          Icon(icon, color: Colors.white24, size: 64),
-          const SizedBox(height: 16),
-          Text(
-            message,
-            style: const TextStyle(color: _textMuted, fontSize: 16),
-          ),
-        ],
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: _textMuted.withOpacity(0.4), size: 48),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: _textMuted, fontSize: 14),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildTouristsListMobile(List<Map<String, dynamic>> tourists) {
-    int visitCount(Map<String, dynamic> t) {
-      final v = t['totalVisits'] ?? t['visits'] ?? 0;
-      if (v is int) return v;
-      if (v is num) return v.toInt();
-      return int.tryParse(v.toString()) ?? 0;
-    }
-    final sorted = List<Map<String, dynamic>>.from(tourists)
-      ..sort((a, b) => visitCount(b).compareTo(visitCount(a)));
+    final sorted = _sortedTouristsByVisits(tourists);
 
-    return Column(
-      children: sorted
-          .map(
-            (t) => Container(
-              margin: const EdgeInsets.only(bottom: 12),
+    return ListView.separated(
+      padding: const EdgeInsets.all(12),
+      itemCount: sorted.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        final t = sorted[index];
+        final name = _getTouristDisplayName(t);
+        final visits = _touristVisitCount(t);
+        return Material(
+          color: index.isEven ? const Color(0xFFFAFAFA) : Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          child: InkWell(
+            onTap: () => _showTouristDetails(t),
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
               padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(12),
-              ),
               child: Row(
                 children: [
-                  CircleAvatar(
-                    backgroundColor: _primaryOrange.withOpacity(0.2),
-                    child: Text(
-                      (_getTouristDisplayName(t))[0].toUpperCase(),
-                      style: const TextStyle(
-                        color: _primaryOrange,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
+                  _touristAvatar(t),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _getTouristDisplayName(t),
+                          name,
                           style: const TextStyle(
                             color: _textDark,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        Text(
-                          t['id'] ?? '',
-                          style: TextStyle(
-                            color: _primaryOrange.withOpacity(0.8),
-                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
                           ),
                         ),
                         const SizedBox(height: 4),
+                        _touristIdChip(
+                          TouristIdHelper.displayForTourist(t),
+                        ),
+                        const SizedBox(height: 6),
                         Text(
-                          'Date: ${_formatRegisteredDateOnly(_registeredDateTimeFromTourist(t))}',
-                          style: TextStyle(
+                          _getTouristOrigin(t),
+                          style: const TextStyle(
                             color: _textMuted,
                             fontSize: 11,
                           ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
+                        const SizedBox(height: 4),
                         Text(
-                          'Time: ${_formatRegisteredTimeOnly(_registeredDateTimeFromTourist(t))}',
-                          style: TextStyle(
+                          '${_formatRegisteredDateOnly(_registeredDateTimeFromTourist(t))} · ${_formatRegisteredTimeOnly(_registeredDateTimeFromTourist(t))}',
+                          style: const TextStyle(
                             color: _textMuted,
-                            fontSize: 11,
+                            fontSize: 10,
                           ),
                         ),
                       ],
                     ),
                   ),
-                  IconButton(
-                    onPressed: () => _showTouristDetails(t),
-                    icon: const Icon(
-                      Icons.visibility,
-                      color: _primaryOrange,
-                      size: 20,
-                    ),
+                  Column(
+                    children: [
+                      _visitCountBadge(visits),
+                      const SizedBox(height: 8),
+                      _touristViewButton(
+                        onPressed: () => _showTouristDetails(t),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
-          )
-          .toList(),
+          ),
+        );
+      },
     );
   }
 
-  // Min widths so DataTable does not shrink the Actions column off-screen.
-  static const double _touristColName = 200;
-  static const double _touristColId = 128;
-  static const double _touristColOrigin = 220;
-  static const double _touristColDate = 108;
-  static const double _touristColTime = 120;
-  static const double _touristColVisits = 72;
-  static const double _touristColActions = 88;
-
   Widget _buildTouristsTableDesktop(List<Map<String, dynamic>> tourists) {
-    // Sort by visits descending (most visits first / by rank)
-    int visitCount(Map<String, dynamic> t) {
-      final v = t['totalVisits'] ?? t['visits'] ?? 0;
-      if (v is int) return v;
-      if (v is num) return v.toInt();
-      return int.tryParse(v.toString()) ?? 0;
-    }
-    final sorted = List<Map<String, dynamic>>.from(tourists)
-      ..sort((a, b) => visitCount(b).compareTo(visitCount(a)));
+    final sorted = _sortedTouristsByVisits(tourists);
 
     const headStyle = TextStyle(
-      color: _textDark,
-      fontWeight: FontWeight.w700,
-      fontSize: 13,
+      color: _textMuted,
+      fontWeight: FontWeight.w600,
+      fontSize: 11,
+      letterSpacing: 0.3,
     );
 
-    Widget colLabel(String text, double w) => SizedBox(
-          width: w,
-          child: Text(text, style: headStyle),
-        );
+    Widget headerCell(
+      String label, {
+      double flex = 1,
+      EdgeInsets padding = EdgeInsets.zero,
+    }) {
+      return Expanded(
+        flex: (flex * 10).round(),
+        child: Padding(
+          padding: padding,
+          child: Text(label.toUpperCase(), style: headStyle),
+        ),
+      );
+    }
 
-    return Container(
-      decoration: BoxDecoration(
-        border: Border.all(color: Colors.black, width: 1.5),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: Scrollbar(
-          scrollbarOrientation: ScrollbarOrientation.bottom,
-          thumbVisibility: true,
-          thickness: 8,
-          radius: const Radius.circular(4),
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            primary: false,
-            child: DataTable(
-              columnSpacing: 20,
-              horizontalMargin: 12,
-              headingRowColor: WidgetStateProperty.all(
-                Colors.grey.shade100,
+    return Column(
+      children: [
+        Container(
+          color: const Color(0xFFF9FAFB),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          child: Row(
+            children: [
+              headerCell('Name', flex: 2.2),
+              headerCell(
+                'Tourist ID',
+                flex: 1.6,
+                padding: const EdgeInsets.only(right: 24),
               ),
-              headingTextStyle: headStyle,
-              columns: [
-                DataColumn(label: colLabel('Name', _touristColName)),
-                DataColumn(label: colLabel('Tourist ID', _touristColId)),
-                DataColumn(label: colLabel('Origin', _touristColOrigin)),
-                DataColumn(label: colLabel('Date', _touristColDate)),
-                DataColumn(label: colLabel('Time', _touristColTime)),
-                DataColumn(label: colLabel('Visits', _touristColVisits)),
-                DataColumn(label: colLabel('Actions', _touristColActions)),
-              ],
-              rows: sorted
-                  .map(
-                    (t) => DataRow(
-                      cells: [
-                        DataCell(
-                          SizedBox(
-                            width: _touristColName,
-                            child: Text(
-                              _getTouristDisplayName(t),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: _textDark),
+              headerCell(
+                'Origin',
+                flex: 2.1,
+                padding: const EdgeInsets.only(left: 4),
+              ),
+              headerCell('Date', flex: 1),
+              headerCell('Time', flex: 1.1),
+              headerCell('Visits', flex: 0.6),
+              const SizedBox(
+                width: 48,
+                child: Text(
+                  'VIEW',
+                  style: headStyle,
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1, color: _cardBorder),
+        Expanded(
+          child: Scrollbar(
+            thumbVisibility: true,
+            child: ListView.separated(
+              itemCount: sorted.length,
+              separatorBuilder: (_, __) => const Divider(
+                height: 1,
+                color: _cardBorder,
+                indent: 16,
+                endIndent: 16,
+              ),
+              itemBuilder: (context, index) {
+                final t = sorted[index];
+                final name = _getTouristDisplayName(t);
+                final id = TouristIdHelper.displayForTourist(t);
+                final visits = _touristVisitCount(t);
+                final bg = index.isEven
+                    ? Colors.white
+                    : const Color(0xFFFAFAFA);
+
+                return Material(
+                  color: bg,
+                  child: InkWell(
+                    onTap: () => _showTouristDetails(t),
+                    hoverColor: _primaryOrange.withOpacity(0.04),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 12,
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Expanded(
+                            flex: 22,
+                            child: Row(
+                              children: [
+                                _touristAvatar(t, radius: 16),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    name,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: _textDark,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        ),
-                        DataCell(
-                          SizedBox(
-                            width: _touristColId,
-                            child: Text(
-                              t['id'] ?? '',
-                              style: const TextStyle(
-                                color: _primaryOrange,
-                                fontFamily: 'monospace',
+                          Expanded(
+                            flex: 16,
+                            child: Padding(
+                              padding: const EdgeInsets.only(right: 24),
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: _touristIdChip(id, maxWidth: 200),
                               ),
-                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                        ),
-                        DataCell(
-                          SizedBox(
-                            width: _touristColOrigin,
-                            child: Text(
-                              _getTouristOrigin(t),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: _textMuted),
+                          Expanded(
+                            flex: 21,
+                            child: Padding(
+                              padding: const EdgeInsets.only(left: 4),
+                              child: Text(
+                                _getTouristOrigin(t),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: _textMuted,
+                                  fontSize: 12,
+                                ),
+                              ),
                             ),
                           ),
-                        ),
-                        DataCell(
-                          SizedBox(
-                            width: _touristColDate,
+                          Expanded(
+                            flex: 10,
                             child: Text(
                               _formatRegisteredDateOnly(
                                 _registeredDateTimeFromTourist(t),
                               ),
                               style: const TextStyle(
                                 color: _textDark,
-                                fontSize: 13,
+                                fontSize: 12,
                               ),
                             ),
                           ),
-                        ),
-                        DataCell(
-                          SizedBox(
-                            width: _touristColTime,
+                          Expanded(
+                            flex: 11,
                             child: Text(
                               _formatRegisteredTimeOnly(
                                 _registeredDateTimeFromTourist(t),
                               ),
                               style: const TextStyle(
                                 color: _textDark,
-                                fontSize: 13,
+                                fontSize: 12,
                               ),
                             ),
                           ),
-                        ),
-                        DataCell(
-                          SizedBox(
-                            width: _touristColVisits,
-                            child: Text(
-                              '${t['totalVisits'] ?? t['visits'] ?? 0}',
-                              style: const TextStyle(color: _textMuted),
-                            ),
+                          Expanded(flex: 6, child: _visitCountBadge(visits)),
+                          _touristViewButton(
+                            onPressed: () => _showTouristDetails(t),
                           ),
-                        ),
-                        DataCell(
-                          SizedBox(
-                            width: _touristColActions,
-                            child: Align(
-                              alignment: Alignment.centerLeft,
-                              child: IconButton(
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(
-                                  minWidth: 44,
-                                  minHeight: 44,
-                                ),
-                                onPressed: () => _showTouristDetails(t),
-                                icon: const Icon(
-                                  Icons.visibility,
-                                  color: _primaryOrange,
-                                  size: 20,
-                                ),
-                                tooltip: 'View',
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  )
-                  .toList(),
+                  ),
+                );
+              },
             ),
           ),
         ),
-      ),
+      ],
     );
   }
 
   void _showTouristDetails(Map<String, dynamic> tourist) {
+    final name = _getTouristDisplayName(tourist);
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: _cardBg,
-        title: Text(
-          _getTouristDisplayName(tourist),
-          style: const TextStyle(color: _textDark, fontWeight: FontWeight.w600),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            _touristAvatar(tourist, radius: 22),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                name,
+                style: const TextStyle(
+                  color: _textDark,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                ),
+              ),
+            ),
+          ],
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _detailRow('Tourist ID', tourist['id'] ?? tourist['touristId'] ?? '-'),
+            _touristIdChip(
+              TouristIdHelper.displayForTourist(tourist),
+            ),
+            const SizedBox(height: 14),
+            _detailRow(
+              'Tourist ID',
+              TouristIdHelper.displayForTourist(tourist),
+            ),
             _detailRow('Email', tourist['email'] ?? '-'),
-            _detailRow('Origin', tourist['origin']?.toString() ?? tourist['city']?.toString() ?? tourist['country']?.toString() ?? '-'),
+            _detailRow('Origin', _getTouristOrigin(tourist)),
             _detailRow(
               'Date registered',
-              _formatRegisteredDateOnly(_registeredDateTimeFromTourist(tourist)),
+              _formatRegisteredDateOnly(
+                _registeredDateTimeFromTourist(tourist),
+              ),
             ),
             _detailRow(
               'Time registered',
-              _formatRegisteredTimeOnly(_registeredDateTimeFromTourist(tourist)),
+              _formatRegisteredTimeOnly(
+                _registeredDateTimeFromTourist(tourist),
+              ),
             ),
-            _detailRow('Total Visits', '${tourist['visits'] ?? tourist['totalVisits'] ?? 0}'),
+            _detailRow('Total visits', '${_touristVisitCount(tourist)}'),
           ],
         ),
         actions: [
@@ -2514,7 +3554,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
             final qrData = lguQrData(m.id, anchorLat: m.lat, anchorLng: m.lng);
             return Container(
               width: _isMobile ? double.infinity : 240,
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.all(_isMobile ? 12 : 16),
               decoration: BoxDecoration(
                 color: _cardBg,
                 borderRadius: BorderRadius.circular(12),
@@ -2536,7 +3576,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                   ),
                   const SizedBox(height: 10),
                   Container(
-                    padding: const EdgeInsets.all(8),
+                    padding: EdgeInsets.all(_isMobile ? 6 : 8),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(8),
@@ -2544,14 +3584,16 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                     child: QrImageView(
                       data: qrData,
                       version: QrVersions.auto,
-                      size: 180,
+                      size: _isMobile ? 160 : 180,
                       backgroundColor: Colors.white,
                       errorCorrectionLevel: QrErrorCorrectLevel.H,
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  SizedBox(height: _isMobile ? 8 : 10),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: _isMobile ? 6 : 10,
+                    runSpacing: 4,
                     children: [
                       TextButton(
                         onPressed: () async {
@@ -2563,13 +3605,22 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                           if (mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
-                                content: Text('PNG ready — check downloads or share sheet'),
+                                content: Text(
+                                  'PNG ready — check downloads or share sheet',
+                                ),
                                 backgroundColor: _primaryOrange,
                               ),
                             );
                           }
                         },
-                        child: Text('PNG', style: TextStyle(color: _primaryOrange)),
+                        child: Text(
+                          'PNG',
+                          style: TextStyle(
+                            color: _primaryOrange,
+                            fontSize: _isMobile ? 13 : 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
                       TextButton(
                         onPressed: () async {
@@ -2580,7 +3631,14 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                             anchorLng: m.lng,
                           );
                         },
-                        child: Text('PDF', style: TextStyle(color: _primaryOrange)),
+                        child: Text(
+                          'PDF',
+                          style: TextStyle(
+                            color: _primaryOrange,
+                            fontSize: _isMobile ? 13 : 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -2644,110 +3702,158 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     final name = municipality['name']?.toString() ?? 'Unknown';
     final type = municipality['type']?.toString() ?? 'Municipality';
     final tourists = municipality['tourists'] ?? 0;
-    return Container(
-      margin: _isMobile ? const EdgeInsets.only(bottom: 12) : null,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: Colors.grey.shade300,
-          width: 1.5,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
+    final accent = type == 'City' ? _primaryOrange : _accentOrange;
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        margin: _isMobile ? const EdgeInsets.only(bottom: 12) : null,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: () => _showMunicipalityDetails(municipality),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
             decoration: BoxDecoration(
-              color: _primaryOrange.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(
-              Icons.location_city_rounded,
-              color: _primaryOrange,
-              size: 24,
-            ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  name,
-                  style: const TextStyle(
-                    color: _textDark,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  overflow: TextOverflow.ellipsis,
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  const Color(0xFFFFFFFF),
+                  Color.lerp(const Color(0xFFFFFFFF), accent, 0.06)!,
+                ],
+              ),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: accent.withOpacity(0.22), width: 1.0),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.08),
+                  blurRadius: 18,
+                  offset: const Offset(0, 8),
                 ),
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
+                BoxShadow(
+                  color: accent.withOpacity(0.12),
+                  blurRadius: 22,
+                  offset: const Offset(0, 10),
+                  spreadRadius: -10,
+                ),
+                BoxShadow(
+                  color: Colors.white.withOpacity(0.65),
+                  blurRadius: 1,
+                  offset: const Offset(0, -1),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 4,
+                  margin: const EdgeInsets.only(right: 10),
+                  decoration: BoxDecoration(
+                    color: accent.withOpacity(0.55),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.all(11),
+                  decoration: BoxDecoration(
+                    color: accent.withOpacity(0.14),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: accent.withOpacity(0.18),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                        spreadRadius: -8,
                       ),
-                      decoration: BoxDecoration(
-                        color: _primaryOrange.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        type,
+                    ],
+                  ),
+                  child: Icon(
+                    Icons.location_city_rounded,
+                    color: accent,
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        name,
                         style: const TextStyle(
-                          color: _primaryOrange,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
+                          color: _textDark,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          height: 1.15,
                         ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        '$tourists ${tourists == 1 ? 'tourist' : 'tourists'}',
-                        style: const TextStyle(
-                          color: _textMuted,
-                          fontSize: 13,
-                        ),
+                        maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: accent.withOpacity(0.14),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              type,
+                              style: TextStyle(
+                                color: accent,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '$tourists ${tourists == 1 ? 'tourist' : 'tourists'}',
+                              style: const TextStyle(
+                                color: _textMuted,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: accent.withOpacity(0.28)),
+                  ),
+                  child: Icon(
+                    Icons.chevron_right_rounded,
+                    color: accent.withOpacity(0.9),
+                    size: 18,
+                  ),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: () => _showMunicipalityDetails(municipality),
-            child: Icon(
-              Icons.arrow_forward_ios_rounded,
-              color: _textMuted,
-              size: 16,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 
-  DateTime? _checkInTimestamp(Map<String, dynamic> c) {
-    final t = c['timestamp'];
-    if (t == null) return null;
-    if (t is Timestamp) return t.toDate();
-    return null;
-  }
+  DateTime? _checkInTimestamp(Map<String, dynamic> c) =>
+      GovernorFirestoreService.parseCheckInTime(c);
 
   int get _analyticsDailyAvg {
     if (_checkIns.isEmpty) return 0;
@@ -2785,7 +3891,8 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   String get _analyticsTopOrigin {
     final counts = <String, int>{};
     for (var t in _tourists) {
-      final one = t['city']?.toString().trim() ??
+      final one =
+          t['city']?.toString().trim() ??
           t['country']?.toString().trim() ??
           t['origin']?.toString().trim() ??
           t['nationality']?.toString().trim();
@@ -2797,24 +3904,13 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     return counts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
   }
 
-  List<double> get _analyticsTrendValues {
-    const days = 14;
-    final counts = List.filled(days, 0.0);
-    for (var c in _checkIns) {
-      final d = _checkInTimestamp(c);
-      if (d != null) {
-        final today = DateTime.now();
-        final diff = today.difference(DateTime(d.year, d.month, d.day)).inDays;
-        if (diff >= 0 && diff < days) counts[days - 1 - diff] += 1;
-      }
-    }
-    return counts;
-  }
-
   List<Map<String, dynamic>> get _analyticsTopSpots {
     final byLocation = <String, int>{};
     for (var c in _checkIns) {
-      final loc = c['location']?.toString().trim() ?? c['spotName']?.toString().trim() ?? '';
+      final loc =
+          c['location']?.toString().trim() ??
+          c['spotName']?.toString().trim() ??
+          '';
       if (loc.isNotEmpty) byLocation[loc] = (byLocation[loc] ?? 0) + 1;
     }
     return byLocation.entries
@@ -2824,6 +3920,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   // ==================== ANALYTICS SECTION ====================
+  /// Insights not shown on the main Dashboard (no duplicate totals/trends/demographics).
   Widget _buildAnalyticsContent() {
     return Container(
       color: _darkBg,
@@ -2831,17 +3928,17 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         children: [
           _buildHeader(
             'Analytics',
-            subtitle: 'Misamis Occidental only — tourism insights from provincial check-ins & registrations',
+            subtitle:
+                'Patterns & spot rankings — totals and charts are on Dashboard',
           ),
           Expanded(
             child: SingleChildScrollView(
-              padding: EdgeInsets.all(_isMobile ? 16 : 24),
+              padding: EdgeInsets.all(_isMobile ? 12 : 20),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   _buildAnalyticsCards(),
-                  const SizedBox(height: 24),
-                  _buildVisitorTrendsChart(),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 16),
                   _buildTopSpotsChart(),
                 ],
               ),
@@ -2853,91 +3950,102 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   Widget _buildAnalyticsCards() {
+    final topOrigin = _analyticsTopOrigin;
+    final originDisplay = topOrigin.length > 22
+        ? '${topOrigin.substring(0, 20)}…'
+        : topOrigin;
+
     return GridView.count(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      crossAxisCount: _isMobile ? 2 : 4,
-      crossAxisSpacing: 16,
-      mainAxisSpacing: 16,
-      childAspectRatio: 1.5,
+      crossAxisCount: _isMobile ? 1 : 3,
+      crossAxisSpacing: 12,
+      mainAxisSpacing: 12,
+      childAspectRatio: _isMobile ? 2.4 : 2.2,
       children: [
         _buildAnalyticsCard(
-          'Daily Avg',
-          '$_analyticsDailyAvg',
-          Icons.calendar_today,
-          Colors.blue,
+          title: 'Daily Avg',
+          subtitle: 'Average check-ins per active day',
+          value: '$_analyticsDailyAvg',
+          icon: Icons.calendar_today_rounded,
+          background: const Color(0xFFE3F2FD),
+          iconBg: const Color(0xFFBBDEFB),
+          iconColor: const Color(0xFF1565C0),
         ),
         _buildAnalyticsCard(
-          'Peak Hour',
-          _analyticsPeakHour,
-          Icons.access_time,
-          _primaryOrange,
+          title: 'Peak Hour',
+          subtitle: 'Busiest hour for QR scans',
+          value: _analyticsPeakHour,
+          icon: Icons.access_time_rounded,
+          background: const Color(0xFFFFF3E0),
+          iconBg: const Color(0xFFFFE0B2),
+          iconColor: const Color(0xFFE65100),
         ),
-        _buildAnalyticsCard('Top Origin', _analyticsTopOrigin, Icons.flight, Colors.green),
-        _buildAnalyticsCard('Avg Stay', '—', Icons.hotel, Colors.purple),
+        _buildAnalyticsCard(
+          title: 'Top Origin',
+          subtitle: 'Where most tourists registered from',
+          value: originDisplay,
+          icon: Icons.flight_rounded,
+          background: const Color(0xFFE8F5E9),
+          iconBg: const Color(0xFFC8E6C9),
+          iconColor: const Color(0xFF2E7D32),
+        ),
       ],
     );
   }
 
-  Widget _buildAnalyticsCard(
-    String label,
-    String value,
-    IconData icon,
-    Color color,
-  ) {
+  Widget _buildAnalyticsCard({
+    required String title,
+    required String subtitle,
+    required String value,
+    required IconData icon,
+    required Color background,
+    required Color iconBg,
+    required Color iconColor,
+  }) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _cardBorder),
+        color: background,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.black.withOpacity(0.04)),
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, color: color, size: 28),
-          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: iconBg,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: iconColor, size: 22),
+          ),
+          const SizedBox(height: 10),
           Text(
             value,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               color: _textDark,
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
+              height: 1.1,
             ),
           ),
-          Text(label, style: const TextStyle(color: _textMuted, fontSize: 12)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildVisitorTrendsChart() {
-    final values = _analyticsTrendValues;
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _cardBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Visitor Trends',
-            style: TextStyle(
+          const SizedBox(height: 4),
+          Text(
+            title,
+            style: const TextStyle(
               color: _textDark,
-              fontSize: 16,
+              fontSize: 12,
               fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 24),
-          SizedBox(
-            height: 200,
-            child: CustomPaint(
-              size: const Size(double.infinity, 200),
-              painter: _ChartPainter(color: _primaryOrange, values: values),
-            ),
+          Text(
+            subtitle,
+            style: TextStyle(color: _textMuted.withOpacity(0.9), fontSize: 10),
           ),
         ],
       ),
@@ -2945,34 +4053,26 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   Widget _buildTopSpotsChart() {
-    final spots = _analyticsTopSpots.take(10).toList();
+    final spots = _analyticsTopSpots.take(8).toList();
     final maxVisits = spots.isEmpty ? 1 : (spots.first['visits'] as int);
 
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _cardBorder),
-      ),
+    return _wrapDashboardRichPanel(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Most Visited Spots',
-            style: TextStyle(
-              color: _textDark,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-            ),
+          _dashboardSectionTitle(
+            title: 'Most Visited Spots',
+            icon: Icons.location_on_rounded,
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 14),
           if (spots.isEmpty)
             const Padding(
-              padding: EdgeInsets.symmetric(vertical: 24),
-              child: Text(
-                'No check-in data yet.',
-                style: TextStyle(color: _textMuted, fontSize: 14),
+              padding: EdgeInsets.symmetric(vertical: 32),
+              child: Center(
+                child: Text(
+                  'No spot check-ins yet',
+                  style: TextStyle(color: _textMuted, fontSize: 13),
+                ),
               ),
             )
           else
@@ -2980,62 +4080,77 @@ class _GovernorDashboardState extends State<GovernorDashboard>
               final index = entry.key;
               final spot = entry.value;
               final visits = spot['visits'] as int;
+              final name = spot['name'] as String;
               return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.only(bottom: 10),
                 child: Row(
                   children: [
                     Container(
-                      width: 24,
-                      height: 24,
+                      width: 26,
+                      height: 26,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
                         color: index == 0
                             ? _primaryOrange
-                            : _primaryOrange.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(6),
+                            : const Color(0xFFF4F4F5),
+                        borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
                         '${index + 1}',
                         style: TextStyle(
-                          color: index == 0 ? Colors.white : _primaryOrange,
+                          color: index == 0 ? Colors.white : _textMuted,
                           fontSize: 12,
-                          fontWeight: FontWeight.bold,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 10),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            spot['name'] as String,
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               color: _textDark,
-                              fontSize: 13,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
-                          const SizedBox(height: 4),
+                          const SizedBox(height: 6),
                           ClipRRect(
                             borderRadius: BorderRadius.circular(4),
                             child: LinearProgressIndicator(
                               value: maxVisits > 0 ? visits / maxVisits : 0,
-                              backgroundColor: Colors.grey.shade200,
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                _primaryOrange.withOpacity(0.8),
+                              backgroundColor: const Color(0xFFE4E4E7),
+                              valueColor: const AlwaysStoppedAnimation<Color>(
+                                _primaryOrange,
                               ),
-                              minHeight: 4,
+                              minHeight: 6,
                             ),
                           ),
                         ],
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Text(
-                      '$visits',
-                      style: const TextStyle(
-                        color: _primaryOrange,
-                        fontWeight: FontWeight.w600,
+                    const SizedBox(width: 10),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF3E0),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        '$visits',
+                        style: const TextStyle(
+                          color: _primaryOrange,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                        ),
                       ),
                     ),
                   ],
@@ -3049,146 +4164,536 @@ class _GovernorDashboardState extends State<GovernorDashboard>
 
   // ==================== ANNOUNCEMENTS SECTION ====================
   Widget _buildAnnouncementsContent() {
+    final publishedCount = _announcements
+        .where((a) => a['published'] == true)
+        .length;
+    final draftCount = _announcements.length - publishedCount;
+
     return Container(
       color: _darkBg,
       child: Column(
         children: [
           _buildHeader(
             'Announcements',
-            subtitle: 'Manage public announcements',
+            subtitle: 'Create and publish notices for tourists',
             actions: [
+              if (!_isMobile)
+                OutlinedButton.icon(
+                  onPressed: _sendTestPushAnnouncement,
+                  icon: const Icon(
+                    Icons.notifications_active_rounded,
+                    size: 18,
+                  ),
+                  label: const Text(
+                    'Test push',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white, width: 1.5),
+                    backgroundColor: Colors.white.withOpacity(0.12),
+                  ),
+                ),
+              if (!_isMobile) const SizedBox(width: 8),
               ElevatedButton.icon(
                 onPressed: _showCreateAnnouncementDialog,
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('New'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _primaryOrange,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
+                icon: Icon(
+                  Icons.add_rounded,
+                  size: 18,
+                  color: _isMobile ? Colors.white : _primaryOrange,
+                ),
+                label: Text(
+                  _isMobile ? 'New' : 'New announcement',
+                  style: TextStyle(
+                    color: _isMobile ? Colors.white : _primaryOrange,
+                    fontWeight: FontWeight.w600,
                   ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _isMobile
+                      ? Colors.white.withOpacity(0.2)
+                      : Colors.white,
+                  foregroundColor: _isMobile ? Colors.white : _primaryOrange,
+                  elevation: 0,
+                  side: _isMobile
+                      ? const BorderSide(color: Colors.white, width: 1.5)
+                      : null,
                 ),
               ),
             ],
           ),
           Expanded(
-            child: _announcements.isEmpty
-                ? Center(
-                    child: _buildEmptyState(
-                      'No announcements yet',
-                      Icons.campaign_outlined,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                _isMobile ? 12 : 20,
+                0,
+                _isMobile ? 12 : 20,
+                16,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (_isMobile)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: OutlinedButton.icon(
+                        onPressed: _sendTestPushAnnouncement,
+                        icon: const Icon(Icons.notifications_active_rounded),
+                        label: const Text('Send test push'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _primaryOrange,
+                          side: const BorderSide(color: _cardBorder),
+                        ),
+                      ),
                     ),
-                  )
-                : ListView.builder(
-                    padding: EdgeInsets.all(_isMobile ? 16 : 24),
-                    itemCount: _announcements.length,
-                    itemBuilder: (context, index) =>
-                        _buildAnnouncementCard(_announcements[index]),
+                  if (_announcements.isNotEmpty)
+                    _buildAnnouncementsSummaryBar(publishedCount, draftCount),
+                  if (_announcements.isNotEmpty) const SizedBox(height: 12),
+                  Expanded(
+                    child: _announcements.isEmpty
+                        ? Center(
+                            child: _buildEmptyState(
+                              'No announcements yet — tap New announcement',
+                              Icons.campaign_outlined,
+                            ),
+                          )
+                        : Container(
+                            decoration: _dashboardPanelDecoration(),
+                            child: ListView.separated(
+                              padding: const EdgeInsets.all(12),
+                              itemCount: _announcements.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 10),
+                              itemBuilder: (context, index) =>
+                                  _buildAnnouncementCard(_announcements[index]),
+                            ),
+                          ),
                   ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildAnnouncementCard(Map<String, dynamic> announcement) {
-    final isPublished = announcement['published'] ?? false;
+  Widget _buildAnnouncementsSummaryBar(int published, int drafts) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: _cardBg,
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _cardBorder),
+      ),
+      child: Row(
+        children: [
+          _announcementCountChip(
+            '$published published',
+            const Color(0xFFE8F5E9),
+            const Color(0xFF2E7D32),
+          ),
+          const SizedBox(width: 8),
+          _announcementCountChip(
+            '$drafts draft',
+            const Color(0xFFF4F4F5),
+            _textMuted,
+          ),
+          const Spacer(),
+          Text(
+            '${_announcements.length} total',
+            style: const TextStyle(color: _textMuted, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _announcementCountChip(String label, Color bg, Color textColor) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: bg,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isPublished
-              ? _primaryOrange.withOpacity(0.3)
-              : Colors.white.withOpacity(0.05),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: textColor,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
         ),
       ),
+    );
+  }
+
+  Color _announcementTypeColor(String type) {
+    switch (type) {
+      case 'Alert':
+        return const Color(0xFFEF5350);
+      case 'Event':
+        return const Color(0xFF42A5F5);
+      case 'Promo':
+        return const Color(0xFF66BB6A);
+      default:
+        return _primaryOrange;
+    }
+  }
+
+  IconData _announcementTypeIcon(String type) {
+    switch (type) {
+      case 'Alert':
+        return Icons.warning_amber_rounded;
+      case 'Event':
+        return Icons.event_rounded;
+      case 'Promo':
+        return Icons.local_offer_rounded;
+      default:
+        return Icons.campaign_rounded;
+    }
+  }
+
+  Future<bool> _broadcastPublishedAnnouncement({
+    required String title,
+    required String content,
+    required String type,
+    String? announcementId,
+  }) {
+    return AnnouncementPushService.broadcastToInstalledApps(
+      title: title,
+      content: content,
+      type: type,
+      announcementId: announcementId,
+    );
+  }
+
+  String _publishedAnnouncementSnackMessage(bool pushSent) {
+    return pushSent
+        ? 'Published — push notification sent to users with the app installed.'
+        : 'Published — saved. If users do not receive a push, run: firebase deploy --only functions';
+  }
+
+  Future<void> _sendTestPushAnnouncement() async {
+    final now = DateTime.now();
+    final yyyy = now.year.toString().padLeft(4, '0');
+    final mm = now.month.toString().padLeft(2, '0');
+    final dd = now.day.toString().padLeft(2, '0');
+    final hh = now.hour.toString().padLeft(2, '0');
+    final min = now.minute.toString().padLeft(2, '0');
+    final stamp = '$yyyy-$mm-$dd $hh:$min';
+
+    final announcementData = <String, dynamic>{
+      'title': 'Test push from Governor',
+      'content': 'This is a test notification sent at $stamp.',
+      'type': 'Alert',
+      'published': true,
+      'date': '$yyyy-$mm-$dd',
+      'createdAt': FieldValue.serverTimestamp(),
+      'createdBy': 'Governor',
+    };
+
+    try {
+      if (Firebase.apps.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Firebase is not initialized. Cannot send test push.',
+            ),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+        return;
+      }
+
+      final docRef = await FirebaseFirestore.instance
+          .collection('announcements')
+          .add(announcementData);
+      final pushSent = await _broadcastPublishedAnnouncement(
+        title: announcementData['title'] as String,
+        content: announcementData['content'] as String,
+        type: announcementData['type'] as String,
+        announcementId: docRef.id,
+      );
+      if (!mounted) return;
+      setState(() {
+        _announcements.insert(0, {
+          'id': docRef.id,
+          ...announcementData,
+          'createdAt': now,
+        });
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_publishedAnnouncementSnackMessage(pushSent)),
+          backgroundColor: _primaryOrange,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to send test push: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  Widget _buildAnnouncementCard(Map<String, dynamic> announcement) {
+    final isPublished = announcement['published'] == true;
+    final type = announcement['type']?.toString() ?? 'General';
+    final typeColor = _announcementTypeColor(type);
+    final title = announcement['title']?.toString().trim() ?? 'Untitled';
+    final content = announcement['content']?.toString().trim() ?? '';
+    final date = announcement['date']?.toString() ?? '—';
+
+    final body = Padding(
+      padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Text(
-                  announcement['title'] ?? 'Untitled',
-                  style: const TextStyle(
-                    color: _textDark,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: typeColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  _announcementTypeIcon(type),
+                  color: typeColor,
+                  size: 20,
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: isPublished
-                      ? _primaryOrange.withOpacity(0.15)
-                      : Colors.grey.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  isPublished ? 'Published' : 'Draft',
-                  style: TextStyle(
-                    color: isPublished ? _primaryOrange : Colors.grey,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                  ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            title,
+                            style: const TextStyle(
+                              color: _textDark,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        _announcementStatusBadge(isPublished),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      content.isEmpty ? 'No message body' : content,
+                      style: TextStyle(
+                        color: content.isEmpty
+                            ? _textMuted.withOpacity(0.7)
+                            : _textMuted,
+                        fontSize: 13,
+                        height: 1.35,
+                      ),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                 ),
               ),
             ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            announcement['content'] ?? '',
-            style: TextStyle(
-              color: Colors.white.withOpacity(0.7),
-              fontSize: 14,
-            ),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 12),
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Icon(Icons.calendar_today, color: _textMuted, size: 14),
-              const SizedBox(width: 6),
+              Icon(Icons.calendar_today_outlined, size: 14, color: _textMuted),
               Text(
-                announcement['date'] ?? '-',
-                style: TextStyle(color: _textMuted, fontSize: 12),
+                date,
+                style: const TextStyle(color: _textMuted, fontSize: 11),
               ),
-              const Spacer(),
-              IconButton(
-                onPressed: () => _togglePublishAnnouncement(announcement),
-                icon: Icon(
-                  isPublished ? Icons.visibility_off : Icons.visibility,
-                  color: _textMuted,
-                  size: 18,
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: typeColor.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(6),
                 ),
-                tooltip: isPublished ? 'Unpublish' : 'Publish',
-              ),
-              IconButton(
-                onPressed: () => _editAnnouncement(announcement),
-                icon: const Icon(Icons.edit, color: _textMuted, size: 18),
-                tooltip: 'Edit',
-              ),
-              IconButton(
-                onPressed: () => _deleteAnnouncement(announcement),
-                icon: const Icon(
-                  Icons.delete,
-                  color: Colors.redAccent,
-                  size: 18,
+                child: Text(
+                  type,
+                  style: TextStyle(
+                    color: typeColor,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-                tooltip: 'Delete',
               ),
             ],
           ),
+          if (_isMobile) ...[
+            const SizedBox(height: 12),
+            _buildAnnouncementActionsRow(announcement, isPublished),
+          ],
         ],
+      ),
+    );
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFFAFAFA),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _cardBorder),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              width: 4,
+              color: isPublished ? _primaryOrange : const Color(0xFF9CA3AF),
+            ),
+            Expanded(child: body),
+            if (!_isMobile) ...[
+              const VerticalDivider(width: 1, color: _cardBorder),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 10,
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _buildAnnouncementActionsRow(announcement, isPublished),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _announcementStatusBadge(bool isPublished) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: isPublished ? const Color(0xFFFFF3E0) : const Color(0xFFF4F4F5),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        isPublished ? 'Published' : 'Draft',
+        style: TextStyle(
+          color: isPublished ? _primaryOrange : _textMuted,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAnnouncementActionsRow(
+    Map<String, dynamic> announcement,
+    bool isPublished,
+  ) {
+    if (_isMobile) {
+      return Row(
+        children: [
+          Expanded(
+            child: _announcementActionButton(
+              label: isPublished ? 'Unpublish' : 'Publish',
+              icon: isPublished
+                  ? Icons.visibility_off_outlined
+                  : Icons.publish_outlined,
+              color: isPublished ? _textMuted : const Color(0xFF2E7D32),
+              onPressed: () => _togglePublishAnnouncement(announcement),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _announcementActionButton(
+              label: 'Edit',
+              icon: Icons.edit_outlined,
+              color: _primaryOrange,
+              onPressed: () => _editAnnouncement(announcement),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _announcementActionButton(
+              label: 'Delete',
+              icon: Icons.delete_outline,
+              color: const Color(0xFFC62828),
+              onPressed: () => _deleteAnnouncement(announcement),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _announcementActionButton(
+          label: isPublished ? 'Unpublish' : 'Publish',
+          icon: isPublished
+              ? Icons.visibility_off_outlined
+              : Icons.publish_outlined,
+          color: isPublished ? _textMuted : const Color(0xFF2E7D32),
+          onPressed: () => _togglePublishAnnouncement(announcement),
+        ),
+        const SizedBox(height: 6),
+        _announcementActionButton(
+          label: 'Edit',
+          icon: Icons.edit_outlined,
+          color: _primaryOrange,
+          onPressed: () => _editAnnouncement(announcement),
+        ),
+        const SizedBox(height: 6),
+        _announcementActionButton(
+          label: 'Delete',
+          icon: Icons.delete_outline,
+          color: const Color(0xFFC62828),
+          onPressed: () => _deleteAnnouncement(announcement),
+        ),
+      ],
+    );
+  }
+
+  Widget _announcementActionButton({
+    required String label,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onPressed,
+  }) {
+    return SizedBox(
+      width: _isMobile ? null : 96,
+      child: OutlinedButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon, size: 16, color: color),
+        label: Text(
+          label,
+          style: TextStyle(
+            color: color,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: color,
+          side: BorderSide(color: color.withOpacity(0.35)),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+          minimumSize: const Size(0, 36),
+        ),
       ),
     );
   }
@@ -3330,12 +4835,13 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                     'createdBy': 'Governor',
                   };
 
-                  // Save to Firestore
+                  String? docId;
                   try {
                     if (Firebase.apps.isNotEmpty) {
                       final docRef = await FirebaseFirestore.instance
                           .collection('announcements')
                           .add(announcementData);
+                      docId = docRef.id;
                       setState(() {
                         _announcements.insert(0, {
                           'id': docRef.id,
@@ -3344,30 +4850,43 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                         });
                       });
                     } else {
+                      docId = DateTime.now().millisecondsSinceEpoch.toString();
                       setState(() {
                         _announcements.insert(0, {
-                          'id': DateTime.now().millisecondsSinceEpoch
-                              .toString(),
+                          'id': docId,
                           ...announcementData,
                         });
                       });
                     }
                   } catch (e) {
                     debugPrint('Error saving announcement: $e');
+                    docId = DateTime.now().millisecondsSinceEpoch.toString();
                     setState(() {
                       _announcements.insert(0, {
-                        'id': DateTime.now().millisecondsSinceEpoch.toString(),
+                        'id': docId,
                         ...announcementData,
                       });
                     });
                   }
 
+                  var snackText = isPublished
+                      ? 'Announcement published'
+                      : 'Announcement saved as draft';
+                  if (isPublished) {
+                    final pushSent = await _broadcastPublishedAnnouncement(
+                      title: titleController.text,
+                      content: contentController.text,
+                      type: selectedType,
+                      announcementId: docId,
+                    );
+                    snackText = _publishedAnnouncementSnackMessage(pushSent);
+                  }
+
+                  if (!context.mounted) return;
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text(
-                        'Announcement ${isPublished ? "published" : "saved as draft"}',
-                      ),
+                      content: Text(snackText),
                       backgroundColor: _primaryOrange,
                     ),
                   );
@@ -3406,11 +4925,23 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       }
     });
 
+    var snackText = newPublished
+        ? 'Announcement published'
+        : 'Announcement unpublished';
+    if (newPublished) {
+      final pushSent = await _broadcastPublishedAnnouncement(
+        title: announcement['title']?.toString() ?? '',
+        content: announcement['content']?.toString() ?? '',
+        type: announcement['type']?.toString() ?? 'General',
+        announcementId: announcement['id']?.toString(),
+      );
+      snackText = _publishedAnnouncementSnackMessage(pushSent);
+    }
+
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          newPublished ? 'Announcement published' : 'Announcement unpublished',
-        ),
+        content: Text(snackText),
         backgroundColor: _primaryOrange,
       ),
     );
@@ -4384,16 +5915,18 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         columnSpacing: 16,
         horizontalMargin: 12,
         columns: headers
-            .map((h) => DataColumn(
-                  label: Text(
-                    h,
-                    style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
+            .map(
+              (h) => DataColumn(
+                label: Text(
+                  h,
+                  style: const TextStyle(
+                    color: _textDark,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
                   ),
-                ))
+                ),
+              ),
+            )
             .toList(),
         rows: dataRows.map((line) {
           final cells = line.split(',').map((s) => s.trim()).toList();
@@ -4478,7 +6011,10 @@ class _GovernorDashboardState extends State<GovernorDashboard>
           textColor: Colors.white,
           onPressed: () {
             // Show export preview as table when CSV
-            final lines = content.split('\n').where((s) => s.trim().isNotEmpty).toList();
+            final lines = content
+                .split('\n')
+                .where((s) => s.trim().isNotEmpty)
+                .toList();
             final isCsv = lines.isNotEmpty && lines.first.contains(',');
             showDialog(
               context: context,
@@ -5243,9 +6779,9 @@ class _CategoryPiePainter extends CustomPainter {
 
     if (isEmpty) {
       final track = Paint()
-        ..color = Colors.grey.shade300
+        ..color = const Color(0xFFE4E4E7)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = r * 0.32;
+        ..strokeWidth = r * 0.28;
       canvas.drawCircle(c, r * 0.68, track);
       return;
     }
@@ -5272,15 +6808,17 @@ class _CategoryPiePainter extends CustomPainter {
 class _StatCard {
   final String title;
   final String value;
-  final String change;
-  final bool isPositive;
+  final String? subtitle;
+  final String? change;
+  final bool? isPositive;
   final IconData icon;
   final Color color;
   _StatCard({
     required this.title,
     required this.value,
-    required this.change,
-    required this.isPositive,
+    this.subtitle,
+    this.change,
+    this.isPositive,
     required this.icon,
     required this.color,
   });
@@ -5289,25 +6827,17 @@ class _StatCard {
 class _ChartPainter extends CustomPainter {
   final Color color;
   final List<double> values;
-  _ChartPainter({required this.color, this.values = const []});
+  final bool showPlaceholder;
+  _ChartPainter({
+    required this.color,
+    this.values = const [],
+    this.showPlaceholder = false,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    final fillPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [color.withOpacity(0.3), color.withOpacity(0.0)],
-      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
-
     final gridPaint = Paint()
-      ..color = Colors.grey.shade300
+      ..color = const Color(0xFFF3F4F6)
       ..strokeWidth = 1;
 
     for (int i = 0; i < 5; i++) {
@@ -5315,25 +6845,38 @@ class _ChartPainter extends CustomPainter {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
     }
 
-    final maxVal = values.isEmpty ? 1.0 : values.reduce((a, b) => a > b ? a : b).clamp(1.0, double.infinity);
+    if (showPlaceholder || values.isEmpty) {
+      final baseline = Paint()
+        ..color = color.withOpacity(0.35)
+        ..strokeWidth = 2
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round;
+      canvas.drawLine(
+        Offset(0, size.height * 0.88),
+        Offset(size.width, size.height * 0.88),
+        baseline,
+      );
+      return;
+    }
+
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 3
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    final fillPaint = Paint()..color = color.withOpacity(0.12);
+
+    final maxVal = values
+        .reduce((a, b) => a > b ? a : b)
+        .clamp(1.0, double.infinity);
     final points = <Offset>[];
     if (values.length >= 2) {
       for (int i = 0; i < values.length; i++) {
         final x = size.width * (i / (values.length - 1));
-        final y = size.height * (1 - (values[i] / maxVal));
+        final y = size.height * (1 - (values[i] / maxVal) * 0.85);
         points.add(Offset(x, y));
       }
-    } else {
-      points.addAll([
-        Offset(0, size.height * 0.6),
-        Offset(size.width * 0.15, size.height * 0.5),
-        Offset(size.width * 0.3, size.height * 0.7),
-        Offset(size.width * 0.45, size.height * 0.4),
-        Offset(size.width * 0.6, size.height * 0.5),
-        Offset(size.width * 0.75, size.height * 0.3),
-        Offset(size.width * 0.9, size.height * 0.4),
-        Offset(size.width, size.height * 0.2),
-      ]);
     }
 
     if (points.isEmpty) return;
@@ -5363,5 +6906,240 @@ class _ChartPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _ChartPainter oldDelegate) {
+    return oldDelegate.color != color ||
+        oldDelegate.showPlaceholder != showPlaceholder ||
+        oldDelegate.values != values;
+  }
+}
+
+/// Grouped Male / Female / Others bars per age bucket.
+class _GroupedAgeGenderBarPainter extends CustomPainter {
+  _GroupedAgeGenderBarPainter({
+    required this.series,
+    required this.maleColor,
+    required this.femaleColor,
+    required this.otherColor,
+  });
+
+  final List<({String label, int male, int female, int others})> series;
+  final Color maleColor;
+  final Color femaleColor;
+  final Color otherColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final leftPad = 36.0;
+    final bottomPad = 28.0;
+    final topPad = 12.0;
+    final chartW = size.width - leftPad - 8;
+    final chartH = size.height - bottomPad - topPad;
+    final origin = Offset(leftPad, topPad + chartH);
+
+    final gridPaint = Paint()
+      ..color = const Color(0xFFF3F4F6)
+      ..strokeWidth = 1;
+    for (var i = 0; i <= 4; i++) {
+      final y = topPad + chartH * i / 4;
+      canvas.drawLine(Offset(leftPad, y), Offset(size.width - 4, y), gridPaint);
+    }
+
+    final maxVal = series
+        .map((r) => math.max(r.male, math.max(r.female, r.others)))
+        .fold<int>(0, (a, b) => a > b ? a : b)
+        .clamp(1, 999999)
+        .toDouble();
+
+    final groupCount = series.length;
+    final groupWidth = chartW / groupCount;
+    final barWidth = groupWidth * 0.18;
+    final gap = barWidth * 0.35;
+
+    for (var g = 0; g < groupCount; g++) {
+      final row = series[g];
+      final values = [row.male, row.female, row.others];
+      final colors = [maleColor, femaleColor, otherColor];
+      final groupStart = leftPad + g * groupWidth + groupWidth * 0.12;
+
+      for (var b = 0; b < 3; b++) {
+        final value = values[b].toDouble();
+        final barH = (value / maxVal) * chartH;
+        final x = groupStart + b * (barWidth + gap);
+        final rect = RRect.fromRectAndRadius(
+          Rect.fromLTWH(x, origin.dy - barH, barWidth, barH),
+          const Radius.circular(6),
+        );
+        final paint = Paint()..color = colors[b];
+        canvas.drawRRect(rect, paint);
+      }
+
+      final label = row.label;
+      final tp = TextPainter(
+        text: TextSpan(
+          text: label,
+          style: const TextStyle(
+            color: Color(0xFF6B7280),
+            fontSize: 10,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(
+        canvas,
+        Offset(
+          leftPad + g * groupWidth + (groupWidth - tp.width) / 2,
+          origin.dy + 6,
+        ),
+      );
+    }
+
+    for (var i = 0; i <= 4; i++) {
+      final val = (maxVal * (4 - i) / 4).round();
+      final y = topPad + chartH * i / 4;
+      final tp = TextPainter(
+        text: TextSpan(
+          text: '$val',
+          style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 9),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, Offset(0, y - tp.height / 2));
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _GroupedAgeGenderBarPainter oldDelegate) => true;
+}
+
+/// Vertical bars for top municipalities / cities.
+class _CityRankingBarPainter extends CustomPainter {
+  _CityRankingBarPainter({
+    required this.cities,
+    required this.maxCount,
+    required this.colors,
+  });
+
+  final List<({String name, int count})> cities;
+  final int maxCount;
+  final List<Color> colors;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final leftPad = 8.0;
+    final bottomPad = 32.0;
+    final topPad = 20.0;
+    final chartW = size.width - leftPad * 2;
+    final chartH = size.height - bottomPad - topPad;
+    final origin = Offset(leftPad, topPad + chartH);
+    final maxVal = maxCount.clamp(1, 999999).toDouble();
+
+    final gridPaint = Paint()
+      ..color = const Color(0xFFF3F4F6)
+      ..strokeWidth = 1;
+    for (var i = 0; i <= 4; i++) {
+      final y = topPad + chartH * i / 4;
+      canvas.drawLine(
+        Offset(leftPad, y),
+        Offset(size.width - leftPad, y),
+        gridPaint,
+      );
+    }
+
+    final barCount = cities.length;
+    final slot = chartW / barCount;
+    final barWidth = slot * 0.5;
+
+    for (var i = 0; i < barCount; i++) {
+      final city = cities[i];
+      final value = city.count.toDouble();
+      final barH = (value / maxVal) * chartH;
+      final x = leftPad + i * slot + (slot - barWidth) / 2;
+      final color = colors[i % colors.length];
+      final rect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(x, origin.dy - barH, barWidth, barH),
+        const Radius.circular(8),
+      );
+      final paint = Paint()..color = color;
+      canvas.drawRRect(rect, paint);
+
+      final countTp = TextPainter(
+        text: TextSpan(
+          text: '${city.count}',
+          style: const TextStyle(
+            color: Color(0xFF1A1A1A),
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      countTp.paint(
+        canvas,
+        Offset(x + (barWidth - countTp.width) / 2, origin.dy - barH - 14),
+      );
+
+      var label = city.name;
+      if (label.length > 10) label = '${label.substring(0, 9)}…';
+      final labelTp = TextPainter(
+        text: TextSpan(
+          text: label,
+          style: const TextStyle(
+            color: Color(0xFF6B7280),
+            fontSize: 9,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      labelTp.paint(
+        canvas,
+        Offset(x + (barWidth - labelTp.width) / 2, origin.dy + 6),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CityRankingBarPainter oldDelegate) => true;
+}
+
+/// Minimal white sparkline for flat KPI cards.
+class _MiniSparklinePainter extends CustomPainter {
+  _MiniSparklinePainter({required this.values});
+
+  final List<double> values;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (values.isEmpty) return;
+    final maxVal = values
+        .reduce((a, b) => a > b ? a : b)
+        .clamp(1.0, double.infinity);
+    final points = <Offset>[];
+    for (var i = 0; i < values.length; i++) {
+      final x = values.length == 1
+          ? size.width / 2
+          : size.width * (i / (values.length - 1));
+      final y = size.height * (1 - (values[i] / maxVal) * 0.85);
+      points.add(Offset(x, y));
+    }
+    if (points.length < 2) return;
+
+    final paint = Paint()
+      ..color = Colors.white.withOpacity(0.9)
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final path = Path()..moveTo(points.first.dx, points.first.dy);
+    for (var i = 1; i < points.length; i++) {
+      path.lineTo(points[i].dx, points[i].dy);
+    }
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _MiniSparklinePainter oldDelegate) =>
+      oldDelegate.values != values;
 }

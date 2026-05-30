@@ -1,5 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 
 /// Canonical user profile in Firestore `users` collection (all roles).
 ///
@@ -103,15 +106,175 @@ class UserDirectoryService {
     }
   }
 
-  /// True if this tourist completed EmailJS OTP (`users.isVerified` and/or `tourists.isVerified`).
+  /// If the user verified their email in Firebase Auth (Gmail link), mirror that to
+  /// `users` / `tourists` `isVerified` so they are not sent to the in-app OTP screen again.
+  static Future<void> syncVerifiedStatusFromAuthIfNeeded(String uid) async {
+    if (!_ready || uid.isEmpty) return;
+    User? u = FirebaseAuth.instance.currentUser;
+    if (u == null || u.uid != uid) return;
+    try {
+      await u.reload();
+      u = FirebaseAuth.instance.currentUser;
+    } catch (_) {}
+    if (u == null || !u.emailVerified) return;
+
+    try {
+      final userDoc = await _db.collection(collectionId).doc(uid).get();
+      final touristDoc = await _db.collection('tourists').doc(uid).get();
+      final role =
+          (userDoc.data()?['role'] as String? ?? '').trim().toLowerCase();
+      final looksLikeTourist =
+          role == 'tourist' || (!userDoc.exists && touristDoc.exists);
+      if (!looksLikeTourist) return;
+
+      final userOk = (userDoc.data()?['isVerified'] as bool?) == true;
+      final tourOk = (touristDoc.data()?['isVerified'] as bool?) == true;
+      if (userOk && tourOk) return;
+      if (userOk && !touristDoc.exists) return;
+
+      final batch = _db.batch();
+      var hasOps = false;
+      if (userDoc.exists && !userOk) {
+        batch.set(
+          _db.collection(collectionId).doc(uid),
+          {'isVerified': true},
+          SetOptions(merge: true),
+        );
+        hasOps = true;
+      }
+      if (touristDoc.exists && !tourOk) {
+        batch.set(
+          _db.collection('tourists').doc(uid),
+          {'isVerified': true},
+          SetOptions(merge: true),
+        );
+        hasOps = true;
+      }
+      if (hasOps) await batch.commit();
+    } catch (e) {
+      debugPrint('UserDirectoryService.syncVerifiedStatusFromAuthIfNeeded: $e');
+    }
+  }
+
+  /// True if this tourist completed in-app OTP **or** Firebase Auth email verification.
   static Future<bool> touristEmailVerificationComplete(String uid) async {
     if (!_ready || uid.isEmpty) return false;
+    await syncVerifiedStatusFromAuthIfNeeded(uid);
+    final authUser = FirebaseAuth.instance.currentUser;
+    if (authUser != null &&
+        authUser.uid == uid &&
+        authUser.emailVerified) {
+      return true;
+    }
     final profile = await getProfileByUid(uid, preferServer: true);
     if (profile != null && profile.isTourist && profile.isVerified) {
       return true;
     }
     final fromTourists = await getTouristIsVerifiedFromTouristsDoc(uid);
     return fromTourists == true;
+  }
+
+  /// Creates/updates `users/{uid}` for Governor or tourism staff (required for Firestore rules).
+  static Future<bool> ensureStaffUserDoc({
+    required String uid,
+    required String email,
+    required String roleRaw,
+    String? fullName,
+    String? municipalityId,
+  }) async {
+    if (!_ready || uid.isEmpty) return false;
+    final role = roleRaw.trim().toLowerCase();
+    if (role != 'governor' && role != 'tourism' && role != 'tourism_office') {
+      return false;
+    }
+    final mun = (municipalityId ?? '').trim();
+    try {
+      await _db.collection(collectionId).doc(uid).set({
+        'firebaseUid': uid,
+        'email': email.trim(),
+        'role': role,
+        'fullName': fullName?.trim() ?? '',
+        'municipality': mun,
+        if (mun.isNotEmpty) 'municipalityId': mun,
+        'isVerified': true,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      return true;
+    } catch (e) {
+      debugPrint('UserDirectoryService.ensureStaffUserDoc: $e');
+      return false;
+    }
+  }
+
+  /// Ensures `users/{uid}` has a staff role before provincial/LGU Firestore list queries.
+  static Future<bool> prepareProvincialStaffFirestoreAccess({
+    required String uid,
+    required String email,
+    required String roleRaw,
+    String? fullName,
+    String? municipalityId,
+  }) async {
+    if (!_ready || uid.isEmpty) return false;
+
+    final normalizedEmail = email.trim();
+    var wrote = await ensureStaffUserDoc(
+      uid: uid,
+      email: normalizedEmail.isNotEmpty ? normalizedEmail : email,
+      roleRaw: roleRaw,
+      fullName: fullName,
+      municipalityId: municipalityId,
+    );
+
+    // Legacy: staff profile stored under a different doc id (email query).
+    if (!wrote || normalizedEmail.isNotEmpty) {
+      final byEmail = await getProfileByEmail(normalizedEmail);
+      if (byEmail != null &&
+          byEmail.uid != uid &&
+          (byEmail.isGovernor || byEmail.isTourismOffice)) {
+        wrote = await ensureStaffUserDoc(
+          uid: uid,
+          email: byEmail.email,
+          roleRaw: byEmail.roleRaw,
+          fullName: byEmail.fullName ?? fullName,
+          municipalityId: municipalityId,
+        );
+      }
+    }
+
+    try {
+      final doc = await _db
+          .collection(collectionId)
+          .doc(uid)
+          .get(const GetOptions(source: Source.server));
+      final role =
+          (doc.data()?['role'] as String? ?? '').trim().toLowerCase();
+      final isStaff = role == 'governor' ||
+          role == 'tourism' ||
+          role == 'tourism_office';
+      if (isStaff) {
+        await _syncStaffCustomClaims();
+      }
+      return isStaff;
+    } catch (e) {
+      debugPrint('UserDirectoryService.prepareProvincialStaffFirestoreAccess: $e');
+      return false;
+    }
+  }
+
+  /// Sets Auth custom claims via Cloud Function so Firestore rules allow staff list queries.
+  static Future<void> _syncStaffCustomClaims() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    try {
+      final callable = FirebaseFunctions.instanceFor(
+        region: 'asia-southeast1',
+      ).httpsCallable('ensureStaffAccess');
+      await callable.call<Object?>();
+      await user.getIdToken(true);
+    } catch (e) {
+      debugPrint('UserDirectoryService._syncStaffCustomClaims: $e');
+    }
   }
 
   /// Fallback: query by email (case variants).

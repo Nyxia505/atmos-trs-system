@@ -1,20 +1,31 @@
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:geolocator/geolocator.dart';
 import 'package:atmos_trs_system/config/qr_scan_geofence_config.dart';
+import 'package:atmos_trs_system/services/qr_scan_demo_guard.dart';
 
 /// Verifies the device is near the expected coordinates before honoring a QR scan.
 class QrScanLocationGuard {
   QrScanLocationGuard._();
+
+  /// Haversine distance in meters (also used to compare QR vs Firestore anchors).
+  static double distanceMeters(
+    double lat1,
+    double lon1,
+    double lat2,
+    double lon2,
+  ) =>
+      _haversineMeters(lat1, lon1, lat2, lon2);
 
   /// Returns `null` if OK, or a user-facing error message.
   static Future<String?> verifyNearAnchor({
     required double anchorLat,
     required double anchorLng,
     required double maxDistanceMeters,
+    String? spotLabel,
   }) async {
-    if (kDebugMode && kQrScanBypassGeofenceInDebug) {
+    if (QrScanDemoGuard.shouldBypassGeofence) {
       return null;
     }
 
@@ -23,12 +34,14 @@ class QrScanLocationGuard {
     }
 
     if (kIsWeb) {
-      return 'QR proximity check runs in the mobile app with GPS. Please use the ATMOS TRS app on your phone.';
+      return 'QR check-in with GPS works in the ATMOS TRS mobile app. '
+          'Please open the app on your phone at the tourist spot.';
     }
 
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      return 'Turn on location services so we can confirm you are at the site.';
+      return 'Please turn on Location (GPS) in your phone settings, then try scanning again. '
+          'We use your location only to confirm you are at the site — printed QR codes work when you are there.';
     }
 
     var permission = await Geolocator.checkPermission();
@@ -36,31 +49,55 @@ class QrScanLocationGuard {
       permission = await Geolocator.requestPermission();
     }
     if (permission == LocationPermission.denied) {
-      return 'Location permission is required to verify you are near this QR code.';
+      return 'We need location permission to confirm you are at the tourist spot. '
+          'Allow location when prompted, then scan again.';
     }
     if (permission == LocationPermission.deniedForever) {
-      return 'Location is blocked for this app. Open Settings and allow location to check in.';
+      return 'Location is turned off for ATMOS TRS. Open your phone Settings → Apps → ATMOS TRS → Permissions → allow Location, then try again.';
     }
 
-    final Position pos = await Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 0,
-      ),
-    );
+    Position pos;
+    try {
+      pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.best,
+          distanceFilter: 0,
+          timeLimit: Duration(seconds: 18),
+        ),
+      );
+    } catch (_) {
+      return 'We could not get your GPS position. Step outside for a clearer signal, wait a few seconds, and scan again.';
+    }
 
-    final double distance = _haversineMeters(
+    final accuracy = pos.accuracy;
+    if (accuracy > kQrScanRejectIfAccuracyWorseThanMeters) {
+      return 'Your GPS signal is still settling. Wait a moment outdoors, then scan again.';
+    }
+
+    final double distance = distanceMeters(
       anchorLat,
       anchorLng,
       pos.latitude,
       pos.longitude,
     );
 
-    if (distance > maxDistanceMeters) {
-      final int dRound = distance.round();
-      final int maxRound = maxDistanceMeters.round();
-      return 'Sorry, you must scan this QR within about $maxRound meters of the site. '
-          'You appear to be about $dRound m away — go to the location and try again.';
+    final buffer = math.min(
+      accuracy > 0 ? accuracy : kQrScanSpotGpsAccuracyBufferMeters,
+      kQrScanSpotGpsAccuracyBufferMeters,
+    );
+    final effectiveMax = maxDistanceMeters + buffer;
+
+    if (distance > effectiveMax) {
+      final label = (spotLabel ?? '').trim();
+      final place = label.isNotEmpty ? label : 'this tourist spot';
+      final int shownTarget = maxDistanceMeters.round();
+      if (distance > 500) {
+        return 'Sorry — you need to be at $place to check in (within about $shownTarget meters of the site). '
+            'This code is registered for that location; scanning a photo or print from somewhere else will not work. '
+            'Visit the spot and try again.';
+      }
+      return 'Sorry — you need to be within about $shownTarget meters of $place to scan this QR. '
+          'Printed codes work when you are on site. Move closer and try again.';
     }
 
     return null;

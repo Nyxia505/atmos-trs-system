@@ -1,0 +1,237 @@
+rules_version = '2';
+// Deploy from main/: firebase deploy --only firestore:rules,functions --project atmos-trs-system
+// Roles are permanent via Auth custom claims (synced from users/{uid}.role by Cloud Function).
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function userDocPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function userDocExists() {
+      return isSignedIn() && exists(userDocPath());
+    }
+
+    function tokenRole() {
+      return isSignedIn() && request.auth.token.role is string
+        ? request.auth.token.role
+        : '';
+    }
+
+    function tokenStaff() {
+      return isSignedIn() && (
+        request.auth.token.staff == true
+        || request.auth.token.staff == 'true'
+      );
+    }
+
+    function tokenAdmin() {
+      return isSignedIn() && (
+        request.auth.token.admin == true
+        || request.auth.token.admin == 'true'
+      );
+    }
+
+    function isPublicCatalogCollection(collection) {
+      return collection in [
+        'tourist_spots',
+        'municipalities',
+        'featured_spots',
+        'events',
+        'announcements',
+        'transportation_fees',
+        'hub_spot_transport_fees'
+      ];
+    }
+
+    function firestoreUserRole() {
+      return userDocExists() ? get(userDocPath()).data.role : '';
+    }
+
+    function isAdminRole(role) {
+      return role in [
+        'admin', 'Admin', 'administrator', 'Administrator', 'governor', 'Governor'
+      ];
+    }
+
+    function isManagerRole(role) {
+      return role in [
+        'municipal_manager', 'Municipal Manager', 'municipal manager',
+        'municipalmanager', 'manager', 'Manager'
+      ];
+    }
+
+    function isAdmin() {
+      return tokenAdmin()
+        || isAdminRole(tokenRole())
+        || (userDocExists() && isAdminRole(firestoreUserRole()));
+    }
+
+    function isMunicipalManager() {
+      return isSignedIn() && (
+        request.auth.token.municipal_manager == true
+        || isManagerRole(tokenRole())
+        || (userDocExists() && isManagerRole(firestoreUserRole()))
+      );
+    }
+
+    function isStaff() {
+      return tokenStaff() || isAdmin() || isMunicipalManager();
+    }
+
+    // Role is permanent: only admins may change role / rolePermanent on users/{uid}.
+    function roleFieldUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys()
+        .hasAny(['role', 'rolePermanent']);
+    }
+
+    function authEmailLower() {
+      return isSignedIn() && request.auth.token.email is string
+        ? request.auth.token.email.lower()
+        : '';
+    }
+
+    // Own admin_accounts row (get by doc id — no collection list required).
+    function canReadOwnAdminAccount(accountId) {
+      return isSignedIn()
+        && authEmailLower() != ''
+        && (
+          !exists(/databases/$(database)/documents/admin_accounts/$(accountId))
+          || (
+            get(/databases/$(database)/documents/admin_accounts/$(accountId)).data.emailLower
+                == authEmailLower()
+            || get(/databases/$(database)/documents/admin_accounts/$(accountId)).data.firebaseUid
+                == request.auth.uid
+          )
+        );
+    }
+
+    // First login: signed-in user may set own permanent admin role (before custom claims exist).
+    function maySelfGrantAdminRole(userId) {
+      return isOwner(userId)
+        && isSignedIn()
+        && request.auth.token.email is string
+        && isAdminRole(request.resource.data.role)
+        && request.resource.data.emailLower == authEmailLower()
+        && request.resource.data.rolePermanent == true;
+    }
+
+    function isPermanentStaffUser() {
+      return userDocExists()
+        && get(userDocPath()).data.rolePermanent == true
+        && (
+          isAdminRole(get(userDocPath()).data.role)
+          || isManagerRole(get(userDocPath()).data.role)
+        );
+    }
+
+    // Public tourism catalogs — readable by everyone (guest + signed-in).
+    match /tourist_spots/{docId} {
+      allow read: if true;
+      allow write: if isStaff() || isPermanentStaffUser();
+    }
+    match /municipalities/{docId} {
+      allow read: if true;
+      allow write: if isStaff() || isPermanentStaffUser();
+    }
+    match /featured_spots/{docId} {
+      allow read: if true;
+      allow write: if isStaff() || isPermanentStaffUser();
+    }
+    match /events/{docId} {
+      allow read: if true;
+      allow write: if isStaff() || isPermanentStaffUser();
+    }
+    match /announcements/{docId} {
+      allow read: if true;
+      allow write: if isStaff() || isPermanentStaffUser();
+    }
+    match /transportation_fees/{docId} {
+      allow read: if true;
+      allow write: if isStaff() || isPermanentStaffUser();
+    }
+    match /hub_spot_transport_fees/{docId} {
+      allow read: if true;
+      allow write: if isStaff() || isPermanentStaffUser();
+    }
+    match /{collection}/{docId} {
+      allow read: if isPublicCatalogCollection(collection);
+      allow write: if isPublicCatalogCollection(collection) && (isStaff() || isPermanentStaffUser());
+    }
+    match /{collection}/{docId}/{document=**} {
+      allow read: if isPublicCatalogCollection(collection);
+      allow write: if isPublicCatalogCollection(collection) && (isStaff() || isPermanentStaffUser());
+    }
+    match /recommendation_profiles/{userId} {
+      allow read: if true;
+      allow create, update: if isOwner(userId);
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    // Listed admin: read own doc by id; staff may list all. No broad list for tourists.
+    match /admin_accounts/{accountId} {
+      allow get: if canReadOwnAdminAccount(accountId)
+        || isStaff()
+        || tokenAdmin()
+        || tokenStaff();
+      allow list: if isStaff() || tokenAdmin() || tokenStaff()
+        || (isSignedIn()
+            && resource.data.emailLower == authEmailLower());
+      allow create, update, delete: if isAdmin() || tokenAdmin();
+      // Bootstrap: create/update own row before JWT staff claims exist.
+      allow create, update: if isSignedIn()
+        && request.auth.token.email is string
+        && request.resource.data.emailLower == authEmailLower()
+        && request.resource.data.firebaseUid == request.auth.uid
+        && isAdminRole(request.resource.data.role);
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isStaff() || isPermanentStaffUser();
+      allow create: if isOwner(userId)
+        || (isSignedIn() && request.auth.uid == userId);
+      // Tourists may update profile fields; listed admin may self-grant permanent role on first login.
+      allow update: if isAdmin()
+        || isPermanentStaffUser()
+        || (isOwner(userId) && roleFieldUnchanged())
+        || maySelfGrantAdminRole(userId);
+      allow delete: if isAdmin();
+    }
+
+    match /tourist/{touristId} {
+      allow read: if isOwner(touristId) || isStaff();
+      allow create, update: if isOwner(touristId);
+      allow delete: if isAdmin();
+    }
+
+    match /tourists/{touristId} {
+      // Doc id may be ATMOS-xxx while [firebaseUid] holds Auth uid.
+      allow read: if isOwner(touristId)
+        || isStaff()
+        || (isSignedIn()
+            && resource.data.firebaseUid == request.auth.uid);
+      allow create, update: if isOwner(touristId)
+        || (isSignedIn()
+            && request.resource.data.firebaseUid == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+
+    match /tourist_visits/{document=**} {
+      allow read: if isSignedIn();
+      allow write: if isStaff();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

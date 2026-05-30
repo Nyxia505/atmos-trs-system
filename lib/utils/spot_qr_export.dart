@@ -8,8 +8,18 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 /// Downloads a single tourist-spot QR as PNG (web: file download; mobile: share sheet).
-Future<void> downloadSpotQrPng(String municipalityId, String spotId) async {
-  final data = spotQrData(municipalityId, spotId);
+Future<void> downloadSpotQrPng(
+  String municipalityId,
+  String spotId, {
+  double? latitude,
+  double? longitude,
+}) async {
+  final data = spotQrData(
+    municipalityId,
+    spotId,
+    latitude: latitude,
+    longitude: longitude,
+  );
   final bytes = await qrDataToPngBytes(data, size: 280);
   if (bytes == null) return;
   final safeMid = municipalityId.replaceAll(RegExp(r'[^a-z0-9_-]'), '_');
@@ -23,8 +33,15 @@ Future<void> downloadSpotQrPdf({
   required String spotId,
   required String spotName,
   required String municipalityDisplayName,
+  double? latitude,
+  double? longitude,
 }) async {
-  final data = spotQrData(municipalityId, spotId);
+  final data = spotQrData(
+    municipalityId,
+    spotId,
+    latitude: latitude,
+    longitude: longitude,
+  );
   final Uint8List? pngBytes = await qrDataToPngBytes(data, size: 220);
   final doc = pw.Document();
   doc.addPage(

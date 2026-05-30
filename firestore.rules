@@ -5,29 +5,100 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    /*
-     * TOURISTS
-     * - Create: doc id must be the signed-in user's uid, and firebaseUid field must match (signup flow).
-     * - Read/Update: any signed-in user (tourism dashboards list all; tighten later if needed).
-     */
-    match /tourists/{touristId} {
-      // Sign-up: doc id must be the caller's Auth uid (field checks alone can fail on web/SDK edge cases).
-      allow create: if isSignedIn() && touristId == request.auth.uid;
-      allow read, update: if isSignedIn();
-      allow delete: if false;
+    function userDocPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function userExists() {
+      return isSignedIn() && exists(userDocPath());
+    }
+
+    function staffRole() {
+      return userExists() ? get(userDocPath()).data.get('role', '') : '';
+    }
+
+    /// Role on `users/{uid}` (tolerates case / whitespace).
+    function isStaffRoleValue(role) {
+      return role is string
+        && (
+          role.matches('(?i)^\\s*governor\\s*$')
+          || role.matches('(?i)^\\s*tourism(_office)?\\s*$')
+        );
+    }
+
+    function isProvincialStaffFromUserDoc() {
+      return userExists() && isStaffRoleValue(staffRole());
+    }
+
+    /// Set by Cloud Function `ensureStaffAccess` after `users/{uid}` has a staff role.
+    function hasStaffCustomClaim() {
+      return isSignedIn()
+        && request.auth.token.get('staff', false) == true;
+    }
+
+    /// Demo / LGU staff emails when `users/{uid}` is missing or stale.
+    function isKnownStaffEmail() {
+      return isSignedIn()
+        && request.auth.token.email != null
+        && (
+          request.auth.token.email.matches('(?i)^governor\\.atmos@misocc-demo\\.ph$')
+          || request.auth.token.email.matches('(?i)^tourismoffice\\.atmos@misocc-demo\\.ph$')
+          || request.auth.token.email.matches('(?i)^tourism\\.[^@]+@.+$')
+          || request.auth.token.email.matches('(?i)^tourismoroquieta@.+$')
+          || request.auth.token.email.matches('(?i)^oroquieta\\.tourism@.+$')
+        );
+    }
+
+    /// Governor + municipal tourism offices — provincial / LGU dashboards.
+    function isProvincialStaff() {
+      return isSignedIn()
+        && (
+          hasStaffCustomClaim()
+          || isProvincialStaffFromUserDoc()
+          || isKnownStaffEmail()
+        );
+    }
+
+    function canReadTouristDoc(touristId) {
+      return isSignedIn()
+        && (request.auth.uid == touristId || isProvincialStaff());
+    }
+
+    /// Tourist read on a single check-in row (one uid field must match).
+    function isOwnCheckInByTouristId() {
+      return isSignedIn()
+          && resource.data.get('tourist_id', '') == request.auth.uid;
+    }
+
+    function isOwnCheckInByUserId() {
+      return isSignedIn()
+          && resource.data.get('userId', '') == request.auth.uid;
+    }
+
+    function isOwnCheckInByUserIdSnake() {
+      return isSignedIn()
+          && resource.data.get('user_id', '') == request.auth.uid;
+    }
+
+    function isOwnCheckinAuditRow() {
+      return isSignedIn()
+          && resource.data.get('user_id', '') == request.auth.uid;
     }
 
     /*
-     * VR TOURS — used by tourism dashboard (was blocked by catch-all before).
+     * TOURISTS — tourists read own doc; staff read all (Governor portal).
      */
+    match /tourists/{touristId} {
+      allow read: if canReadTouristDoc(touristId);
+      allow create, update: if isSignedIn() && request.auth.uid == touristId;
+      allow delete: if false;
+    }
+
     match /vr_tours/{vrTourId} {
       allow read: if true;
       allow create, update, delete: if isSignedIn();
     }
 
-    /*
-     * NOTIFICATIONS
-     */
     match /notifications/{notificationId} {
       allow read: if isSignedIn()
                   && resource.data.user_id == request.auth.uid;
@@ -35,20 +106,15 @@ service cloud.firestore {
                     && request.resource.data.user_id == request.auth.uid;
       allow update: if isSignedIn()
                     && resource.data.user_id == request.auth.uid;
-      allow delete: if false;
+      allow delete: if isSignedIn()
+                     && resource.data.user_id == request.auth.uid;
     }
 
-    /*
-     * ANNOUNCEMENTS
-     */
     match /announcements/{announcementId} {
       allow read: if true;
       allow create, update, delete: if isSignedIn();
     }
 
-    /*
-     * USERS — role + isVerified (canonical routing for all Firebase accounts).
-     */
     match /users/{userId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.auth.uid == userId;
@@ -56,38 +122,73 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    /*
-     * EMAIL OTPs — one doc per Auth uid; only that user may read/write.
-     */
+    match /tourist_activity/{userId} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+    }
+
     match /email_otps/{otpUid} {
       allow read, create, update, delete: if isSignedIn()
                                           && request.auth.uid == otpUid;
     }
 
-    /*
-     * CHECK-IN collections
-     */
     match /check_ins/{docId} {
-      allow read, create, update: if isSignedIn();
+      // Legacy collection — staff dashboards only (tourist app uses qr_checkins + checkins).
+      allow read, write: if isProvincialStaff();
+      allow create, update: if isSignedIn();
       allow delete: if false;
+    }
+
+    function isCheckInOwner() {
+      return isSignedIn()
+        && request.resource.data.user_id == request.auth.uid;
+    }
+
+    function isQrCheckInOwner() {
+      return isSignedIn()
+        && request.resource.data.get('tourist_id', '') == request.auth.uid
+        && (
+          request.resource.data.get('userId', '') == request.auth.uid
+          || request.resource.data.get('user_id', '') == request.auth.uid
+        );
     }
 
     match /qr_checkins/{docId} {
-      allow read, create, update: if isSignedIn();
+      // Staff: full collection access for dashboards.
+      allow read: if isProvincialStaff();
+      // Tourist: each rule matches one query shape (Firestore rejects OR in one list rule).
+      allow read: if isOwnCheckInByTouristId();
+      allow read: if isOwnCheckInByUserId();
+      allow read: if isOwnCheckInByUserIdSnake();
+      allow create: if isQrCheckInOwner();
+      allow update: if isSignedIn()
+                    && resource.data.tourist_id == request.auth.uid;
       allow delete: if false;
     }
 
-    /*
-     * TOURIST SPOTS
-     */
+    match /checkins/{docId} {
+      allow read: if isProvincialStaff();
+      allow read: if isOwnCheckinAuditRow();
+      allow create: if isCheckInOwner();
+      allow update, delete: if false;
+    }
+
     match /tourist_spots/{spotId} {
       allow read: if true;
       allow create, update, delete: if isSignedIn();
     }
 
-    /*
-     * Default deny for everything else.
-     */
+    match /tourist_qr_codes/{touristId} {
+      allow read: if isSignedIn() && request.auth.uid == touristId;
+      allow create, update: if isSignedIn() && request.auth.uid == touristId;
+      allow delete: if false;
+    }
+
+    match /tourist_qr_codes/{touristId}/history/{historyId} {
+      allow read: if isSignedIn() && request.auth.uid == touristId;
+      allow create: if isSignedIn() && request.auth.uid == touristId;
+      allow update, delete: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

@@ -4,6 +4,20 @@ import 'package:shared_preferences/shared_preferences.dart';
 class UserProfileStorage {
   UserProfileStorage._();
 
+  static UserProfile? _memoryCache;
+
+  /// In-memory profile for instant UI (Home header) after app restart.
+  static UserProfile? get cachedProfile {
+    final p = _memoryCache;
+    if (p != null && p.firstName.trim().isNotEmpty) return p;
+    return null;
+  }
+
+  /// Loads SharedPreferences into [cachedProfile] before the first frame.
+  static Future<void> warmCache() async {
+    await getUserProfile();
+  }
+
   static const _keyFirstName = 'user_first_name';
   static const _keyMiddleName = 'user_middle_name';
   static const _keyLastName = 'user_last_name';
@@ -69,21 +83,48 @@ class UserProfileStorage {
       await prefs.setString(_keyProfileImage, profileImageBase64);
     }
     if (profilePhotoUrl != null) await prefs.setString(_keyProfilePhotoUrl, profilePhotoUrl);
+    _memoryCache = UserProfile(
+      firstName: firstName,
+      middleName: middleName,
+      lastName: lastName,
+      suffix: suffix,
+      sex: sex,
+      civilStatus: civilStatus,
+      nationality: nationality,
+      dateOfBirth: dateOfBirth,
+      mobile: mobile,
+      email: email,
+      country: country,
+      province: province,
+      city: city,
+      street: street,
+      barangay: barangay,
+      touristId: touristId,
+      profileImageBase64: profileImageBase64,
+      profilePhotoUrl: profilePhotoUrl,
+    );
   }
 
   /// Persists only the Storage download URL (e.g. after hydrating from Firestore).
   static Future<void> updateProfilePhotoUrl(String url) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_keyProfilePhotoUrl, url);
+    final cached = _memoryCache;
+    if (cached != null) {
+      _memoryCache = cached.withProfilePhotoUrl(url);
+    }
   }
 
   /// Get user profile data
   static Future<UserProfile?> getUserProfile() async {
+    final cached = cachedProfile;
+    if (cached != null) return cached;
+
     final prefs = await SharedPreferences.getInstance();
     final firstName = prefs.getString(_keyFirstName);
     if (firstName == null) return null;
 
-    return UserProfile(
+    _memoryCache = UserProfile(
       firstName: firstName,
       middleName: prefs.getString(_keyMiddleName),
       lastName: prefs.getString(_keyLastName) ?? '',
@@ -103,10 +144,12 @@ class UserProfileStorage {
       profileImageBase64: prefs.getString(_keyProfileImage),
       profilePhotoUrl: prefs.getString(_keyProfilePhotoUrl),
     );
+    return _memoryCache;
   }
 
   /// Clear user profile data on logout
   static Future<void> clearUserProfile() async {
+    _memoryCache = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyFirstName);
     await prefs.remove(_keyMiddleName);

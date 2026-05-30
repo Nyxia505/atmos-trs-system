@@ -18,6 +18,7 @@ class AppSearchBar extends StatelessWidget {
     this.enabled = true,
     this.horizontalPadding,
     this.customShadow,
+    this.borderColor,
   });
 
   final TextEditingController controller;
@@ -34,6 +35,9 @@ class AppSearchBar extends StatelessWidget {
   final double? horizontalPadding;
   /// When set, overrides the default shadow for a custom look (e.g. enhanced depth).
   final List<BoxShadow>? customShadow;
+
+  /// When set, overrides the default grey border (e.g. brand accent on dashboards).
+  final Color? borderColor;
 
   double _getHorizontalPadding(BuildContext context) {
     if (horizontalPadding != null) return horizontalPadding!;
@@ -56,7 +60,10 @@ class AppSearchBar extends StatelessWidget {
         decoration: BoxDecoration(
           color: backgroundColor,
           borderRadius: BorderRadius.circular(radius),
-          border: Border.all(color: Colors.grey.shade300, width: 1),
+          border: Border.all(
+            color: borderColor ?? Colors.grey.shade300,
+            width: 1,
+          ),
           boxShadow: customShadow ?? (showShadow
               ? [
                   BoxShadow(
