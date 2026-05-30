@@ -47,6 +47,6 @@ class EmailjsConfig {
   /// Never commit a real value to a public repository.
   static const String privateAccessToken = String.fromEnvironment(
     'EMAILJS_ACCESS_TOKEN',
-    defaultValue: 'axQ3F4ykxyBz1GTozodYe',
+    defaultValue: '',
   );
 }

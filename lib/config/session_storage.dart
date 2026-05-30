@@ -12,11 +12,21 @@ class SessionStorage {
   static const _keyUserEmail = 'auth_user_email';
   static const _keyMunicipalityId = 'auth_municipality_id';
 
-  /// Admin credentials
+  /// Admin credentials (emails are non-secret demo identifiers).
   static const String governorEmail = 'governor.atmos@misocc-demo.ph';
-  static const String governorPassword = 'Asenso@MISocc#2026!Gov';
   static const String tourismEmail = 'tourismoffice.atmos@misocc-demo.ph';
-  static const String tourismPassword = 'ATMOS#Tourism@2026_MisOcc!';
+
+  /// Demo passwords — pass at build/run time, never commit real values:
+  /// `--dart-define=GOVERNOR_DEMO_PASSWORD=... --dart-define=TOURISM_DEMO_PASSWORD=...`
+  static String get governorPassword => const String.fromEnvironment(
+        'GOVERNOR_DEMO_PASSWORD',
+        defaultValue: '',
+      );
+
+  static String get tourismPassword => const String.fromEnvironment(
+        'TOURISM_DEMO_PASSWORD',
+        defaultValue: '',
+      );
 
   /// Password used by tourism dashboard "Change Password" validation (prefs override or demo default).
   static Future<String> getEffectiveTourismPassword() async {
