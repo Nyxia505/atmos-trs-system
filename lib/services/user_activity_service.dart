@@ -1,5 +1,14 @@
 import 'dart:convert';
+import 'dart:math' as math;
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'package:atmos_trs_system/config/auth_config.dart';
+import 'package:atmos_trs_system/utils/checkin_dedupe.dart';
 
 /// Service to manage user activity data like visits, saved spots, and stats.
 class UserActivityService {
@@ -11,13 +20,55 @@ class UserActivityService {
   static const String _keyFirstVisitDate = 'user_first_visit_date';
   static const String _keyNotifications = 'user_notifications';
   static const String _keyRecentlyViewed = 'user_recently_viewed_spots';
+  static const String _keyActivityBoundUid = 'user_activity_bound_uid';
+
+  static String? _boundUidCache;
+
+  /// Binds local activity storage to [uid] so a new account on the same device
+  /// does not inherit another user's visits or notifications.
+  static Future<void> bindToUser(String uid) async {
+    final id = uid.trim();
+    if (id.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final previous = prefs.getString(_keyActivityBoundUid);
+    _boundUidCache = id;
+    await prefs.setString(_keyActivityBoundUid, id);
+    if (previous != null && previous.isNotEmpty && previous != id) {
+      _boundUidCache = id;
+    }
+  }
+
+  static Future<String?> _activeUid() async {
+    if (_boundUidCache != null && _boundUidCache!.isNotEmpty) {
+      return _boundUidCache;
+    }
+    final fromAuth =
+        AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
+    if (fromAuth != null && fromAuth.isNotEmpty) {
+      _boundUidCache = fromAuth;
+      return fromAuth;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_keyActivityBoundUid);
+    if (stored != null && stored.isNotEmpty) {
+      _boundUidCache = stored;
+      return stored;
+    }
+    return null;
+  }
+
+  static Future<String> _scoped(String base) async {
+    final uid = await _activeUid();
+    if (uid == null || uid.isEmpty) return base;
+    return '${base}_$uid';
+  }
 
   // ============ RECENTLY VIEWED (Home / spot previews) ============
 
   /// Spots the user opened (e.g. bottom sheet on Home). Most recent first; max 30.
   static Future<List<VisitRecord>> getRecentlyViewed() async {
     final prefs = await SharedPreferences.getInstance();
-    final jsonString = prefs.getString(_keyRecentlyViewed);
+    final jsonString = prefs.getString(await _scoped(_keyRecentlyViewed));
     if (jsonString == null || jsonString.isEmpty) return [];
     try {
       final List<dynamic> jsonList = json.decode(jsonString);
@@ -52,25 +103,175 @@ class UserActivityService {
       list = list.sublist(0, 30);
     }
     await prefs.setString(
-      _keyRecentlyViewed,
+      await _scoped(_keyRecentlyViewed),
       json.encode(list.map((v) => v.toJson()).toList()),
     );
+    _schedulePushActivityToCloud();
   }
 
   // ============ VISITED SPOTS ============
 
+  /// Replaces the full visited list in local storage (e.g. after enriching images).
+  static Future<void> replaceVisitedSpots(List<VisitRecord> visits) async {
+    final prefs = await SharedPreferences.getInstance();
+    final sorted = List<VisitRecord>.from(visits)
+      ..sort((a, b) => b.visitedAt.compareTo(a.visitedAt));
+    await prefs.setString(
+      await _scoped(_keyVisitedSpots),
+      json.encode(sorted.map((v) => v.toJson()).toList()),
+    );
+  }
+
   /// Get list of visited spot IDs with timestamps
   static Future<List<VisitRecord>> getVisitedSpots() async {
     final prefs = await SharedPreferences.getInstance();
-    final jsonString = prefs.getString(_keyVisitedSpots);
+    final jsonString = prefs.getString(await _scoped(_keyVisitedSpots));
     if (jsonString == null || jsonString.isEmpty) return [];
-    
+
     try {
       final List<dynamic> jsonList = json.decode(jsonString);
       return jsonList.map((e) => VisitRecord.fromJson(e)).toList()
         ..sort((a, b) => b.visitedAt.compareTo(a.visitedAt));
     } catch (_) {
       return [];
+    }
+  }
+
+  static void _mergeCheckInRowIntoBySpot(
+    Map<String, VisitRecord> bySpot,
+    Map<String, dynamic> d,
+  ) {
+    final spotId = CheckInDedupe.spotId(d);
+    if (spotId.isEmpty || _isLguOnlyCheckIn(spotId)) return;
+
+    var spotName = (d['spot_name'] ?? d['spotName'] ?? '').toString().trim();
+    if (spotName.isEmpty) {
+      spotName = spotId.replaceAll('_', ' ');
+    }
+    var category = (d['category'] ?? d['spotCategory'] ?? '').toString().trim();
+    if (category.isEmpty) {
+      category = 'Spot';
+    }
+
+    var visitedAt = DateTime.now();
+    final ts = d['timestamp'] ?? d['checkin_time'] ?? d['checkedInAt'] ?? d['createdAt'];
+    if (ts is Timestamp) {
+      visitedAt = ts.toDate();
+    } else if (ts is String) {
+      visitedAt = DateTime.tryParse(ts) ?? visitedAt;
+    }
+
+    final imageRaw = (d['imageUrl'] ?? d['image_url'] ?? '').toString().trim();
+    final imageUrl = imageRaw.isNotEmpty ? imageRaw : null;
+
+    final existing = bySpot[spotId];
+    if (existing == null || visitedAt.isAfter(existing.visitedAt)) {
+      bySpot[spotId] = VisitRecord(
+        spotId: spotId,
+        spotName: spotName,
+        category: category,
+        imageUrl: imageUrl ?? existing?.imageUrl,
+        visitedAt: visitedAt,
+      );
+    }
+  }
+
+  /// Municipality LGU QR visits are not tourist-spot destinations on Home.
+  static bool _isLguOnlyCheckIn(String spotId) {
+    return spotId.trim().toLowerCase().startsWith('lgu_');
+  }
+
+  static Future<QuerySnapshot<Map<String, dynamic>>> _queryUserCollection(
+    String collection,
+    String uid,
+  ) async {
+    final db = FirebaseFirestore.instance;
+    try {
+      return db
+          .collection(collection)
+          .where('tourist_id', isEqualTo: uid)
+          .limit(300)
+          .get();
+    } catch (_) {
+      try {
+        return db
+            .collection(collection)
+            .where('userId', isEqualTo: uid)
+            .limit(300)
+            .get();
+      } catch (_) {
+        return db
+            .collection(collection)
+            .where('user_id', isEqualTo: uid)
+            .limit(300)
+            .get();
+      }
+    }
+  }
+
+  /// Rebuilds local visit history from Firestore QR check-ins (source of truth).
+  static Future<List<VisitRecord>> syncVisitedSpotsFromQrCheckins() async {
+    final uid = AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty || Firebase.apps.isEmpty) {
+      return getVisitedSpots();
+    }
+
+    final local = await getVisitedSpots();
+    try {
+      final bySpot = <String, VisitRecord>{};
+      var firestoreSynced = false;
+
+      try {
+        final qrRows = (await _queryUserCollection('qr_checkins', uid))
+            .docs
+            .map((d) => d.data())
+            .toList();
+        firestoreSynced = true;
+        for (final row in CheckInDedupe.oneVisitPerUserSpotDay(qrRows)) {
+          _mergeCheckInRowIntoBySpot(bySpot, row);
+        }
+      } catch (e) {
+        debugPrint('[UserActivity] qr_checkins sync skipped: $e');
+      }
+
+      try {
+        for (final doc in (await _queryUserCollection('checkins', uid)).docs) {
+          firestoreSynced = true;
+          final row = doc.data();
+          final spotId = CheckInDedupe.spotId(row);
+          if (spotId.isEmpty || bySpot.containsKey(spotId)) continue;
+          _mergeCheckInRowIntoBySpot(bySpot, row);
+        }
+      } catch (e) {
+        debugPrint('[UserActivity] checkins sync skipped: $e');
+      }
+
+      // Keep a just-completed local QR visit until Firestore index catches up.
+      if (firestoreSynced) {
+        final now = DateTime.now();
+        for (final v in local) {
+          if (v.spotId.isEmpty || _isLguOnlyCheckIn(v.spotId)) continue;
+          if (now.difference(v.visitedAt).inMinutes > 5) continue;
+          if (bySpot.containsKey(v.spotId)) continue;
+          bySpot[v.spotId] = v;
+        }
+      }
+
+      if (!firestoreSynced) return local;
+
+      final merged = bySpot.values.toList()
+        ..sort((a, b) => b.visitedAt.compareTo(a.visitedAt));
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        await _scoped(_keyVisitedSpots),
+        json.encode(merged.map((v) => v.toJson()).toList()),
+      );
+      _schedulePushActivityToCloud();
+      return merged;
+    } catch (e) {
+      debugPrint('UserActivityService.syncVisitedSpotsFromQrCheckins: $e');
+      return local;
     }
   }
 
@@ -84,31 +285,118 @@ class UserActivityService {
     final prefs = await SharedPreferences.getInstance();
     final visits = await getVisitedSpots();
     
-    // Check if already visited today
-    final today = DateTime.now();
-    final alreadyVisitedToday = visits.any((v) =>
-        v.spotId == spotId &&
-        v.visitedAt.year == today.year &&
-        v.visitedAt.month == today.month &&
-        v.visitedAt.day == today.day);
-    
-    if (!alreadyVisitedToday) {
-      visits.insert(0, VisitRecord(
-        spotId: spotId,
+    final img = imageUrl?.trim();
+    final existingIndex = visits.indexWhere((v) => v.spotId == spotId);
+
+    if (existingIndex >= 0) {
+      final existing = visits[existingIndex];
+      final updated = existing.copyWith(
         spotName: spotName,
         category: category,
-        imageUrl: imageUrl,
         visitedAt: DateTime.now(),
-      ));
-      
+        imageUrl: (img != null && img.isNotEmpty)
+            ? img
+            : existing.imageUrl,
+      );
+      visits.removeAt(existingIndex);
+      visits.insert(0, updated);
       await prefs.setString(
-        _keyVisitedSpots,
+        await _scoped(_keyVisitedSpots),
         json.encode(visits.map((v) => v.toJson()).toList()),
       );
-      
-      // Check for badge achievements
-      await _checkBadgeAchievements(visits.length);
+      _schedulePushActivityToCloud();
+      return;
     }
+
+    visits.insert(0, VisitRecord(
+      spotId: spotId,
+      spotName: spotName,
+      category: category,
+      imageUrl: imageUrl,
+      visitedAt: DateTime.now(),
+    ));
+
+    await prefs.setString(
+      await _scoped(_keyVisitedSpots),
+      json.encode(visits.map((v) => v.toJson()).toList()),
+    );
+
+    // Check for badge achievements
+    await _checkBadgeAchievements(
+      visits.map((v) => v.spotId).where((id) => id.isNotEmpty).toSet().length,
+    );
+    _schedulePushActivityToCloud();
+  }
+
+  /// Backs up visits + badges + recently viewed + saved spots so progress
+  /// survives reinstall / new device.
+  static Future<void> pushVisitAndBadgeSnapshotToCloud(String uid) async {
+    if (uid.isEmpty) return;
+    try {
+      if (Firebase.apps.isEmpty) return;
+      final authUser = FirebaseAuth.instance.currentUser;
+      if (authUser == null || authUser.uid != uid) return;
+      final visits = await getVisitedSpots();
+      final badges = await getEarnedBadges();
+      final recentlyViewed = await getRecentlyViewed();
+      final savedSpots = await getSavedSpotIds();
+      await FirebaseFirestore.instance.collection('tourist_activity').doc(uid).set(
+        {
+          'visits': visits.map((v) => v.toJson()).toList(),
+          'badges': badges.map((b) => b.toJson()).toList(),
+          'recentlyViewed': recentlyViewed.map((v) => v.toJson()).toList(),
+          'savedSpots': savedSpots,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    } catch (e) {
+      debugPrint('UserActivityService.pushVisitAndBadgeSnapshotToCloud: $e');
+    }
+  }
+
+  static void _schedulePushActivityToCloud() {
+    final uid = AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return;
+    pushVisitAndBadgeSnapshotToCloud(uid);
+  }
+
+  /// After merging local + server lists (login / app start).
+  static Future<void> applyMergedActivityFromCloud({
+    required List<VisitRecord> visits,
+    required List<Badge> badges,
+    required List<VisitRecord> recentlyViewed,
+    required List<String> savedSpotIds,
+    required String uid,
+  }) async {
+    if (uid.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final sorted = List<VisitRecord>.from(visits)
+      ..sort((a, b) => b.visitedAt.compareTo(a.visitedAt));
+    await prefs.setString(
+      await _scoped(_keyVisitedSpots),
+      json.encode(sorted.map((v) => v.toJson()).toList()),
+    );
+    await prefs.setString(
+      await _scoped(_keyBadges),
+      json.encode(badges.map((b) => b.toJson()).toList()),
+    );
+    final viewed = List<VisitRecord>.from(recentlyViewed)
+      ..sort((a, b) => b.visitedAt.compareTo(a.visitedAt));
+    await prefs.setString(
+      await _scoped(_keyRecentlyViewed),
+      json.encode(viewed.map((v) => v.toJson()).toList()),
+    );
+    await prefs.setStringList(
+      await _scoped(_keySavedSpots),
+      savedSpotIds.toSet().toList(),
+    );
+    for (final t in [1, 5, 10, 25]) {
+      if (sorted.length >= t) {
+        await _checkBadgeAchievements(t);
+      }
+    }
+    await pushVisitAndBadgeSnapshotToCloud(uid);
   }
 
   /// Get unique places visited count
@@ -122,7 +410,7 @@ class UserActivityService {
   /// Get list of saved spot IDs
   static Future<List<String>> getSavedSpotIds() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getStringList(_keySavedSpots) ?? [];
+    return prefs.getStringList(await _scoped(_keySavedSpots)) ?? [];
   }
 
   /// Check if a spot is saved
@@ -145,7 +433,8 @@ class UserActivityService {
       isSaved = true;
     }
     
-    await prefs.setStringList(_keySavedSpots, savedSpots);
+    await prefs.setStringList(await _scoped(_keySavedSpots), savedSpots);
+    _schedulePushActivityToCloud();
     return isSaved;
   }
 
@@ -160,7 +449,7 @@ class UserActivityService {
   /// Get earned badges
   static Future<List<Badge>> getEarnedBadges() async {
     final prefs = await SharedPreferences.getInstance();
-    final jsonString = prefs.getString(_keyBadges);
+    final jsonString = prefs.getString(await _scoped(_keyBadges));
     if (jsonString == null || jsonString.isEmpty) return [];
     
     try {
@@ -181,7 +470,7 @@ class UserActivityService {
     
     badges.add(badge);
     await prefs.setString(
-      _keyBadges,
+      await _scoped(_keyBadges),
       json.encode(badges.map((b) => b.toJson()).toList()),
     );
   }
@@ -247,11 +536,12 @@ class UserActivityService {
   /// Get days since first visit
   static Future<int> getDaysAsTourist() async {
     final prefs = await SharedPreferences.getInstance();
-    final firstVisitString = prefs.getString(_keyFirstVisitDate);
+    final firstVisitKey = await _scoped(_keyFirstVisitDate);
+    final firstVisitString = prefs.getString(firstVisitKey);
     
     if (firstVisitString == null) {
       // Set first visit date to now
-      await prefs.setString(_keyFirstVisitDate, DateTime.now().toIso8601String());
+      await prefs.setString(firstVisitKey, DateTime.now().toIso8601String());
       return 1;
     }
     
@@ -269,7 +559,7 @@ class UserActivityService {
   /// Get notifications
   static Future<List<AppNotification>> getNotifications() async {
     final prefs = await SharedPreferences.getInstance();
-    final jsonString = prefs.getString(_keyNotifications);
+    final jsonString = prefs.getString(await _scoped(_keyNotifications));
     if (jsonString == null || jsonString.isEmpty) return [];
     
     try {
@@ -279,6 +569,34 @@ class UserActivityService {
     } catch (_) {
       return [];
     }
+  }
+
+  /// Add a notification only if [id] is not already stored.
+  static Future<void> addNotificationIfAbsent({
+    required String id,
+    required String title,
+    required String message,
+    required NotificationType type,
+  }) async {
+    if (id.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final notifications = await getNotifications();
+    if (notifications.any((n) => n.id == id)) return;
+
+    notifications.insert(0, AppNotification(
+      id: id,
+      title: title,
+      message: message,
+      type: type,
+      createdAt: DateTime.now(),
+      isRead: false,
+    ));
+
+    final trimmed = notifications.take(50).toList();
+    await prefs.setString(
+      await _scoped(_keyNotifications),
+      json.encode(trimmed.map((n) => n.toJson()).toList()),
+    );
   }
 
   /// Add a notification
@@ -303,7 +621,7 @@ class UserActivityService {
     final trimmed = notifications.take(50).toList();
     
     await prefs.setString(
-      _keyNotifications,
+      await _scoped(_keyNotifications),
       json.encode(trimmed.map((n) => n.toJson()).toList()),
     );
   }
@@ -330,8 +648,21 @@ class UserActivityService {
     ));
     final trimmed = notifications.take(50).toList();
     await prefs.setString(
-      _keyNotifications,
+      await _scoped(_keyNotifications),
       json.encode(trimmed.map((n) => n.toJson()).toList()),
+    );
+  }
+
+  /// Removes a stored notification by id.
+  static Future<void> deleteNotification(String notificationId) async {
+    if (notificationId.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final notifications = await getNotifications();
+    final next = notifications.where((n) => n.id != notificationId).toList();
+    if (next.length == notifications.length) return;
+    await prefs.setString(
+      await _scoped(_keyNotifications),
+      json.encode(next.map((n) => n.toJson()).toList()),
     );
   }
 
@@ -344,10 +675,22 @@ class UserActivityService {
     if (index != -1) {
       notifications[index] = notifications[index].copyWith(isRead: true);
       await prefs.setString(
-        _keyNotifications,
+        await _scoped(_keyNotifications),
         json.encode(notifications.map((n) => n.toJson()).toList()),
       );
     }
+  }
+
+  /// Marks every stored notification (e.g. announcements mirrored on Home) as read.
+  static Future<void> markAllNotificationsAsRead() async {
+    final prefs = await SharedPreferences.getInstance();
+    final notifications = await getNotifications();
+    if (notifications.isEmpty) return;
+    final updated = notifications.map((n) => n.copyWith(isRead: true)).toList();
+    await prefs.setString(
+      await _scoped(_keyNotifications),
+      json.encode(updated.map((n) => n.toJson()).toList()),
+    );
   }
 
   /// Get unread notifications count
@@ -359,18 +702,23 @@ class UserActivityService {
   /// Clear all notifications
   static Future<void> clearNotifications() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_keyNotifications);
+    await prefs.remove(await _scoped(_keyNotifications));
   }
 
   // ============ USER STATS ============
 
-  /// Get all user stats at once
-  static Future<UserStats> getUserStats() async {
-    final placesVisited = await getUniquePlacesVisited();
+  /// Fast stats from local storage only (no Firestore network calls).
+  static Future<UserStats> getUserStatsCached() async {
+    final visits = await getVisitedSpots();
+    final placesVisited = visits
+        .map((v) => v.spotId)
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .length;
     final badgesEarned = await getBadgesCount();
     final daysAsTourist = await getDaysAsTourist();
     final savedSpots = await getSavedSpotsCount();
-    
+
     return UserStats(
       placesVisited: placesVisited,
       badgesEarned: badgesEarned,
@@ -379,15 +727,38 @@ class UserActivityService {
     );
   }
 
-  /// Clear all user activity data
+  /// Get all user stats at once (syncs check-ins from Firestore first).
+  static Future<UserStats> getUserStats() async {
+    await syncVisitedSpotsFromQrCheckins();
+    return getUserStatsCached();
+  }
+
+  /// Durable total visits count (Firestore + local fallback).
+  /// Keeps user visit progress even when local cache changes.
+  static Future<int> getTotalVisitsCount() async {
+    final localCount = (await getVisitedSpots()).length;
+    final uid = AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty || Firebase.apps.isEmpty) return localCount;
+    try {
+      final doc = await FirebaseFirestore.instance.collection('tourists').doc(uid).get();
+      final data = doc.data();
+      final remoteRaw = data?['totalVisits'];
+      final remoteCount = remoteRaw is num ? remoteRaw.toInt() : 0;
+      return math.max(localCount, remoteCount);
+    } catch (_) {
+      return localCount;
+    }
+  }
+
+  /// Clear all user activity data for the active account.
   static Future<void> clearAllData() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_keyVisitedSpots);
-    await prefs.remove(_keySavedSpots);
-    await prefs.remove(_keyBadges);
-    await prefs.remove(_keyFirstVisitDate);
-    await prefs.remove(_keyNotifications);
-    await prefs.remove(_keyRecentlyViewed);
+    await prefs.remove(await _scoped(_keyVisitedSpots));
+    await prefs.remove(await _scoped(_keySavedSpots));
+    await prefs.remove(await _scoped(_keyBadges));
+    await prefs.remove(await _scoped(_keyFirstVisitDate));
+    await prefs.remove(await _scoped(_keyNotifications));
+    await prefs.remove(await _scoped(_keyRecentlyViewed));
   }
 }
 
@@ -407,6 +778,22 @@ class VisitRecord {
     this.imageUrl,
     required this.visitedAt,
   });
+
+  VisitRecord copyWith({
+    String? spotId,
+    String? spotName,
+    String? category,
+    String? imageUrl,
+    DateTime? visitedAt,
+  }) {
+    return VisitRecord(
+      spotId: spotId ?? this.spotId,
+      spotName: spotName ?? this.spotName,
+      category: category ?? this.category,
+      imageUrl: imageUrl ?? this.imageUrl,
+      visitedAt: visitedAt ?? this.visitedAt,
+    );
+  }
 
   factory VisitRecord.fromJson(Map<String, dynamic> json) {
     return VisitRecord(
@@ -465,7 +852,7 @@ class Badge {
   }
 }
 
-enum NotificationType { badge, event, weather, checkin, system }
+enum NotificationType { badge, event, weather, checkin, system, welcome }
 
 class AppNotification {
   final String id;

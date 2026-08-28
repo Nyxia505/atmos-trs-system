@@ -18,6 +18,12 @@ class RoleRouter {
     AuthConfig.currentUserUid = firebaseUid;
 
     if (profile.isGovernor) {
+      await UserDirectoryService.ensureStaffUserDoc(
+        uid: firebaseUid,
+        email: profile.email,
+        roleRaw: 'governor',
+        fullName: profile.fullName,
+      );
       await SessionStorage.saveSession(
         firebaseUid,
         role: UserRole.governor,
@@ -27,21 +33,25 @@ class RoleRouter {
     }
 
     if (profile.isTourismOffice) {
-      String municipalityId =
-          getMunicipalityIdFromName(profile.municipality);
+      await UserDirectoryService.ensureStaffUserDoc(
+        uid: firebaseUid,
+        email: profile.email,
+        roleRaw: profile.roleRaw,
+        fullName: profile.fullName,
+      );
+      String municipalityId = getMunicipalityIdFromName(profile.municipality);
       if (municipalityId.isEmpty) {
         municipalityId =
             SessionStorage.getMunicipalityIdFromTourismEmail(profile.email) ??
-                '';
+            '';
       }
       await SessionStorage.saveSession(
         firebaseUid,
         role: UserRole.tourism,
         email: profile.email,
-        municipalityId:
-            municipalityId.isNotEmpty ? municipalityId : null,
+        municipalityId: municipalityId.isNotEmpty ? municipalityId : null,
       );
-      return '/tourism-dashboard';
+      return '/lgu-dashboard';
     }
 
     if (profile.isTourist) {
@@ -50,9 +60,11 @@ class RoleRouter {
         role: UserRole.tourist,
         email: profile.email,
       );
-      if (!profile.isVerified) {
-        return '/verify-otp';
-      }
+      final verified =
+          await UserDirectoryService.touristEmailVerificationComplete(
+        firebaseUid,
+      );
+      if (!verified) return '/verify-otp';
       return '/dashboard';
     }
 
@@ -68,8 +80,10 @@ class RoleRouter {
   /// Cold start: when profile is already loaded (e.g. from [getProfileByUid]).
   static String routeForProfile(AppUserProfile profile) {
     if (profile.isGovernor) return '/governor-dashboard';
-    if (profile.isTourismOffice) return '/tourism-dashboard';
-    if (profile.isTourist && !profile.isVerified) return '/verify-otp';
+    if (profile.isTourismOffice) return '/lgu-dashboard';
+    if (profile.isTourist && !profile.isVerified) {
+      return '/verify-otp';
+    }
     if (profile.isTourist) return '/dashboard';
     return '/dashboard';
   }

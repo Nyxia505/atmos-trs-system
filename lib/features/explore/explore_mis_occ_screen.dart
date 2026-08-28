@@ -11,8 +11,10 @@ import 'package:latlong2/latlong.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/models/municipality.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
-import 'package:atmos_trs_system/features/explore/explore_screen.dart' show TouristSpot, kMockSpots;
+import 'package:atmos_trs_system/features/explore/explore_data.dart' show TouristSpot, kMockSpots;
 import 'package:atmos_trs_system/widgets/app_search_bar.dart';
+import 'package:atmos_trs_system/widgets/atmos_osm_tile_layer.dart';
+import 'package:atmos_trs_system/widgets/map_zoom_controls.dart';
 import 'package:atmos_trs_system/screens/municipality_map_and_spots_screen.dart';
 
 // -----------------------------------------------------------------------------
@@ -88,6 +90,13 @@ class _ExploreMisOccScreenState extends State<ExploreMisOccScreen> {
 
   void _animateToMunicipality(Municipality m) {
     _mapController.move(LatLng(m.lat, m.lng), 12);
+  }
+
+  void _recenterProvince() {
+    _mapController.move(
+      const LatLng(_kMapCenterLat, _kMapCenterLng),
+      _kMapZoom,
+    );
   }
 
   void _onMarkerTap(Municipality m) {
@@ -176,31 +185,40 @@ class _ExploreMisOccScreenState extends State<ExploreMisOccScreen> {
 
     return SizedBox.expand(
       child: Stack(
+        fit: StackFit.expand,
         children: [
-          FlutterMap(
+          Positioned.fill(
+            child: FlutterMap(
             mapController: _mapController,
             options: MapOptions(
               initialCenter: const LatLng(_kMapCenterLat, _kMapCenterLng),
               initialZoom: _kMapZoom,
-              minZoom: 8,
-              maxZoom: 17,
+              minZoom: 7,
+              maxZoom: 18,
               cameraConstraint: CameraConstraint.contain(
                 bounds: _kMisamisOccidentalBounds,
               ),
               interactionOptions: const InteractionOptions(
                 flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+                scrollWheelVelocity: 0.002,
+                pinchZoomThreshold: 0.5,
+                pinchMoveThreshold: 20,
               ),
             ),
             children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.atmos.trs',
-                maxZoom: 19,
-              ),
+              buildAtmosOsmTileLayer(),
               MarkerLayer(
                 markers: markers,
               ),
             ],
+          ),
+          ),
+          OsmMapZoomControls(
+            mapController: _mapController,
+            minZoom: 7,
+            maxZoom: 18,
+            onRecenter: _recenterProvince,
+            bottom: MediaQuery.of(context).size.height * 0.32,
           ),
           // Map attribution
           Positioned(
@@ -642,7 +660,7 @@ class _MunicipalityDetailsSheet extends StatelessWidget {
                 child: OutlinedButton.icon(
                   onPressed: () => Navigator.pop(context),
                   icon: const Icon(Icons.qr_code_scanner, size: 18),
-                  label: const Text('QR Check-in'),
+                  label: const Text('Register visit'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.white,
                     side: BorderSide(color: AppTheme.unselectedMuted.withOpacity(0.5)),

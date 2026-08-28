@@ -8,6 +8,14 @@ const String _kLogoAsset = 'assets/images/logo.png';
 /// Cached logo bytes with white/near-white pixels made transparent.
 Uint8List? _cachedLogoNoWhite;
 
+bool _isLogoBackgroundPixel(int r, int g, int b) {
+  if (r >= 235 && g >= 235 && b >= 235) return true;
+  final maxC = r > g ? (r > b ? r : b) : (g > b ? g : b);
+  final minC = r < g ? (r < b ? r : b) : (g < b ? g : b);
+  final avg = (r + g + b) / 3;
+  return avg >= 228 && (maxC - minC) <= 18;
+}
+
 /// Loads logo from assets and sets alpha to 0 for white/near-white pixels.
 /// Result is cached so subsequent calls return the same bytes.
 Future<Uint8List?> loadLogoWithoutWhiteBackground() async {
@@ -15,14 +23,17 @@ Future<Uint8List?> loadLogoWithoutWhiteBackground() async {
   try {
     final data = await rootBundle.load(_kLogoAsset);
     final bytes = data.buffer.asUint8List();
-    final image = img.decodeImage(bytes);
-    if (image == null) return null;
-    const threshold = 250;
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) return null;
+    // PNG is RGB-only; convert so alpha changes are preserved in output PNG.
+    final image = decoded.numChannels == 4
+        ? decoded
+        : decoded.convert(numChannels: 4);
     for (int y = 0; y < image.height; y++) {
       for (int x = 0; x < image.width; x++) {
         final p = image.getPixel(x, y);
         final r = p.r.toInt(), g = p.g.toInt(), b = p.b.toInt();
-        if (r >= threshold && g >= threshold && b >= threshold) {
+        if (_isLogoBackgroundPixel(r, g, b)) {
           image.setPixelRgba(x, y, r, g, b, 0);
         }
       }
@@ -48,6 +59,7 @@ class TransparentLogo extends StatelessWidget {
     this.width,
     this.height,
     this.fit = BoxFit.contain,
+    this.alignment = Alignment.center,
     this.errorIcon,
     this.errorIconSize = 28.0,
     this.errorIconColor,
@@ -56,6 +68,7 @@ class TransparentLogo extends StatelessWidget {
   final double? width;
   final double? height;
   final BoxFit fit;
+  final Alignment alignment;
   final IconData? errorIcon;
   final double errorIconSize;
   final Color? errorIconColor;
@@ -72,6 +85,7 @@ class TransparentLogo extends StatelessWidget {
             width: width,
             height: height,
             fit: fit,
+            alignment: alignment,
             errorBuilder: (_, __, ___) => _fallback(context),
           );
         }
@@ -86,6 +100,7 @@ class TransparentLogo extends StatelessWidget {
       width: width,
       height: height,
       fit: fit,
+      alignment: alignment,
       errorBuilder: (_, __, ___) => Icon(
         errorIcon ?? Icons.public,
         size: errorIconSize,

@@ -1,0 +1,31 @@
+{
+  "functions": {
+    "source": "functions"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "atmos-trs-system",
+          "appId": "1:760231001760:android:7a1a7652e422be04cf13c5",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "atmos-trs-system",
+          "configurations": {
+            "android": "1:760231001760:android:7a1a7652e422be04cf13c5",
+            "web": "1:760231001760:web:d5aa1abd6d15d9d1cf13c5"
+          }
+        }
+      }
+    }
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "firestore": {
+    "rules": "firestore.rules"
+  }
+}

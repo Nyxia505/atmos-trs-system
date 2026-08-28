@@ -22,7 +22,8 @@ class NotificationItem {
   final String? userId;
   final bool isAnnouncement;
 
-  bool get isUnread => !isRead && !isAnnouncement;
+  /// Unread for both user notifications and announcements (read/dismiss tracked per user).
+  bool get isUnread => !isRead;
 
   NotificationItem copyWith({bool? isRead}) {
     return NotificationItem(

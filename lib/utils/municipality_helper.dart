@@ -37,6 +37,27 @@ List<String> municipalityIdsForQuery(String? storedMunicipalityId) {
   return [canonical];
 }
 
+/// Display-name variants for loading real `tourists` by `city` field.
+List<String> municipalityCityNamesForQuery(String? storedMunicipalityId) {
+  final canonical = normalizeMunicipalityId(storedMunicipalityId);
+  if (canonical.isEmpty) return const [];
+  for (final m in getMisamisOccidentalMunicipalities()) {
+    if (normalizeMunicipalityId(m.id) != canonical) continue;
+    final names = <String>{m.name};
+    if (canonical == 'ozamiz') {
+      names.add('Ozamiz City');
+      names.add('Ozamis City');
+    }
+    // Common short form without "City".
+    final withoutCity = m.name.replaceFirst(RegExp(r'\s+City$', caseSensitive: false), '');
+    if (withoutCity.isNotEmpty && withoutCity != m.name) {
+      names.add(withoutCity);
+    }
+    return names.toList(growable: false);
+  }
+  return const [];
+}
+
 /// Canonical ids for the province (Governor / province-wide filters).
 Set<String> misamisOccidentalMunicipalityIdSet() {
   return {

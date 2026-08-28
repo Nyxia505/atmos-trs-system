@@ -8,24 +8,8 @@ class ItineraryPage extends StatelessWidget {
   static const Color _accentOrange = Color(0xFFFB923C);
   static const Color _darkBg = Color(0xFF0F172A);
 
-  /// Sample itinerary data for display.
-  static final List<Map<String, String>> _sampleItineraries = [
-    {
-      'destination': 'Oroquieta City',
-      'date': 'Mar 20, 2026',
-      'notes': 'Capital city tour, plaza and local cuisine',
-    },
-    {
-      'destination': 'Baliangao',
-      'date': 'Mar 22, 2026',
-      'notes': 'Cabgan Island and beach day',
-    },
-    {
-      'destination': 'Sapang Dalaga',
-      'date': 'Mar 25, 2026',
-      'notes': 'Caluya Bay and Cristo Redentor',
-    },
-  ];
+  /// Reserved for future user-saved itineraries (beta starts empty).
+  static const List<Map<String, String>> _sampleItineraries = [];
 
   @override
   Widget build(BuildContext context) {
@@ -91,13 +75,35 @@ class ItineraryPage extends StatelessWidget {
                 ),
               ),
             ),
-            // Sample itinerary cards
-            ..._sampleItineraries.map((item) => _buildItineraryCard(
-                  context,
-                  destination: item['destination']!,
-                  date: item['date']!,
-                  notes: item['notes']!,
-                )),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              child: Column(
+                children: [
+                  Icon(Icons.map_outlined, size: 48, color: Colors.grey.shade400),
+                  const SizedBox(height: 12),
+                  Text(
+                    'No trips planned yet',
+                    style: TextStyle(
+                      color: _darkBg,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Your saved itineraries will appear here once you create a trip during beta.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),

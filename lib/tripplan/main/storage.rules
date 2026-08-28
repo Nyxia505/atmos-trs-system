@@ -1,0 +1,13 @@
+rules_version = '2';
+// Deploy: firebase deploy --only storage --project atmos-trs-system
+//
+// Tourism photos are public read (app + CachedNetworkImage). Writes require sign-in.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+  }
+}

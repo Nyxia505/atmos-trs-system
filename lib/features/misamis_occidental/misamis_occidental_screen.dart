@@ -11,6 +11,7 @@ import 'package:atmos_trs_system/features/tourism/tourist_spot_detail_screen.dar
 import 'package:atmos_trs_system/widgets/app_search_bar.dart';
 import 'package:atmos_trs_system/screens/municipality_map_and_spots_screen.dart';
 import 'package:atmos_trs_system/data/tourist_spots_by_municipality.dart';
+import 'package:atmos_trs_system/widgets/atmos_osm_tile_layer.dart';
 
 // -----------------------------------------------------------------------------
 // Constants (colors from AppTheme)
@@ -633,9 +634,10 @@ class _InteractiveMapState extends State<_InteractiveMap> {
   @override
   Widget build(BuildContext context) {
     return Stack(
+      fit: StackFit.expand,
       children: [
-        // The interactive map
-        FlutterMap(
+        Positioned.fill(
+          child: FlutterMap(
           mapController: _mapController,
           options: MapOptions(
             initialCenter: _misamisOccidentalCenter,
@@ -650,10 +652,7 @@ class _InteractiveMapState extends State<_InteractiveMap> {
             },
           ),
           children: [
-            // OpenStreetMap tile layer with dark theme styling
-            TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.atmos.trs',
+            buildAtmosOsmTileLayer(
               tileBuilder: (context, child, tile) {
                 return ColorFiltered(
                   colorFilter: ColorFilter.matrix(<double>[
@@ -697,6 +696,7 @@ class _InteractiveMapState extends State<_InteractiveMap> {
                   : _buildTouristSpotMarkers(),
             ),
           ],
+        ),
         ),
 
         // Zoom controls overlay (outside FlutterMap so they don't interfere)
@@ -1490,7 +1490,7 @@ class _MunicipalityDetailsSheet extends StatelessWidget {
                 child: OutlinedButton.icon(
                   onPressed: () => Navigator.pop(context),
                   icon: const Icon(Icons.qr_code_scanner, size: 18),
-                  label: const Text('QR Check-in'),
+                  label: const Text('Register visit'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.white,
                     side: BorderSide(color: Colors.white.withOpacity(0.5)),

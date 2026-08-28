@@ -1,0 +1,7 @@
+{
+  // Ensure Flutter is on PATH in Cursor/VS Code integrated terminals
+  // (needed when the IDE was started before Flutter was added to user PATH)
+  "terminal.integrated.env.windows": {
+    "Path": "C:\\flutter\\bin;${env:Path}"
+  }
+}

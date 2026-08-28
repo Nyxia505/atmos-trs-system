@@ -32,6 +32,14 @@ migrate_working_dir/
 .pub/
 /build/
 /coverage/
+node_modules/
+.firebase/
+.idea_modules/
+*.hprof
+**/java_pid*.hprof
+android/build/
+functions/.env*
+!functions/.env.example
 
 # Symbolication related
 app.*.symbols

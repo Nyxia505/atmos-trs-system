@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Atmos Trs System</string>
+	<string>ATMOS TRS</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>atmos_trs_system</string>
+	<string>ATMOS TRS</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -55,5 +55,7 @@
 	</array>
 	<key>FLTEnableImpeller</key>
 	<false/>
+	<key>GMSApiKey</key>
+	<string>AIzaSyB9VpH9L8BD57CjGQBTTY1ZpLa8OtvYhRI</string>
 </dict>
 </plist>

@@ -9,11 +9,10 @@
 (function (global) {
   'use strict';
 
-  // Oroquieta City Plaza: single 360° image (relative to vr_tour/index.html -> assets/images)
-  var OROQUIETA_PLAZA_IMAGE = '../images/oroquieta%20City%20plaza.jpeg';
-  // Fallback if local image fails to load (e.g. when testing in browser without Flutter assets)
+  // Demo equirectangular panorama (local plaza 360 asset not bundled yet).
   var DEMO_IMAGE = 'https://cdn.pannellum.org/2.5.6/cerro-toco-0.jpg';
   var IMAGE_BASE = '';
+  var OROQUIETA_PLAZA_IMAGE = DEMO_IMAGE;
 
   /**
    * All tour spots keyed by spot id. Each spot has:

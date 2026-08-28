@@ -1,0 +1,38 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Flutter: pub get",
+      "type": "shell",
+      "command": "C:\\flutter\\bin\\flutter.bat",
+      "args": ["pub", "get"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Flutter: run (Chrome)",
+      "type": "shell",
+      "command": "C:\\flutter\\bin\\flutter.bat",
+      "args": ["run", "-d", "chrome"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "CHROME_EXECUTABLE": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        }
+      },
+      "dependsOn": ["Flutter: pub get"],
+      "problemMatcher": [],
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "Flutter: run (web-server)",
+      "type": "shell",
+      "command": "C:\\flutter\\bin\\flutter.bat",
+      "args": ["run", "-d", "web-server", "--web-hostname", "localhost", "--web-port", "8080"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "dependsOn": ["Flutter: pub get"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    }
+  ]
+}

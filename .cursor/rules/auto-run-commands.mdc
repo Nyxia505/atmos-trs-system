@@ -1,0 +1,15 @@
+---
+description: Run terminal commands automatically when implementing or fixing tasks
+alwaysApply: true
+---
+
+# Auto-run commands
+
+When the user asks you to implement, fix, test, or run something:
+
+- Run terminal commands yourself instead of only suggesting them.
+- Do not wait for the user to run commands manually unless a command is destructive or needs explicit approval.
+- After code changes, run relevant checks (e.g. `flutter analyze`, `dart analyze`) when useful.
+- If `flutter run` is already active, prefer hot restart when a full restart is needed for asset or config changes.
+
+This project uses Flutter on Windows. Flutter is at `C:\flutter\bin`.

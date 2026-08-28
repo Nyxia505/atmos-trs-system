@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/services/qr_checkin_service.dart';
 import 'package:atmos_trs_system/services/qr_checkin_ui.dart';
-import 'package:atmos_trs_system/services/user_activity_service.dart' as activity;
 
 /// Check-in page for a Firestore [SpotInfo] after QR scan (logged-in flow).
 class SpotCheckInScreen extends StatefulWidget {
@@ -25,21 +24,34 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
     if (_submitting) return;
     setState(() => _submitting = true);
     final s = widget.spotInfo;
-    final ok = await performQRCheckIn(
+
+    final lat = s.latitude;
+    final lng = s.longitude;
+    final hasCoords = lat != null &&
+        lng != null &&
+        lat.abs() > 1e-7 &&
+        lng.abs() > 1e-7;
+    if (hasCoords) {
+      final locationError = await QRCheckInService.verifyProximityToTouristSpot(
+        latitude: lat,
+        longitude: lng,
+        spotLabel: s.spotName.isNotEmpty ? s.spotName : s.spotId,
+      );
+      if (!mounted) return;
+      if (locationError != null) {
+        setState(() => _submitting = false);
+        showQRCheckInErrorDialog(context, locationError);
+        return;
+      }
+    }
+
+    await performQRCheckIn(
       context,
       municipalityId: s.municipalityId,
       spotId: s.spotId,
       spotName: s.spotName.isNotEmpty ? s.spotName : null,
       municipality: s.municipality.isNotEmpty ? s.municipality : null,
     );
-    if (ok) {
-      final spotDisplay = s.spotName.isNotEmpty ? s.spotName : s.spotId;
-      await activity.UserActivityService.addVisit(
-        spotId: s.spotId,
-        spotName: spotDisplay,
-        category: 'Spot',
-      );
-    }
     if (mounted) setState(() => _submitting = false);
   }
 
@@ -50,7 +62,7 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
     return Scaffold(
       backgroundColor: AppTheme.scaffoldBackground,
       appBar: AppBar(
-        title: const Text('Check-in'),
+        title: const Text('Register visit'),
         backgroundColor: AppTheme.cardBackground,
         foregroundColor: _textDark,
         leading: IconButton(
@@ -85,7 +97,7 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
               ],
               const SizedBox(height: 24),
               Text(
-                'Tap Check-in to record your visit at this location.',
+                'Tap Register visit to record your visit at this location.',
                 style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 15, height: 1.4),
               ),
               const Spacer(),
@@ -103,7 +115,7 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
                         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                       )
                     : const Icon(Icons.check_circle_outline),
-                label: Text(_submitting ? 'Saving…' : 'Check-in'),
+                label: Text(_submitting ? 'Saving…' : 'Register visit'),
               ),
             ],
           ),

@@ -1,6 +1,11 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
+
 /// Tourist spot model for Firestore "tourist_spots" collection.
 /// Fields in Firestore: name, category, municipality, description, rating,
 /// latitude, longitude, image_url, vr_link. Optional: status, visitors, municipalityId.
+/// QR registry (per spot): [qrValue] (usually same as document id), [qr_payload] (URL for scanners),
+/// [createdAt] (server timestamp on create).
 class TouristSpot {
   const TouristSpot({
     required this.id,
@@ -16,6 +21,9 @@ class TouristSpot {
     this.status = 'Active',
     this.visitors = 0,
     this.municipalityId = '',
+    this.qrValue = '',
+    this.qrPayload,
+    this.createdAt,
   });
 
   final String id;
@@ -33,6 +41,15 @@ class TouristSpot {
   /// Municipality ID for QR payload and filtering (e.g. oroquieta, ozamiz).
   final String municipalityId;
 
+  /// Stable code stored in Firestore; typically equals [id] (document id).
+  final String qrValue;
+
+  /// Full string to encode in QR (see [spotQrData] in spot_qr_helper.dart).
+  final String? qrPayload;
+
+  /// When this spot document was first created (from Firestore).
+  final DateTime? createdAt;
+
   /// Alias for [vrLink] for compatibility with code that expects vrTourUrl.
   String? get vrTourUrl => vrLink;
 
@@ -40,11 +57,21 @@ class TouristSpot {
     final lat = data['latitude'];
     final lng = data['longitude'];
     final ratingData = data['rating'];
-    final image = data['image_url'] as String? ?? data['image'] as String?;
+    final image = TouristSpotFirestore.readImageUrl(data) ??
+        data['image'] as String?;
     final vr = data['vr_link'] as String? ?? data['vrLink'] as String?;
     final statusVal = data['status'] as String? ?? 'Active';
     final visitorsVal = data['visitors'];
     final municipalityIdVal = data['municipalityId'] as String? ?? '';
+    final qrVal =
+        (data['qrValue'] as String? ?? data['qr_value'] as String? ?? '')
+            .trim();
+    final qrPay = data['qr_payload'] as String? ?? data['qrPayload'] as String?;
+    final createdRaw = data['createdAt'] ?? data['created_at'];
+    DateTime? created;
+    if (createdRaw is Timestamp) {
+      created = createdRaw.toDate();
+    }
 
     return TouristSpot(
       id: docId,
@@ -62,6 +89,9 @@ class TouristSpot {
           ? visitorsVal
           : (visitorsVal is num ? visitorsVal.toInt() : 0),
       municipalityId: municipalityIdVal,
+      qrValue: qrVal.isNotEmpty ? qrVal : docId,
+      qrPayload: qrPay?.trim().isNotEmpty == true ? qrPay : null,
+      createdAt: created,
     );
   }
 
@@ -80,6 +110,9 @@ class TouristSpot {
       'status': status,
       'visitors': visitors,
       if (municipalityId.isNotEmpty) 'municipalityId': municipalityId,
+      if (qrValue.isNotEmpty) 'qrValue': qrValue,
+      if (qrPayload != null && qrPayload!.trim().isNotEmpty)
+        'qr_payload': qrPayload,
     };
   }
 }

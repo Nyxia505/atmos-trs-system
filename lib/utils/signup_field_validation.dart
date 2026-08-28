@@ -98,3 +98,57 @@ String? validatePhilippineStreet(String? v) {
   }
   return null;
 }
+
+/// City for non-PH residence (foreign nationals or Filipinos living abroad).
+String? validateInternationalCity(String? v) {
+  if (v == null || v.trim().isEmpty) {
+    return 'City is required.';
+  }
+  final s = v.trim();
+  if (s.length < 2) {
+    return 'Enter your city (at least 2 characters).';
+  }
+  if (s.length > 80) {
+    return 'City name is too long.';
+  }
+  if (!RegExp(r'[a-zA-Z\u00C0-\u024FñÑ]').hasMatch(s)) {
+    return 'Use letters for the city name.';
+  }
+  return null;
+}
+
+/// Matches signup / Firebase password rules (8+ chars, upper, lower, digit).
+bool isPasswordStrongEnough(String pw) {
+  if (pw.length < 8) return false;
+  return RegExp(r'[A-Z]').hasMatch(pw) &&
+      RegExp(r'[a-z]').hasMatch(pw) &&
+      RegExp(r'[0-9]').hasMatch(pw);
+}
+
+String? validateStrongPassword(String? value) {
+  if (value == null || value.isEmpty) {
+    return 'Please enter a password';
+  }
+  if (value.length < 8) {
+    return 'Password must be at least 8 characters';
+  }
+  if (!isPasswordStrongEnough(value)) {
+    return 'Use at least 8 characters including uppercase, lowercase, and a number';
+  }
+  return null;
+}
+
+/// State / province / region outside the Philippines.
+String? validateInternationalRegion(String? v) {
+  if (v == null || v.trim().isEmpty) {
+    return 'State / province / region is required.';
+  }
+  final s = v.trim();
+  if (s.length < 2) {
+    return 'Enter at least 2 characters.';
+  }
+  if (s.length > 80) {
+    return 'Name is too long.';
+  }
+  return null;
+}

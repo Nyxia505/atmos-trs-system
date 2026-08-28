@@ -1,5 +1,5 @@
 import 'package:atmos_trs_system/models/municipality.dart';
-import 'package:atmos_trs_system/features/explore/explore_screen.dart' show TouristSpot, kMockSpots;
+import 'package:atmos_trs_system/features/explore/explore_data.dart' show TouristSpot, kMockSpots;
 
 /// Returns tourist spots that belong to the given municipality/city.
 /// Used by the drill-down map and municipality details to filter spots by location.

@@ -6,7 +6,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
-        android:label="atmos_trs_system"
+        android:label="ATMOS TRS"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -31,7 +31,7 @@
         <!-- Google Maps API key (required for Explore map) -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
-            android:value="AIzaSyC5s5xYI7KArwSJnPnRFUxc4V-qnZMlC_M"/>
+            android:value="AIzaSyB9VpH9L8BD57CjGQBTTY1ZpLa8OtvYhRI"/>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

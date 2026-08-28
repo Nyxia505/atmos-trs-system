@@ -18,28 +18,48 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="ATMOS TRS - Misamis Occidental Tourism Registration System">
+  <meta name="description" content="ATMOS TRS">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="apple-mobile-web-app-title" content="ATMOS TRS">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="apple-touch-icon" sizes="192x192" href="icons/Icon-192.png">
+  <link rel="apple-touch-icon" sizes="512x512" href="icons/Icon-512.png">
 
-  <!-- Favicon -->
+  <!-- Favicon (browser tab — ATMOS TRS logo, not Flutter default) -->
   <link rel="icon" type="image/png" href="favicon.png"/>
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/Icon-192.png"/>
+  <link rel="icon" type="image/png" sizes="512x512" href="icons/Icon-512.png"/>
 
-  <title>ATMOS TRS - Misamis Occidental Tourism</title>
+  <title>ATMOS TRS</title>
   <link rel="manifest" href="manifest.json">
 
-  <!-- Google Maps JavaScript API for google_maps_flutter (web). Load without defer so the API is ready before Flutter runs. -->
-  <!-- Replace with your key from Google Cloud Console; enable "Maps JavaScript API" (see README or docs). -->
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCUX8WWB1AEQma7bF9-20kaExpXbfAxJGA"></script>
 </head>
 <body>
   <!-- reCAPTCHA container for Firebase Phone Auth (required for web) -->
   <div id="recaptcha-container"></div>
-  
-  <script src="flutter_bootstrap.js" async></script>
+  <!-- TripPlan directions + optional Google Maps tiles (Explore uses OSM by default on web). -->
+  <script>
+    window.__googleMapsAuthFailed = false;
+    window.gm_authFailure = function () {
+      window.__googleMapsAuthFailed = true;
+    };
+    (function () {
+      var orig = console.error.bind(console);
+      console.error = function () {
+        var msg = Array.prototype.slice.call(arguments).join(' ');
+        if (/BillingNotEnabled|RefererNotAllowed|ApiNotActivated|InvalidKey|ExpiredKey/i.test(msg)) {
+          window.__googleMapsAuthFailed = true;
+        }
+        orig.apply(console, arguments);
+      };
+    })();
+  </script>
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyABHzKStpFi9K-nIb0TS4kmedR-9_-zqh4&v=weekly"></script>
+  <!-- TripPlan trip route: DirectionsService (avoids CORS on directions/json) -->
+  <script src="directions_bridge.js"></script>
+  <script src="flutter_bootstrap.js"></script>
 </body>
 </html>

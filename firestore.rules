@@ -5,29 +5,122 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    /*
-     * TOURISTS
-     * - Create: doc id must be the signed-in user's uid, and firebaseUid field must match (signup flow).
-     * - Read/Update: any signed-in user (tourism dashboards list all; tighten later if needed).
-     */
+    function userDocPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function userExists() {
+      return isSignedIn() && exists(userDocPath());
+    }
+
+    function staffRole() {
+      return userExists() ? get(userDocPath()).data.get('role', '') : '';
+    }
+
+    function isProvincialStaffFromUserDoc() {
+      return userExists()
+        && (
+          staffRole().matches('(?i)^\\s*governor\\s*$')
+          || staffRole().matches('(?i)^\\s*tourism(_office)?\\s*$')
+          || staffRole().matches('(?i)^\\s*lgu\\s*tourism\\s*$')
+          || staffRole().matches('(?i)^\\s*tourism\\s*office\\s*$')
+        );
+    }
+
+    /// Tourism / governor demo and LGU staff emails (works even before users/{uid} exists).
+    function isKnownStaffEmail() {
+      return isSignedIn()
+        && request.auth.token.email != null
+        && (
+          request.auth.token.email.matches('(?i)^governor\\.atmos@misocc-demo\\.ph$')
+          || request.auth.token.email.matches('(?i)^tourismoffice\\.atmos@misocc-demo\\.ph$')
+          || request.auth.token.email.matches('(?i)^tourism\\.[^@]+@.+$')
+          || request.auth.token.email.matches('(?i)^tourismoroquieta@.+$')
+          || request.auth.token.email.matches('(?i)^oroquieta\\.tourism@.+$')
+          || request.auth.token.email.matches('(?i)^.*\\.tourism@.+$')
+          || request.auth.token.email.matches('(?i)^.*(tourism|governor|misocc|atmos).*@.+$')
+        );
+    }
+
+    function lguMunicipalityId() {
+      return userExists()
+        ? get(userDocPath()).data.get('municipalityId', '')
+        : '';
+    }
+
+    function isLguTourismFromUserDoc() {
+      return userExists()
+        && (
+          staffRole().matches('(?i)^\\s*tourism(_office)?\\s*$')
+          || staffRole().matches('(?i)^\\s*lgu\\s*tourism\\s*$')
+        )
+        && lguMunicipalityId() != '';
+    }
+
+    function isProvincialStaff() {
+      return isSignedIn()
+        && (isProvincialStaffFromUserDoc() || isKnownStaffEmail());
+    }
+
+    function isLguStaff() {
+      return isProvincialStaff() || isLguTourismFromUserDoc();
+    }
+
+    function touristRegisteredInLguMunicipality() {
+      return isLguTourismFromUserDoc()
+        && resource.data.get('registrationMunicipalityId', '') == lguMunicipalityId();
+    }
+
+    function checkInInLguMunicipality() {
+      return isLguTourismFromUserDoc()
+        && resource.data.get('municipalityId', '') == lguMunicipalityId();
+    }
+
+    function canReadTouristDoc(touristId) {
+      return isSignedIn()
+        && (
+          request.auth.uid == touristId
+          || isProvincialStaff()
+          || touristRegisteredInLguMunicipality()
+        );
+    }
+
+    function canReadOwnCheckInRow() {
+      return isSignedIn()
+        && (
+          resource.data.get('user_id', '') == request.auth.uid
+          || resource.data.get('userId', '') == request.auth.uid
+          || resource.data.get('tourist_id', '') == request.auth.uid
+        );
+    }
+
+    /// Tourist QR registration / check-in write (mobile scanner).
+    function isQrCheckInOwner() {
+      return isSignedIn()
+        && (
+          request.resource.data.get('tourist_id', '') == request.auth.uid
+          || request.resource.data.get('userId', '') == request.auth.uid
+          || request.resource.data.get('user_id', '') == request.auth.uid
+        );
+    }
+
+    function isCheckInOwner() {
+      return isSignedIn()
+        && request.resource.data.get('user_id', '') == request.auth.uid;
+    }
+
     match /tourists/{touristId} {
-      // Sign-up: doc id must be the caller's Auth uid (field checks alone can fail on web/SDK edge cases).
-      allow create: if isSignedIn() && touristId == request.auth.uid;
-      allow read, update: if isSignedIn();
+      // Signed-in read: LGU dashboards list/filter tourists; tourists read own profile.
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && request.auth.uid == touristId;
       allow delete: if false;
     }
 
-    /*
-     * VR TOURS — used by tourism dashboard (was blocked by catch-all before).
-     */
     match /vr_tours/{vrTourId} {
-      allow read: if true;
+      allow get, list: if true;
       allow create, update, delete: if isSignedIn();
     }
 
-    /*
-     * NOTIFICATIONS
-     */
     match /notifications/{notificationId} {
       allow read: if isSignedIn()
                   && resource.data.user_id == request.auth.uid;
@@ -35,59 +128,91 @@ service cloud.firestore {
                     && request.resource.data.user_id == request.auth.uid;
       allow update: if isSignedIn()
                     && resource.data.user_id == request.auth.uid;
-      allow delete: if false;
+      allow delete: if isSignedIn()
+                     && resource.data.user_id == request.auth.uid;
     }
 
-    /*
-     * ANNOUNCEMENTS
-     */
     match /announcements/{announcementId} {
       allow read: if true;
       allow create, update, delete: if isSignedIn();
     }
 
-    /*
-     * USERS — role + isVerified (canonical routing for all Firebase accounts).
-     */
     match /users/{userId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.auth.uid == userId;
       allow update: if isSignedIn() && request.auth.uid == userId;
       allow delete: if false;
+
+      match /faq_chats/{messageId} {
+        allow read, create, update, delete: if isSignedIn()
+                                              && request.auth.uid == userId;
+      }
     }
 
-    /*
-     * EMAIL OTPs — one doc per Auth uid; only that user may read/write.
-     */
+    match /tourist_activity/{userId} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+    }
+
     match /email_otps/{otpUid} {
       allow read, create, update, delete: if isSignedIn()
                                           && request.auth.uid == otpUid;
     }
 
-    /*
-     * CHECK-IN collections
-     */
     match /check_ins/{docId} {
-      allow read, create, update: if isSignedIn();
+      allow get: if isLguStaff() || canReadOwnCheckInRow();
+      allow list: if isLguStaff() || canReadOwnCheckInRow() || checkInInLguMunicipality();
+      allow create, update: if isSignedIn();
       allow delete: if false;
     }
 
     match /qr_checkins/{docId} {
-      allow read, create, update: if isSignedIn();
+      // Signed-in read: LGU dashboards + tourists viewing own history (client filters by municipality).
+      allow get, list: if isSignedIn();
+      allow create: if isQrCheckInOwner();
+      allow update: if isSignedIn()
+                    && resource.data.get('tourist_id', '') == request.auth.uid;
       allow delete: if false;
     }
 
-    /*
-     * TOURIST SPOTS
-     */
+    match /checkins/{docId} {
+      allow get: if isLguStaff() || canReadOwnCheckInRow();
+      allow list: if isLguStaff() || canReadOwnCheckInRow() || checkInInLguMunicipality();
+      allow create: if isCheckInOwner();
+      allow update, delete: if false;
+    }
+
     match /tourist_spots/{spotId} {
       allow read: if true;
       allow create, update, delete: if isSignedIn();
     }
 
-    /*
-     * Default deny for everything else.
-     */
+    match /spot_reviews/{reviewId} {
+      allow read: if true;
+      allow create: if isSignedIn()
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.rating is number
+                    && request.resource.data.rating >= 1
+                    && request.resource.data.rating <= 5
+                    && request.resource.data.comment is string
+                    && request.resource.data.comment.size() >= 10;
+      allow update: if isSignedIn()
+                    && resource.data.userId == request.auth.uid
+                    && request.resource.data.userId == request.auth.uid;
+      allow delete: if false;
+    }
+
+    match /tourist_qr_codes/{touristId} {
+      allow read: if isSignedIn() && request.auth.uid == touristId;
+      allow create, update: if isSignedIn() && request.auth.uid == touristId;
+      allow delete: if false;
+    }
+
+    match /tourist_qr_codes/{touristId}/history/{historyId} {
+      allow read: if isSignedIn() && request.auth.uid == touristId;
+      allow create: if isSignedIn() && request.auth.uid == touristId;
+      allow update, delete: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

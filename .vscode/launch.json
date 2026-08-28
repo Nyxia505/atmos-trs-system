@@ -13,6 +13,24 @@
       "request": "launch",
       "type": "dart",
       "noDebug": true
+    },
+    {
+      "name": "Flutter (Chrome)",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "chrome"
+    },
+    {
+      "name": "Flutter (web-server)",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "web-server",
+      "args": [
+        "--web-hostname",
+        "localhost",
+        "--web-port",
+        "8080"
+      ]
     }
   ]
 }

@@ -13,27 +13,37 @@ final List<QrTouristSpot> mockQrTouristSpots = [
     deepLink: _deepLinkFor('SPOT001'),
     image: 'assets/images/Asenso Global Garden 1.png',
     description:
-        'A beautiful botanical garden featuring diverse plant species and scenic walkways.',
+        '191-hectare highland eco-tourism park in Barangay Hoyohoy. Themed international gardens and Panguil Bay views. Daily 6:00 AM–6:00 PM; weekdays ₱50, weekends ₱100.',
   ),
   QrTouristSpot(
     id: 'SPOT002',
-    name: 'Asenso Misamis Occidental Aquamarine Park',
+    name: 'AMORAP — Asenso Misamis Occidental Resort and Aquamarine Park',
     municipality: 'Sinacaban',
     qrCodeValue: _deepLinkFor('SPOT002'),
     deepLink: _deepLinkFor('SPOT002'),
-    image: 'assets/images/sinacaban.jpg',
+    image: 'assets/images/AMORAP.jpg',
     description:
-        'Aquamarine park with water attractions, marine exhibits, and coastal views.',
+        'Barangay Libertad Bajo, Sinacaban. Resort grounds and all-day dining generally open daily; entrance fees vary by activity or accommodation.',
   ),
   QrTouristSpot(
     id: 'SPOT003',
-    name: 'Asenso Ozamiz Wellness Park, Cotta Fort & Shrine',
+    name: 'Asenso Ozamiz Wellness Park',
     municipality: 'Ozamis City',
     qrCodeValue: _deepLinkFor('SPOT003'),
     deepLink: _deepLinkFor('SPOT003'),
     image: 'assets/images/ozamis city.webp',
     description:
-        'Historic Cotta Fort, wellness park, and religious shrine in one destination.',
+        'Port Road wellness park in Barangay Baybay Triunfo, near Ozamiz Port. Free admission; playground ₱20, mini-gym ₱50. Night cafés Fri–Sun 5:00 PM–11:30 PM.',
+  ),
+  QrTouristSpot(
+    id: 'SPOT008',
+    name: 'Cotta Fort & Shrine',
+    municipality: 'Ozamis City',
+    qrCodeValue: _deepLinkFor('SPOT008'),
+    deepLink: _deepLinkFor('SPOT008'),
+    image: "assets/images/Cotta Fort & Shrine.jpg",
+    description:
+        'Historic stone fort (1755) and Cotta Shrine in Barangay Baybay Triunfo. Free admission; typically open daily 8:00 AM–5:00 PM. Dress modestly.',
   ),
   QrTouristSpot(
     id: 'SPOT004',
@@ -47,13 +57,13 @@ final List<QrTouristSpot> mockQrTouristSpots = [
   ),
   QrTouristSpot(
     id: 'SPOT005',
-    name: 'Oroquieta City Boulevard and People’s Park',
+    name: 'Oroquieta City Plaza',
     municipality: 'Oroquieta City',
     qrCodeValue: _deepLinkFor('SPOT005'),
     deepLink: _deepLinkFor('SPOT005'),
-    image: 'assets/images/oroquieta city.jpg',
+    image: 'assets/images/oroquieta City plaza.jpeg',
     description:
-        'Seaside boulevard and central park popular for walks and community events.',
+        'Public open space with Iligan Bay views, playground, bandstand, and Rizal monument. Open 24 hours; free.',
   ),
   QrTouristSpot(
     id: 'SPOT006',
@@ -63,17 +73,17 @@ final List<QrTouristSpot> mockQrTouristSpots = [
     deepLink: _deepLinkFor('SPOT006'),
     image: 'assets/images/Jimenez - St. John the Baptist Church.jpg',
     description:
-        'Spanish-era church known for its heritage architecture and religious significance.',
+        'Church of St. John the Baptist (Jimenez Church), Barangay Poblacion. National Cultural Treasure with painted wooden ceilings and coral stone facade. Free; typically open daily 6:00 AM–5:00 PM.',
   ),
   QrTouristSpot(
     id: 'SPOT007',
-    name: 'Baliangao Tourist Spot',
+    name: 'Bless Amare Sunrise Beach',
     municipality: 'Baliangao',
     qrCodeValue: _deepLinkFor('SPOT007'),
     deepLink: _deepLinkFor('SPOT007'),
     image: 'assets/images/Baliangao - Cabgan Island.jpg',
     description:
-        'Coastal destination featuring beaches and nearby marine sanctuaries.',
+        'Baliangao Beach, Barangay Tugas. Day use 6 AM–5 PM. Cottages and tables for rent. Overnight accommodations 24 hours.',
   ),
 ];
 

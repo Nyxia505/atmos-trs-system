@@ -61,6 +61,13 @@ class EmailjsService {
     }
 
     // Include common aliases so templates using {{email}} / {{user_email}} work.
+    final subject = 'Complete your ATMOS-TRS registration';
+    final message =
+        'Hello $toName,\n\n'
+        'Use this code to finish creating your ATMOS-TRS tourist account:\n\n'
+        '$otp\n\n'
+        'This code expires in 15 minutes. Do not share it with anyone.\n\n'
+        '— ATMOS-TRS Tourism';
     final templateParams = <String, String>{
       'to_email': toEmail,
       'to_name': toName,
@@ -68,6 +75,17 @@ class EmailjsService {
       'name': toName,
       'email': toEmail,
       'user_email': toEmail,
+      'subject': subject,
+      'from_name': 'ATMOS-TRS Tourism',
+      'reply_to': 'tourismoffice.atmos@misocc-demo.ph',
+      'message': message,
+      'message_html':
+          '<p>Hello $toName,</p>'
+          '<p>Use this code to finish creating your ATMOS-TRS tourist account:</p>'
+          '<p style="font-size:24px;font-weight:700;letter-spacing:4px;">$otp</p>'
+          '<p>This code expires in 15 minutes. Do not share it with anyone.</p>'
+          '<p>— ATMOS-TRS Tourism</p>',
+      'preheader': 'Your code is $otp. Expires in 15 minutes.',
     };
 
     String? accessForPayload() {
@@ -80,10 +98,15 @@ class EmailjsService {
 
     Future<http.Response> postSend(Map<String, dynamic> payload) {
       debugPrint('[EmailJS] POST body keys: ${payload.keys.join(", ")}');
+      // EmailJS may return 403 for "non-browser" clients unless Account → Security allows it,
+      // or unless the request looks like a typical browser send.
       return http.post(
         Uri.parse(EmailjsConfig.sendUrl),
         headers: const {
           'Content-Type': 'application/json; charset=UTF-8',
+          'Accept': 'application/json',
+          'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         },
         body: jsonEncode(payload),
       );

@@ -357,7 +357,7 @@ class _SpotCard extends StatelessWidget {
                   label: const Text('Show QR'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppTheme.primary,
-                    side: const BorderSide(color: AppTheme.primary),
+                    side: BorderSide(color: AppTheme.primary),
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
                   ),

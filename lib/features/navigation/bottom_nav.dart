@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 
 /// Bottom nav items: Home, Explore, Scan (center elevated), Notification, Account.
-/// Active: orange; Inactive: grey.
+/// Active: theme accent; Inactive: grey.
 const List<(IconData, String)> kBottomNavItems = [
   (Icons.home_rounded, 'Home'),
   (Icons.explore_rounded, 'Explore'),
@@ -16,10 +16,12 @@ class BottomNav extends StatelessWidget {
     super.key,
     required this.currentIndex,
     required this.onTap,
+    this.unreadNotificationCount = 0,
   });
 
   final int currentIndex;
   final ValueChanged<int> onTap;
+  final int unreadNotificationCount;
 
   @override
   Widget build(BuildContext context) {
@@ -49,6 +51,7 @@ class BottomNav extends StatelessWidget {
                 isSelected: index == currentIndex,
                 isScanTab: index == 2,
                 showLabel: showLabels,
+                badgeCount: index == 3 ? unreadNotificationCount : 0,
                 onTap: () => onTap(index),
               );
             }),
@@ -73,6 +76,7 @@ class _NavItem extends StatelessWidget {
     required this.isSelected,
     required this.isScanTab,
     required this.showLabel,
+    required this.badgeCount,
     required this.onTap,
   });
 
@@ -81,6 +85,7 @@ class _NavItem extends StatelessWidget {
   final bool isSelected;
   final bool isScanTab;
   final bool showLabel;
+  final int badgeCount;
   final VoidCallback onTap;
 
   @override
@@ -110,6 +115,17 @@ class _NavItem extends StatelessWidget {
       );
     }
 
+    final iconWithBadge = badgeCount > 0
+        ? Badge(
+            label: Text(
+              badgeCount > 99 ? '99+' : '$badgeCount',
+              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
+            ),
+            backgroundColor: const Color(0xFFDC2626),
+            child: iconWidget,
+          )
+        : iconWidget;
+
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
@@ -118,7 +134,7 @@ class _NavItem extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            iconWidget,
+            iconWithBadge,
             if (showLabel) ...[
               const SizedBox(height: 4),
               Text(
@@ -136,3 +152,4 @@ class _NavItem extends StatelessWidget {
     );
   }
 }
+    

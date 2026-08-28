@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:atmos_trs_system/config/app_theme.dart';
+import 'package:atmos_trs_system/config/app_theme_controller.dart';
 import 'package:atmos_trs_system/models/vr_hotspot.dart';
 import 'package:atmos_trs_system/data/mock_vr_hotspots.dart';
 
@@ -27,7 +29,6 @@ class _VRTourScreenState extends State<VRTourScreen> {
   bool _hasError = false;
   VRHotspot? _selectedHotspot;
 
-  static const _primaryOrange = Color(0xFFE07B3C);
   static const _darkBg = Color(0xFF1A1A2E);
   final TransformationController _transformController =
       TransformationController();
@@ -98,7 +99,7 @@ class _VRTourScreenState extends State<VRTourScreen> {
                   ? loadingProgress.cumulativeBytesLoaded /
                       loadingProgress.expectedTotalBytes!
                   : null,
-              color: _primaryOrange,
+              color: AppTheme.primary,
             ),
           ),
         );
@@ -114,7 +115,11 @@ class _VRTourScreenState extends State<VRTourScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return ListenableBuilder(
+      listenable: AppThemeController.instance,
+      builder: (context, _) {
+        final accent = AppTheme.primary;
+        return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
@@ -161,11 +166,11 @@ class _VRTourScreenState extends State<VRTourScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const SizedBox(
+                    SizedBox(
                       width: 60,
                       height: 60,
                       child: CircularProgressIndicator(
-                        color: _primaryOrange,
+                        color: accent,
                         strokeWidth: 3,
                       ),
                     ),
@@ -247,7 +252,7 @@ class _VRTourScreenState extends State<VRTourScreen> {
                                 vertical: 4,
                               ),
                               decoration: BoxDecoration(
-                                color: _primaryOrange,
+                                color: AppTheme.primary,
                                 borderRadius: BorderRadius.circular(6),
                               ),
                               child: const Row(
@@ -450,6 +455,8 @@ class _VRTourScreenState extends State<VRTourScreen> {
         ],
       ),
     );
+      },
+    );
   }
 
   Widget _buildErrorState() {
@@ -502,7 +509,7 @@ class _VRTourScreenState extends State<VRTourScreen> {
                 icon: const Icon(Icons.refresh),
                 label: const Text('Try Again'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: _primaryOrange,
+                  backgroundColor: AppTheme.primary,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(
                     horizontal: 24,
@@ -558,7 +565,7 @@ class _VRTourScreenState extends State<VRTourScreen> {
         width: 36,
         height: 36,
         decoration: BoxDecoration(
-          color: _primaryOrange,
+          color: AppTheme.primary,
           shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
@@ -611,12 +618,12 @@ class _VRTourScreenState extends State<VRTourScreen> {
                   width: 36,
                   height: 36,
                   decoration: BoxDecoration(
-                    color: _primaryOrange.withOpacity(0.15),
+                    color: AppTheme.primary.withOpacity(0.15),
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
                     hotspot.icon ?? Icons.place_rounded,
-                    color: _primaryOrange,
+                    color: AppTheme.primary,
                     size: 20,
                   ),
                 ),

@@ -40,7 +40,7 @@ Future<void> downloadLguQrPdf(
             mainAxisAlignment: pw.MainAxisAlignment.center,
             children: [
               pw.Text(
-                'ATMOS TRS',
+                'ATMOS-TRS',
                 style: pw.TextStyle(fontSize: 22, fontWeight: pw.FontWeight.bold),
               ),
               pw.SizedBox(height: 8),
@@ -58,7 +58,7 @@ Future<void> downloadLguQrPdf(
                 ),
               pw.SizedBox(height: 20),
               pw.Text(
-                'LGU QR — scan in the ATMOS TRS app',
+                'LGU QR — scan in the ATMOS-TRS app',
                 style: const pw.TextStyle(fontSize: 11),
               ),
               pw.SizedBox(height: 8),

@@ -1,6 +1,6 @@
 # ATMOS-TRS logo
 
-This folder contains **logo.png**, used for:
+This folder contains **logo.png** (source: `atmostrs logo.png`), used for:
 
 - **Login screen** – orange header
 - **Tourism dashboard** – drawer/sidebar beside "ATMOS TRS" and "Tourism Office"

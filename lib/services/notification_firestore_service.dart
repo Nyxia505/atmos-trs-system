@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:atmos_trs_system/models/notification_item.dart';
+import 'package:atmos_trs_system/services/welcome_notification_service.dart';
 
 const String _notificationsCollection = 'notifications';
 const String _announcementsCollection = 'announcements';
@@ -19,21 +21,33 @@ class NotificationFirestoreService {
 
   static FirebaseFirestore get _firestore => FirebaseFirestore.instance;
 
-  /// Creates a welcome notification for a user after sign-up.
-  static Future<void> createWelcomeNotification(String userId) async {
+  /// Creates a welcome notification for a user after sign-up (once per user).
+  static Future<void> createWelcomeNotification(
+    String userId, {
+    String? firstName,
+  }) async {
     if (!_isFirebaseInitialized || userId.isEmpty) return;
     try {
+      final existing = await _firestore
+          .collection(_notificationsCollection)
+          .where('user_id', isEqualTo: userId)
+          .where('type', isEqualTo: 'welcome')
+          .limit(1)
+          .get();
+      if (existing.docs.isNotEmpty) return;
+
+      final copy = WelcomeNotificationService.welcomeCopy(firstName);
+
       await _firestore.collection(_notificationsCollection).add({
         'user_id': userId,
-        'title': 'Welcome to ATMOS!',
-        'message': 'Thank you for signing up.',
+        'title': copy.title,
+        'message': copy.message,
         'type': 'welcome',
         'created_at': FieldValue.serverTimestamp(),
         'is_read': false,
       });
     } catch (e) {
-      // Ignore; notification is best-effort
-      assert(true, 'createWelcomeNotification: $e');
+      debugPrint('NotificationFirestoreService.createWelcomeNotification: $e');
     }
   }
 
@@ -102,14 +116,34 @@ class NotificationFirestoreService {
   }
 
   /// Merges user notifications and announcements and sorts by newest first.
+  /// Drops activity rows that duplicate a published announcement (same title+body).
   static Future<List<NotificationItem>> getMergedNotifications(String? userId) async {
     final List<NotificationItem> list = [];
     if (userId != null && userId.isNotEmpty) {
       list.addAll(await getUserNotifications(userId));
     }
-    list.addAll(await getAnnouncements());
-    list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    return list;
+    final announcements = await getAnnouncements();
+    list.addAll(announcements);
+
+    final announcementKeys = <String>{
+      for (final a in announcements) _dedupeKey(a.title, a.message),
+    };
+    final deduped = <NotificationItem>[];
+    final seenIds = <String>{};
+    for (final item in list) {
+      if (!seenIds.add(item.id)) continue;
+      if (!item.isAnnouncement &&
+          announcementKeys.contains(_dedupeKey(item.title, item.message))) {
+        continue;
+      }
+      deduped.add(item);
+    }
+    deduped.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return deduped;
+  }
+
+  static String _dedupeKey(String title, String message) {
+    return '${title.trim().toLowerCase()}|${message.trim().toLowerCase()}';
   }
 
   /// Marks a user notification as read.
@@ -118,6 +152,45 @@ class NotificationFirestoreService {
     try {
       await _firestore.collection(_notificationsCollection).doc(notificationId).update({'is_read': true});
     } catch (_) {}
+  }
+
+  /// Marks every Firestore notification for [userId] as read (batched).
+  static Future<void> markAllAsReadForUser(String userId) async {
+    if (!_isFirebaseInitialized || userId.isEmpty) return;
+    try {
+      final snap = await _firestore
+          .collection(_notificationsCollection)
+          .where('user_id', isEqualTo: userId)
+          .limit(100)
+          .get();
+      if (snap.docs.isEmpty) return;
+      var batch = _firestore.batch();
+      var ops = 0;
+      for (final d in snap.docs) {
+        final data = d.data();
+        if (data['is_read'] == true) continue;
+        batch.update(d.reference, {'is_read': true});
+        ops++;
+        if (ops >= 450) {
+          await batch.commit();
+          batch = _firestore.batch();
+          ops = 0;
+        }
+      }
+      if (ops > 0) await batch.commit();
+    } catch (e) {
+      debugPrint('NotificationFirestoreService.markAllAsReadForUser: $e');
+    }
+  }
+
+  /// Removes a user-owned notification document.
+  static Future<void> deleteUserNotification(String notificationId) async {
+    if (!_isFirebaseInitialized || notificationId.isEmpty) return;
+    try {
+      await _firestore.collection(_notificationsCollection).doc(notificationId).delete();
+    } catch (e) {
+      debugPrint('NotificationFirestoreService.deleteUserNotification: $e');
+    }
   }
 
   static NotificationItem _docToNotificationItem(DocumentSnapshot<Map<String, dynamic>> d, {required bool isAnnouncement}) {
@@ -157,7 +230,8 @@ class NotificationFirestoreService {
       message: message,
       type: data['type'] as String? ?? 'General',
       createdAt: createdAt,
-      isRead: true,
+      // Per-user read state is applied in [AlertsTabPage] from local prefs.
+      isRead: false,
       userId: null,
       isAnnouncement: true,
     );

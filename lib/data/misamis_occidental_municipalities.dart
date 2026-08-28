@@ -6,9 +6,26 @@ const double kMaxLat = 8.72;
 const double kMinLng = 123.5;
 const double kMaxLng = 123.95;
 
-/// All municipalities and cities in Misamis Occidental with dummy spot/vr counts.
+/// All municipalities and cities in Misamis Occidental.
+/// Spot/VR counts are 0 until loaded from Firestore during beta.
 List<Municipality> getMisamisOccidentalMunicipalities() {
-  return [
+  return _misamisOccidentalMunicipalitiesRaw
+      .map(
+        (m) => Municipality(
+          id: m.id,
+          name: m.name,
+          type: m.type,
+          lat: m.lat,
+          lng: m.lng,
+          spotCount: 0,
+          vrCount: 0,
+          category: m.category,
+        ),
+      )
+      .toList(growable: false);
+}
+
+const List<Municipality> _misamisOccidentalMunicipalitiesRaw = [
     const Municipality(
       id: 'oroquieta',
       name: 'Oroquieta City',
@@ -180,4 +197,3 @@ List<Municipality> getMisamisOccidentalMunicipalities() {
       category: MunicipalityCategory.festivals,
     ),
   ];
-}

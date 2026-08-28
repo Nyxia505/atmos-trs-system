@@ -1,0 +1,62 @@
+name: trip_plan
+description: "Misamis Occidental Tourism App"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  smooth_page_indicator: ^1.1.0
+  google_maps_flutter: 2.10.1
+  flutter_map: ^6.1.0
+  latlong2: ^0.9.1
+  image_picker: ^1.0.7
+  fl_chart: ^0.69.0
+  firebase_core: ^3.8.0
+  cloud_firestore: ^5.4.4
+  firebase_storage: ^12.3.4
+  cloud_functions: ^5.2.0
+  http: ^1.2.0
+  geolocator: ^13.0.2
+  firebase_messaging: ^15.2.10
+  flutter_local_notifications: ^21.0.0
+  firebase_auth: ^5.7.0
+  qr_flutter: ^4.1.0
+  cached_network_image: ^3.4.1
+  shared_preferences: ^2.5.3
+  video_player: ^2.9.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.3
+
+dependency_overrides:
+  # path_provider_android >=2.3.0 uses JNI internally, which is causing
+  # Windows file-lock failures in this environment during Android debug builds.
+  path_provider_android: 2.2.23
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/images/tripplan.png
+
+  fonts:
+    - family: HolidayCalling
+      fonts:
+        - asset: assets/fonts/holiday-calling-non-commercial-use.noncommercialuse.ttf
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/images/tripplan.png"
+  adaptive_icon_background: "#FFFFFF"
+  background_color_ios: "#FFFFFF"
+  remove_alpha_ios: true
