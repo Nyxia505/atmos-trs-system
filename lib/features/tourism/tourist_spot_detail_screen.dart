@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/app_theme_controller.dart';
+import 'package:atmos_trs_system/config/supabase_storage_config.dart';
 import 'package:atmos_trs_system/config/vr_tour_config.dart';
 import 'package:atmos_trs_system/features/explore/explore_screen.dart'
     show TouristSpot, kTextMuted;
@@ -254,7 +255,8 @@ class _TouristSpotDetailScreenState extends State<TouristSpotDetailScreen> {
   }
 
   Widget _buildHeroImage() {
-    final imagePath = spot.imageUrl.trim();
+    final imagePath =
+        SupabaseStorageConfig.resolve(spot.imageUrl.trim());
     if (imagePath.isEmpty) {
       return _buildHeroPlaceholder();
     }

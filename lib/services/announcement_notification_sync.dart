@@ -30,6 +30,8 @@ class AnnouncementNotificationSync {
           title: item.title,
           message: item.message,
           type: _announcementTypeToActivity(item.type),
+          imageUrl: item.imageUrl,
+          municipalityName: item.municipalityName,
         );
       }
     } catch (e) {
@@ -212,6 +214,8 @@ class AnnouncementNotificationSync {
           : _userTypeToActivity(item.type),
       createdAt: item.createdAt,
       isRead: item.isRead,
+      imageUrl: item.imageUrl,
+      municipalityName: item.municipalityName,
     );
   }
 

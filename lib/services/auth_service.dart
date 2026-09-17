@@ -1,5 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:atmos_trs_system/utils/email_utils.dart';
 import 'package:atmos_trs_system/utils/firebase_client_blocked_message.dart';
 
@@ -116,5 +116,82 @@ class AuthService {
     if (user == null) return false;
     await _auth.currentUser!.reload();
     return _auth.currentUser?.emailVerified ?? false;
+  }
+
+  /// Re-authenticates the signed-in user then sets a new password in Firebase Auth.
+  /// Call this when staff change password in Settings so login stays in sync with
+  /// SharedPreferences overrides.
+  static Future<void> reauthenticateAndUpdatePassword({
+    required String email,
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw FirebaseAuthException(
+        code: 'no-current-user',
+        message: 'Not signed in. Log in again, then change your password.',
+      );
+    }
+    final credential = EmailAuthProvider.credential(
+      email: normalizeEmail(email),
+      password: currentPassword,
+    );
+    await user.reauthenticateWithCredential(credential);
+    await user.updatePassword(newPassword);
+  }
+
+  /// Demo governor/tourism: Settings may update SharedPreferences while Firebase Auth
+  /// still has the previous password. Sign in with a known prior password, then push
+  /// [newPassword] into Auth so the next login succeeds.
+  static Future<UserCredential?> syncDemoStaffAuthPassword({
+    required String email,
+    required String newPassword,
+    required Iterable<String> previousPasswordCandidates,
+  }) async {
+    final normalized = normalizeEmail(email);
+    for (final oldPassword in previousPasswordCandidates) {
+      if (oldPassword.isEmpty || oldPassword == newPassword) continue;
+      try {
+        var cred = await _auth.signInWithEmailAndPassword(
+          email: normalized,
+          password: oldPassword,
+        );
+        final user = cred.user;
+        if (user == null) continue;
+        try {
+          await user.updatePassword(newPassword);
+        } on FirebaseAuthException catch (e) {
+          debugPrint(
+            '[Auth] syncDemoStaff updatePassword failed: ${e.code} ${e.message}',
+          );
+          if (e.code == 'requires-recent-login') {
+            try {
+              cred = await _auth.signInWithEmailAndPassword(
+                email: normalized,
+                password: oldPassword,
+              );
+              await cred.user?.updatePassword(newPassword);
+            } on FirebaseAuthException catch (e2) {
+              debugPrint(
+                '[Auth] syncDemoStaff retry updatePassword failed: ${e2.code}',
+              );
+              // Keep the signed-in session anyway so the governor can proceed.
+            }
+          }
+          // Keep signed-in session even if Auth password could not be updated.
+        }
+        return cred;
+      } on FirebaseAuthException catch (e) {
+        debugPrint(
+          '[Auth] syncDemoStaff sign-in candidate failed: ${e.code}',
+        );
+        continue;
+      } catch (e) {
+        debugPrint('[Auth] syncDemoStaff error: $e');
+        continue;
+      }
+    }
+    return null;
   }
 }

@@ -4,6 +4,33 @@ typedef CheckInTimestampParser = DateTime? Function(
   Map<String, dynamic> checkIn,
 );
 
+/// True when [raw] looks like an external form/URL — not a real AE / attraction id.
+///
+/// Accidental Google Form edit links have appeared as `spot_name` / AE-ID in DAE-3.
+bool isExcludedReportSpotLabel(String? raw) {
+  final v = (raw ?? '').trim().toLowerCase();
+  if (v.isEmpty) return false;
+  if (v.contains('docs.google.com/forms') || v.contains('forms.gle')) {
+    return true;
+  }
+  // Broken paste variants (spaces in the middle of a forms URL).
+  if (v.contains('docs.google.com') && v.contains('forms')) return true;
+  if (v.startsWith('http://') || v.startsWith('https://')) return true;
+  return false;
+}
+
+/// Check-ins whose spot label is a form/URL must not appear in official reports.
+bool isExcludedFromOfficialReports(Map<String, dynamic> checkIn) {
+  final spotName = checkIn['spot_name']?.toString() ??
+      checkIn['spotName']?.toString() ??
+      '';
+  final spotId = checkIn['spotId']?.toString() ??
+      checkIn['spot_id']?.toString() ??
+      '';
+  return isExcludedReportSpotLabel(spotName) ||
+      isExcludedReportSpotLabel(spotId);
+}
+
 /// Layout for time-bucketed check-in summary exports.
 enum CheckInSummaryLayoutKind {
   daily,
@@ -252,6 +279,7 @@ CheckInSummaryBuildResult buildCheckInSummaryReport({
   final bySpot = <String, _SpotAggregate>{};
 
   for (final c in checkIns) {
+    if (isExcludedFromOfficialReports(c)) continue;
     final ts = parse(c);
     if (ts == null) continue;
 

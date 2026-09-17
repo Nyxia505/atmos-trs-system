@@ -20,6 +20,7 @@ class OnboardingHeroVideoData extends ChangeNotifier {
   bool _failed = false;
   bool _initializing = false;
   DateTime? _lastInitFailureTime;
+  bool _pausedForAuthOverlay = false;
 
   /// Set in [rememberPlaybackPositionForLanding]; applied once on landing mount.
   Duration? _resumePositionAfterLanding;
@@ -188,9 +189,32 @@ class OnboardingHeroVideoData extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Pause decoding/playback while login or signup covers the landing page.
+  Future<void> pauseForAuthOverlay() async {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) return;
+    if (!c.value.isPlaying) return;
+    await c.pause();
+    _pausedForAuthOverlay = true;
+    notifyListeners();
+  }
+
+  /// Resume hero playback after closing an auth screen on top of landing.
+  Future<void> resumeAfterAuthOverlay() async {
+    if (!_pausedForAuthOverlay) return;
+    _pausedForAuthOverlay = false;
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) return;
+    if (!c.value.isPlaying) {
+      await c.play();
+    }
+    notifyListeners();
+  }
+
   /// Call when [LandingPage] is popped so the next visit can start a fresh player.
   void releaseLandingHeroVideo() {
     _resumePositionAfterLanding = null;
+    _pausedForAuthOverlay = false;
     _controller?.dispose();
     _controller = null;
     _ready = false;

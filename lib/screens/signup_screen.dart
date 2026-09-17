@@ -20,8 +20,9 @@ import 'package:atmos_trs_system/services/registration_rollback_service.dart';
 import 'package:atmos_trs_system/services/otp_delivery_service.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_barangays.dart';
-import 'package:atmos_trs_system/data/signup_prior_destinations.dart';
 import 'package:atmos_trs_system/utils/web_face_camera_capture.dart';
+import 'package:atmos_trs_system/widgets/web_glass_auth_scaffold.dart';
+import 'package:atmos_trs_system/widgets/tourist_signup_chrome.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -213,14 +214,6 @@ class _SignupScreenState extends State<SignupScreen> {
   final _barangayController = TextEditingController();
   final _foreignCityController = TextEditingController();
   final _foreignRegionController = TextEditingController();
-  final _accompanyingChildrenCountController = TextEditingController();
-
-  String? _selectedHowHeard;
-
-  String? _selectedPriorDestination1;
-  String? _selectedPriorDestination2;
-  String? _selectedPriorDestination3;
-  String? _selectedTransportation;
 
   // Dropdown values
   String? _selectedSuffix;
@@ -268,44 +261,34 @@ class _SignupScreenState extends State<SignupScreen> {
   /// Parent/guardian name when registrant is age 12 or below.
   final _parentGuardianController = TextEditingController();
 
-  static const List<String> _howHeardOptions = [
-    'Facebook',
-    'Instagram',
-    'TikTok',
-    'Friends / Family',
-    'Word of mouth',
-    'Tourism office / LGU',
-    'Hotel or resort',
-    'Travel agency / tour operator',
-    'Google / online search',
-    'News / TV / radio',
-    'School / work',
-    'Other',
-  ];
-
-  static const List<String> _transportationModes = [
-    'Private car (own vehicle)',
-    'Rented car or van',
-    'Tour van / package transport',
-    'Public bus',
-    'UV Express',
-    'Jeepney',
-    'Tricycle',
-    'Motorcycle',
-    'Bicycle or walking',
-    'Domestic flight',
-    'Ferry / RORO boat',
-    'Chartered boat',
-    'Other',
-  ];
-
-  static const Color _backgroundWhite = Color(0xFFFFF7ED); // orange-50
   static const Color _cardWhite = Colors.white;
-  static const Color _textDark = Color(0xFF111827);
-  static const Color _textMuted = Color(0xFF4B5563);
+  static const Color _textDark = Color(0xFF1F2937);
+  static const Color _textMuted = Color(0xFF6B7280);
   static const Color _inputBorder = Color(0xFFE5E7EB);
-  static const Color _inputFill = Color(0xFFFFFFFF);
-  static const Color _requiredAccent = Color(0xFFEA580C);
+  static const Color _inputFill = Color(0xFFF3F4F6);
+  static const Color _requiredAccent = Color(0xFFEF4444);
+
+  /// Mock visual step (0–3): Personal Details → Personal Info → Contact → Uploads.
+  int get _visualStepIndex {
+    if (_currentStep >= 1) return 3;
+    switch (_personalDetailsSubStep) {
+      case 0:
+      case 1:
+        return 0;
+      case 2:
+        return 1;
+      case 3:
+      case 4:
+        return 2;
+      default:
+        return 0;
+    }
+  }
+
+  int get _displayStepNumber => _visualStepIndex + 1;
+
+  String get _stepSlogan =>
+      TouristSignupChrome.sloganForVisualStep(_visualStepIndex);
 
   String? _requiredField(String? value, String fieldLabel) {
     if (value == null || value.trim().isEmpty) {
@@ -778,7 +761,6 @@ class _SignupScreenState extends State<SignupScreen> {
     _barangayController.dispose();
     _foreignCityController.dispose();
     _foreignRegionController.dispose();
-    _accompanyingChildrenCountController.dispose();
     _parentGuardianController.dispose();
     for (var controller in _otpControllers) {
       controller.dispose();
@@ -807,21 +789,6 @@ class _SignupScreenState extends State<SignupScreen> {
     return age != null && age <= _minorMaxAgeYears;
   }
 
-  int _parsedAccompanyingChildrenCount() {
-    final text = _accompanyingChildrenCountController.text.trim();
-    if (text.isEmpty) return 0;
-    return int.tryParse(text) ?? 0;
-  }
-
-  String? _validateAccompanyingChildrenCount(String? v) {
-    if (v == null || v.trim().isEmpty) return null;
-    final n = int.tryParse(v.trim());
-    if (n == null || n < 0 || n > 50) {
-      return 'Enter a number from 0 to 50';
-    }
-    return null;
-  }
-
   String? _validateTravelParty() {
     if (_isMinorRegistrant()) {
       if (_parentGuardianController.text.trim().isEmpty) {
@@ -829,21 +796,14 @@ class _SignupScreenState extends State<SignupScreen> {
       }
       return null;
     }
-    return _validateAccompanyingChildrenCount(
-      _accompanyingChildrenCountController.text,
-    );
+    // Adults: party size / gender is asked on QR scan welcome — not during signup.
+    return null;
   }
 
-  /// Tourists counted: minor alone = 1; adult = 1 + children brought.
-  int _computePartyHeadcount() {
-    if (_isMinorRegistrant()) return 1;
-    return 1 + _parsedAccompanyingChildrenCount();
-  }
+  /// Profile headcount is 1; visit party size comes from the QR check-in flow.
+  int _computePartyHeadcount() => 1;
 
-  int _accompanyingChildrenForSave() {
-    if (_isMinorRegistrant()) return 0;
-    return _parsedAccompanyingChildrenCount();
-  }
+  int _accompanyingChildrenForSave() => 0;
 
   Widget _buildLegalBullet(String text) {
     return Padding(
@@ -856,8 +816,8 @@ class _SignupScreenState extends State<SignupScreen> {
             child: Container(
               width: 6,
               height: 6,
-              decoration: const BoxDecoration(
-                color: _textMuted,
+              decoration: BoxDecoration(
+                color: _legalMutedColor,
                 shape: BoxShape.circle,
               ),
             ),
@@ -868,8 +828,9 @@ class _SignupScreenState extends State<SignupScreen> {
               text,
               style: TextStyle(
                 fontSize: 14,
-                color: _textDark,
-                height: 1.5,
+                color: _legalBodyColor,
+                height: 1.55,
+                fontWeight: _isDesktopGlass ? FontWeight.w500 : FontWeight.w400,
               ),
             ),
           ),
@@ -889,10 +850,18 @@ class _SignupScreenState extends State<SignupScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: done ? accent.withValues(alpha: 0.1) : const Color(0xFFF9FAFB),
+        color: done
+            ? accent.withValues(alpha: _isDesktopGlass ? 0.38 : 0.1)
+            : (_isDesktopGlass
+                ? Colors.black.withValues(alpha: 0.38)
+                : const Color(0xFFF9FAFB)),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: done ? accent.withValues(alpha: 0.45) : _inputBorder,
+          color: done
+              ? accent.withValues(alpha: _isDesktopGlass ? 0.85 : 0.45)
+              : (_isDesktopGlass
+                  ? Colors.white.withValues(alpha: 0.28)
+                  : _inputBorder),
         ),
       ),
       child: Row(
@@ -901,7 +870,9 @@ class _SignupScreenState extends State<SignupScreen> {
           Icon(
             done ? Icons.check_circle_rounded : icon,
             size: 16,
-            color: done ? accent : _textMuted,
+            color: done
+                ? (_isDesktopGlass ? Colors.white : accent)
+                : _legalMutedColor,
           ),
           const SizedBox(width: 6),
           Flexible(
@@ -912,7 +883,9 @@ class _SignupScreenState extends State<SignupScreen> {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
-                color: done ? accent : _textMuted,
+                color: done
+                    ? (_isDesktopGlass ? Colors.white : accent)
+                    : _legalMutedColor,
               ),
             ),
           ),
@@ -934,13 +907,17 @@ class _SignupScreenState extends State<SignupScreen> {
     required List<String> bullets,
   }) {
     return Material(
-      color: surface,
+      color: _legalSurface(surface),
       elevation: expanded ? 2 : 0,
       shadowColor: accent.withValues(alpha: 0.12),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: BorderSide(
-          color: reviewed ? accent.withValues(alpha: 0.5) : border,
+          color: reviewed
+              ? accent.withValues(alpha: _isDesktopGlass ? 0.75 : 0.5)
+              : (_isDesktopGlass
+                  ? Colors.white.withValues(alpha: 0.22)
+                  : border),
           width: reviewed ? 1.5 : 1,
         ),
       ),
@@ -957,10 +934,15 @@ class _SignupScreenState extends State<SignupScreen> {
               padding: const EdgeInsets.fromLTRB(14, 14, 10, 14),
               decoration: BoxDecoration(
                 gradient: LinearGradient(
-                  colors: [
-                    accent.withValues(alpha: 0.16),
-                    accent.withValues(alpha: 0.03),
-                  ],
+                  colors: _isDesktopGlass
+                      ? [
+                          accent.withValues(alpha: 0.62),
+                          Colors.black.withValues(alpha: 0.38),
+                        ]
+                      : [
+                          accent.withValues(alpha: 0.16),
+                          accent.withValues(alpha: 0.03),
+                        ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
@@ -970,7 +952,9 @@ class _SignupScreenState extends State<SignupScreen> {
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.85),
+                      color: _isDesktopGlass
+                          ? Colors.white.withValues(alpha: 0.14)
+                          : Colors.white.withValues(alpha: 0.85),
                       borderRadius: BorderRadius.circular(12),
                       boxShadow: [
                         BoxShadow(
@@ -980,7 +964,11 @@ class _SignupScreenState extends State<SignupScreen> {
                         ),
                       ],
                     ),
-                    child: Icon(icon, color: accent, size: 22),
+                    child: Icon(
+                      icon,
+                      color: _isDesktopGlass ? Colors.white : accent,
+                      size: 22,
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -992,10 +980,10 @@ class _SignupScreenState extends State<SignupScreen> {
                             Expanded(
                               child: Text(
                                 title,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w800,
-                                  color: _textDark,
+                                  color: _legalTitleColor,
                                 ),
                               ),
                             ),
@@ -1006,15 +994,24 @@ class _SignupScreenState extends State<SignupScreen> {
                                   vertical: 3,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: accent.withValues(alpha: 0.15),
+                                  color: accent.withValues(
+                                    alpha: _isDesktopGlass ? 0.35 : 0.15,
+                                  ),
                                   borderRadius: BorderRadius.circular(20),
+                                  border: _isDesktopGlass
+                                      ? Border.all(
+                                          color: Colors.white
+                                              .withValues(alpha: 0.35),
+                                        )
+                                      : null,
                                 ),
                                 child: Text(
                                   'Read',
                                   style: TextStyle(
                                     fontSize: 10,
                                     fontWeight: FontWeight.w800,
-                                    color: accent,
+                                    color:
+                                        _isDesktopGlass ? Colors.white : accent,
                                   ),
                                 ),
                               ),
@@ -1023,10 +1020,11 @@ class _SignupScreenState extends State<SignupScreen> {
                         const SizedBox(height: 2),
                         Text(
                           subtitle,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 12,
-                            color: _textMuted,
-                            height: 1.3,
+                            color: _legalMutedColor,
+                            height: 1.35,
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
                       ],
@@ -1036,7 +1034,7 @@ class _SignupScreenState extends State<SignupScreen> {
                     expanded
                         ? Icons.keyboard_arrow_up_rounded
                         : Icons.keyboard_arrow_down_rounded,
-                    color: accent,
+                    color: _isDesktopGlass ? Colors.white : accent,
                     size: 28,
                   ),
                 ],
@@ -1103,9 +1101,7 @@ class _SignupScreenState extends State<SignupScreen> {
             ),
           ),
         Material(
-          color: _agreeToTerms
-              ? AppTheme.brandOrange.withValues(alpha: 0.07)
-              : _cardWhite,
+          color: _legalAgreementFill(agreed: _agreeToTerms),
           elevation: _agreeToTerms ? 1 : 0,
           shadowColor: AppTheme.brandOrange.withValues(alpha: 0.2),
           shape: RoundedRectangleBorder(
@@ -1113,7 +1109,11 @@ class _SignupScreenState extends State<SignupScreen> {
             side: BorderSide(
               color: _agreeToTerms
                   ? AppTheme.brandOrange
-                  : (canAgree ? _inputBorder : Colors.amber.shade200),
+                  : (canAgree
+                      ? (_isDesktopGlass
+                          ? Colors.white.withValues(alpha: 0.28)
+                          : _inputBorder)
+                      : Colors.amber.shade200),
               width: _agreeToTerms ? 2 : 1,
             ),
           ),
@@ -1141,7 +1141,9 @@ class _SignupScreenState extends State<SignupScreen> {
                         border: Border.all(
                           color: _agreeToTerms
                               ? AppTheme.brandOrange
-                              : _inputBorder,
+                              : (_isDesktopGlass
+                                  ? Colors.white.withValues(alpha: 0.45)
+                                  : _inputBorder),
                           width: 2,
                         ),
                       ),
@@ -1168,20 +1170,22 @@ class _SignupScreenState extends State<SignupScreen> {
                               fontSize: 14,
                               fontWeight: FontWeight.w800,
                               color: _agreeToTerms
-                                  ? AppTheme.brandOrange
-                                  : _textDark,
+                                  ? (_isDesktopGlass
+                                      ? Colors.white
+                                      : AppTheme.brandOrange)
+                                  : _legalTitleColor,
                             ),
                           ),
                           const SizedBox(height: 8),
-                          const Text(
+                          Text(
                             'I have read and agree to the Terms and Conditions '
                             'and the Data Privacy Policy (Republic Act No. 10173) '
                             'of ATMOS-TRS - Asenso Tourismo Misamis Occidental '
                             'Smart Tourist Registration System.',
                             style: TextStyle(
                               fontSize: 14,
-                              color: _textDark,
-                              height: 1.5,
+                              color: _legalBodyColor,
+                              height: 1.55,
                               fontWeight: FontWeight.w500,
                             ),
                           ),
@@ -1244,6 +1248,14 @@ class _SignupScreenState extends State<SignupScreen> {
           return;
         }
       }
+      if (_personalDetailsSubStep == 3) {
+        // Party size / gender is captured on QR welcome after scan — not here.
+        // Minors still need the parent/guardian step.
+        if (!_isMinorRegistrant()) {
+          setState(() => _currentStep++);
+          return;
+        }
+      }
       if (_personalDetailsSubStep == 4) {
         final err = _validateTravelParty();
         if (err != null) {
@@ -1276,7 +1288,7 @@ class _SignupScreenState extends State<SignupScreen> {
 
   void _submitCurrentStepFromKeyboard() {
     if (_isSubmitting || _registrationInFlight) return;
-    if (_currentStep == 2) {
+    if (_currentStep == 1) {
       _submitForm();
     } else {
       _nextStep();
@@ -1556,7 +1568,7 @@ class _SignupScreenState extends State<SignupScreen> {
       SnackBar(
         content: SelectableText(
           message,
-          style: const TextStyle(color: Colors.white, fontSize: 14),
+          style: TextStyle(color: Colors.white, fontSize: 14),
         ),
         backgroundColor: background,
         behavior: SnackBarBehavior.floating,
@@ -1607,23 +1619,15 @@ class _SignupScreenState extends State<SignupScreen> {
         if (regionErr != null) return regionErr;
       }
     }
-    if (_selectedHowHeard == null || _selectedHowHeard!.trim().isEmpty) {
-      return 'Please select how you heard about Misamis Occidental (Step 2).';
-    }
-    if (_selectedTransportation == null) {
-      return 'Please select how you will travel (Step 2).';
-    }
     if (_passwordController.text != _confirmPasswordController.text) {
       return 'Password and confirm password do not match.';
     }
     return _validateRegistrationExtra();
   }
 
-  /// Extra checks beyond [FormState] validators (terms, photo, password length).
+  /// Extra checks beyond [FormState] validators (terms, password length).
+  /// Profile photo is optional — many tourists prefer to skip it.
   String? _validateRegistrationExtra() {
-    if (_uploadedImageBytes == null || _uploadedImageBytes!.isEmpty) {
-      return 'Please upload a close-up photo of your face (camera or gallery).';
-    }
     final email = normalizeEmail(_emailController.text);
     if (email.isEmpty) return 'Please enter your email address.';
     if (!isValidEmailFormat(_emailController.text)) {
@@ -1691,7 +1695,7 @@ class _SignupScreenState extends State<SignupScreen> {
       user = await auth
           .authStateChanges()
           .firstWhere((u) => u?.uid == uid)
-          .timeout(const Duration(seconds: 15));
+          .timeout(const Duration(seconds: 8));
     }
     if (user == null || user.uid != uid) {
       throw StateError(
@@ -1799,39 +1803,59 @@ class _SignupScreenState extends State<SignupScreen> {
     final ageYearsForAuth = _ageInYears();
     final isMinorRegistrant =
         ageYearsForAuth != null && ageYearsForAuth <= _minorMaxAgeYears;
-    if (isMinorRegistrant && _isGmailAddress(contactEmail)) {
+
+    // Compress photo in parallel with auth / OTP work (optional — skip if none).
+    final hasProfilePhoto =
+        _uploadedImageBytes != null && _uploadedImageBytes!.isNotEmpty;
+    final Future<Uint8List> compressFuture = hasProfilePhoto
+        ? compute(
+            compressProfileJpegIsolate,
+            ProfileJpegCompressArgs(_uploadedImageBytes!, 800, 78),
+          )
+        : Future<Uint8List>.value(Uint8List(0));
+
+    // Firebase Auth 6 removed fetchSignInMethodsForEmail (email enumeration).
+    // For minors using a parent Gmail, try that address first; on conflict we
+    // retry with a protected alias below in the createUser catch path.
+    var minorAliasRetryEligible =
+        isMinorRegistrant && _isGmailAddress(contactEmail);
+
+    UserCredential? userCredential;
+    String? uid;
+    String? registrationOtp;
+
+    // --- STEP 1: Firebase Auth + OTP save ---
+    try {
+      debugPrint('[REG] STEP 1: createUserWithEmailAndPassword');
       try {
-        final methods = await FirebaseAuth.instance
-            .fetchSignInMethodsForEmail(contactEmail)
-            .timeout(const Duration(seconds: 8), onTimeout: () => <String>[]);
-        if (methods.isNotEmpty) {
+        await FirebaseAuth.instance.signOut();
+      } catch (_) {}
+      try {
+        userCredential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+          email: authEmail,
+          password: password,
+        );
+      } on FirebaseAuthException catch (e) {
+        if (e.code == 'email-already-in-use' &&
+            minorAliasRetryEligible &&
+            authEmail == contactEmail) {
           authEmail = _buildMinorGmailAlias(contactEmail);
+          minorAliasRetryEligible = false;
           if (mounted) {
             _registrationSnack(
               'Parent/guardian Gmail is already used. Minor account will proceed using a protected alias.',
               background: Colors.green.shade700,
             );
           }
+          userCredential =
+              await FirebaseAuth.instance.createUserWithEmailAndPassword(
+            email: authEmail,
+            password: password,
+          );
+        } else {
+          rethrow;
         }
-      } catch (e) {
-        debugPrint('[REG] minor gmail precheck skipped: $e');
       }
-    }
-
-    UserCredential? userCredential;
-    String? uid;
-    String? registrationOtp;
-
-    // --- STEP 1: Firebase Auth only ---
-    try {
-      debugPrint('[REG] STEP 1: createUserWithEmailAndPassword');
-      try {
-        await FirebaseAuth.instance.signOut();
-      } catch (_) {}
-      userCredential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
-        email: authEmail,
-        password: password,
-      );
       uid = userCredential.user?.uid;
       debugPrint('[REG] STEP 1 OK: uid=$uid');
       if (uid == null || uid.isEmpty) {
@@ -1893,69 +1917,76 @@ class _SignupScreenState extends State<SignupScreen> {
       return;
     }
 
-    // --- STEP 2: Firebase Storage, or Firestore base64 when Storage quota is full ---
-    try {
-      await _ensureAuthReadyForFirestore(uid);
-    } catch (e) {
-      debugPrint('[REG] STEP 2 auth refresh (non-fatal): $e');
-    }
-    debugPrint('[REG] compressing profile photo (background isolate)');
-      final compressedPhoto = await compute(
-        compressProfileJpegIsolate,
-        ProfileJpegCompressArgs(_uploadedImageBytes!, 1024, 82),
-      );
-    if (compressedPhoto.isEmpty) {
-      await _deleteAuthUserBestEffort();
-      _setSubmitting(false);
-      _registrationSnack(
-        'Photo could not be compressed. Try another JPG/PNG.',
-        background: Colors.red.shade700,
-      );
-      return;
-    }
-
+    // --- STEP 2: optional photo upload + municipality resolve ---
     _ProfilePhotoResult? profilePhoto;
-    try {
-      profilePhoto = await _uploadProfilePhoto(
-        uid: uid,
-        compressedPhoto: compressedPhoto,
-      );
-    } on FirebaseException catch (e, st) {
-      debugPrint(
-        '[REG] STEP 2 FAIL: plugin=${e.plugin} code=${e.code} message=${e.message}\n$st',
-      );
-      // Should not happen: _uploadProfilePhoto falls back to Firestore for Storage errors.
-      await _deleteAuthUserBestEffort();
-      _setSubmitting(false);
-      _registrationSnack(
-        'Profile photo could not be saved — ${_formatFirebaseException(e)}',
-        background: Colors.red.shade700,
-      );
-      return;
-    } catch (e, st) {
-      debugPrint('[REG] STEP 2 FAIL (non-Firebase): $e\n$st');
-      await _deleteAuthUserBestEffort();
-      _setSubmitting(false);
-      _registrationSnack(
-        'Profile photo upload failed — ${_formatRegistrationError(e)}',
-        background: Colors.red.shade700,
-      );
-      return;
+    late final String? registrationMunicipalityId;
+
+    if (!hasProfilePhoto) {
+      debugPrint('[REG] STEP 2: no profile photo — skipping upload');
+      try {
+        registrationMunicipalityId =
+            await RegistrationMunicipalityResolver.resolveForSignup();
+      } catch (e, st) {
+        debugPrint('[REG] STEP 2 municipality resolve (non-fatal): $e\n$st');
+        registrationMunicipalityId = null;
+      }
+    } else {
+      debugPrint('[REG] awaiting photo compress (started in parallel)');
+      final compressedPhoto = await compressFuture;
+      if (compressedPhoto.isEmpty) {
+        await _deleteAuthUserBestEffort();
+        _setSubmitting(false);
+        _registrationSnack(
+          'Photo could not be compressed. Try another JPG/PNG, or skip the photo.',
+          background: Colors.red.shade700,
+        );
+        return;
+      }
+
+      try {
+        final parallel = await Future.wait<Object?>([
+          _uploadProfilePhoto(uid: uid, compressedPhoto: compressedPhoto),
+          RegistrationMunicipalityResolver.resolveForSignup(),
+        ]);
+        profilePhoto = parallel[0] as _ProfilePhotoResult?;
+        registrationMunicipalityId = parallel[1] as String?;
+      } on FirebaseException catch (e, st) {
+        debugPrint(
+          '[REG] STEP 2 FAIL: plugin=${e.plugin} code=${e.code} message=${e.message}\n$st',
+        );
+        await _deleteAuthUserBestEffort();
+        _setSubmitting(false);
+        _registrationSnack(
+          'Profile photo could not be saved — ${_formatFirebaseException(e)}',
+          background: Colors.red.shade700,
+        );
+        return;
+      } catch (e, st) {
+        debugPrint('[REG] STEP 2 FAIL (non-Firebase): $e\n$st');
+        await _deleteAuthUserBestEffort();
+        _setSubmitting(false);
+        _registrationSnack(
+          'Profile photo upload failed — ${_formatRegistrationError(e)}',
+          background: Colors.red.shade700,
+        );
+        return;
+      }
+
+      if (profilePhoto == null || !profilePhoto.hasPhoto) {
+        await _deleteAuthUserBestEffort();
+        _setSubmitting(false);
+        _registrationSnack(
+          'Photo is too large to save. Try a smaller JPG/PNG, or skip the photo.',
+          background: Colors.red.shade700,
+        );
+        return;
+      }
     }
 
-    if (profilePhoto == null || !profilePhoto.hasPhoto) {
-      await _deleteAuthUserBestEffort();
-      _setSubmitting(false);
-      _registrationSnack(
-        'Photo is too large to save. Try a smaller JPG or PNG.',
-        background: Colors.red.shade700,
-      );
-      return;
-    }
-
-    final profilePhotoUrl = profilePhoto.profilePhotoUrl;
-    final profileImageBase64 = profilePhoto.profileImageBase64;
-    final usedPhotoFirestoreFallback = profilePhoto.usedFirestoreFallback;
+    final profilePhotoUrl = profilePhoto?.profilePhotoUrl;
+    final profileImageBase64 = profilePhoto?.profileImageBase64;
+    final usedPhotoFirestoreFallback =
+        profilePhoto?.usedFirestoreFallback ?? false;
 
     // --- Prepare name + tourist id (needed for Firestore) ---
     final touristId = TouristIdHelper.generate(
@@ -1982,27 +2013,15 @@ class _SignupScreenState extends State<SignupScreen> {
     final accompanyingChildren = _accompanyingChildrenForSave();
     final partyHeadcount = _computePartyHeadcount();
 
-    final registrationMunicipalityId =
-        await RegistrationMunicipalityResolver.resolveForSignup(
-      priorDestination1: signupPriorDestinationValueForSave(
-        _selectedPriorDestination1,
-      ),
-      priorDestination2: signupPriorDestinationValueForSave(
-        _selectedPriorDestination2,
-      ),
-      priorDestination3: signupPriorDestinationValueForSave(
-        _selectedPriorDestination3,
-      ),
-    );
-
     final otp = registrationOtp;
 
-    // --- STEP 4: Email delivery (SMS optional; OTP already in Firestore from STEP 3) ---
+    // --- STEP 4: Email delivery (OTP already in Firestore from STEP 3) ---
     if (!kIsWeb) {
-      await ensureEmailOtpNotificationSupport();
-      await syncFcmTokenToUserDoc(uid);
+      // Non-blocking device notification setup — don't delay email send.
+      unawaited(ensureEmailOtpNotificationSupport());
+      unawaited(syncFcmTokenToUserDoc(uid));
     }
-    debugPrint('[REG] STEP 4: OTP delivery (email + on-device notification on mobile)');
+    debugPrint('[REG] STEP 4: OTP delivery (email)');
     final delivery = await OtpDeliveryService.deliverVerificationCode(
       uid: uid,
       email: contactEmail,
@@ -2012,6 +2031,16 @@ class _SignupScreenState extends State<SignupScreen> {
       notifyOnThisDevice: !kIsWeb,
       trySms: false,
       otpAlreadyInFirestore: true,
+    ).timeout(
+      const Duration(seconds: 15),
+      onTimeout: () {
+        debugPrint('[REG] STEP 4 timeout — continuing with saved OTP');
+        return const OtpDeliveryResult(
+          emailSent: false,
+          emailError: 'Email send timed out',
+          otpAlreadyInFirestore: true,
+        );
+      },
     );
     if (!delivery.canCompleteRegistration) {
       debugPrint(
@@ -2028,7 +2057,9 @@ class _SignupScreenState extends State<SignupScreen> {
     if (delivery.emailSent) {
       debugPrint('[REG] STEP 4 OK: email sent');
     } else {
-      debugPrint('[REG] STEP 4: email delivery failed');
+      debugPrint(
+        '[REG] STEP 4: email delivery failed/timed out — OTP saved, continuing',
+      );
     }
 
     // --- Defer Firestore profile until OTP verified on /verify-otp ---
@@ -2056,18 +2087,12 @@ class _SignupScreenState extends State<SignupScreen> {
       'profilePhotoPending': usedPhotoFirestoreFallback,
       'isLocal': _isPhilippines,
       'localOrForeign': _derivedLocalOrForeign,
-      'transportation': _selectedTransportation,
+      'transportation': '',
       'travelHistory': {
-        'firstDestination': signupPriorDestinationValueForSave(
-          _selectedPriorDestination1,
-        ),
-        'secondDestination': signupPriorDestinationValueForSave(
-          _selectedPriorDestination2,
-        ),
-        'thirdDestination': signupPriorDestinationValueForSave(
-          _selectedPriorDestination3,
-        ),
-        'howHeardAbout': _selectedHowHeard?.trim() ?? '',
+        'firstDestination': '',
+        'secondDestination': '',
+        'thirdDestination': '',
+        'howHeardAbout': '',
       },
       'receiveUpdates': _receiveUpdates,
       if (registrationMunicipalityId != null &&
@@ -2150,7 +2175,7 @@ class _SignupScreenState extends State<SignupScreen> {
       debugPrint('[REG] STEP 5 deferred — navigate to verify-otp');
       final snackMsg = delivery.emailSent
           ? 'We sent a 6-digit code to $contactEmail. Enter it below to finish signup.'
-          : 'Enter the verification code on the next screen to finish signup.';
+          : delivery.messageForUser(contactEmail);
       _registrationSnack(
         snackMsg,
         background: delivery.emailSent || delivery.smsSent
@@ -2218,25 +2243,42 @@ class _SignupScreenState extends State<SignupScreen> {
     required String hint,
     IconData? prefixIcon,
     Widget? suffixIcon,
+    /// Frees horizontal room so long values (e.g. emails) stay fully visible.
+    bool compact = false,
   }) {
+    if (_isDesktopGlass) {
+      return webGlassInputDecoration(
+        hint: hint,
+        prefixIcon: prefixIcon,
+        suffixIcon: suffixIcon,
+      );
+    }
     return InputDecoration(
       hintText: hint,
-      hintStyle: TextStyle(
-        color: _textMuted.withValues(alpha: 0.9),
-        fontSize: 15,
-        fontWeight: FontWeight.w400,
-      ),
+      hintStyle: compact
+          ? _fieldHintTextStyle.copyWith(fontSize: 14)
+          : _fieldHintTextStyle,
       prefixIcon: prefixIcon != null
           ? Padding(
-              padding: const EdgeInsets.only(left: 12, right: 4),
-              child: Icon(prefixIcon, color: AppTheme.brandOrange, size: 20),
+              padding: EdgeInsets.only(left: compact ? 10 : 12, right: 4),
+              child: Icon(
+                prefixIcon,
+                color: AppTheme.brandOrange,
+                size: compact ? 18 : 20,
+              ),
             )
           : null,
-      prefixIconConstraints: const BoxConstraints(minWidth: 44, minHeight: 48),
+      prefixIconConstraints: BoxConstraints(
+        minWidth: compact ? 36 : 44,
+        minHeight: 48,
+      ),
       suffixIcon: suffixIcon,
       filled: true,
-      fillColor: _inputFill,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+      fillColor: _formFillColor,
+      contentPadding: EdgeInsets.symmetric(
+        horizontal: compact ? 10 : 14,
+        vertical: 16,
+      ),
       errorStyle: TextStyle(
         fontSize: 12,
         height: 1.3,
@@ -2245,33 +2287,43 @@ class _SignupScreenState extends State<SignupScreen> {
       ),
       errorMaxLines: 2,
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: _inputBorder, width: 1),
+        borderRadius: BorderRadius.circular(16),
+        borderSide: BorderSide(color: _formBorderColor, width: 1),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppTheme.brandOrange, width: 2),
+        borderRadius: BorderRadius.circular(16),
+        borderSide: const BorderSide(color: AppTheme.brandOrange, width: 1.8),
       ),
       errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
         borderSide: BorderSide(color: Colors.red.shade300, width: 1),
       ),
       focusedErrorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: Colors.red.shade400, width: 2),
+        borderRadius: BorderRadius.circular(16),
+        borderSide: BorderSide(color: Colors.red.shade400, width: 1.8),
       ),
     );
   }
 
   Widget _buildSectionLabel(String label, {bool required = false}) {
+    final labelColor = _isDesktopGlass ? Colors.white : _textDark;
     return Text.rich(
       TextSpan(
         text: label,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 15,
           fontWeight: FontWeight.w700,
-          color: _textDark,
+          color: labelColor,
           letterSpacing: 0.1,
+          shadows: _isDesktopGlass
+              ? const [
+                  Shadow(
+                    color: Color(0x99000000),
+                    blurRadius: 4,
+                    offset: Offset(0, 1),
+                  ),
+                ]
+              : null,
         ),
         children: required
             ? const [
@@ -2291,363 +2343,597 @@ class _SignupScreenState extends State<SignupScreen> {
   }
 
   Widget _buildSignupIntro() {
-    return RichText(
-      textAlign: TextAlign.center,
-      text: TextSpan(
-        style: const TextStyle(
-          fontSize: 15,
-          color: _textDark,
-          height: 1.5,
-          fontWeight: FontWeight.w500,
-        ),
-        children: [
-          const TextSpan(
-            text:
-                'Please provide accurate and valid details only to help us serve you better. If you already have an account, ',
-          ),
-          WidgetSpan(
-            alignment: PlaceholderAlignment.baseline,
-            baseline: TextBaseline.alphabetic,
-            child: GestureDetector(
-              onTap: () => Navigator.pushReplacementNamed(context, '/login'),
-              child: Text(
-                'Log in',
-                style: TextStyle(
-                  color: AppTheme.brandOrange,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 15,
-                  decoration: TextDecoration.underline,
-                  decorationColor: AppTheme.brandOrange,
+    if (_isDesktopGlass) {
+      final bodyStyle = TextStyle(
+        fontSize: 14,
+        color: Colors.white,
+        height: 1.45,
+        fontWeight: FontWeight.w600,
+      );
+      return RichText(
+        textAlign: TextAlign.center,
+        text: TextSpan(
+          style: bodyStyle,
+          children: [
+            const TextSpan(
+              text:
+                  'Please provide accurate and valid details only to help us serve you better. If you already have an account, ',
+            ),
+            WidgetSpan(
+              alignment: PlaceholderAlignment.baseline,
+              baseline: TextBaseline.alphabetic,
+              child: GestureDetector(
+                onTap: () => Navigator.pushReplacementNamed(context, '/login'),
+                child: const Text(
+                  'Log in',
+                  style: TextStyle(
+                    color: AppTheme.brandOrange,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    decoration: TextDecoration.underline,
+                    decorationColor: AppTheme.brandOrange,
+                  ),
                 ),
               ),
             ),
+            const TextSpan(text: ' instead.'),
+          ],
+        ),
+      );
+    }
+
+    return _buildStepInfoBanner();
+  }
+
+  Widget _buildStepInfoBanner() {
+    // Per-step peach info banners (mock).
+    if (_currentStep >= 1) {
+      return TouristSignupInfoBanner(
+        icon: Icons.photo_camera_outlined,
+        child: Text(
+          'Optional: add a clear face photo for your tourist profile. You can skip and finish registration.',
+          style: TextStyle(
+            fontSize: 12.5,
+            height: 1.4,
+            fontWeight: FontWeight.w500,
+            color: TouristSignupChrome.textDark.withValues(alpha: 0.85),
           ),
-          const TextSpan(text: ' instead.'),
-        ],
-      ),
-    );
+        ),
+      );
+    }
+
+    switch (_personalDetailsSubStep) {
+      case 0:
+        return TouristSignupInfoBanner(
+          icon: Icons.privacy_tip_outlined,
+          child: Text(
+            'Please review Data Privacy and Terms before continuing. Required for a secure tourist account.',
+            style: TextStyle(
+              fontSize: 12.5,
+              height: 1.4,
+              fontWeight: FontWeight.w500,
+              color: TouristSignupChrome.textDark.withValues(alpha: 0.85),
+            ),
+          ),
+        );
+      case 2:
+        return TouristSignupInfoBanner(
+          icon: Icons.info_outline_rounded,
+          child: Text(
+            'Tell us more about yourself. This helps us personalize your experience.',
+            style: TextStyle(
+              fontSize: 12.5,
+              height: 1.4,
+              fontWeight: FontWeight.w500,
+              color: TouristSignupChrome.textDark.withValues(alpha: 0.85),
+            ),
+          ),
+        );
+      case 3:
+      case 4:
+        return TouristSignupInfoBanner(
+          icon: Icons.badge_outlined,
+          child: Text(
+            'How can we reach you? This information keeps your account secure.',
+            style: TextStyle(
+              fontSize: 12.5,
+              height: 1.4,
+              fontWeight: FontWeight.w500,
+              color: TouristSignupChrome.textDark.withValues(alpha: 0.85),
+            ),
+          ),
+        );
+      default:
+        return TouristSignupInfoBanner(
+          icon: Icons.person_rounded,
+          child: RichText(
+            text: TextSpan(
+              style: TextStyle(
+                fontSize: 12.5,
+                height: 1.4,
+                fontWeight: FontWeight.w500,
+                color: TouristSignupChrome.textDark.withValues(alpha: 0.85),
+              ),
+              children: [
+                const TextSpan(
+                  text:
+                      'Please provide accurate and valid details only to help us serve you better. If you already have an account, ',
+                ),
+                WidgetSpan(
+                  alignment: PlaceholderAlignment.baseline,
+                  baseline: TextBaseline.alphabetic,
+                  child: GestureDetector(
+                    onTap: () =>
+                        Navigator.pushReplacementNamed(context, '/login'),
+                    child: const Text(
+                      'Log in',
+                      style: TextStyle(
+                        color: TouristSignupChrome.heroOrange,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12.5,
+                        decoration: TextDecoration.underline,
+                        decorationColor: TouristSignupChrome.heroOrange,
+                      ),
+                    ),
+                  ),
+                ),
+                const TextSpan(text: ' instead.'),
+              ],
+            ),
+          ),
+        );
+    }
   }
 
   BoxDecoration _signupFormCardDecoration() {
+    if (_isDesktopGlass) {
+      return BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.28),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
+      );
+    }
     return BoxDecoration(
       color: _cardWhite,
-      borderRadius: BorderRadius.circular(_isWeb ? 20 : 16),
-      border: Border.all(color: AppTheme.brandOrange.withValues(alpha: 0.12)),
+      borderRadius: BorderRadius.circular(20),
       boxShadow: [
         BoxShadow(
-          color: Colors.black.withValues(alpha: _isWeb ? 0.06 : 0.04),
-          blurRadius: _isWeb ? 20 : 12,
-          offset: const Offset(0, 4),
-        ),
-        BoxShadow(
-          color: AppTheme.brandOrange.withValues(alpha: 0.05),
-          blurRadius: _isWeb ? 28 : 0,
-          offset: const Offset(0, 8),
+          color: Colors.black.withValues(alpha: 0.10),
+          blurRadius: 28,
+          offset: const Offset(0, 12),
         ),
       ],
     );
   }
 
-  bool get _isWeb => kIsWeb && MediaQuery.sizeOf(context).width >= 768;
+  bool get _isDesktopGlass =>
+      MediaQuery.sizeOf(context).width >= kWebGlassAuthBreakpoint;
+
+  Color get _fieldTextColor =>
+      _isDesktopGlass ? Colors.white : _textDark;
+
+  Color get _helperTextColor =>
+      _isDesktopGlass ? Colors.white.withValues(alpha: 0.82) : _textMuted;
+
+  Color _legalSurface(Color lightSurface) =>
+      _isDesktopGlass ? Colors.black.withValues(alpha: 0.52) : lightSurface;
+
+  Color get _legalTitleColor => _isDesktopGlass ? Colors.white : _textDark;
+
+  Color get _legalBodyColor =>
+      _isDesktopGlass ? Colors.white.withValues(alpha: 0.94) : _textDark;
+
+  Color get _legalMutedColor =>
+      _isDesktopGlass ? Colors.white.withValues(alpha: 0.82) : _textMuted;
+
+  Color _legalAgreementFill({required bool agreed}) {
+    if (!_isDesktopGlass) {
+      return agreed
+          ? AppTheme.brandOrange.withValues(alpha: 0.07)
+          : _cardWhite;
+    }
+    return agreed
+        ? AppTheme.brandOrange.withValues(alpha: 0.3)
+        : Colors.black.withValues(alpha: 0.44);
+  }
+
+  Color get _formFillColor =>
+      _isDesktopGlass ? Colors.black.withValues(alpha: 0.38) : _inputFill;
+
+  Color get _formBorderColor =>
+      _isDesktopGlass ? Colors.white.withValues(alpha: 0.45) : _inputBorder;
+
+  /// High-contrast placeholders on dark glass / light mobile fills.
+  TextStyle get _fieldHintTextStyle => TextStyle(
+        color: _isDesktopGlass
+            ? Colors.white.withValues(alpha: 0.95)
+            : const Color(0xFF475569),
+        fontSize: 15,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0.1,
+      );
+
+  TextStyle get _formValueTextStyle => TextStyle(
+        color: _isDesktopGlass ? Colors.white.withValues(alpha: 0.98) : _textDark,
+        fontSize: 16,
+        fontWeight: FontWeight.w500,
+      );
+
+  Widget _dropdownHint(String text, {double fontSize = 15}) {
+    return Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: _fieldHintTextStyle.copyWith(fontSize: fontSize),
+    );
+  }
+
+  TextStyle _dropdownMenuTextStyle({double fontSize = 16}) => TextStyle(
+        color: _textDark,
+        fontSize: fontSize,
+        fontWeight: FontWeight.w500,
+      );
+
+  Widget _dropdownMenuText(
+    String text, {
+    double fontSize = 16,
+    int? maxLines,
+    TextOverflow? overflow,
+  }) {
+    return Text(
+      text,
+      maxLines: maxLines,
+      overflow: overflow,
+      style: _dropdownMenuTextStyle(fontSize: fontSize),
+    );
+  }
+
+  Widget _dropdownSelectedText(
+    String text, {
+    double fontSize = 16,
+    int? maxLines,
+    TextOverflow? overflow,
+  }) {
+    return Text(
+      text,
+      maxLines: maxLines,
+      overflow: overflow,
+      style: _formValueTextStyle.copyWith(fontSize: fontSize),
+    );
+  }
+
+  List<DropdownMenuItem<String>> _stringDropdownItems(
+    Iterable<String> values, {
+    double fontSize = 16,
+  }) {
+    return values
+        .map(
+          (value) => DropdownMenuItem<String>(
+            value: value,
+            child: _dropdownMenuText(
+              value,
+              fontSize: fontSize,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        )
+        .toList();
+  }
+
+  List<Widget> _stringSelectedLabels(
+    Iterable<String> values, {
+    double fontSize = 16,
+  }) {
+    return values
+        .map(
+          (value) => Align(
+            alignment: Alignment.centerLeft,
+            child: _dropdownSelectedText(
+              value,
+              fontSize: fontSize,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        )
+        .toList();
+  }
+
+  List<DropdownMenuItem<int>> _intDropdownItems(
+    Iterable<int> values, {
+    double fontSize = 16,
+  }) {
+    return values
+        .map(
+          (value) => DropdownMenuItem<int>(
+            value: value,
+            child: _dropdownMenuText('$value', fontSize: fontSize),
+          ),
+        )
+        .toList();
+  }
+
+  List<Widget> _intSelectedLabels(
+    Iterable<int> values, {
+    double fontSize = 16,
+  }) {
+    return values
+        .map(
+          (value) => Align(
+            alignment: Alignment.centerLeft,
+            child: _dropdownSelectedText('$value', fontSize: fontSize),
+          ),
+        )
+        .toList();
+  }
+
+  BoxDecoration _compactDropdownDecoration() {
+    return BoxDecoration(
+      color: _formFillColor,
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: _formBorderColor),
+    );
+  }
+
+  Widget _buildSignupFormBody({required EdgeInsets formPadding}) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (_isDesktopGlass) ...[
+          TouristSignupProgressTracker(
+            visualStepIndex: _visualStepIndex,
+            onDark: true,
+          ),
+          const SizedBox(height: 16),
+          _buildSignupIntro(),
+          const SizedBox(height: 20),
+        ],
+        Container(
+          width: double.infinity,
+          decoration: _signupFormCardDecoration(),
+          child: Padding(
+            padding: formPadding,
+            child: Form(
+              key: _formKey,
+              child: AutofillGroup(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (!_isDesktopGlass) ...[
+                      _buildSignupIntro(),
+                      const SizedBox(height: 18),
+                    ],
+                    _isDesktopGlass
+                        ? Theme(
+                            data: Theme.of(context).copyWith(
+                              canvasColor: Colors.white,
+                              dropdownMenuTheme: DropdownMenuThemeData(
+                                textStyle: _dropdownMenuTextStyle(),
+                              ),
+                            ),
+                            child: _buildCurrentStep(),
+                          )
+                        : _buildCurrentStep(),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    const double cardRadius = 24.0;
-
-    final headerSection = Stack(
-      children: [
-        Container(
-          width: double.infinity,
-          height: 200,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [AppTheme.brandOrange, AppTheme.brandOrangeLight],
-            ),
-            borderRadius: _isWeb
-                ? const BorderRadius.only(
-                    topLeft: Radius.circular(cardRadius),
-                    topRight: Radius.circular(cardRadius),
-                  )
-                : const BorderRadius.only(
-                    bottomLeft: Radius.circular(40),
-                    bottomRight: Radius.circular(40),
-                  ),
-          ),
-        ),
-        SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(
-                        Icons.arrow_back_rounded,
-                        color: Colors.white,
-                        size: 24,
-                      ),
-                      onPressed: () => Navigator.pop(context),
-                      tooltip: 'Back',
-                    ),
-                    const Spacer(),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Step ${_currentStep + 1}',
-                  style: const TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.white,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Registration',
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: Colors.white.withValues(alpha: 0.95),
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-
-    final contentSection = _isWeb
-        ? Container(
-            width: double.infinity,
-            decoration: const BoxDecoration(
-              color: _backgroundWhite,
-              borderRadius: BorderRadius.only(
-                bottomLeft: Radius.circular(cardRadius),
-                bottomRight: Radius.circular(cardRadius),
-              ),
-            ),
+    if (_isDesktopGlass) {
+      return Scaffold(
+        backgroundColor: Colors.transparent,
+        body: WebGlassAuthScaffold(
+          maxWidth: 560,
+          child: WebGlassAuthCard(
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              padding: const EdgeInsets.fromLTRB(28, 24, 28, 32),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _buildStepProgressIndicator(),
-                  const SizedBox(height: 20),
-                  _buildSignupIntro(),
-                  const SizedBox(height: 24),
-                  Container(
-                    width: double.infinity,
-                    decoration: _signupFormCardDecoration(),
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Form(
-                        key: _formKey,
-                        child: AutofillGroup(child: _buildCurrentStep()),
-                      ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: WebGlassBackButton(
+                      onPressed: () => Navigator.pop(context),
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Expanded(
+                        child: TouristSignupBrandRow(onDark: true),
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: TouristSignupScriptSlogan(
+                          text: _stepSlogan,
+                          color: Colors.white,
+                          fontSize: 20,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Step $_displayStepNumber',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Registration',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.white.withValues(alpha: 0.9),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  _buildSignupFormBody(
+                    formPadding: const EdgeInsets.all(24),
                   ),
                 ],
               ),
             ),
-          )
-        : Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-            child: Column(
-              children: [
-                _buildStepProgressIndicator(),
-                const SizedBox(height: 20),
-                _buildSignupIntro(),
-                const SizedBox(height: 24),
-                Container(
-                  width: double.infinity,
-                  decoration: _signupFormCardDecoration(),
-                  child: Padding(
-                    padding: const EdgeInsets.all(28),
-                    child: Form(
-                      key: _formKey,
-                      child: AutofillGroup(child: _buildCurrentStep()),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          );
+          ),
+        ),
+      );
+    }
 
-    final content = Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [headerSection, contentSection],
-    );
-
-    final bodyContent = _isWeb
-        ? Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(cardRadius),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.18),
-                  blurRadius: 28,
-                  offset: const Offset(0, 10),
-                ),
-              ],
-            ),
-            child: content,
-          )
-        : content;
+    final topPad = MediaQuery.paddingOf(context).top;
+    final bottomPad = MediaQuery.paddingOf(context).bottom;
+    final heroH = (MediaQuery.sizeOf(context).height * 0.28).clamp(210.0, 260.0);
 
     return Scaffold(
-      backgroundColor: _backgroundWhite,
-      body: _isWeb
-          ? SizedBox(
-              width: MediaQuery.sizeOf(context).width,
-              height: MediaQuery.sizeOf(context).height,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Image.asset(
-                    'assets/images/capitol.webp',
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Image.network(
-                      'https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=1200',
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Container(
-                        color: AppTheme.brandOrange.withOpacity(0.9),
+      backgroundColor: Colors.white,
+      body: SingleChildScrollView(
+        physics: const BouncingScrollPhysics(),
+        padding: EdgeInsets.only(bottom: bottomPad + 8),
+        child: Column(
+          children: [
+            SizedBox(
+              height: heroH,
+              width: double.infinity,
+              child: ClipPath(
+                clipper: const TouristSignupHeroWaveClipper(),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    const ColoredBox(color: TouristSignupChrome.heroOrange),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: FractionallySizedBox(
+                        widthFactor: 0.72,
+                        heightFactor: 1,
+                        child: Image.asset(
+                          TouristSignupChrome.heroAsset,
+                          fit: BoxFit.cover,
+                          alignment: const Alignment(0.2, 0),
+                          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                        ),
                       ),
                     ),
-                  ),
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.45),
-                    ),
-                  ),
-                  Center(
-                    child: SingleChildScrollView(
-                      padding: EdgeInsets.symmetric(
-                        vertical: _isWeb ? 16 : 24,
-                        horizontal: _isWeb ? 16 : 24,
-                      ),
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 440),
-                        child: bodyContent,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            )
-          : SingleChildScrollView(child: content),
-    );
-  }
-
-  Widget _buildStepProgressIndicator() {
-    final steps = ['Personal Details', 'Travel History', 'Uploads'];
-    return Column(
-      children: [
-        // Main step indicator
-        Row(
-          children: List.generate(3, (index) {
-            final isCompleted = index < _currentStep;
-            final isCurrent = index == _currentStep;
-            return Expanded(
-              child: Row(
-                children: [
-                  if (index > 0)
-                    Expanded(
-                      child: Container(
-                        height: 2,
-                        color: isCompleted
-                            ? AppTheme.brandOrange
-                            : _inputBorder,
-                      ),
-                    ),
-                  Flexible(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 34,
-                          height: 34,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: isCompleted || isCurrent
-                                ? AppTheme.brandOrange
-                                : const Color(0xFFF9FAFB),
-                            border: Border.all(
-                              color: isCompleted || isCurrent
-                                  ? AppTheme.brandOrange
-                                  : _inputBorder,
-                              width: isCurrent ? 2 : 1.5,
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.centerLeft,
+                          end: Alignment.centerRight,
+                          colors: [
+                            TouristSignupChrome.heroOrange,
+                            TouristSignupChrome.heroOrange.withValues(
+                              alpha: 0.94,
                             ),
-                            boxShadow: isCurrent
-                                ? [
-                                    BoxShadow(
-                                      color: AppTheme.brandOrange.withValues(
-                                        alpha: 0.25,
-                                      ),
-                                      blurRadius: 8,
-                                      offset: const Offset(0, 2),
-                                    ),
-                                  ]
-                                : null,
-                          ),
-                          child: Center(
-                            child: isCompleted
-                                ? const Icon(
-                                    Icons.check,
-                                    color: Colors.white,
-                                    size: 16,
-                                  )
-                                : Text(
-                                    '${index + 1}',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                      color: isCurrent
-                                          ? Colors.white
-                                          : _textMuted,
-                                    ),
-                                  ),
-                          ),
+                            TouristSignupChrome.heroOrange.withValues(
+                              alpha: 0.55,
+                            ),
+                          ],
+                          stops: const [0.0, 0.45, 1.0],
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          steps[index],
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: isCurrent
-                                ? FontWeight.w700
-                                : FontWeight.w500,
-                            color: isCurrent
-                                ? AppTheme.brandOrange
-                                : _textDark,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (index < 2)
-                    Expanded(
-                      child: Container(
-                        height: 2,
-                        color: isCompleted
-                            ? AppTheme.brandOrange
-                            : _inputBorder,
                       ),
                     ),
-                ],
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(16, topPad + 4, 16, 40),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.arrow_back_ios_new_rounded,
+                                  color: Colors.white,
+                                  size: 18,
+                                ),
+                                onPressed: () => Navigator.pop(context),
+                                tooltip: 'Back',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(
+                                  minWidth: 36,
+                                  minHeight: 36,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              const Expanded(
+                                child: TouristSignupBrandRow(onDark: true),
+                              ),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: TouristSignupScriptSlogan(
+                                    text: _stepSlogan,
+                                    color: Colors.white,
+                                    fontSize: 20,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const Spacer(),
+                          Text(
+                            'Step $_displayStepNumber',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white,
+                              letterSpacing: 0.2,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Registration',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.white.withValues(alpha: 0.92),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            );
-          }),
+            ),
+            Transform.translate(
+              offset: const Offset(0, -28),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 18),
+                child: Column(
+                  children: [
+                    TouristSignupProgressTracker(
+                      visualStepIndex: _visualStepIndex,
+                    ),
+                    const SizedBox(height: 16),
+                    _buildSignupFormBody(
+                      formPadding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const TouristSignupFooterMotif(),
+          ],
         ),
-      ],
+      ),
     );
   }
 
@@ -2656,8 +2942,6 @@ class _SignupScreenState extends State<SignupScreen> {
       case 0:
         return _buildPersonalDetailsStep();
       case 1:
-        return _buildTravelHistoryStep();
-      case 2:
         return _buildUploadsStep();
       default:
         return _buildPersonalDetailsStep();
@@ -2711,15 +2995,22 @@ class _SignupScreenState extends State<SignupScreen> {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
             gradient: LinearGradient(
-              colors: [
-                AppTheme.brandOrange.withValues(alpha: 0.14),
-                privacyBlue.withValues(alpha: 0.08),
-              ],
+              colors: _isDesktopGlass
+                  ? [
+                      Colors.black.withValues(alpha: 0.55),
+                      AppTheme.brandOrange.withValues(alpha: 0.35),
+                    ]
+                  : [
+                      AppTheme.brandOrange.withValues(alpha: 0.14),
+                      privacyBlue.withValues(alpha: 0.08),
+                    ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
             border: Border.all(
-              color: AppTheme.brandOrange.withValues(alpha: 0.2),
+              color: _isDesktopGlass
+                  ? Colors.white.withValues(alpha: 0.22)
+                  : AppTheme.brandOrange.withValues(alpha: 0.2),
             ),
           ),
           child: Row(
@@ -2727,12 +3018,14 @@ class _SignupScreenState extends State<SignupScreen> {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.9),
+                  color: _isDesktopGlass
+                      ? Colors.white.withValues(alpha: 0.14)
+                      : Colors.white.withValues(alpha: 0.9),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
                   Icons.lock_outline_rounded,
-                  color: AppTheme.brandOrange,
+                  color: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
                   size: 26,
                 ),
               ),
@@ -2741,12 +3034,12 @@ class _SignupScreenState extends State<SignupScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       'Your privacy matters',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w800,
-                        color: _textDark,
+                        color: _legalTitleColor,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -2754,9 +3047,10 @@ class _SignupScreenState extends State<SignupScreen> {
                       'ATMOS-TRS follows RA 10173 and provincial tourism policies. '
                       'Please review both sections before registering.',
                       style: TextStyle(
-                        fontSize: 12,
-                        color: _textDark.withValues(alpha: 0.82),
-                        height: 1.4,
+                        fontSize: 13,
+                        color: _legalBodyColor,
+                        height: 1.45,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ],
@@ -2806,7 +3100,7 @@ class _SignupScreenState extends State<SignupScreen> {
               _privacySectionExpanded && _termsSectionExpanded
                   ? 'Collapse all'
                   : 'Expand all',
-              style: const TextStyle(fontWeight: FontWeight.w600),
+              style: TextStyle(fontWeight: FontWeight.w600),
             ),
             style: TextButton.styleFrom(
               foregroundColor: AppTheme.brandOrange,
@@ -2877,60 +3171,11 @@ class _SignupScreenState extends State<SignupScreen> {
   }
 
   Widget _buildSubStepHeader(String title, String description, IconData icon) {
-    return Column(
-      children: [
-        Container(
-          width: 64,
-          height: 64,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                AppTheme.brandOrange.withValues(alpha: 0.18),
-                AppTheme.brandOrangeLight.withValues(alpha: 0.28),
-              ],
-            ),
-            border: Border.all(
-              color: AppTheme.brandOrange.withValues(alpha: 0.35),
-              width: 1.5,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: AppTheme.brandOrange.withValues(alpha: 0.12),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Icon(icon, size: 30, color: AppTheme.brandOrange),
-        ),
-        const SizedBox(height: 16),
-        Text(
-          title,
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            fontSize: 22,
-            fontWeight: FontWeight.w800,
-            color: _textDark,
-            letterSpacing: 0.2,
-            height: 1.2,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          description,
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            fontSize: 15,
-            color: _textMuted,
-            height: 1.5,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 20),
-      ],
+    return TouristSignupSectionHeader(
+      title: title,
+      description: description,
+      icon: icon,
+      onDark: _isDesktopGlass,
     );
   }
 
@@ -2952,11 +3197,7 @@ class _SignupScreenState extends State<SignupScreen> {
             textInputAction: TextInputAction.next,
             onFieldSubmitted: (_) => _focusNextFormField(),
             onEditingComplete: _focusNextFormField,
-            style: const TextStyle(
-              color: _textDark,
-              fontSize: 16,
-              fontWeight: FontWeight.w500,
-            ),
+            style: _formValueTextStyle,
             decoration: _inputDecoration(
               hint: 'e.g. Juan',
               prefixIcon: Icons.person_outline_rounded,
@@ -2973,11 +3214,7 @@ class _SignupScreenState extends State<SignupScreen> {
             textInputAction: TextInputAction.next,
             onFieldSubmitted: (_) => _focusNextFormField(),
             onEditingComplete: _focusNextFormField,
-            style: const TextStyle(
-              color: _textDark,
-              fontSize: 16,
-              fontWeight: FontWeight.w500,
-            ),
+            style: _formValueTextStyle,
             decoration: _inputDecoration(
               hint: 'e.g. Dela',
               prefixIcon: Icons.badge_outlined,
@@ -2994,11 +3231,7 @@ class _SignupScreenState extends State<SignupScreen> {
             textInputAction: TextInputAction.done,
             onFieldSubmitted: (_) => _submitCurrentStepFromKeyboard(),
             onEditingComplete: _submitCurrentStepFromKeyboard,
-            style: const TextStyle(
-              color: _textDark,
-              fontSize: 16,
-              fontWeight: FontWeight.w500,
-            ),
+            style: _formValueTextStyle,
             decoration: _inputDecoration(
               hint: 'e.g. Cruz',
               prefixIcon: Icons.person_outline_rounded,
@@ -3016,18 +3249,15 @@ class _SignupScreenState extends State<SignupScreen> {
             icon: const SizedBox.shrink(),
             iconSize: 0,
             borderRadius: BorderRadius.circular(12),
-            style: const TextStyle(
-              color: _textDark,
-              fontSize: 16,
-              fontWeight: FontWeight.w500,
-            ),
+            style: _formValueTextStyle,
+            selectedItemBuilder: (context) =>
+                _stringSelectedLabels(_suffixes),
+            hint: _dropdownHint('e.g. Jr., Sr., III'),
             decoration: _inputDecoration(
               hint: 'e.g. Jr., Sr., III',
               prefixIcon: Icons.label_outline_rounded,
             ),
-            items: _suffixes
-                .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                .toList(),
+            items: _stringDropdownItems(_suffixes),
             onChanged: (v) => setState(() => _selectedSuffix = v),
           ),
         ),
@@ -3055,18 +3285,15 @@ class _SignupScreenState extends State<SignupScreen> {
             dropdownColor: Colors.white,
             icon: const SizedBox.shrink(),
             iconSize: 0,
-            style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
+            style: _formValueTextStyle,
+            selectedItemBuilder: (context) =>
+                _stringSelectedLabels(_sexOptions),
+            hint: _dropdownHint('Select your sex'),
             decoration: _inputDecoration(
               hint: 'Select your sex',
               prefixIcon: Icons.wc_outlined,
             ),
-            items: _sexOptions
-                .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                .toList(),
+            items: _stringDropdownItems(_sexOptions),
             validator: (v) => v == null ? 'Required' : null,
             onChanged: (v) => setState(() => _selectedSex = v),
           ),
@@ -3081,18 +3308,15 @@ class _SignupScreenState extends State<SignupScreen> {
             dropdownColor: Colors.white,
             icon: const SizedBox.shrink(),
             iconSize: 0,
-            style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
+            style: _formValueTextStyle,
+            selectedItemBuilder: (context) =>
+                _stringSelectedLabels(_nationalities),
+            hint: _dropdownHint('Select nationality'),
             decoration: _inputDecoration(
               hint: 'Select nationality',
               prefixIcon: Icons.flag_outlined,
             ),
-            items: _nationalities
-                .map((n) => DropdownMenuItem(value: n, child: Text(n)))
-                .toList(),
+            items: _stringDropdownItems(_nationalities),
             validator: (v) => v == null ? 'Required' : null,
             onChanged: _onNationalityChanged,
           ),
@@ -3101,10 +3325,10 @@ class _SignupScreenState extends State<SignupScreen> {
             !_maySelectPhilippines &&
             !_countryLockedByNationality) ...[
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'Foreign nationals: select your home country below. Philippines is '
             'not available — use City and State/Province/Region.',
-            style: TextStyle(fontSize: 14, color: _textMuted, height: 1.45),
+            style: TextStyle(fontSize: 14, color: _helperTextColor, height: 1.45),
           ),
         ],
         if (_isDualCitizenNationality) ...[
@@ -3112,7 +3336,7 @@ class _SignupScreenState extends State<SignupScreen> {
           Text(
             'Dual citizens: choose Philippines if you live here (province, city, '
             'barangay), or your other home country for an international address.',
-            style: TextStyle(fontSize: 14, color: _textMuted, height: 1.45),
+            style: TextStyle(fontSize: 14, color: _helperTextColor, height: 1.45),
           ),
         ],
         const SizedBox(height: 16),
@@ -3123,11 +3347,7 @@ class _SignupScreenState extends State<SignupScreen> {
             Expanded(
               child: Container(
                 height: 48,
-                decoration: BoxDecoration(
-                  color: _inputFill,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: _inputBorder),
-                ),
+                decoration: _compactDropdownDecoration(),
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: DropdownButtonHideUnderline(
                   child: DropdownButton<int>(
@@ -3136,23 +3356,20 @@ class _SignupScreenState extends State<SignupScreen> {
                     dropdownColor: Colors.white,
                     icon: const SizedBox.shrink(),
                     iconSize: 0,
-                    hint: Text(
-                      'Month',
-                      style: TextStyle(
-                        color: _textMuted.withValues(alpha: 0.85),
-                        fontSize: 15,
+                    hint: _dropdownHint('Month'),
+                    style: _formValueTextStyle,
+                    selectedItemBuilder: (context) => List.generate(
+                      12,
+                      (i) => Align(
+                        alignment: Alignment.centerLeft,
+                        child: _dropdownSelectedText(_months[i]),
                       ),
-                    ),
-                    style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
                     ),
                     items: List.generate(
                       12,
-                      (i) => DropdownMenuItem(
+                      (i) => DropdownMenuItem<int>(
                         value: i + 1,
-                        child: Text(_months[i]),
+                        child: _dropdownMenuText(_months[i]),
                       ),
                     ),
                     onChanged: (v) {
@@ -3176,11 +3393,7 @@ class _SignupScreenState extends State<SignupScreen> {
             Expanded(
               child: Container(
                 height: 48,
-                decoration: BoxDecoration(
-                  color: _inputFill,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: _inputBorder),
-                ),
+                decoration: _compactDropdownDecoration(),
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: DropdownButtonHideUnderline(
                   child: DropdownButton<int>(
@@ -3189,23 +3402,14 @@ class _SignupScreenState extends State<SignupScreen> {
                     dropdownColor: Colors.white,
                     icon: const SizedBox.shrink(),
                     iconSize: 0,
-                    hint: Text(
-                      'Day',
-                      style: TextStyle(
-                        color: _textMuted.withValues(alpha: 0.85),
-                        fontSize: 15,
-                      ),
+                    hint: _dropdownHint('Day'),
+                    style: _formValueTextStyle,
+                    selectedItemBuilder: (context) => _intSelectedLabels(
+                      _getDaysInMonth(_selectedMonth, _selectedYear),
                     ),
-                    style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
+                    items: _intDropdownItems(
+                      _getDaysInMonth(_selectedMonth, _selectedYear),
                     ),
-                    items: _getDaysInMonth(_selectedMonth, _selectedYear)
-                        .map(
-                          (d) => DropdownMenuItem(value: d, child: Text('$d')),
-                        )
-                        .toList(),
                     onChanged: (v) {
                       setState(() => _selectedDay = v);
                       _updateDateOfBirth();
@@ -3218,11 +3422,7 @@ class _SignupScreenState extends State<SignupScreen> {
             Expanded(
               child: Container(
                 height: 48,
-                decoration: BoxDecoration(
-                  color: _inputFill,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: _inputBorder),
-                ),
+                decoration: _compactDropdownDecoration(),
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: DropdownButtonHideUnderline(
                   child: DropdownButton<int>(
@@ -3231,23 +3431,11 @@ class _SignupScreenState extends State<SignupScreen> {
                     dropdownColor: Colors.white,
                     icon: const SizedBox.shrink(),
                     iconSize: 0,
-                    hint: Text(
-                      'Year',
-                      style: TextStyle(
-                        color: _textMuted.withValues(alpha: 0.85),
-                        fontSize: 15,
-                      ),
-                    ),
-                    style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    items: _getYears()
-                        .map(
-                          (y) => DropdownMenuItem(value: y, child: Text('$y')),
-                        )
-                        .toList(),
+                    hint: _dropdownHint('Year'),
+                    style: _formValueTextStyle,
+                    selectedItemBuilder: (context) =>
+                        _intSelectedLabels(_getYears()),
+                    items: _intDropdownItems(_getYears()),
                     onChanged: (v) {
                       setState(() {
                         _selectedYear = v;
@@ -3267,8 +3455,11 @@ class _SignupScreenState extends State<SignupScreen> {
             ),
           ],
         ),
-        const SizedBox(height: 32),
-
+        const SizedBox(height: 20),
+        if (!_isDesktopGlass) ...[
+          const TouristSignupExploreStrip(),
+          const SizedBox(height: 12),
+        ],
         _buildPersonalDetailsNavButtons(),
       ],
     );
@@ -3293,11 +3484,7 @@ class _SignupScreenState extends State<SignupScreen> {
             textInputAction: TextInputAction.next,
             onFieldSubmitted: (_) => _focusNextFormField(),
             onEditingComplete: _focusNextFormField,
-            style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
+            style: _formValueTextStyle,
             decoration: _inputDecoration(
               hint: 'e.g. 09171234567',
               prefixIcon: Icons.phone_outlined,
@@ -3319,14 +3506,14 @@ class _SignupScreenState extends State<SignupScreen> {
             autofillHints: const [],
             autocorrect: false,
             enableSuggestions: false,
-            style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
+            style: _formValueTextStyle.copyWith(
+              fontSize: 14,
+              letterSpacing: 0,
+            ),
             decoration: _inputDecoration(
               hint: 'e.g. juan@email.com',
               prefixIcon: Icons.email_outlined,
+              compact: true,
             ),
             validator: (v) {
               if (v == null || v.isEmpty) return 'Required';
@@ -3349,11 +3536,7 @@ class _SignupScreenState extends State<SignupScreen> {
             autofillHints: const [],
             autocorrect: false,
             enableSuggestions: false,
-            style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
+            style: _formValueTextStyle,
             decoration: _inputDecoration(
               hint: 'Min 8 chars',
               prefixIcon: Icons.lock_outline,
@@ -3362,7 +3545,7 @@ class _SignupScreenState extends State<SignupScreen> {
                   _obscurePassword
                       ? Icons.visibility_off_outlined
                       : Icons.visibility_outlined,
-                  color: _textMuted,
+                  color: _helperTextColor,
                   size: 20,
                 ),
                 onPressed: () =>
@@ -3392,11 +3575,7 @@ class _SignupScreenState extends State<SignupScreen> {
             autofillHints: const [],
             autocorrect: false,
             enableSuggestions: false,
-            style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
+            style: _formValueTextStyle,
             decoration: _inputDecoration(
               hint: 'Re-type',
               prefixIcon: Icons.lock_outline,
@@ -3405,7 +3584,7 @@ class _SignupScreenState extends State<SignupScreen> {
                   _obscureConfirmPassword
                       ? Icons.visibility_off_outlined
                       : Icons.visibility_outlined,
-                  color: _textMuted,
+                  color: _helperTextColor,
                   size: 20,
                 ),
                 onPressed: () => setState(
@@ -3425,27 +3604,36 @@ class _SignupScreenState extends State<SignupScreen> {
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: AppTheme.brandOrange.withOpacity(0.05),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: AppTheme.brandOrange.withOpacity(0.2)),
+            color: TouristSignupChrome.peachBanner,
+            borderRadius: BorderRadius.circular(16),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
-                  Icon(
-                    Icons.home_outlined,
-                    size: 20,
-                    color: AppTheme.brandOrange,
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: TouristSignupChrome.heroOrange.withValues(
+                        alpha: 0.12,
+                      ),
+                    ),
+                    child: const Icon(
+                      Icons.home_outlined,
+                      size: 18,
+                      color: TouristSignupChrome.heroOrange,
+                    ),
                   ),
-                  const SizedBox(width: 8),
-                  const Text(
+                  const SizedBox(width: 10),
+                  Text(
                     'Address Information',
                     style: TextStyle(
                       fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: _textDark,
+                      fontWeight: FontWeight.w700,
+                      color: _fieldTextColor,
                     ),
                   ),
                 ],
@@ -3462,11 +3650,7 @@ class _SignupScreenState extends State<SignupScreen> {
                         key: ValueKey(_selectedCountry),
                         initialValue: _selectedCountry,
                         readOnly: true,
-                        style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
+                        style: _formValueTextStyle,
                         decoration: _inputDecoration(
                           hint: 'Home country',
                           prefixIcon: Icons.public_outlined,
@@ -3479,21 +3663,20 @@ class _SignupScreenState extends State<SignupScreen> {
                         dropdownColor: Colors.white,
                         icon: const SizedBox.shrink(),
                         iconSize: 0,
-                        style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
+                        style: _formValueTextStyle,
+                        selectedItemBuilder: (context) =>
+                            _stringSelectedLabels(_countriesForResidence),
+                        hint: _dropdownHint(
+                          _maySelectPhilippines
+                              ? 'Select country'
+                              : 'Select home country (not Philippines)',
+                        ),
                         decoration: _inputDecoration(
                           hint: _maySelectPhilippines
                               ? 'Select country'
                               : 'Select home country (not Philippines)',
                         ),
-                        items: _countriesForResidence
-                            .map(
-                              (c) => DropdownMenuItem(value: c, child: Text(c)),
-                            )
-                            .toList(),
+                        items: _stringDropdownItems(_countriesForResidence),
                         validator: (v) => v == null ? 'Required' : null,
                         onChanged: _onCountryChanged,
                       ),
@@ -3512,32 +3695,12 @@ class _SignupScreenState extends State<SignupScreen> {
                           dropdownColor: Colors.white,
                           icon: const SizedBox.shrink(),
                           iconSize: 0,
-                          style: const TextStyle(
-                            color: _textDark,
-                            fontSize: 14,
-                          ),
+                          style: _formValueTextStyle.copyWith(fontSize: 14),
+                          selectedItemBuilder: (context) =>
+                              _stringSelectedLabels(_provinces, fontSize: 14),
+                          hint: _dropdownHint('Province', fontSize: 14),
                           decoration: _inputDecoration(hint: 'Province'),
-                          items: _provinces
-                              .map(
-                                (p) => DropdownMenuItem(
-                                  value: p,
-                                  child: Text(
-                                    p,
-                                    overflow: TextOverflow.ellipsis,
-                                    maxLines: 1,
-                                  ),
-                                ),
-                              )
-                              .toList(),
-                          selectedItemBuilder: (context) => _provinces
-                              .map(
-                                (p) => Text(
-                                  p,
-                                  overflow: TextOverflow.ellipsis,
-                                  maxLines: 1,
-                                ),
-                              )
-                              .toList(),
+                          items: _stringDropdownItems(_provinces, fontSize: 14),
                           validator: (v) => v == null ? 'Required' : null,
                           onChanged: (v) {
                             setState(() {
@@ -3561,33 +3724,18 @@ class _SignupScreenState extends State<SignupScreen> {
                           dropdownColor: Colors.white,
                           icon: const SizedBox.shrink(),
                           iconSize: 0,
-                          style: const TextStyle(
-                            color: _textDark,
+                          style: _formValueTextStyle.copyWith(fontSize: 14),
+                          selectedItemBuilder: (context) =>
+                              _stringSelectedLabels(
+                            _getCitiesForProvince(_selectedProvince),
                             fontSize: 14,
                           ),
+                          hint: _dropdownHint('City', fontSize: 14),
                           decoration: _inputDecoration(hint: 'City'),
-                          items: _getCitiesForProvince(_selectedProvince)
-                              .map(
-                                (c) => DropdownMenuItem(
-                                  value: c,
-                                  child: Text(
-                                    c,
-                                    overflow: TextOverflow.ellipsis,
-                                    maxLines: 1,
-                                  ),
-                                ),
-                              )
-                              .toList(),
-                          selectedItemBuilder: (context) =>
-                              _getCitiesForProvince(_selectedProvince)
-                                  .map(
-                                    (c) => Text(
-                                      c,
-                                      overflow: TextOverflow.ellipsis,
-                                      maxLines: 1,
-                                    ),
-                                  )
-                                  .toList(),
+                          items: _stringDropdownItems(
+                            _getCitiesForProvince(_selectedProvince),
+                            fontSize: 14,
+                          ),
                           validator: (v) =>
                               v == null || v == 'Select province first'
                               ? 'Required'
@@ -3615,24 +3763,18 @@ class _SignupScreenState extends State<SignupScreen> {
                           dropdownColor: Colors.white,
                           icon: const SizedBox.shrink(),
                           iconSize: 0,
-                          style: const TextStyle(
-                            color: _textDark,
+                          style: _formValueTextStyle.copyWith(fontSize: 14),
+                          selectedItemBuilder: (context) =>
+                              _stringSelectedLabels(
+                            barangaysForMisamisOccidentalCity(_selectedCity),
                             fontSize: 14,
                           ),
+                          hint: _dropdownHint('Select barangay', fontSize: 14),
                           decoration: _inputDecoration(hint: 'Select barangay'),
-                          items:
-                              barangaysForMisamisOccidentalCity(_selectedCity)
-                                  .map(
-                                    (b) => DropdownMenuItem(
-                                      value: b,
-                                      child: Text(
-                                        b,
-                                        overflow: TextOverflow.ellipsis,
-                                        maxLines: 1,
-                                      ),
-                                    ),
-                                  )
-                                  .toList(),
+                          items: _stringDropdownItems(
+                            barangaysForMisamisOccidentalCity(_selectedCity),
+                            fontSize: 14,
+                          ),
                           validator: _validateBarangayField,
                           onChanged: (v) =>
                               setState(() => _selectedBarangay = v),
@@ -3643,10 +3785,7 @@ class _SignupScreenState extends State<SignupScreen> {
                           onFieldSubmitted: (_) =>
                               _submitCurrentStepFromKeyboard(),
                           onEditingComplete: _submitCurrentStepFromKeyboard,
-                          style: const TextStyle(
-                            color: _textDark,
-                            fontSize: 14,
-                          ),
+                          style: _formValueTextStyle.copyWith(fontSize: 14),
                           decoration: _inputDecoration(hint: 'e.g. Poblacion'),
                           textCapitalization: TextCapitalization.words,
                           validator: _validateBarangayField,
@@ -3660,11 +3799,7 @@ class _SignupScreenState extends State<SignupScreen> {
                   required: true,
                   child: TextFormField(
                     controller: _foreignCityController,
-                    style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
+                    style: _formValueTextStyle,
                     decoration: _inputDecoration(
                       hint: _countryLockedByNationality
                           ? 'e.g. Los Angeles'
@@ -3681,11 +3816,7 @@ class _SignupScreenState extends State<SignupScreen> {
                     required: true,
                     child: TextFormField(
                       controller: _foreignRegionController,
-                      style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
+                      style: _formValueTextStyle,
                       decoration: _inputDecoration(hint: 'e.g. California'),
                       textCapitalization: TextCapitalization.words,
                       validator: (v) => validateInternationalRegion(v),
@@ -3704,70 +3835,37 @@ class _SignupScreenState extends State<SignupScreen> {
   }
 
   Widget _buildFamilyTravelPartySubStep() {
-    final isMinor = _isMinorRegistrant();
-
+    // Adults skip this step (party size asked after QR scan). Minors: guardian only.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildSubStepHeader(
-          'Family / travel party',
-          isMinor
-              ? 'Age 12 and below: add your parent or guardian\'s name. '
-                    'You are still counted as 1 tourist.'
-              : 'If you are a parent traveling with children, enter how many '
-                    'children you are bringing. You and each child count as tourists.',
-          Icons.family_restroom_outlined,
+          'Parent / guardian',
+          'Age 12 and below: add your parent or guardian\'s name. '
+              'You are still counted as 1 tourist. Party size for visits '
+              'is asked when you scan a destination QR.',
+          Icons.supervisor_account_outlined,
         ),
-        if (isMinor) ...[
-          _buildFormField(
-            label: 'Parent / guardian full name',
-            required: true,
-            child: TextFormField(
-              controller: _parentGuardianController,
-              textInputAction: TextInputAction.done,
-              onFieldSubmitted: (_) => _submitCurrentStepFromKeyboard(),
-              onEditingComplete: _submitCurrentStepFromKeyboard,
-              style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
-              decoration: _inputDecoration(
-                hint: 'e.g. Maria Santos',
-                prefixIcon: Icons.supervisor_account_outlined,
-              ),
-              textCapitalization: TextCapitalization.words,
-              validator: (v) {
-                if (v == null || v.trim().isEmpty) return 'Required';
-                return null;
-              },
+        _buildFormField(
+          label: 'Parent / guardian full name',
+          required: true,
+          child: TextFormField(
+            controller: _parentGuardianController,
+            textInputAction: TextInputAction.done,
+            onFieldSubmitted: (_) => _submitCurrentStepFromKeyboard(),
+            onEditingComplete: _submitCurrentStepFromKeyboard,
+            style: _formValueTextStyle,
+            decoration: _inputDecoration(
+              hint: 'e.g. Maria Santos',
+              prefixIcon: Icons.supervisor_account_outlined,
             ),
+            textCapitalization: TextCapitalization.words,
+            validator: (v) {
+              if (v == null || v.trim().isEmpty) return 'Required';
+              return null;
+            },
           ),
-        ] else ...[
-          _buildFormField(
-            label: 'Children you are bringing',
-            required: false,
-            child: TextFormField(
-              controller: _accompanyingChildrenCountController,
-              onChanged: (_) => setState(() {}),
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              textInputAction: TextInputAction.done,
-              onFieldSubmitted: (_) => _submitCurrentStepFromKeyboard(),
-              onEditingComplete: _submitCurrentStepFromKeyboard,
-              style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
-              decoration: _inputDecoration(
-                hint: 'e.g. 3 (leave blank if none)',
-                prefixIcon: Icons.numbers_rounded,
-              ),
-              validator: _validateAccompanyingChildrenCount,
-            ),
-          ),
-        ],
+        ),
         const SizedBox(height: 24),
         _buildPersonalDetailsNavButtons(isLastSubStep: true),
       ],
@@ -3779,27 +3877,27 @@ class _SignupScreenState extends State<SignupScreen> {
     bool isLastSubStep = false,
   }) {
     final nextStyle = FilledButton.styleFrom(
-      backgroundColor: AppTheme.brandOrange,
+      backgroundColor: TouristSignupChrome.heroOrange,
       foregroundColor: Colors.white,
       elevation: 0,
-      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     );
 
     return Column(
       children: [
+        const SizedBox(height: 8),
         Divider(color: _inputBorder.withValues(alpha: 0.9), height: 1),
-        const SizedBox(height: 20),
+        const SizedBox(height: 16),
         Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             if (showBack)
               TextButton(
                 onPressed: _previousStep,
                 style: TextButton.styleFrom(
-                  foregroundColor: _textMuted,
+                  foregroundColor: TouristSignupChrome.textMuted,
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
+                    horizontal: 8,
                     vertical: 12,
                   ),
                 ),
@@ -3812,9 +3910,9 @@ class _SignupScreenState extends State<SignupScreen> {
               TextButton(
                 onPressed: () => Navigator.pop(context),
                 style: TextButton.styleFrom(
-                  foregroundColor: _textMuted,
+                  foregroundColor: TouristSignupChrome.textMuted,
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
+                    horizontal: 8,
                     vertical: 12,
                   ),
                 ),
@@ -3823,23 +3921,15 @@ class _SignupScreenState extends State<SignupScreen> {
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
                 ),
               ),
-            isLastSubStep
-                ? FilledButton(
-                    onPressed: _nextStep,
-                    style: nextStyle,
-                    child: const Text(
-                      'Continue',
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                  )
-                : FilledButton(
-                    onPressed: _nextStep,
-                    style: nextStyle,
-                    child: const Text(
-                      'Next',
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                  ),
+            const Spacer(),
+            FilledButton(
+              onPressed: _nextStep,
+              style: nextStyle,
+              child: Text(
+                isLastSubStep ? 'Continue →' : 'Next →',
+                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+              ),
+            ),
           ],
         ),
       ],
@@ -3867,16 +3957,22 @@ class _SignupScreenState extends State<SignupScreen> {
                     vertical: 3,
                   ),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF3F4F6),
+                    color: _isDesktopGlass
+                        ? Colors.white.withValues(alpha: 0.14)
+                        : const Color(0xFFF3F4F6),
                     borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: _inputBorder),
+                    border: Border.all(
+                      color: _isDesktopGlass
+                          ? Colors.white.withValues(alpha: 0.28)
+                          : _inputBorder,
+                    ),
                   ),
-                  child: const Text(
+                  child: Text(
                     'Optional',
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
-                      color: _textMuted,
+                      color: _isDesktopGlass ? Colors.white : _textMuted,
                       letterSpacing: 0.2,
                     ),
                   ),
@@ -3913,12 +4009,12 @@ class _SignupScreenState extends State<SignupScreen> {
         ),
         const SizedBox(height: 24),
 
-        const Text(
+        Text(
           'Verify Your Phone Number',
           style: TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.bold,
-            color: _textDark,
+            color: _fieldTextColor,
           ),
         ),
         const SizedBox(height: 12),
@@ -3928,7 +4024,7 @@ class _SignupScreenState extends State<SignupScreen> {
               ? 'We sent a 6-digit code to\n$phoneNumber'
               : 'We will send a verification code to\n$phoneNumber',
           textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 14, color: _textMuted, height: 1.5),
+          style: TextStyle(fontSize: 14, color: _helperTextColor, height: 1.5),
         ),
         const SizedBox(height: 32),
 
@@ -3979,10 +4075,10 @@ class _SignupScreenState extends State<SignupScreen> {
                   keyboardType: TextInputType.number,
                   textAlign: TextAlign.center,
                   maxLength: 1,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
-                    color: _textDark,
+                    color: _fieldTextColor,
                   ),
                   decoration: InputDecoration(
                     counterText: '',
@@ -4060,7 +4156,7 @@ class _SignupScreenState extends State<SignupScreen> {
           if (_resendTimer > 0)
             Text(
               'Resend code in $_resendTimer seconds',
-              style: const TextStyle(fontSize: 14, color: _textMuted),
+              style: TextStyle(fontSize: 14, color: _textMuted),
             )
           else
             TextButton.icon(
@@ -4144,7 +4240,7 @@ class _SignupScreenState extends State<SignupScreen> {
               'Skip verification (Testing only)',
               style: TextStyle(
                 fontSize: 12,
-                color: _textMuted.withOpacity(0.7),
+                color: _helperTextColor.withValues(alpha: 0.78),
               ),
             ),
           ),
@@ -4165,9 +4261,9 @@ class _SignupScreenState extends State<SignupScreen> {
                 _clearOtpFields();
                 _previousStep();
               },
-              child: const Text(
+              child: Text(
                 'Back',
-                style: TextStyle(color: _textMuted, fontSize: 15),
+                style: TextStyle(color: _helperTextColor, fontSize: 15),
               ),
             ),
             if (_isPhoneVerified)
@@ -4195,229 +4291,22 @@ class _SignupScreenState extends State<SignupScreen> {
     );
   }
 
-  Widget _buildPriorDestinationDropdown({
-    required String label,
-    required String? value,
-    required ValueChanged<String?> onChanged,
-    required List<String> options,
-  }) {
-    final effectiveValue = options.contains(value) ? value : null;
-    return _buildFormField(
-      label: label,
-      required: false,
-      child: DropdownButtonFormField<String>(
-        value: effectiveValue,
-        isExpanded: true,
-        dropdownColor: Colors.white,
-        icon: const SizedBox.shrink(),
-        iconSize: 0,
-        style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
-        decoration: _inputDecoration(
-          hint: 'Optional — select destination',
-          prefixIcon: Icons.place_outlined,
-        ),
-        items: options
-            .map((d) => DropdownMenuItem(value: d, child: Text(d)))
-            .toList(),
-        onChanged: onChanged,
-      ),
-    );
-  }
-
-  Widget _buildTravelHistoryStep() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Last tourist destinations visited (optional)',
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: _textDark,
-          ),
-        ),
-        const SizedBox(height: 6),
-        const Text(
-          'Select up to three places you visited before, or leave blank.',
-          style: TextStyle(fontSize: 13, color: _textMuted, height: 1.35),
-        ),
-        const SizedBox(height: 16),
-        _buildPriorDestinationDropdown(
-          label: '1',
-          value: _selectedPriorDestination1,
-          options: signupPriorDestinationChoices(
-            exclude2: _selectedPriorDestination2,
-            exclude3: _selectedPriorDestination3,
-          ),
-          onChanged: (v) => setState(() => _selectedPriorDestination1 = v),
-        ),
-        const SizedBox(height: 12),
-        _buildPriorDestinationDropdown(
-          label: '2',
-          value: _selectedPriorDestination2,
-          options: signupPriorDestinationChoices(
-            exclude1: _selectedPriorDestination1,
-            exclude3: _selectedPriorDestination3,
-          ),
-          onChanged: (v) => setState(() => _selectedPriorDestination2 = v),
-        ),
-        const SizedBox(height: 12),
-        _buildPriorDestinationDropdown(
-          label: '3',
-          value: _selectedPriorDestination3,
-          options: signupPriorDestinationChoices(
-            exclude1: _selectedPriorDestination1,
-            exclude2: _selectedPriorDestination2,
-          ),
-          onChanged: (v) => setState(() => _selectedPriorDestination3 = v),
-        ),
-        const SizedBox(height: 24),
-
-        _buildFormField(
-          label: 'How did you hear about Misamis Occidental?',
-          required: true,
-          child: DropdownButtonFormField<String>(
-            value: _selectedHowHeard,
-            isExpanded: true,
-            dropdownColor: Colors.white,
-            icon: const SizedBox.shrink(),
-            iconSize: 0,
-            style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
-            decoration: _inputDecoration(
-              hint: 'Select one',
-              prefixIcon: Icons.info_outline,
-            ),
-            items: _howHeardOptions
-                .map((o) => DropdownMenuItem(value: o, child: Text(o)))
-                .toList(),
-            validator: (v) => v == null ? 'Required' : null,
-            onChanged: (v) => setState(() => _selectedHowHeard = v),
-          ),
-        ),
-        const SizedBox(height: 24),
-
-        _buildSectionLabel(
-          'How will you travel in Misamis Occidental?',
-          required: true,
-        ),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<String>(
-          value: _selectedTransportation,
-          isExpanded: true,
-          dropdownColor: Colors.white,
-          icon: const SizedBox.shrink(),
-          iconSize: 0,
-          style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
-          decoration: _inputDecoration(
-            hint: 'Select primary mode of transport',
-            prefixIcon: Icons.directions_outlined,
-          ),
-          items: _transportationModes
-              .map(
-                (m) => DropdownMenuItem(
-                  value: m,
-                  child: Text(m, overflow: TextOverflow.ellipsis),
-                ),
-              )
-              .toList(),
-          validator: (v) => v == null ? 'Please select how you will travel' : null,
-          onChanged: (v) => setState(() => _selectedTransportation = v),
-        ),
-        const SizedBox(height: 24),
-
-        if (_selectedCountry != null) ...[
-          const SizedBox(height: 12),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFF7ED),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: AppTheme.brandOrange.withValues(alpha: 0.25),
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.badge_outlined,
-                  size: 20,
-                  color: AppTheme.brandOrange,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Visitor type: $_derivedLocalOrForeign'
-                    '${_isPhilippines ? ' (Philippines)' : ''}',
-                    style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-        const SizedBox(height: 32),
-
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            TextButton(
-              onPressed: _previousStep,
-              child: const Text(
-                'Back',
-                style: TextStyle(color: _textMuted, fontSize: 15),
-              ),
-            ),
-            FilledButton(
-              onPressed: _nextStep,
-              style: FilledButton.styleFrom(
-                backgroundColor: AppTheme.brandOrange,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 32,
-                  vertical: 14,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              child: const Text(
-                'Proceed',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
   Widget _buildUploadsStep() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildSectionLabel(
-          'Upload a close-up photo of your face',
-          required: true,
+        _buildFormField(
+          label: 'Upload a close-up photo of your face',
+          required: false,
+          child: Text(
+            'You can skip this and add a photo later if you prefer.',
+            style: TextStyle(
+              fontSize: 13,
+              color: _helperTextColor,
+              height: 1.35,
+            ),
+          ),
         ),
-        const SizedBox(height: 12),
-
         Container(
           width: double.infinity,
           height: 180,
@@ -4501,13 +4390,13 @@ class _SignupScreenState extends State<SignupScreen> {
                     Icon(
                       Icons.camera_alt_outlined,
                       size: 48,
-                      color: _textMuted.withOpacity(0.5),
+                      color: _helperTextColor.withValues(alpha: 0.62),
                     ),
                     const SizedBox(height: 8),
                     Text(
                       'No file chosen',
                       style: TextStyle(
-                        color: _textMuted.withOpacity(0.7),
+                        color: _helperTextColor.withValues(alpha: 0.78),
                         fontSize: 14,
                       ),
                     ),
@@ -4563,17 +4452,38 @@ class _SignupScreenState extends State<SignupScreen> {
                 value: _receiveUpdates,
                 onChanged: (v) => setState(() => _receiveUpdates = v ?? false),
                 activeColor: AppTheme.brandOrange,
+                checkColor: Colors.white,
+                fillColor: WidgetStateProperty.resolveWith((states) {
+                  if (states.contains(WidgetState.selected)) {
+                    return AppTheme.brandOrange;
+                  }
+                  return _isDesktopGlass
+                      ? Colors.white.withValues(alpha: 0.2)
+                      : null;
+                }),
+                side: BorderSide(
+                  color: _isDesktopGlass
+                      ? Colors.white.withValues(alpha: 0.75)
+                      : _inputBorder,
+                  width: 1.5,
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(4),
                 ),
-                side: const BorderSide(color: _inputBorder),
               ),
             ),
             const SizedBox(width: 12),
-            const Expanded(
+            Expanded(
               child: Text(
                 'I would like to receive updates and promotions (optional)',
-                style: TextStyle(fontSize: 14, color: _textMuted),
+                style: TextStyle(
+                  fontSize: 14,
+                  height: 1.4,
+                  fontWeight: FontWeight.w600,
+                  color: _isDesktopGlass
+                      ? Colors.white.withValues(alpha: 0.95)
+                      : _textDark,
+                ),
               ),
             ),
           ],
@@ -4623,9 +4533,9 @@ class _SignupScreenState extends State<SignupScreen> {
 
             final back = TextButton(
               onPressed: _previousStep,
-              child: const Text(
+              child: Text(
                 'Back',
-                style: TextStyle(color: _textMuted, fontSize: 15),
+                style: TextStyle(color: _helperTextColor, fontSize: 15),
               ),
             );
 

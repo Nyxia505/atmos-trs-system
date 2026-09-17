@@ -23,6 +23,9 @@ class ProductionDataFilters {
   }
 
   static bool isDummyTourist(Map<String, dynamic> row) {
+    if (row['accountDeleted'] == true) return true;
+    final status = row['status']?.toString().trim().toLowerCase() ?? '';
+    if (status == 'deleted' || status == 'removed') return true;
     final uid =
         row['firebaseUid']?.toString().trim() ??
         row['id']?.toString().trim() ??
@@ -46,6 +49,8 @@ class ProductionDataFilters {
   static List<Map<String, dynamic>> realTourists(
     List<Map<String, dynamic>> rows,
   ) {
-    return rows.where((t) => !isDummyTourist(t)).toList(growable: false);
+    return rows
+        .where((t) => !isDummyTourist(t))
+        .toList(growable: true);
   }
 }

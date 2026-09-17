@@ -31,12 +31,20 @@ class GovernorFirestoreService {
 
   final FirebaseFirestore _firestore;
 
+  static const GetOptions _cacheGet = GetOptions(source: Source.cache);
   static const GetOptions _serverGet = GetOptions(source: Source.server);
 
-  Future<GovernorFirestoreSnapshot> loadProvincialSnapshot() async {
+  /// Loads provincial data. [includeCheckIns] skips the heaviest collection when false.
+  /// [getOptions] controls cache vs server reads.
+  Future<GovernorFirestoreSnapshot> loadProvincialSnapshot({
+    GetOptions getOptions = _serverGet,
+    bool includeCheckIns = true,
+  }) async {
     final warnings = <String>[];
 
-    final isStaff = await UserDirectoryService.isCurrentUserProvincialStaff();
+    final isStaff = await UserDirectoryService.isCurrentUserProvincialStaff(
+      preferServer: false,
+    );
     if (!isStaff) {
       final uid = FirebaseAuth.instance.currentUser?.uid;
       debugPrint(
@@ -54,53 +62,64 @@ class GovernorFirestoreService {
     }
 
     List<Map<String, dynamic>> spots = [];
-    try {
-      final snap =
-          await _firestore.collection('tourist_spots').get(_serverGet);
-      spots = snap.docs
-          .map((d) => {'id': d.id, ...d.data()})
-          .where(_isTouristSpotInProvince)
-          .toList();
-    } catch (e) {
-      debugPrint('[GovernorFirestore] tourist_spots: $e');
-      warnings.add('Could not load tourist spots.');
-    }
-
-    final spotsById = {for (final s in spots) s['id']?.toString() ?? '': s};
-
     List<Map<String, dynamic>> tourists = [];
-    try {
-      final snap = await _firestore.collection('tourists').get(_serverGet);
-      tourists = snap.docs
-          .map((d) => {'id': d.id, ...d.data()})
-          .where(_isTouristInProvinceScope)
-          .toList();
-    } catch (e) {
-      debugPrint('[GovernorFirestore] tourists: $e');
-      warnings.add('Could not load tourists (check sign-in / Firestore rules).');
-    }
-
-    final checkIns = await _loadAllCheckIns(spotsById, warnings);
-
     List<Map<String, dynamic>> announcements = [];
-    try {
-      final snap = await _firestore
-          .collection('announcements')
-          .orderBy('createdAt', descending: true)
-          .get(_serverGet);
-      announcements =
-          snap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
-    } catch (e) {
-      debugPrint('[GovernorFirestore] announcements orderBy: $e');
-      try {
-        final snap =
-            await _firestore.collection('announcements').get(_serverGet);
-        announcements =
-            snap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
-      } catch (e2) {
-        debugPrint('[GovernorFirestore] announcements: $e2');
-        warnings.add('Could not load announcements.');
-      }
+
+    await Future.wait<void>([
+      () async {
+        try {
+          final snap =
+              await _firestore.collection('tourist_spots').get(getOptions);
+          spots = snap.docs
+              .map((d) => {'id': d.id, ...d.data()})
+              .where(_isTouristSpotInProvince)
+              .toList();
+        } catch (e) {
+          debugPrint('[GovernorFirestore] tourist_spots: $e');
+          warnings.add('Could not load tourist spots.');
+        }
+      }(),
+      () async {
+        try {
+          final snap = await _firestore.collection('tourists').get(getOptions);
+          tourists = snap.docs
+              .map((d) => {'id': d.id, ...d.data()})
+              .where(_isTouristInProvinceScope)
+              .toList();
+        } catch (e) {
+          debugPrint('[GovernorFirestore] tourists: $e');
+          warnings.add(
+            'Could not load tourists (check sign-in / Firestore rules).',
+          );
+        }
+      }(),
+      () async {
+        try {
+          final snap = await _firestore
+              .collection('announcements')
+              .orderBy('createdAt', descending: true)
+              .get(getOptions);
+          announcements =
+              snap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+        } catch (e) {
+          debugPrint('[GovernorFirestore] announcements orderBy: $e');
+          try {
+            final snap =
+                await _firestore.collection('announcements').get(getOptions);
+            announcements =
+                snap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+          } catch (e2) {
+            debugPrint('[GovernorFirestore] announcements: $e2');
+            warnings.add('Could not load announcements.');
+          }
+        }
+      }(),
+    ]);
+
+    List<Map<String, dynamic>> checkIns = [];
+    if (includeCheckIns) {
+      final spotsById = {for (final s in spots) s['id']?.toString() ?? '': s};
+      checkIns = await _loadAllCheckIns(spotsById, warnings, getOptions);
     }
 
     return GovernorFirestoreSnapshot(
@@ -112,9 +131,30 @@ class GovernorFirestoreService {
     );
   }
 
+  /// Cache-first quick load for dashboard stat cards, then refresh from server.
+  Future<GovernorFirestoreSnapshot> loadProvincialSnapshotCacheFirst({
+    bool includeCheckIns = true,
+  }) async {
+    var snapshot = await loadProvincialSnapshot(
+      getOptions: _cacheGet,
+      includeCheckIns: includeCheckIns,
+    );
+    final hasData = snapshot.tourists.isNotEmpty ||
+        snapshot.touristSpots.isNotEmpty ||
+        snapshot.checkIns.isNotEmpty;
+    if (!hasData) {
+      snapshot = await loadProvincialSnapshot(
+        getOptions: _serverGet,
+        includeCheckIns: includeCheckIns,
+      );
+    }
+    return snapshot;
+  }
+
   Future<List<Map<String, dynamic>>> _loadAllCheckIns(
     Map<String, Map<String, dynamic>> spotsById,
     List<String> warnings,
+    GetOptions getOptions,
   ) async {
     final byId = <String, Map<String, dynamic>>{};
 
@@ -124,7 +164,7 @@ class GovernorFirestoreService {
     }) async {
       try {
         final snap =
-            await _firestore.collection(collection).get(_serverGet);
+            await _firestore.collection(collection).get(getOptions);
         _mergeCheckInDocs(
           snap.docs,
           collection: collection,
@@ -149,6 +189,7 @@ class GovernorFirestoreService {
             await _ingestQrCheckInsByMunicipality(
               spotsById: spotsById,
               byId: byId,
+              getOptions: getOptions,
             );
             return;
           } catch (e2) {
@@ -161,8 +202,6 @@ class GovernorFirestoreService {
       }
     }
 
-    // Dashboards use qr_checkins only. Legacy `checkins` / `check_ins` are
-    // audit/welcome-back rows and would double-count the same scan.
     await ingest('qr_checkins');
 
     final list = byId.values.toList();
@@ -202,6 +241,7 @@ class GovernorFirestoreService {
   Future<void> _ingestQrCheckInsByMunicipality({
     required Map<String, Map<String, dynamic>> spotsById,
     required Map<String, Map<String, dynamic>> byId,
+    GetOptions getOptions = _serverGet,
   }) async {
     final queryIds = <String>{};
     for (final m in getMisamisOccidentalMunicipalities()) {
@@ -217,7 +257,7 @@ class GovernorFirestoreService {
           : _firestore
               .collection('qr_checkins')
               .where('municipalityId', whereIn: chunk);
-      final snap = await q.get(_serverGet);
+      final snap = await q.get(getOptions);
       _mergeCheckInDocs(
         snap.docs,
         collection: 'qr_checkins',

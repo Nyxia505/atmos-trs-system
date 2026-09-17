@@ -9,6 +9,7 @@ import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/config/user_profile_storage.dart';
 import 'package:atmos_trs_system/navigation/role_router.dart';
 import 'package:atmos_trs_system/services/dashboard_user_service.dart';
+import 'package:atmos_trs_system/services/mobile_onboarding_storage.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/tourist_profile_hydration.dart';
@@ -27,17 +28,7 @@ class StartupRouteResolver {
       return _applyQrWelcomeIfNeeded(route, firebaseUser: null);
     }
 
-    var firebaseUser = FirebaseAuth.instance.currentUser;
-    if (firebaseUser == null) {
-      try {
-        firebaseUser = await FirebaseAuth.instance
-            .authStateChanges()
-            .first
-            .timeout(const Duration(milliseconds: 600));
-      } catch (_) {
-        firebaseUser = FirebaseAuth.instance.currentUser;
-      }
-    }
+    final firebaseUser = await _waitForRestoredFirebaseUser();
 
     if (firebaseUser == null) {
       final storedUid = await SessionStorage.getStoredUser();
@@ -57,18 +48,26 @@ class StartupRouteResolver {
         case UserRole.governor:
           route = '/governor-dashboard';
           break;
+        case UserRole.provincialTourism:
+          route = '/provincial-tourism-dashboard';
+          break;
         case UserRole.tourism:
           route = '/lgu-dashboard';
+          break;
+        case UserRole.tourismEstablishment:
+          route = '/establishment-dashboard';
           break;
         case UserRole.tourist:
           route = '/dashboard';
           break;
-      } 
+      }
     } else {
       final email = firebaseUser.email ?? '';
       final roleFromEmail = SessionStorage.getRoleFromEmail(email);
       if (roleFromEmail == UserRole.governor) {
         route = '/governor-dashboard';
+      } else if (roleFromEmail == UserRole.provincialTourism) {
+        route = '/provincial-tourism-dashboard';
       } else if (roleFromEmail == UserRole.tourism) {
         route = '/lgu-dashboard';
       } else {
@@ -87,6 +86,9 @@ class StartupRouteResolver {
     final pendingLgu = await PendingLguCheckInStorage.peek();
     if (firebaseUser == null) {
       if (pendingSpot != null || pendingLgu != null) return '/qr-welcome';
+      if (!kIsWeb && !await MobileOnboardingStorage.isComplete()) {
+        return '/mobile-onboarding';
+      }
       return route;
     }
     if ((pendingSpot != null || pendingLgu != null) &&
@@ -104,6 +106,11 @@ class StartupRouteResolver {
 
     var firebaseUser = FirebaseAuth.instance.currentUser;
     if (firebaseUser == null) return route;
+
+    final staffFastRoute = await _resolveTrustedStaffRoute(firebaseUser);
+    if (staffFastRoute != null) {
+      return _applyQrWelcomeIfNeeded(staffFastRoute, firebaseUser: firebaseUser);
+    }
 
     try {
       await firebaseUser.reload();
@@ -200,6 +207,18 @@ class StartupRouteResolver {
             email: email,
           );
           route = '/lgu-dashboard';
+        } else if (SessionStorage.isProvincialTourismEmail(email)) {
+          await UserDirectoryService.ensureStaffUserDoc(
+            uid: firebaseUser.uid,
+            email: email,
+            roleRaw: 'provincial_tourism',
+          );
+          await SessionStorage.saveSession(
+            firebaseUser.uid,
+            role: UserRole.provincialTourism,
+            email: email,
+          );
+          route = '/provincial-tourism-dashboard';
         } else {
           await SessionStorage.saveSession(
             firebaseUser.uid,
@@ -224,8 +243,26 @@ class StartupRouteResolver {
     required GlobalKey<NavigatorState> navigatorKey,
   }) async {
     try {
+      final firebaseUser = FirebaseAuth.instance.currentUser;
+      if (firebaseUser != null) {
+        final staffFastRoute = await _resolveTrustedStaffRoute(firebaseUser);
+        if (staffFastRoute != null && staffFastRoute == currentRoute) {
+          return;
+        }
+      }
+
       final authoritative = await resolveAuthoritativeRoute();
       if (authoritative == currentRoute) return;
+
+      // Keep verified tourists on the dashboard if Firestore is briefly stale.
+      if (authoritative == '/verify-otp' && currentRoute == '/dashboard') {
+        final uid = FirebaseAuth.instance.currentUser?.uid;
+        if (uid != null &&
+            await SessionStorage.isTouristEmailVerifiedCached(uid)) {
+          return;
+        }
+      }
+
       final nav = navigatorKey.currentState;
       if (nav == null) return;
       nav.pushReplacementNamed(authoritative);
@@ -233,5 +270,41 @@ class StartupRouteResolver {
     } catch (e) {
       debugPrint('Startup route refine skipped: $e');
     }
+  }
+
+  /// Staff with matching session + email heuristics — skip Firestore reload.
+  static Future<String?> _resolveTrustedStaffRoute(User firebaseUser) async {
+    final storedUid = await SessionStorage.getStoredUser();
+    if (storedUid != firebaseUser.uid) return null;
+
+    final storedRole = await SessionStorage.getStoredRole();
+    if (!SessionStorage.isStaffRole(storedRole)) {
+      return null;
+    }
+
+    final emailRole = SessionStorage.getRoleFromEmail(firebaseUser.email ?? '');
+    if (emailRole != storedRole) return null;
+
+    return SessionStorage.getDashboardRoute(storedRole);
+  }
+
+  /// Waits for Firebase Auth persistence to restore the signed-in user after restart.
+  static Future<User?> _waitForRestoredFirebaseUser() async {
+    var user = FirebaseAuth.instance.currentUser;
+    if (user != null) return user;
+
+    final timeout = kIsWeb
+        ? const Duration(seconds: 3)
+        : const Duration(milliseconds: 1500);
+
+    try {
+      user = await FirebaseAuth.instance
+          .authStateChanges()
+          .firstWhere((u) => u != null)
+          .timeout(timeout);
+    } catch (_) {
+      user = FirebaseAuth.instance.currentUser;
+    }
+    return user;
   }
 }

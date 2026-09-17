@@ -3,7 +3,7 @@ import 'package:atmos_trs_system/services/pending_checkin_completion_service.dar
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 
-String? _landingWelcomeMessage({
+String? landingWelcomeMessageForPending({
   PendingSpotCheckIn? spot,
   PendingLguCheckIn? lgu,
 }) {
@@ -14,17 +14,23 @@ String? _landingWelcomeMessage({
     final mun = spot.municipality?.trim();
     if (mun != null && mun.isNotEmpty) {
       return 'Welcome to $mun! Your check-in at $place is saved. '
-          'Explore VR tours, plan your itinerary, or open the app when you\'re ready.';
+          'Continue on the website, download the app for VR tours, or plan your itinerary.';
     }
     return 'Your check-in at $place is saved. '
-        'Explore VR tours, plan your itinerary, or open the app when you\'re ready.';
+        'Continue on the website, download the app for VR tours, or plan your itinerary.';
   }
   if (lgu != null) {
     return 'Welcome to ${lgu.displayName}! Your municipality visit is saved. '
-        'Explore VR tours, plan your itinerary, or open the app when you\'re ready.';
+        'Continue on the website, download the app for VR tours, or plan your itinerary.';
   }
   return null;
 }
+
+String? _landingWelcomeMessage({
+  PendingSpotCheckIn? spot,
+  PendingLguCheckIn? lgu,
+}) =>
+    landingWelcomeMessageForPending(spot: spot, lgu: lgu);
 
 /// After tourist login or OTP verification, completes a pending QR scan (registration)
 /// then opens the dashboard or landing page.

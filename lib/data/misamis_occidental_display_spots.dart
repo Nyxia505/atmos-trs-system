@@ -65,7 +65,9 @@ class MisamisOccidentalDisplaySpots {
       municipalityId: sample.municipalityId,
       spotName: sample.name,
     );
-    if (bundled != null) return bundled;
+    if (bundled != null) {
+      return TouristSpotImageCatalog.displayUrl(preferred: bundled);
+    }
     return TouristSpotImageCatalog.displayUrlForSpot(remote);
   }
 

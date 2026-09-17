@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode, kIsWeb;
 import 'package:atmos_trs_system/services/emailjs_service.dart';
+import 'package:atmos_trs_system/services/otp_service.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
 
 /// Delivers signup / resend OTP to the tourist's email inbox and registered mobile (SMS).
@@ -35,7 +36,8 @@ class OtpDeliveryService {
     return cleaned.startsWith('+') ? cleaned : null;
   }
 
-  /// Sends OTP email via Cloud Function (preferred), then client EmailJS fallback.
+  /// Sends OTP email via client EmailJS first on web (browser Origin), then
+  /// Cloud Function. Mobile prefers Cloud Function, then EmailJS fallback.
   /// Returns `null` on success, or an error message.
   static Future<String?> sendOtpToUserEmail({
     required String toEmail,
@@ -45,39 +47,68 @@ class OtpDeliveryService {
     final inboxEmail = toEmail.trim().toLowerCase();
     final authEmail =
         FirebaseAuth.instance.currentUser?.email?.trim().toLowerCase() ?? '';
-    final callableEmail = authEmail.isNotEmpty ? authEmail : inboxEmail;
+    // Always deliver to the contact/inbox address the tourist typed.
+    final deliverTo = inboxEmail.isNotEmpty ? inboxEmail : authEmail;
 
-    if (Firebase.apps.isNotEmpty) {
+    if (deliverTo.isEmpty) {
+      return 'No email address to send the verification code to.';
+    }
+
+    Future<String?> tryEmailJs() => EmailjsService.sendOtpEmail(
+          toEmail: deliverTo,
+          toName: toName,
+          otp: otp,
+        );
+
+    Future<String?> tryCloudFunction() async {
+      if (Firebase.apps.isEmpty) {
+        return 'Firebase not ready';
+      }
       try {
-        final callable = _functions.httpsCallable('sendOtpEmail');
+        final callable = _functions.httpsCallable(
+          'sendOtpEmail',
+          options: HttpsCallableOptions(
+            timeout: const Duration(seconds: 12),
+          ),
+        );
         final payload = <String, dynamic>{
-          'toEmail': callableEmail,
+          'toEmail': deliverTo,
           'toName': toName,
           'otp': otp,
         };
-        if (inboxEmail != callableEmail) {
-          payload['inboxEmail'] = inboxEmail;
+        if (authEmail.isNotEmpty && authEmail != deliverTo) {
+          payload['inboxEmail'] = deliverTo;
         }
         await callable.call<void>(payload);
-        debugPrint('[OTP] Email sent via Cloud Function');
+        debugPrint('[OTP] Email sent via Cloud Function to=$deliverTo');
         return null;
       } on FirebaseFunctionsException catch (e) {
         debugPrint(
           '[OTP] Cloud Function sendOtpEmail failed: ${e.code} ${e.message}',
         );
-        // Always try client-side EmailJS when the Cloud Function fails.
+        return e.message ?? e.code;
       } catch (e, st) {
         debugPrint('[OTP] Cloud Function error: $e\n$st');
+        return e.toString();
       }
     }
 
-    final emailJsErr = await EmailjsService.sendOtpEmail(
-      toEmail: toEmail,
-      toName: toName,
-      otp: otp,
-    );
+    if (kIsWeb) {
+      // Web: EmailJS with Origin is the reliable path on Spark (no CF deploy).
+      final emailJsErr = await tryEmailJs();
+      if (emailJsErr == null) return null;
+      debugPrint('[OTP] Web EmailJS failed: $emailJsErr — trying Cloud Function');
+      final cfErr = await tryCloudFunction();
+      if (cfErr == null) return null;
+      return emailJsErr;
+    }
+
+    final cfErr = await tryCloudFunction();
+    if (cfErr == null) return null;
+
+    final emailJsErr = await tryEmailJs();
     if (emailJsErr == null) {
-      debugPrint('[OTP] Email sent via client EmailJS');
+      debugPrint('[OTP] Email sent via client EmailJS to=$deliverTo');
     }
     return emailJsErr;
   }
@@ -182,7 +213,8 @@ class OtpDeliveryService {
           ? smsResult
           : null,
       notificationShown: notificationShown,
-      otpForDebugOnly: kDebugMode ? otp : null,
+      // Reveal code in-app when inbox delivery failed (OTP is already stored).
+      otpForDisplay: emailErr != null ? otp : (kDebugMode ? otp : null),
       maskedMobile: mobileRaw.isNotEmpty
           ? _maskMobile(formatPhilippineMobile(mobileRaw) ?? mobileRaw)
           : null,
@@ -207,7 +239,7 @@ class OtpDeliveryResult {
     this.smsError,
     this.maskedMobile,
     this.notificationShown = false,
-    this.otpForDebugOnly,
+    this.otpForDisplay,
     this.otpAlreadyInFirestore = false,
   });
 
@@ -218,15 +250,23 @@ class OtpDeliveryResult {
   final String? smsError;
   final String? maskedMobile;
   final bool notificationShown;
-  final String? otpForDebugOnly;
+  /// 6-digit code for in-app display when email could not be delivered.
+  final String? otpForDisplay;
   final bool otpAlreadyInFirestore;
 
-  /// Signup / resend can continue only when email delivery succeeded.
-  bool get canCompleteRegistration => emailSent;
+  /// Signup can continue when email arrived, or OTP is already stored (Resend on next screen).
+  bool get canCompleteRegistration =>
+      emailSent || otpAlreadyInFirestore || smsSent || notificationShown;
 
   String messageForUser(String email) {
     if (otpAlreadyInFirestore && !emailSent) {
-      return 'Could not send the verification code to $email. Please try again.';
+      if (otpForDisplay != null && otpForDisplay!.length == 6) {
+        return 'Email could not be delivered to $email. '
+            'Use this code now: $otpForDisplay '
+            '(also try Resend after EmailJS Template ID is fixed).';
+      }
+      return 'Could not email $email right now. Continue to enter your code — '
+          'use Resend on the next screen if you did not receive it.';
     }
     if (smsError != null && smsError!.isNotEmpty) {
       return 'Email: ${emailSent ? "sent" : "failed"}. SMS failed: $smsError';
@@ -254,11 +294,12 @@ class OtpDeliveryResult {
     if (smsSent && maskedMobile != null) {
       return 'Code sent via SMS to $maskedMobile.';
     }
-    if (kDebugMode && otpForDebugOnly != null) {
-      return 'Email/SMS could not be sent. Dev code: $otpForDebugOnly (expires in 5 min).';
+    if (otpForDisplay != null && otpForDisplay!.length == 6) {
+      return 'Email could not be sent. Your code is $otpForDisplay '
+          '(expires in ${OtpService.otpExpiryMinutes} min).';
     }
     if (kIsWeb) {
-      return 'Could not send email. Please check your EmailJS setup, then tap Resend.';
+      return 'Could not send email. Please check your EmailJS Template ID, then tap Resend.';
     }
     return 'Could not send the code. Check your email address and tap Resend.';
   }

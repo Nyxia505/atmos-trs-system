@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart'
     show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'dart:async';
@@ -7,35 +8,47 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:cross_file/cross_file.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
+import 'package:gal/gal.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/beta_testing_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
+import 'package:atmos_trs_system/config/supabase_storage_config.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:atmos_trs_system/widgets/ui_skeleton.dart';
+import 'package:atmos_trs_system/services/dashboard_stats_cache.dart';
 import 'package:atmos_trs_system/widgets/app_search_bar.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
 import 'package:atmos_trs_system/utils/spot_qr_helper.dart';
-import 'package:atmos_trs_system/utils/lgu_qr_export.dart';
-import 'package:atmos_trs_system/utils/logo_utils.dart';
+import 'package:atmos_trs_system/utils/spot_qr_export.dart';
+import 'package:atmos_trs_system/widgets/atmos_square_logo.dart';
 import 'package:atmos_trs_system/services/registration_municipality_resolver.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
+import 'package:atmos_trs_system/services/auth_service.dart';
+import 'package:atmos_trs_system/services/tourist_account_admin_service.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/tourist_id_helper.dart';
 import 'package:atmos_trs_system/models/tourist_spot.dart';
+import 'package:atmos_trs_system/navigation/post_logout_navigation.dart';
 import 'package:atmos_trs_system/services/tourist_spots_firestore_service.dart';
-import 'package:atmos_trs_system/utils/checkin_report_summary_csv.dart';
 import 'package:atmos_trs_system/utils/csv_file_download.dart';
+import 'package:atmos_trs_system/utils/checkin_visitor_count.dart';
+import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
 import 'package:atmos_trs_system/utils/production_data_filters.dart';
 import 'package:atmos_trs_system/services/vr_tour_firestore_service.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:atmos_trs_system/widgets/dot_report_export_panel.dart';
+import 'package:atmos_trs_system/services/dae3_auto_report_service.dart';
+import 'package:atmos_trs_system/widgets/lgu_events_panel.dart';
+import 'package:atmos_trs_system/services/lgu_event_service.dart';
 
 class LguDashboard extends StatefulWidget {
   const LguDashboard({super.key});
@@ -51,29 +64,103 @@ class _LguDashboardState extends State<LguDashboard>
   bool _didInitializeSidebarForViewport = false;
   late AnimationController _animationController;
 
-  // Theme colors - FlexiMart style with Orange
-  static const Color _primaryOrange = Color(
-    0xFFEA580C,
-  ); // dark orange (sidebar)
-  static const Color _accentOrange = Color(
-    0xFFF97316,
-  ); // orange-500 (highlights, user card)
-  static const Color _darkBg = Color(0xFFFFF7ED); // cream background
-  static const Color _cardBg = Color(0xFFFFFBF7); // soft white cards
-  static const Color _textDark = Color(0xFF1A1A1A);
+  // Theme â€” premium LGU tourism dashboard
+  static const Color _primaryOrange = Color(0xFFF97316);
+  static const Color _accentOrange = Color(0xFFFB923C);
+  static const Color _darkBg = Color(0xFFFFF8F3);
+  static const Color _cardBg = Color(0xFFFFFFFF);
+  static const Color _textDark = Color(0xFF111827);
   static const Color _textMuted = Color(0xFF6B7280);
   static const Color _kAnalyticsSurfaceBorder = Color(0xFFE5E7EB);
-  static const Color _kpiGreen = Color(0xFF9CCC65);
-  static const Color _kpiOrange = Color(0xFFFFB74D);
-  static const Color _kpiBlue = Color(0xFF64B5F6);
-  static const Color _kpiPurple = Color(0xFF9575CD);
-  static const Color _surfaceBg = Color(0xFFF4F4F5);
-  static const Color _panelBorder = Color(0xFFE4E4E7);
+  static const Color _kpiGreen = Color(0xFF10B981);
+  static const Color _kpiOrange = Color(0xFFF97316);
+  static const Color _kpiBlue = Color(0xFF3B82F6);
+  static const Color _kpiPurple = Color(0xFF8B5CF6);
+  static const Color _surfaceBg = Color(0xFFF9FAFB);
+  static const Color _panelBorder = Color(0xFFE5E7EB);
+  static const Color _tintBlue = Color(0xFFE8F4FF);
+  static const Color _tintGreen = Color(0xFFECFDF3);
+  static const Color _tintPurple = Color(0xFFF5F0FF);
+  static const Color _tintOrange = Color(0xFFFFF3E8);
+
+  /// Shared brand gradient for sidebar + every page header (same colors).
+  static const LinearGradient _lguBrandGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [
+      Color(0xFFFB923C),
+      Color(0xFFF97316),
+      Color(0xFFEA580C),
+    ],
+    stops: [0.0, 0.55, 1.0],
+  );
+  static const String _fallbackLguScenicAsset =
+      'assets/images/capitol lp bg.png';
+
+  /// Hero photos must match the logged-in LGU
+  /// (Oroquieta Plaza for Oroquieta â€” never Tangub/Ozamiz landmarks).
+  String get _dashboardHeroImageAsset {
+    switch (normalizeMunicipalityId(_storedMunicipalityId)) {
+      case 'oroquieta':
+        return 'assets/images/oroquieta City plaza.jpeg';
+      case 'ozamiz':
+        return 'assets/images/ozamis city.webp';
+      case 'tangub':
+        return 'assets/images/Asenso Global Garden 1.png';
+      case 'sinacaban':
+        return 'assets/images/Amorap.png';
+      case 'baliangao':
+        return 'assets/images/Baliangao.png';
+      case 'bonifacio':
+        return 'assets/images/Bonifacio_kanao.png';
+      case 'calamba':
+        return 'assets/images/Calamba.png';
+      case 'clarin':
+        return 'assets/images/Clarin.png';
+      case 'jimenez':
+        return 'assets/images/Jimenez.png';
+      case 'lopezjaena':
+        return 'assets/images/Lopez Jaena.png';
+      case 'panaon':
+        return 'assets/images/Panaon.png';
+      case 'plaridel':
+        return 'assets/images/Plaridel.png';
+      case 'sapangdalaga':
+        return 'assets/images/Sapang_Dalaga_v2.png';
+      case 'dvc':
+        return 'assets/images/DonVic_v2.png';
+      case 'aloran':
+        return 'assets/images/aloran.png';
+      case 'tudela':
+        return 'assets/images/Tudela Village.webp';
+      case 'concepcion':
+        return 'assets/images/conception_v2.png';
+      default:
+        return _fallbackLguScenicAsset;
+    }
+  }
+
+  String get _dashboardCityDisplayName {
+    final named = _municipalityName?.trim();
+    if (named != null && named.isNotEmpty) return named;
+    final id = normalizeMunicipalityId(_storedMunicipalityId);
+    for (final m in getMisamisOccidentalMunicipalities()) {
+      if (normalizeMunicipalityId(m.id) == id) return m.name;
+    }
+    return 'Misamis Occidental';
+  }
 
   BoxDecoration _tourismPanelDecoration() => BoxDecoration(
     color: Colors.white,
-    borderRadius: BorderRadius.circular(12),
-    border: Border.all(color: _panelBorder),
+    borderRadius: BorderRadius.circular(20),
+    border: Border.all(color: _panelBorder.withValues(alpha: 0.9)),
+    boxShadow: [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: 0.04),
+        blurRadius: 18,
+        offset: const Offset(0, 8),
+      ),
+    ],
   );
 
   Widget _wrapTourismPanel(Widget child, {EdgeInsets? padding}) {
@@ -86,9 +173,15 @@ class _LguDashboardState extends State<LguDashboard>
 
   /// Large rounded UI (dashboard reference): main panel.
 
-  // Data states
-  bool _isLoading = true;
+  // Data states â€” staged loading for smooth post-login paint
+  bool _isBootstrapping = true;
+  bool _isLoadingDetails = true;
+  bool _hasCachedStats = false;
   String? _errorMessage;
+
+  /// Newest check-ins only — enough for dashboard lists/KPIs without full history.
+  static const int _qrCheckInFetchLimit = 100;
+  static const int _touristDocIdChunkSize = 10;
 
   // Dashboard stats
   int _todayCheckIns = 0;
@@ -105,6 +198,17 @@ class _LguDashboardState extends State<LguDashboard>
   List<Map<String, dynamic>> _recentActivity = [];
   List<Map<String, dynamic>> _notifications = [];
   int _unreadNotifications = 0;
+
+  /// Province events stream â€” badge + snackbar for new posts from other LGUs.
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
+      _lguEventsSubscription;
+  bool _lguEventsStreamPrimed = false;
+  /// All announcements from Firestore (used for cross-LGU badges).
+  List<Map<String, dynamic>> _lguEvents = [];
+  final Set<String> _seenCrossLguEventIds = {};
+  Set<String> _knownPublishedEventIds = {};
+  /// 0 Province Live, 1 My posts â€” for Events fragment tabs.
+  int _eventsPanelTab = 0;
 
   /// For real-time check-in notifications: newest check-in doc id we've seen.
   String? _lastSeenCheckInId;
@@ -125,20 +229,17 @@ class _LguDashboardState extends State<LguDashboard>
   final _checkInsSearchController = TextEditingController();
   final _spotsSearchController = TextEditingController();
   final _touristsSearchController = TextEditingController();
+  final _dashboardSearchController = TextEditingController();
   // Filter states
   String _checkInStatusFilter = 'All';
   String _checkInDateFilter = 'All';
   String _spotCategoryFilter = 'All';
   String _spotVrFilter = 'All';
-  String _reportType = 'All Data';
-  DateTime? _reportStartDate;
-  DateTime? _reportEndDate;
-
   // Export states
   bool _isExporting = false;
   double _exportProgress = 0.0;
 
-  /// Full Reports tab (quick exports + custom report) for PNG screenshot.
+  /// Analytics page RepaintBoundary (insights) for PNG screenshot.
   final GlobalKey _reportsRepaintKey = GlobalKey();
   bool _reportsScreenshotBusy = false;
 
@@ -159,19 +260,20 @@ class _LguDashboardState extends State<LguDashboard>
 
   final List<_NavItem> _navItems = [
     _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
-    _NavItem(icon: Icons.qr_code_scanner_rounded, label: 'Visit log'),
+    _NavItem(icon: Icons.qr_code_scanner_rounded, label: 'Tourist Visits'),
     _NavItem(icon: Icons.place_rounded, label: 'Tourist Spots'),
     _NavItem(icon: Icons.qr_code_2_rounded, label: 'Spot QR Codes'),
-    _NavItem(icon: Icons.people_alt_rounded, label: 'Visitors'),
+    _NavItem(icon: Icons.people_alt_rounded, label: 'Registered Tourists'),
     _NavItem(icon: Icons.analytics_rounded, label: 'Analytics'),
-    _NavItem(icon: Icons.assessment_rounded, label: 'Reports'),
+    _NavItem(icon: Icons.event_rounded, label: 'Events'),
+    _NavItem(icon: Icons.settings_rounded, label: 'Settings'),
   ];
 
   static const int _mainNavCount = 6; // Dashboard through Analytics
   static const int _touristSpotsNavIndex = 2;
   static const int _spotQRCodesIndex = 3;
   static const int _analyticsIndex = 5;
-  static const int _reportsIndex = 6;
+  static const int _eventsIndex = 6;
   static const int _settingsIndex = 7;
 
   final List<String> _categories = [
@@ -182,15 +284,6 @@ class _LguDashboardState extends State<LguDashboard>
     'Mountain',
     'Resort',
   ];
-  final List<String> _reportTypes = [
-    'All Data',
-    'Visits only',
-    'Tourists Only',
-    'Tourist Spots Only',
-    'DOT Visitor to Attraction Report',
-    'DOT Accommodation Establishment Data',
-  ];
-
   @override
   void initState() {
     super.initState();
@@ -200,8 +293,173 @@ class _LguDashboardState extends State<LguDashboard>
     );
     _animationController.forward();
     _subscribeToTouristSpots();
-    _loadTourismSettings();
-    _loadData();
+    unawaited(_loadTourismSettings());
+    // Paint cached KPIs and start network load in parallel (don't gate on prefs I/O).
+    unawaited(_restoreLguStatsCache());
+    unawaited(_loadData());
+  }
+
+  Future<void> _restoreLguStatsCache() async {
+    var munId = await SessionStorage.getStoredMunicipalityId();
+    final cached = await DashboardStatsCache.loadLgu(munId);
+    if (cached == null || !mounted) return;
+    setState(() {
+      _todayCheckIns = cached.todayCheckIns;
+      _totalTourists = cached.totalTourists;
+      _activeSpots = cached.activeSpots;
+      _totalVRTours = cached.totalVrTours;
+      if (cached.municipalityName != null) {
+        _municipalityName = cached.municipalityName;
+      }
+      if (cached.profileName != null && cached.profileName!.isNotEmpty) {
+        _profileName = cached.profileName!;
+      }
+      _hasCachedStats = true;
+    });
+  }
+
+  Future<void> _saveLguStatsCache() async {
+    await DashboardStatsCache.saveLgu(
+      _storedMunicipalityId,
+      LguDashboardStatsCache(
+        todayCheckIns: _todayCheckIns,
+        totalTourists: _totalTourists,
+        activeSpots: _activeSpots,
+        totalVrTours: _totalVRTours,
+        municipalityName: _municipalityName,
+        profileName: _profileName,
+      ),
+    );
+  }
+
+  List<Map<String, dynamic>> _processCheckInDocs(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    final sorted = _sortCheckInsNewestFirst(
+      _filterRealCheckIns(
+        docs
+            .map(
+              (doc) => _normalizeCheckInForUi({
+                'id': doc.id,
+                ...doc.data(),
+              }),
+            )
+            .toList(),
+      ),
+    );
+    return sorted.length > 100 ? sorted.take(100).toList() : sorted;
+  }
+
+  Future<void> _loadMunicipalityCheckInsAndTourists({
+    required FirebaseFirestore firestore,
+    required List<String> queryIds,
+  }) async {
+    var docs = await _fetchQrCheckInDocs(
+      firestore,
+      queryIds,
+      getOptions: const GetOptions(source: Source.cache),
+    );
+    final usedCache = docs.isNotEmpty;
+    if (docs.isEmpty) {
+      docs = await _fetchQrCheckInDocs(
+        firestore,
+        queryIds,
+        getOptions: const GetOptions(source: Source.server),
+      );
+    }
+
+    _checkIns = _processCheckInDocs(docs);
+    _lastSeenCheckInId =
+        _checkIns.isNotEmpty ? (_checkIns.first['id'] as String?) : null;
+    debugPrint(
+      '[LguDashboard] loaded ${_checkIns.length} qr_checkins for $queryIds',
+    );
+    _subscribeToCheckIns(queryIds);
+    _subscribeToTouristRegistrations(queryIds);
+    _recomputeDashboardStats();
+
+    if (mounted) {
+      setState(() => _isBootstrapping = false);
+      unawaited(_saveLguStatsCache());
+    }
+
+    final checkInUserIds = _checkIns
+        .map((c) => c['userId']?.toString().trim())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet();
+
+    await Future.wait<void>([
+      () async {
+        try {
+          _tourists = _filterRealTourists(
+            await _loadRegisteredTouristsForMunicipality(
+              firestore: firestore,
+              queryIds: queryIds,
+              checkInUserIds: checkInUserIds,
+            ),
+          );
+          _tourists = _filterRealTourists(
+            _mergeTouristVisitsFromCheckIns(_tourists),
+          );
+        } catch (e) {
+          debugPrint('Failed loading tourists for dashboard: $e');
+          _tourists = [];
+        }
+      }(),
+      if (usedCache)
+        () async {
+          try {
+            final serverDocs = await _fetchQrCheckInDocs(
+              firestore,
+              queryIds,
+              getOptions: const GetOptions(source: Source.server),
+            );
+            if (serverDocs.isNotEmpty && mounted) {
+              _checkIns = _processCheckInDocs(serverDocs);
+              _lastSeenCheckInId = _checkIns.isNotEmpty
+                  ? (_checkIns.first['id'] as String?)
+                  : null;
+              _recomputeDashboardStats();
+            }
+          } catch (e) {
+            debugPrint('[LguDashboard] server refresh qr_checkins: $e');
+          }
+        }(),
+    ]);
+
+    // Paint lists ASAP; hydrate missing profiles in background.
+    _rebuildTouristProfileIndex();
+    _applyTouristProfilesToCheckIns();
+    _mergeVisitorsFromCheckIns();
+    _recomputeDashboardStats();
+
+    if (mounted) {
+      setState(() => _isLoadingDetails = false);
+      unawaited(_saveLguStatsCache());
+      _scheduleDae3DraftRefresh();
+    }
+
+    unawaited(
+      _finalizeCheckInAndTouristData().then((_) {
+        if (!mounted) return;
+        _recomputeDashboardStats();
+        setState(() {});
+        unawaited(_saveLguStatsCache());
+      }).catchError((Object e) {
+        debugPrint('[LguDashboard] background tourist hydrate: $e');
+      }),
+    );
+
+    unawaited(
+      _reloadVrToursFromDatabase().then((_) {
+        if (!mounted) return;
+        setState(() => _totalVRTours = _vrTours.length);
+        unawaited(_saveLguStatsCache());
+      }).catchError((Object e) {
+        debugPrint('VR tours deferred load: $e');
+      }),
+    );
   }
 
   @override
@@ -328,17 +586,19 @@ class _LguDashboardState extends State<LguDashboard>
     _qrCheckInsLguSubscription?.cancel();
     _touristRegistrationsSubscription?.cancel();
     _touristSpotsSubscription?.cancel();
+    _lguEventsSubscription?.cancel();
     _animationController.dispose();
     _checkInsSearchController.dispose();
     _spotsSearchController.dispose();
     _touristsSearchController.dispose();
+    _dashboardSearchController.dispose();
     super.dispose();
   }
 
   bool get _isMobile => MediaQuery.of(context).size.width < 768;
   bool get _isTablet =>
       MediaQuery.of(context).size.width >= 768 &&
-      MediaQuery.of(context).size.width < 1024;
+      MediaQuery.of(context).size.width < 1100;
 
   // When true, show banner that we're showing all data (no municipality filter)
   bool _showAllDataBanner = false;
@@ -346,17 +606,19 @@ class _LguDashboardState extends State<LguDashboard>
   _municipalityName; // Display name for current filter (e.g. "Oroquieta City")
 
   Future<void> _loadData() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+    final isRefresh = !_isBootstrapping;
+    if (isRefresh) {
+      setState(() => _isLoadingDetails = true);
+    }
+    setState(() => _errorMessage = null);
     _touristFirestoreReadsBlocked = false;
 
     try {
       if (Firebase.apps.isEmpty) {
         setState(() {
           _errorMessage = 'Firebase is not initialized yet.';
-          _isLoading = false;
+          _isBootstrapping = false;
+          _isLoadingDetails = false;
         });
         return;
       }
@@ -366,13 +628,15 @@ class _LguDashboardState extends State<LguDashboard>
         setState(() {
           _errorMessage =
               'Your session expired. Please sign in again to load dashboard data.';
-          _isLoading = false;
+          _isBootstrapping = false;
+          _isLoadingDetails = false;
         });
         return;
       }
       AuthConfig.currentUserUid = authUser.uid;
 
-      await authUser.getIdToken(true);
+      // Token is attached by the Firestore SDK; don't block dashboard on refresh.
+      unawaited(authUser.getIdToken());
       final authEmail =
           authUser.email?.trim() ?? (await SessionStorage.getStoredEmail()) ?? '';
 
@@ -428,7 +692,8 @@ class _LguDashboardState extends State<LguDashboard>
                 'This account is not authorized for the LGU dashboard. '
                 'Sign in with a tourism staff email (e.g. tourism.oroquieta@? or '
                 'tourismoffice.atmos@misocc-demo.ph).';
-            _isLoading = false;
+            _isBootstrapping = false;
+            _isLoadingDetails = false;
           });
           return;
         }
@@ -444,7 +709,14 @@ class _LguDashboardState extends State<LguDashboard>
         }
       }
       _municipalityName = munName ?? municipalityId;
-      // Re-apply municipality filter to spots when municipality changes (e.g. after login)
+      if (municipalityId != null && municipalityId.isNotEmpty) {
+        _startLguEventsListener(municipalityId);
+        unawaited(
+          LguEventService().prefetchForLgu(municipalityId).catchError((Object e) {
+            debugPrint('[LguDashboard] events prefetch: $e');
+          }),
+        );
+      }
       _touristSpots = _filterSpotsByMunicipality(
         _allTouristSpots,
         _storedMunicipalityId,
@@ -454,47 +726,23 @@ class _LguDashboardState extends State<LguDashboard>
         _activeSpots = _touristSpots.length;
       }
 
-      // Ensure all existing spot docs carry qrValue/qr_payload/createdAt.
-      // Run once per dashboard session to keep Firestore complete.
       if (!_didAutoBackfillSpotQr) {
         _didAutoBackfillSpotQr = true;
-        try {
-          await _runBackfillSpotQrMetadata(showSnack: false);
-        } catch (e) {
-          debugPrint('Spot QR metadata backfill skipped: $e');
-        }
+        unawaited(
+          _runBackfillSpotQrMetadata(showSnack: false).catchError((Object e) {
+            debugPrint('Spot QR metadata backfill skipped: $e');
+          }),
+        );
       }
 
       if (municipalityId != null) {
-        // Per-municipality: use qr_checkins and filter tourists by this municipality.
-        // Tourist spots are loaded via stream in _subscribeToTouristSpots() and filtered there.
         final queryIds = municipalityIdsForQuery(municipalityId);
         if (queryIds.isNotEmpty) {
           try {
-            final docs = await _fetchQrCheckInDocs(firestore, queryIds);
-            _checkIns = _sortCheckInsNewestFirst(
-              _filterRealCheckIns(
-                docs
-                    .map(
-                      (doc) => _normalizeCheckInForUi({
-                        'id': doc.id,
-                        ...doc.data(),
-                      }),
-                    )
-                    .toList(),
-              ),
+            await _loadMunicipalityCheckInsAndTourists(
+              firestore: firestore,
+              queryIds: queryIds,
             );
-            if (_checkIns.length > 100) {
-              _checkIns = _checkIns.take(100).toList();
-            }
-            _lastSeenCheckInId = _checkIns.isNotEmpty
-                ? (_checkIns.first['id'] as String?)
-                : null;
-            debugPrint(
-              '[LguDashboard] loaded ${_checkIns.length} qr_checkins for $queryIds',
-            );
-            _subscribeToCheckIns(queryIds);
-            _subscribeToTouristRegistrations(queryIds);
           } catch (e) {
             debugPrint('Failed loading qr_checkins for dashboard: $e');
             _checkIns = [];
@@ -505,35 +753,20 @@ class _LguDashboardState extends State<LguDashboard>
                   'in the project folder, copy firestore.rules into Firebase Console -> Firestore -> Rules, '
                   'then Publish and restart the app.';
             }
+            if (mounted) {
+              setState(() {
+                _isBootstrapping = false;
+                _isLoadingDetails = false;
+              });
+            }
           }
+        } else if (mounted) {
+          setState(() {
+            _isBootstrapping = false;
+            _isLoadingDetails = false;
+          });
         }
-
-        final checkInUserIds = _checkIns
-            .map((c) => c['userId']?.toString().trim())
-            .whereType<String>()
-            .where((id) => id.isNotEmpty)
-            .toSet();
-        try {
-          _tourists = _filterRealTourists(
-            await _loadRegisteredTouristsForMunicipality(
-            firestore: firestore,
-            queryIds: queryIds,
-            checkInUserIds: checkInUserIds,
-          ),
-          );
-          _tourists = _filterRealTourists(
-            _mergeTouristVisitsFromCheckIns(_tourists),
-          );
-        } catch (e) {
-          debugPrint('Failed loading tourists for dashboard: $e');
-          _tourists = [];
-        }
-
-        await _finalizeCheckInAndTouristData();
-
-        await _reloadVrToursFromDatabase();
       } else {
-        // Provincial / no municipality: still load qr_checkins (beta defaults to Oroquieta).
         final fallbackIds = BetaTestingGuard.isActive
             ? municipalityIdsForQuery(BetaTestingGuard.dashboardMunicipalityId)
             : <String>[];
@@ -547,63 +780,58 @@ class _LguDashboardState extends State<LguDashboard>
         _lastSeenCheckInId = null;
         if (fallbackIds.isNotEmpty) {
           try {
-            final docs = await _fetchQrCheckInDocs(firestore, fallbackIds);
-            _checkIns = _sortCheckInsNewestFirst(
-              _filterRealCheckIns(
-                docs
-                    .map(
-                      (doc) => _normalizeCheckInForUi({
-                        'id': doc.id,
-                        ...doc.data(),
-                      }),
-                    )
-                    .toList(),
-              ),
+            await _loadMunicipalityCheckInsAndTourists(
+              firestore: firestore,
+              queryIds: fallbackIds,
             );
-            if (_checkIns.length > 100) {
-              _checkIns = _checkIns.take(100).toList();
-            }
-            _subscribeToCheckIns(fallbackIds);
-            _subscribeToTouristRegistrations(fallbackIds);
-            await _finalizeCheckInAndTouristData();
           } catch (e) {
             debugPrint('Failed loading qr_checkins (no municipality): $e');
             _checkIns = [];
+            if (mounted) {
+              setState(() {
+                _isBootstrapping = false;
+                _isLoadingDetails = false;
+              });
+            }
           }
         } else {
           _checkIns = [];
+          _tourists = [];
+          if (mounted) {
+            setState(() {
+              _isBootstrapping = false;
+              _isLoadingDetails = false;
+            });
+          }
         }
-
-        _tourists = [];
-
-        await _reloadVrToursFromDatabase();
       }
 
       _recomputeDashboardStats();
-
       _activeSpots = _touristSpots.where((s) => s.status == 'Active').length;
       if (_activeSpots == 0 && _touristSpots.isNotEmpty) {
         _activeSpots = _touristSpots.length;
       }
-      _totalVRTours = _vrTours.length;
 
-      setState(() {
-        _errorMessage = null;
-        _isLoading = false;
-      });
-      await _loadTourismSettings();
+      if (mounted) {
+        setState(() => _errorMessage = null);
+        unawaited(_saveLguStatsCache());
+      }
     } catch (e) {
       debugPrint('Error loading tourism dashboard data: $e');
       if (mounted) {
         setState(() {
           _errorMessage =
               'Could not load dashboard data. Pull to refresh or sign in again.';
-          _isLoading = false;
+          _isBootstrapping = false;
+          _isLoadingDetails = false;
         });
       }
     } finally {
-      if (mounted && _isLoading) {
-        setState(() => _isLoading = false);
+      if (mounted && _isBootstrapping) {
+        setState(() {
+          _isBootstrapping = false;
+          _isLoadingDetails = false;
+        });
       }
     }
   }
@@ -627,13 +855,16 @@ class _LguDashboardState extends State<LguDashboard>
       unawaited(_handleCheckInsDocs(byId.values.toList(), queryIds));
     }
 
-    final Query<Map<String, dynamic>> munQuery = queryIds.length == 1
+    Query<Map<String, dynamic>> munBase = queryIds.length == 1
         ? FirebaseFirestore.instance
               .collection('qr_checkins')
               .where('municipalityId', isEqualTo: queryIds.first)
         : FirebaseFirestore.instance
               .collection('qr_checkins')
               .where('municipalityId', whereIn: queryIds);
+    final munQuery = munBase
+        .orderBy('timestamp', descending: true)
+        .limit(_qrCheckInFetchLimit);
     _qrCheckInsSubscription = munQuery.snapshots().listen(
       (snapshot) {
         _munCheckInsSnap = snapshot;
@@ -641,16 +872,30 @@ class _LguDashboardState extends State<LguDashboard>
       },
       onError: (Object e) {
         debugPrint('qr_checkins municipalityId stream error: $e');
+        // Fallback without orderBy if composite index is missing.
+        _qrCheckInsSubscription?.cancel();
+        _qrCheckInsSubscription = munBase.limit(_qrCheckInFetchLimit).snapshots().listen(
+          (snapshot) {
+            _munCheckInsSnap = snapshot;
+            emitMerged();
+          },
+          onError: (Object e2) {
+            debugPrint('qr_checkins municipalityId stream fallback error: $e2');
+          },
+        );
       },
     );
 
-    final Query<Map<String, dynamic>> lguQuery = queryIds.length == 1
+    Query<Map<String, dynamic>> lguBase = queryIds.length == 1
         ? FirebaseFirestore.instance
               .collection('qr_checkins')
               .where('lguId', isEqualTo: queryIds.first)
         : FirebaseFirestore.instance
               .collection('qr_checkins')
               .where('lguId', whereIn: queryIds);
+    final lguQuery = lguBase
+        .orderBy('timestamp', descending: true)
+        .limit(_qrCheckInFetchLimit);
     _qrCheckInsLguSubscription = lguQuery.snapshots().listen(
       (snapshot) {
         _lguCheckInsSnap = snapshot;
@@ -658,38 +903,66 @@ class _LguDashboardState extends State<LguDashboard>
       },
       onError: (Object e) {
         debugPrint('qr_checkins lguId stream error: $e');
+        _qrCheckInsLguSubscription?.cancel();
+        _qrCheckInsLguSubscription = lguBase.limit(_qrCheckInFetchLimit).snapshots().listen(
+          (snapshot) {
+            _lguCheckInsSnap = snapshot;
+            emitMerged();
+          },
+          onError: (Object e2) {
+            debugPrint('qr_checkins lguId stream fallback error: $e2');
+          },
+        );
       },
     );
   }
 
-  /// Loads qr_checkins matching [queryIds] via municipalityId and lguId (merged).
+  /// Loads recent qr_checkins matching [queryIds] via municipalityId and lguId (merged).
   Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _fetchQrCheckInDocs(
     FirebaseFirestore firestore,
-    List<String> queryIds,
-  ) async {
+    List<String> queryIds, {
+    GetOptions getOptions = const GetOptions(source: Source.server),
+  }) async {
     final byId = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
 
     Future<void> mergeQuery(String field) async {
       if (queryIds.isEmpty) return;
-      final Query<Map<String, dynamic>> q = queryIds.length == 1
+      final Query<Map<String, dynamic>> base = queryIds.length == 1
           ? firestore
                 .collection('qr_checkins')
                 .where(field, isEqualTo: queryIds.first)
           : firestore
                 .collection('qr_checkins')
                 .where(field, whereIn: queryIds);
-      final snap = await q.get();
-      for (final doc in snap.docs) {
-        byId[doc.id] = doc;
+      try {
+        final snap = await base
+            .orderBy('timestamp', descending: true)
+            .limit(_qrCheckInFetchLimit)
+            .get(getOptions);
+        for (final doc in snap.docs) {
+          byId[doc.id] = doc;
+        }
+      } catch (e) {
+        debugPrint(
+          '[LguDashboard] qr_checkins $field ordered query failed, '
+          'falling back to limit-only: $e',
+        );
+        try {
+          final snap =
+              await base.limit(_qrCheckInFetchLimit).get(getOptions);
+          for (final doc in snap.docs) {
+            byId[doc.id] = doc;
+          }
+        } catch (e2) {
+          debugPrint('[LguDashboard] qr_checkins $field query: $e2');
+        }
       }
     }
 
-    await mergeQuery('municipalityId');
-    try {
-      await mergeQuery('lguId');
-    } catch (e) {
-      debugPrint('[LguDashboard] qr_checkins lguId query: $e');
-    }
+    await Future.wait<void>([
+      mergeQuery('municipalityId'),
+      mergeQuery('lguId'),
+    ]);
     return byId.values.toList();
   }
 
@@ -719,12 +992,28 @@ class _LguDashboardState extends State<LguDashboard>
         .where((id) => id.isNotEmpty)
         .toSet();
     try {
-      final registered = await _loadRegisteredTouristsForMunicipality(
-        firestore: FirebaseFirestore.instance,
-        queryIds: queryIds,
-        checkInUserIds: checkInUserIds,
-      );
-      _tourists = _filterRealTourists(registered);
+      _rebuildTouristProfileIndex();
+      final missingIds = checkInUserIds
+          .where((id) => !_touristProfileByUid.containsKey(id))
+          .toSet();
+      if (_tourists.isEmpty) {
+        final registered = await _loadRegisteredTouristsForMunicipality(
+          firestore: FirebaseFirestore.instance,
+          queryIds: queryIds,
+          checkInUserIds: checkInUserIds,
+        );
+        _tourists = _filterRealTourists(registered);
+      } else if (missingIds.isNotEmpty) {
+        final extra = await _fetchTouristDocsByIds(
+          FirebaseFirestore.instance,
+          missingIds,
+          queryIds: queryIds,
+          checkInUserIds: checkInUserIds,
+        );
+        if (extra.isNotEmpty) {
+          _tourists = _filterRealTourists([..._tourists, ...extra]);
+        }
+      }
     } catch (e) {
       debugPrint('Tourism: reload tourists on check-in stream: $e');
     }
@@ -746,7 +1035,8 @@ class _LguDashboardState extends State<LguDashboard>
             : (c['spotId']?.toString() ?? 'spot').replaceAll('_', ' ');
         _pushNotification({
           'title': 'New check-in',
-          'message': '${c['touristName'] ?? 'A tourist'} scanned $spotLabel',
+          'message':
+              '${_displayTouristIdFromCheckIn(c)} scanned $spotLabel',
           'time': 'Just now',
         });
       }
@@ -762,12 +1052,32 @@ class _LguDashboardState extends State<LguDashboard>
             behavior: SnackBarBehavior.floating,
           ),
         );
+        _scheduleDae3DraftRefresh(newestCheckInId: newFirstId);
       }
     }
     if (mounted) setState(() {});
   }
 
-  /// Subscribes to new tourist registrations for this LGU.
+  void _scheduleDae3DraftRefresh({String? newestCheckInId}) {
+    final mid = _storedMunicipalityId;
+    if (mid == null || mid.isEmpty) return;
+    final scopeName = (_municipalityName ?? mid).trim();
+    final scopeLabel = scopeName.toLowerCase().contains('misamis occidental')
+        ? scopeName
+        : '$scopeName, Misamis Occidental';
+    final slug = normalizeMunicipalityId(mid);
+    Dae3AutoReportService.instance.scheduleRefresh(
+      municipalityId: mid,
+      scopeLabel: scopeLabel,
+      scopeSlug: slug.isEmpty ? 'lgu' : slug,
+      localCheckIns: _realCheckIns,
+      tourists: _tourists,
+      newestCheckInId: newestCheckInId ?? _lastSeenCheckInId,
+      parseTimestamp: _parseCheckInTimestamp,
+    );
+  }
+
+  /// Subscribes to new tourist registrations for this LGU and refreshes the list.
   void _subscribeToTouristRegistrations(List<String> queryIds) {
     _touristRegistrationsSubscription?.cancel();
     _touristRegistrationStreamPrimed = false;
@@ -783,54 +1093,96 @@ class _LguDashboardState extends State<LguDashboard>
               .collection('tourists')
               .where('registrationMunicipalityId', whereIn: queryIds);
 
-    _touristRegistrationsSubscription = q
-        .limit(100)
-        .snapshots()
-        .listen((snapshot) {
-          if (!mounted) return;
-          // Ignore initial snapshot so existing records won't flood notifications.
-          if (!_touristRegistrationStreamPrimed) {
-            _touristRegistrationStreamPrimed = true;
-            return;
-          }
+    _touristRegistrationsSubscription = q.limit(250).snapshots().listen(
+      (snapshot) {
+        if (!mounted) return;
+        // Ignore initial snapshot so existing records won't flood notifications.
+        if (!_touristRegistrationStreamPrimed) {
+          _touristRegistrationStreamPrimed = true;
+          return;
+        }
 
-          final added = snapshot.docChanges
-              .where((c) => c.type == DocumentChangeType.added)
-              .toList();
-          for (final change in added) {
-            final data = change.doc.data() ?? <String, dynamic>{};
-            final firstName = (data['firstName'] ?? '').toString().trim();
-            final lastName = (data['lastName'] ?? '').toString().trim();
-            final fullName = '$firstName $lastName'.trim();
-            _pushNotification({
-              'title': 'New registration',
-              'message': fullName.isNotEmpty
-                  ? '$fullName registered'
-                  : 'A new tourist registered',
-              'time': 'Just now',
-            });
-          }
+        final added = snapshot.docChanges
+            .where((c) => c.type == DocumentChangeType.added)
+            .toList();
+        for (final change in added) {
+          final data = change.doc.data() ?? <String, dynamic>{};
+          final firstName = (data['firstName'] ?? '').toString().trim();
+          final lastName = (data['lastName'] ?? '').toString().trim();
+          final fullName = '$firstName $lastName'.trim();
+          _pushNotification({
+            'title': 'New registration',
+            'message': fullName.isNotEmpty
+                ? '$fullName registered'
+                : 'A new tourist registered',
+            'time': 'Just now',
+          });
+        }
 
-          if (added.isNotEmpty && mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  added.length == 1
-                      ? '1 new tourist registration'
-                      : '${added.length} new tourist registrations',
-                ),
-                backgroundColor: _primaryOrange,
-                behavior: SnackBarBehavior.floating,
+        if (added.isNotEmpty && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                added.length == 1
+                    ? '1 new tourist registration'
+                    : '${added.length} new tourist registrations',
               ),
-            );
-          }
-        }, onError: (Object e) {
-          if (_isFirestorePermissionDenied(e)) {
-            _onTouristFirestorePermissionDenied(e);
-          } else {
-            debugPrint('tourists registration stream error: $e');
-          }
-        });
+              backgroundColor: _primaryOrange,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+
+        // Keep Registered Tourists list in sync (same source as governor, LGU-scoped).
+        unawaited(_reloadMunicipalityRegisteredTourists(queryIds));
+      },
+      onError: (Object e) {
+        if (_isFirestorePermissionDenied(e)) {
+          _onTouristFirestorePermissionDenied(e);
+          return;
+        }
+        debugPrint('Tourism: tourist registrations stream: $e');
+      },
+    );
+  }
+
+  /// Reloads municipality-scoped registered tourists (registration + check-in visitors).
+  Future<void> _reloadMunicipalityRegisteredTourists(
+    List<String> queryIds,
+  ) async {
+    if (!mounted ||
+        queryIds.isEmpty ||
+        Firebase.apps.isEmpty ||
+        _touristFirestoreReadsBlocked) {
+      return;
+    }
+    final checkInUserIds = _checkIns
+        .map(
+          (c) =>
+              c['userId']?.toString().trim() ??
+              c['tourist_id']?.toString().trim(),
+        )
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    try {
+      final registered = await _loadRegisteredTouristsForMunicipality(
+        firestore: FirebaseFirestore.instance,
+        queryIds: queryIds,
+        checkInUserIds: checkInUserIds,
+      );
+      if (!mounted) return;
+      setState(() {
+        _tourists = _filterRealTourists(
+          _mergeTouristVisitsFromCheckIns(registered),
+        );
+        _totalTourists = _tourists.length;
+      });
+      _recomputeDashboardStats();
+      unawaited(_saveLguStatsCache());
+    } catch (e) {
+      debugPrint('Tourism: reload registered tourists: $e');
+    }
   }
 
   bool _isFirestorePermissionDenied(Object e) {
@@ -859,6 +1211,161 @@ class _LguDashboardState extends State<LguDashboard>
     _unreadNotifications++;
   }
 
+  String _crossLguEventSeenKey(String eventId) => eventId;
+
+  int get _eventsNavBadgeCount {
+    final myMun = (_storedMunicipalityId ?? '').trim();
+    if (myMun.isEmpty) return 0;
+    var n = 0;
+    for (final e in _lguEvents) {
+      if (!LguEventService.isVisibleToTourists(e)) continue;
+      if (LguEventService.matchesMunicipality(e, myMun)) continue;
+      final id = e['id']?.toString() ?? '';
+      if (id.isEmpty) continue;
+      if (!_seenCrossLguEventIds.contains(_crossLguEventSeenKey(id))) {
+        n++;
+      }
+    }
+    return n > 99 ? 99 : n;
+  }
+
+  Future<void> _loadSeenCrossLguEventIds(String municipalityId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final mun = municipalityId.trim().toLowerCase();
+    final key = 'lgu_cross_events_seen_$mun';
+    final seededKey = 'lgu_cross_events_seeded_$mun';
+    final stored = prefs.getStringList(key) ?? [];
+    _seenCrossLguEventIds
+      ..clear()
+      ..addAll(stored);
+    if (!(prefs.getBool(seededKey) ?? false)) {
+      // First run: don't badge historical province events.
+      for (final e in _lguEvents) {
+        if (!LguEventService.isVisibleToTourists(e)) continue;
+        if (LguEventService.matchesMunicipality(e, municipalityId)) continue;
+        final id = e['id']?.toString() ?? '';
+        if (id.isNotEmpty) {
+          _seenCrossLguEventIds.add(_crossLguEventSeenKey(id));
+        }
+      }
+      await prefs.setBool(seededKey, true);
+      await prefs.setStringList(key, _seenCrossLguEventIds.toList());
+    }
+  }
+
+  Future<void> _persistSeenCrossLguEventIds() async {
+    final mun = (_storedMunicipalityId ?? '').trim().toLowerCase();
+    if (mun.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      'lgu_cross_events_seen_$mun',
+      _seenCrossLguEventIds.toList(),
+    );
+  }
+
+  Future<void> _markAllEventDecisionsSeen() async {
+    final myMun = (_storedMunicipalityId ?? '').trim();
+    for (final e in _lguEvents) {
+      if (!LguEventService.isVisibleToTourists(e)) continue;
+      if (myMun.isNotEmpty &&
+          LguEventService.matchesMunicipality(e, myMun)) {
+        continue;
+      }
+      final id = e['id']?.toString() ?? '';
+      if (id.isNotEmpty) {
+        _seenCrossLguEventIds.add(_crossLguEventSeenKey(id));
+      }
+    }
+    await _persistSeenCrossLguEventIds();
+    if (mounted) setState(() {});
+  }
+
+  void _startLguEventsListener(String municipalityId) {
+    if (Firebase.apps.isEmpty || municipalityId.trim().isEmpty) return;
+    _lguEventsSubscription?.cancel();
+    _lguEventsStreamPrimed = false;
+    _knownPublishedEventIds = {};
+
+    _lguEventsSubscription = FirebaseFirestore.instance
+        .collection(LguEventService.collection)
+        .snapshots()
+        .listen(
+      (snapshot) async {
+        if (!mounted) return;
+        final list = snapshot.docs
+            .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
+            .toList();
+
+        final previousPublished = Set<String>.from(_knownPublishedEventIds);
+        final wasPrimed = _lguEventsStreamPrimed;
+
+        final publishedIds = <String>{
+          for (final e in list)
+            if (LguEventService.isVisibleToTourists(e) &&
+                (e['id']?.toString() ?? '').isNotEmpty)
+              e['id'].toString(),
+        };
+
+        setState(() {
+          _lguEvents = list;
+          _knownPublishedEventIds = publishedIds;
+        });
+
+        if (!wasPrimed) {
+          _lguEventsStreamPrimed = true;
+          await _loadSeenCrossLguEventIds(municipalityId);
+          if (mounted) setState(() {});
+          return;
+        }
+
+        final newlyPublishedFromOthers = <Map<String, dynamic>>[];
+        for (final e in list) {
+          if (!LguEventService.isVisibleToTourists(e)) continue;
+          if (LguEventService.matchesMunicipality(e, municipalityId)) continue;
+          final id = e['id']?.toString() ?? '';
+          if (id.isEmpty) continue;
+          if (previousPublished.contains(id)) continue;
+          newlyPublishedFromOthers.add(e);
+        }
+
+        if (newlyPublishedFromOthers.isEmpty) return;
+
+        if (mounted) setState(() {});
+
+        final first = newlyPublishedFromOthers.first;
+        final from = LguEventService.sourceMunicipalityLabel(first);
+        final title = first['title']?.toString().trim() ?? 'event';
+        final count = newlyPublishedFromOthers.length;
+        final message = count == 1
+            ? '$from published "$title"'
+            : '$count new events from other LGUs';
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: _primaryOrange,
+            behavior: SnackBarBehavior.floating,
+            action: SnackBarAction(
+              label: 'View',
+              textColor: Colors.white,
+              onPressed: () {
+                if (!mounted) return;
+                setState(() {
+                  _selectedIndex = _eventsIndex;
+                  _eventsPanelTab = 0;
+                });
+              },
+            ),
+          ),
+        );
+      },
+      onError: (Object e) {
+        debugPrint('[LguDashboard] events stream: $e');
+      },
+    );
+  }
+
   String _formatTime(dynamic timestamp) {
     DateTime date;
     if (timestamp is Timestamp) {
@@ -878,10 +1385,6 @@ class _LguDashboardState extends State<LguDashboard>
     return '${diff.inDays} days ago';
   }
 
-  String _formatDate(DateTime date) {
-    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-  }
-
   /// Separate date / time (Governor portal parity).
   String _formatRegisteredDateOnlyDisplay(DateTime? dt) {
     if (dt == null) return '?';
@@ -896,26 +1399,6 @@ class _LguDashboardState extends State<LguDashboard>
     final period = h24 >= 12 ? 'PM' : 'AM';
     final h12 = h24 == 0 ? 12 : (h24 > 12 ? h24 - 12 : h24);
     return '$h12:$min:$sec $period';
-  }
-
-  /// Short display format for date picker trigger, e.g. "Mon, Mar 2"
-  String _formatDateDisplay(DateTime date) {
-    const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
-    return '${weekdays[date.weekday % 7]}, ${months[date.month - 1]} ${date.day}';
   }
 
   /// Parse [timestamp] from a `qr_checkins` or legacy check-in map.
@@ -1049,29 +1532,100 @@ class _LguDashboardState extends State<LguDashboard>
     }
     if (missing.isEmpty) return;
 
-    final firestore = FirebaseFirestore.instance;
-    final extraTourists = <Map<String, dynamic>>[];
-    for (final uid in missing) {
-      try {
-        final snap = await firestore.collection('tourists').doc(uid).get();
-        if (!snap.exists || snap.data() == null) continue;
-        final row = <String, dynamic>{'id': snap.id, ...snap.data()!};
-        _touristProfileByUid[uid] = row;
-        extraTourists.add(row);
-      } catch (e) {
-        if (_isFirestorePermissionDenied(e)) {
-          _onTouristFirestorePermissionDenied(e);
-          break;
-        }
-      }
-    }
+    final checkInUserIds = _checkIns
+        .map(
+          (c) =>
+              c['userId']?.toString().trim() ??
+              c['tourist_id']?.toString().trim() ??
+              '',
+        )
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    final queryIds = municipalityIdsForQuery(_storedMunicipalityId);
+    final extraTourists = await _fetchTouristDocsByIds(
+      FirebaseFirestore.instance,
+      missing,
+      queryIds: queryIds,
+      checkInUserIds: checkInUserIds,
+    );
     if (extraTourists.isNotEmpty) {
+      for (final row in extraTourists) {
+        final uid = row['id']?.toString().trim() ?? '';
+        if (uid.isNotEmpty) _touristProfileByUid[uid] = row;
+      }
       _tourists = _mergeTouristVisitsFromCheckIns([
         ..._tourists,
         ...extraTourists,
       ]);
       _totalTourists = _tourists.length;
     }
+  }
+
+  /// Batched `tourists` doc reads (avoids sequential N+1 gets).
+  Future<List<Map<String, dynamic>>> _fetchTouristDocsByIds(
+    FirebaseFirestore firestore,
+    Set<String> uids, {
+    required List<String> queryIds,
+    required Set<String> checkInUserIds,
+  }) async {
+    if (uids.isEmpty || _touristFirestoreReadsBlocked) return const [];
+    final out = <Map<String, dynamic>>[];
+    final idList = uids.toList(growable: false);
+    for (var i = 0; i < idList.length; i += _touristDocIdChunkSize) {
+      final end = math.min(i + _touristDocIdChunkSize, idList.length);
+      final chunk = idList.sublist(i, end);
+      try {
+        final snap = await firestore
+            .collection('tourists')
+            .where(FieldPath.documentId, whereIn: chunk)
+            .get()
+            .timeout(const Duration(seconds: 12));
+        for (final doc in snap.docs) {
+          if (!doc.exists || doc.data().isEmpty) continue;
+          final row = <String, dynamic>{'id': doc.id, ...doc.data()};
+          if (ProductionDataFilters.isDummyTourist(row)) continue;
+          if (RegistrationMunicipalityResolver.touristMatchesMunicipality(
+            tourist: row,
+            queryIds: queryIds,
+            checkInUserIds: checkInUserIds,
+          )) {
+            out.add(row);
+          }
+        }
+      } catch (e) {
+        if (_isFirestorePermissionDenied(e)) {
+          _onTouristFirestorePermissionDenied(e);
+          break;
+        }
+        // Fallback: per-doc gets for this chunk if whereIn is unsupported.
+        for (final uid in chunk) {
+          try {
+            final doc = await firestore
+                .collection('tourists')
+                .doc(uid)
+                .get()
+                .timeout(const Duration(seconds: 12));
+            if (!doc.exists || doc.data() == null) continue;
+            final row = <String, dynamic>{'id': doc.id, ...doc.data()!};
+            if (ProductionDataFilters.isDummyTourist(row)) continue;
+            if (RegistrationMunicipalityResolver.touristMatchesMunicipality(
+              tourist: row,
+              queryIds: queryIds,
+              checkInUserIds: checkInUserIds,
+            )) {
+              out.add(row);
+            }
+          } catch (e2) {
+            if (_isFirestorePermissionDenied(e2)) {
+              _onTouristFirestorePermissionDenied(e2);
+              return out;
+            }
+          }
+        }
+      }
+      if (_touristFirestoreReadsBlocked) break;
+    }
+    return out;
   }
 
   Map<String, dynamic> _enrichCheckInWithTouristProfile(
@@ -1156,13 +1710,15 @@ class _LguDashboardState extends State<LguDashboard>
 
   void _recomputeDashboardStats() {
     final today = DateTime.now();
-    _todayCheckIns = _filterRealCheckIns(_checkIns).where((c) {
-      final d = _parseCheckInTimestamp(c);
-      if (d == null) return false;
-      return d.year == today.year &&
-          d.month == today.month &&
-          d.day == today.day;
-    }).length;
+    _todayCheckIns = sumCheckInVisitors(
+      _filterRealCheckIns(_checkIns).where((c) {
+        final d = _parseCheckInTimestamp(c);
+        if (d == null) return false;
+        return d.year == today.year &&
+            d.month == today.month &&
+            d.day == today.day;
+      }),
+    );
     _mergeVisitorsFromCheckIns();
     _recentActivity = _filterRealCheckIns(_checkIns)
         .take(5)
@@ -1170,65 +1726,84 @@ class _LguDashboardState extends State<LguDashboard>
         .toList();
   }
 
+  Widget _buildVisitPrivacyAvatar({double radius = 18}) {
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: _primaryOrange.withValues(alpha: 0.12),
+      child: Icon(
+        Icons.person_outline_rounded,
+        color: _primaryOrange,
+        size: radius * 1.1,
+      ),
+    );
+  }
+
+  Widget _buildVisitTouristIdChip(String id, {double? maxWidth}) {
+    final text = id.trim().isEmpty ? 'â€”' : id;
+    final chip = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: _primaryOrange.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: _primaryOrange.withValues(alpha: 0.22)),
+      ),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          color: _primaryOrange,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          fontFamily: 'monospace',
+        ),
+      ),
+    );
+    if (maxWidth == null) return chip;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxWidth),
+      child: chip,
+    );
+  }
+
+  /// Privacy-safe display ID for a visit row (never name / email / Firebase UID).
+  String _displayTouristIdFromCheckIn(Map<String, dynamic> c) {
+    final profile = c['touristProfile'];
+    if (profile is Map<String, dynamic>) {
+      final fromProfile = TouristIdHelper.displayForTourist(profile);
+      if (fromProfile.isNotEmpty && !fromProfile.endsWith('PENDING')) {
+        return fromProfile;
+      }
+    }
+    final stored = c['touristId']?.toString().trim() ?? '';
+    if (TouristIdHelper.isFormattedTouristId(stored)) return stored;
+    if (stored.startsWith('ATMOS-') && stored.length > 6) return stored;
+    if (TouristIdHelper.looksLikeFirebaseUid(stored) || stored.isEmpty) {
+      return TouristIdHelper.displayForTourist({
+        'touristId': '',
+        'province': c['touristOrigin']?.toString() ??
+            c['province']?.toString() ??
+            '',
+      });
+    }
+    return stored;
+  }
+
   Widget _buildCheckInProfileAvatar(
     Map<String, dynamic> c, {
     double radius = 20,
   }) {
-    final profile = c['touristProfile'] as Map<String, dynamic>?;
-    final row = profile ?? c;
-    final avatar = _touristAvatarImage(row);
-    final name = c['touristName']?.toString() ?? '?';
-    final initial =
-        name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : '?';
-    return CircleAvatar(
-      radius: radius,
-      backgroundColor: _primaryOrange.withOpacity(0.15),
-      backgroundImage: avatar,
-      child: avatar == null
-          ? Text(
-              initial,
-              style: TextStyle(
-                color: _primaryOrange,
-                fontWeight: FontWeight.bold,
-                fontSize: radius * 0.85,
-              ),
-            )
-          : null,
-    );
+    // Tourist Visits: privacy avatar only (same as Governor â€” no photo / initials).
+    return _buildVisitPrivacyAvatar(radius: radius);
   }
 
   Widget _buildCheckInTouristCell(Map<String, dynamic> c) {
-    final name = c['touristName']?.toString() ?? 'Tourist';
-    final email = c['touristEmail']?.toString() ?? '';
+    final id = _displayTouristIdFromCheckIn(c);
     return Row(
       children: [
-        _buildCheckInProfileAvatar(c),
+        _buildVisitPrivacyAvatar(radius: 18),
         const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                name,
-                style: const TextStyle(
-                  color: _textDark,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              if (email.isNotEmpty)
-                Text(
-                  email,
-                  style: TextStyle(color: _textMuted, fontSize: 11),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-            ],
-          ),
-        ),
+        Expanded(child: _buildVisitTouristIdChip(id, maxWidth: 220)),
       ],
     );
   }
@@ -1238,11 +1813,13 @@ class _LguDashboardState extends State<LguDashboard>
     final spotLabel = (location != null && location.isNotEmpty)
         ? location
         : (c['spotId']?.toString() ?? '').replaceAll('_', ' ');
+    final id = _displayTouristIdFromCheckIn(c);
     return <String, dynamic>{
       'icon': Icons.qr_code_scanner_rounded,
       'color': _primaryOrange,
-      'title': c['touristName'] ?? c['userId']?.toString() ?? 'Tourist',
-      'description': 'Checked in at ${spotLabel.isNotEmpty ? spotLabel : 'Unknown spot'}',
+      'title': id,
+      'description':
+          'Checked in at ${spotLabel.isNotEmpty ? spotLabel : 'Unknown spot'}',
       'time': _formatTime(c['timestamp']),
     };
   }
@@ -1387,37 +1964,6 @@ class _LguDashboardState extends State<LguDashboard>
       ..sort((a, b) => (b['visits'] as int).compareTo(a['visits'] as int));
   }
 
-  /// Check-ins with [timestamp] in [start]?[end] inclusive (by local calendar day).
-  List<Map<String, dynamic>> _checkInsInDateRange(
-    DateTime start,
-    DateTime end,
-  ) {
-    final startNorm = DateTime(start.year, start.month, start.day);
-    final endNorm = DateTime(end.year, end.month, end.day, 23, 59, 59, 999);
-    return _realCheckIns.where((c) {
-      final t = _parseCheckInTimestamp(c);
-      if (t == null) return false;
-      return !t.isBefore(startNorm) && !t.isAfter(endNorm);
-    }).toList();
-  }
-
-  String _buildCheckInsCsv(List<Map<String, dynamic>> rows) {
-    final buf = StringBuffer(
-      'Timestamp,Spot ID,Spot Name,User ID,Municipality,Municipality ID\n',
-    );
-    for (final c in rows) {
-      final t = _parseCheckInTimestamp(c);
-      final when = t != null ? t.toIso8601String() : '';
-      final spotId = c['spotId']?.toString() ?? c['spot_id']?.toString() ?? '';
-      final spotName = (c['spot_name']?.toString() ?? '').replaceAll('"', '""');
-      final uid = c['userId']?.toString() ?? c['tourist_id']?.toString() ?? '';
-      final mun = (c['municipality']?.toString() ?? '').replaceAll('"', '""');
-      final mid = c['municipalityId']?.toString() ?? '';
-      buf.write('"$when","$spotId","$spotName","$uid","$mun","$mid"\n');
-    }
-    return buf.toString();
-  }
-
   void _toggleSidebar() {
     setState(() => _isSidebarExpanded = !_isSidebarExpanded);
   }
@@ -1432,7 +1978,14 @@ class _LguDashboardState extends State<LguDashboard>
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (_isSidebarExpanded) _buildSidebar(),
-                Expanded(child: _buildMainContent()),
+                // Cream underlay — header orange still joins the sidebar; never flash
+                // a full-viewport solid orange behind tab content.
+                Expanded(
+                  child: ColoredBox(
+                    color: _darkBg,
+                    child: _buildMainContent(),
+                  ),
+                ),
               ],
             ),
       bottomNavigationBar: _isMobile ? _buildMobileBottomNav() : null,
@@ -1493,8 +2046,11 @@ class _LguDashboardState extends State<LguDashboard>
   Widget _buildMobileBody() {
     final screenW = MediaQuery.of(context).size.width;
     final drawerWidth = (screenW * 0.8).clamp(240.0, 300.0);
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
 
-    return Stack(
+    return ColoredBox(
+      color: _darkBg,
+      child: Stack(
       children: [
         Positioned.fill(child: _buildMainContent()),
         if (_isSidebarExpanded)
@@ -1516,30 +2072,36 @@ class _LguDashboardState extends State<LguDashboard>
             color: Colors.transparent,
             elevation: 12,
             child: Container(
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0xFFEA580C), Color(0xFFC2410C)],
-                ),
-                border: Border(
-                  right: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
-                ),
-              ),
+              decoration: _sidebarGradientDecoration(),
               child: SafeArea(
                 top: false,
                 bottom: false,
                 child: Column(
                   children: [
-                    _buildLogoRow(expanded: true),
-                    _buildSidebarProfileStrip(),
+                    _buildSidebarProfileStrip(showCollapseButton: true),
                     _buildSidebarNavScroll(expanded: true),
                     const SizedBox(height: 12),
+                    _buildLogoutButton(expanded: true),
+                    SizedBox(height: 16 + bottomInset),
                   ],
                 ),
               ),
             ),
           ),
+        ),
+      ],
+      ),
+    );
+  }
+
+  BoxDecoration _sidebarGradientDecoration() {
+    return BoxDecoration(
+      gradient: _lguBrandGradient,
+      boxShadow: [
+        BoxShadow(
+          color: _primaryOrange.withValues(alpha: 0.18),
+          blurRadius: 18,
+          offset: const Offset(2, 0),
         ),
       ],
     );
@@ -1547,223 +2109,115 @@ class _LguDashboardState extends State<LguDashboard>
 
   Widget _buildSidebar() {
     final expanded = _isSidebarExpanded;
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
     return AnimatedContainer(
       duration: const Duration(milliseconds: 250),
-      width: expanded ? 260 : 80,
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFFEA580C), Color(0xFFC2410C)],
-        ),
-        border: Border(
-          right: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
-        ),
-      ),
+      width: expanded ? 272 : 84,
+      decoration: _sidebarGradientDecoration(),
       child: Column(
         children: [
-          _buildLogoRow(expanded: expanded),
-          if (expanded) _buildSidebarProfileStrip(),
+          if (expanded)
+            _buildSidebarProfileStrip(showCollapseButton: true)
+          else
+            _buildSidebarCollapsedToggle(),
           _buildSidebarNavScroll(expanded: expanded),
           const SizedBox(height: 12),
+          _buildLogoutButton(expanded: expanded),
+          SizedBox(height: 16 + bottomInset),
         ],
       ),
     );
   }
 
-  Widget _buildLogoRow({required bool expanded}) {
+  Widget _buildSidebarCollapsedToggle() {
     return Padding(
-      padding: EdgeInsets.fromLTRB(expanded ? 16 : 12, 10, expanded ? 16 : 12, 6),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
       child: Row(
-        children: [
-          Expanded(child: _buildLogo(expanded: expanded)),
-          if (expanded)
-            Tooltip(
-              message: 'Collapse sidebar',
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: _toggleSidebar,
-                  borderRadius: BorderRadius.circular(14),
-                  child: Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Icon(
-                      Icons.close_rounded,
-                      color: Colors.white,
-                      size: 20,
-                    ),
-                  ),
-                ),
-              ),
-            )
-          else
-            Tooltip(
-              message: 'Expand sidebar',
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: _toggleSidebar,
-                  borderRadius: BorderRadius.circular(14),
-                  child: Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Icon(
-                      Icons.menu_rounded,
-                      color: Colors.white,
-                      size: 20,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        ],
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [_buildSidebarToggleButton(expanded: false)],
       ),
     );
   }
 
-  Widget _buildLogo({required bool expanded}) {
-    const logoSize = 40.0;
-    const logoSizeCollapsed = 32.0;
-
-    if (!expanded) {
-      return Center(
-        child: Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.12),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: TransparentLogo(
-            width: logoSizeCollapsed,
-            height: logoSizeCollapsed,
-            fit: BoxFit.cover,
-            alignment: Alignment.topCenter,
-            errorIcon: Icons.travel_explore,
-            errorIconSize: 20,
-            errorIconColor: Colors.white,
+  Widget _buildSidebarToggleButton({required bool expanded}) {
+    return Tooltip(
+      message: expanded ? 'Collapse sidebar' : 'Expand sidebar',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _toggleSidebar,
+          borderRadius: BorderRadius.circular(14),
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Icon(
+              expanded ? Icons.close_rounded : Icons.menu_rounded,
+              color: Colors.white,
+              size: 20,
+            ),
           ),
         ),
-      );
+      ),
+    );
+  }
+
+  /// Profile row â€” logo, office name, and optional collapse control on one line.
+  Widget _buildSidebarProfileStrip({bool showCollapseButton = false}) {
+    final city = _municipalityName?.trim() ?? '';
+    final rawName = _profileName.trim();
+    final displayName = rawName.isNotEmpty
+        ? rawName
+        : (city.isNotEmpty ? city : 'LGU Office');
+    // Avoid repeating the city/name in the subtitle when they match.
+    final String subtitle;
+    if (city.isNotEmpty &&
+        displayName.toLowerCase() != city.toLowerCase()) {
+      subtitle = city;
+    } else if (city.isNotEmpty) {
+      subtitle = 'LGU Tourism Office';
+    } else {
+      subtitle = 'Misamis Occidental';
     }
 
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.12),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: TransparentLogo(
-            width: logoSize,
-            height: logoSize,
-            fit: BoxFit.cover,
-            alignment: Alignment.topCenter,
-            errorIcon: Icons.travel_explore,
-            errorIconSize: 24,
-            errorIconColor: Colors.white,
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'ATMOS-TRS',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 17,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.3,
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
-              Text(
-                'LGU Office',
-                style: TextStyle(
-                  color: Colors.white.withOpacity(0.82),
-                  fontSize: 12,
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// Profile row under logo ? flat strip, no nested card box.
-  Widget _buildSidebarProfileStrip() {
-    final city = _municipalityName?.trim();
-    final displayName = _profileName.isNotEmpty
-        ? _profileName
-        : (city != null && city.isNotEmpty ? city : 'LGU Office');
-    final subtitle = city != null && city.isNotEmpty
-        ? 'LGU Office - $city'
-        : 'Misamis Occidental';
-
     return Padding(
-      padding: EdgeInsets.fromLTRB(16, _isMobile ? 4 : 8, 16, _isMobile ? 2 : 4),
-      child: Column(
+      padding: EdgeInsets.fromLTRB(16, _isMobile ? 10 : 14, 8, _isMobile ? 2 : 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Divider(color: Colors.white.withOpacity(0.22), height: 1),
-          SizedBox(height: _isMobile ? 10 : 16),
-          Row(
-            children: [
-              _buildSidebarAvatar(size: _isMobile ? 36 : 40),
-              SizedBox(width: _isMobile ? 8 : 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      displayName,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: _isMobile ? 13 : 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    SizedBox(height: _isMobile ? 1 : 2),
-                    Text(
-                      subtitle,
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(0.78),
-                        fontSize: _isMobile ? 10 : 11,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(width: _isMobile ? 4 : 6),
-              Container(
-                padding: EdgeInsets.symmetric(
-                  horizontal: _isMobile ? 7 : 8,
-                  vertical: _isMobile ? 3 : 4,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: Colors.white.withOpacity(0.45)),
-                ),
-                child: Text(
-                  'LGU Staff',
+          _buildSidebarBrandLogo(size: _isMobile ? 36 : 40),
+          SizedBox(width: _isMobile ? 8 : 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  displayName,
                   style: TextStyle(
                     color: Colors.white,
-                    fontSize: _isMobile ? 9.5 : 10,
-                    fontWeight: FontWeight.w600,
+                    fontSize: _isMobile ? 13 : 14,
+                    fontWeight: FontWeight.w700,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
-            ],
+                SizedBox(height: _isMobile ? 1 : 2),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.82),
+                    fontSize: _isMobile ? 10 : 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
           ),
+          if (showCollapseButton) ...[
+            SizedBox(width: _isMobile ? 4 : 6),
+            _buildSidebarToggleButton(expanded: true),
+          ],
         ],
       ),
     );
@@ -1800,31 +2254,13 @@ class _LguDashboardState extends State<LguDashboard>
       byId[doc.id] = row;
     }
 
+    final queryFutures = <Future<void>>[];
     for (final mid in queryIds) {
-      try {
-        final snap = await firestore
-            .collection('tourists')
-            .where('registrationMunicipalityId', isEqualTo: mid)
-            .limit(250)
-            .get()
-            .timeout(const Duration(seconds: 20));
-        for (final doc in snap.docs) {
-          mergeDoc(doc);
-        }
-      } catch (e) {
-        if (_isFirestorePermissionDenied(e)) {
-          _onTouristFirestorePermissionDenied(e);
-          return byId.values.toList();
-        }
-        debugPrint('Tourism: tourists registrationMunicipalityId=$mid: $e');
-      }
-
-      // Real registrations often store city ("Oroquieta City") without registrationMunicipalityId.
-      for (final cityName in municipalityCityNamesForQuery(mid)) {
+      queryFutures.add(() async {
         try {
           final snap = await firestore
               .collection('tourists')
-              .where('city', isEqualTo: cityName)
+              .where('registrationMunicipalityId', isEqualTo: mid)
               .limit(250)
               .get()
               .timeout(const Duration(seconds: 20));
@@ -1834,52 +2270,64 @@ class _LguDashboardState extends State<LguDashboard>
         } catch (e) {
           if (_isFirestorePermissionDenied(e)) {
             _onTouristFirestorePermissionDenied(e);
-            return byId.values.toList();
+            return;
           }
-          debugPrint('Tourism: tourists city=$cityName: $e');
+          debugPrint('Tourism: tourists registrationMunicipalityId=$mid: $e');
         }
+      }());
+
+      // Real registrations often store city ("Oroquieta City") without registrationMunicipalityId.
+      for (final cityName in municipalityCityNamesForQuery(mid)) {
+        queryFutures.add(() async {
+          try {
+            final snap = await firestore
+                .collection('tourists')
+                .where('city', isEqualTo: cityName)
+                .limit(250)
+                .get()
+                .timeout(const Duration(seconds: 20));
+            for (final doc in snap.docs) {
+              mergeDoc(doc);
+            }
+          } catch (e) {
+            if (_isFirestorePermissionDenied(e)) {
+              _onTouristFirestorePermissionDenied(e);
+              return;
+            }
+            debugPrint('Tourism: tourists city=$cityName: $e');
+          }
+        }());
       }
     }
+    await Future.wait(queryFutures);
 
     if (_touristFirestoreReadsBlocked) return byId.values.toList();
 
-    for (final uid in checkInUserIds) {
-      if (byId.containsKey(uid)) continue;
-      try {
-        final doc = await firestore
-            .collection('tourists')
-            .doc(uid)
-            .get()
-            .timeout(const Duration(seconds: 12));
-        if (!doc.exists || doc.data() == null) continue;
-        final row = <String, dynamic>{'id': doc.id, ...doc.data()!};
-        if (ProductionDataFilters.isDummyTourist(row)) continue;
-        if (RegistrationMunicipalityResolver.touristMatchesMunicipality(
-          tourist: row,
-          queryIds: queryIds,
-          checkInUserIds: checkInUserIds,
-        )) {
-          byId[uid] = row;
-        }
-      } catch (e) {
-        if (_isFirestorePermissionDenied(e)) {
-          _onTouristFirestorePermissionDenied(e);
-          break;
-        }
+    final missingUids =
+        checkInUserIds.where((uid) => !byId.containsKey(uid)).toSet();
+    if (missingUids.isNotEmpty) {
+      final extra = await _fetchTouristDocsByIds(
+        firestore,
+        missingUids,
+        queryIds: queryIds,
+        checkInUserIds: checkInUserIds,
+      );
+      for (final row in extra) {
+        final id = row['id']?.toString() ?? '';
+        if (id.isNotEmpty) byId[id] = row;
       }
     }
 
     return byId.values.toList();
   }
 
-  /// Sidebar + drawer: scrollable nav; Settings is header icon only (not listed here).
+  /// Sidebar + drawer: scrollable nav including Settings at the bottom.
   Widget _buildSidebarNavScroll({required bool expanded}) {
-    final bottomInset = MediaQuery.paddingOf(context).bottom;
     return Expanded(
       child: SingleChildScrollView(
         padding: EdgeInsets.only(
           top: _isMobile ? 10 : 20,
-          bottom: (_isMobile ? 10 : 20) + bottomInset,
+          bottom: 4,
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1900,7 +2348,12 @@ class _LguDashboardState extends State<LguDashboard>
                     ),
                   SizedBox(height: _isMobile ? 2 : 4),
                   _buildTourismNavItem(
-                    index: _reportsIndex,
+                    index: _eventsIndex,
+                    expanded: expanded,
+                  ),
+                  SizedBox(height: _isMobile ? 4 : 6),
+                  _buildTourismNavItem(
+                    index: _settingsIndex,
                     expanded: expanded,
                   ),
                 ],
@@ -1915,19 +2368,21 @@ class _LguDashboardState extends State<LguDashboard>
   Widget _buildTourismNavItem({
     required int index,
     required bool expanded,
-    double bottomMargin = 6,
+    double bottomMargin = 8,
   }) {
     final item = _navItems[index];
     final isSelected = _selectedIndex == index;
-    final iconSize = _isMobile ? 20.0 : 22.0;
+    final iconSize = _isMobile ? 22.0 : 24.0;
     final labelSize = _isMobile ? 13.0 : 14.0;
     final horizontalPadding = _isMobile
-        ? (expanded ? 10.0 : 9.0)
-        : (expanded ? 12.0 : 10.0);
+        ? (expanded ? 12.0 : 10.0)
+        : (expanded ? 14.0 : 12.0);
     final verticalPadding = _isMobile
-        ? (expanded ? 9.0 : 10.0)
-        : (expanded ? 11.0 : 12.0);
-    return Container(
+        ? (expanded ? 11.0 : 12.0)
+        : (expanded ? 13.0 : 14.0);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOutCubic,
       margin: EdgeInsets.only(bottom: bottomMargin),
       child: Tooltip(
         message: expanded ? '' : item.label,
@@ -1940,31 +2395,33 @@ class _LguDashboardState extends State<LguDashboard>
                 _toggleSidebar();
               }
             },
-            borderRadius: BorderRadius.circular(12),
-            hoverColor: Colors.white.withOpacity(0.08),
-            splashColor: Colors.white.withOpacity(0.12),
-            child: Container(
+            borderRadius: BorderRadius.circular(16),
+            hoverColor: Colors.white.withValues(alpha: 0.12),
+            splashColor: Colors.white.withValues(alpha: 0.16),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOutCubic,
               padding: EdgeInsets.symmetric(
                 horizontal: horizontalPadding,
                 vertical: verticalPadding,
               ),
-              constraints: const BoxConstraints(minHeight: 44),
+              constraints: const BoxConstraints(minHeight: 48),
               decoration: BoxDecoration(
                 color: isSelected
-                    ? Colors.white
-                    : Colors.white.withOpacity(0.03),
-                borderRadius: BorderRadius.circular(12),
+                    ? Colors.white.withValues(alpha: 0.92)
+                    : Colors.white.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(16),
                 border: Border.all(
                   color: isSelected
-                      ? Colors.transparent
-                      : Colors.white.withValues(alpha: 0.1),
+                      ? Colors.white.withValues(alpha: 0.95)
+                      : Colors.white.withValues(alpha: 0.14),
                 ),
                 boxShadow: isSelected
                     ? [
                         BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.15),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
+                          color: Colors.black.withValues(alpha: 0.14),
+                          blurRadius: 14,
+                          offset: const Offset(0, 6),
                         ),
                       ]
                     : null,
@@ -1978,18 +2435,18 @@ class _LguDashboardState extends State<LguDashboard>
                     item.icon,
                     color: isSelected
                         ? _primaryOrange
-                        : Colors.white.withOpacity(0.75),
+                        : Colors.white.withValues(alpha: 0.88),
                     size: iconSize,
                   ),
                   if (expanded) ...[
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 14),
                     Expanded(
                       child: Text(
                         item.label,
-                        style: TextStyle(
+                        style: GoogleFonts.poppins(
                           color: isSelected
                               ? _primaryOrange
-                              : Colors.white.withOpacity(0.88),
+                              : Colors.white.withValues(alpha: 0.94),
                           fontSize: labelSize,
                           fontWeight: isSelected
                               ? FontWeight.w600
@@ -2027,55 +2484,143 @@ class _LguDashboardState extends State<LguDashboard>
       ),
     );
     if (confirmed != true) return;
+    UserDirectoryService.clearStaffAccessCache();
     await SessionStorage.clearSession();
+    AuthConfig.currentUserUid = null;
+    try {
+      await FirebaseAuth.instance.signOut();
+    } catch (_) {}
     if (!mounted) return;
-    Navigator.pushReplacementNamed(context, '/login');
+    navigateAfterLogout(context);
+  }
+
+  Widget _buildLogoutButton({required bool expanded}) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(expanded ? 16 : 10, 0, expanded ? 16 : 10, 4),
+      child: Tooltip(
+        message: expanded ? '' : 'Logout',
+        child: Material(
+          color: Colors.transparent,
+          elevation: 10,
+          shadowColor: Colors.black.withValues(alpha: 0.28),
+          borderRadius: BorderRadius.circular(18),
+          child: InkWell(
+            onTap: _logout,
+            borderRadius: BorderRadius.circular(18),
+            child: Ink(
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color(0xFFFFF7ED),
+                    Color(0xFFFFEDD5),
+                    Color(0xFFFDBA74),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.7),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFFEA580C).withValues(alpha: 0.28),
+                    blurRadius: 16,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: expanded ? 16 : 12,
+                  vertical: expanded ? 14 : 12,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.logout_rounded,
+                      size: expanded ? 20 : 22,
+                      color: const Color(0xFFC2410C),
+                    ),
+                    if (expanded) ...[
+                      const SizedBox(width: 10),
+                      Text(
+                        'Logout',
+                        style: GoogleFonts.poppins(
+                          color: const Color(0xFF9A3412),
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildMainContent() {
-    if (_isLoading) {
-      return DashboardContentSkeleton(accent: _primaryOrange);
-    }
-
     if (_errorMessage != null) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline, color: Colors.redAccent, size: 48),
-            const SizedBox(height: 16),
-            Text(_errorMessage!, style: const TextStyle(color: _textMuted)),
-            const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _loadData,
-              style: ElevatedButton.styleFrom(backgroundColor: _primaryOrange),
-              child: const Text('Retry'),
-            ),
-          ],
+      return ColoredBox(
+        color: _darkBg,
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, color: Colors.redAccent, size: 48),
+              const SizedBox(height: 16),
+              Text(_errorMessage!, style: const TextStyle(color: _textMuted)),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _loadData,
+                style: ElevatedButton.styleFrom(backgroundColor: _primaryOrange),
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
         ),
       );
     }
 
-    switch (_selectedIndex) {
-      case 0:
-        return _buildDashboardContent();
-      case 1:
-        return _buildCheckInsContent();
-      case 2:
-        return _buildTouristSpotsContent();
-      case _spotQRCodesIndex:
-        return _buildSpotQRCodesContent();
-      case 4:
-        return _buildTouristsContent();
-      case _analyticsIndex:
-        return _buildAnalyticsContent();
-      case _reportsIndex:
-        return _buildReportsContent();
-      case _settingsIndex:
-        return _buildSettingsContent();
-      default:
-        return _buildDashboardContent();
+    if (_isBootstrapping && !_hasCachedStats) {
+      return ColoredBox(
+        color: _darkBg,
+        child: DashboardContentSkeleton(accent: _primaryOrange),
+      );
     }
+
+    // Keep visited tabs alive so Visits ↔ Spots ↔ Events switches instantly
+    // without tearing down state or re-fetching on every tap.
+    return IndexedStack(
+      index: _selectedIndex.clamp(0, _navItems.length - 1),
+      sizing: StackFit.expand,
+      children: [
+        for (var i = 0; i < _navItems.length; i++)
+          _LguLazyKeepAliveTab(
+            active: _selectedIndex == i,
+            builder: () => _buildTabPage(i),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildTabPage(int index) {
+    return switch (index) {
+      0 => _buildDashboardContent(),
+      1 => _buildCheckInsContent(),
+      2 => _buildTouristSpotsContent(),
+      _spotQRCodesIndex => _buildSpotQRCodesContent(),
+      4 => _buildTouristsContent(),
+      _analyticsIndex => _buildAnalyticsContent(),
+      _eventsIndex => _buildEventsContent(),
+      _settingsIndex => _buildSettingsContent(),
+      _ => _buildDashboardContent(),
+    };
   }
 
   Widget _buildFramedContentShell({
@@ -2111,7 +2656,6 @@ class _LguDashboardState extends State<LguDashboard>
         color: Colors.white,
         borderRadius: frameRadius,
         border: Border(
-          left: BorderSide(color: _panelBorder),
           right: BorderSide(color: _panelBorder),
           bottom: BorderSide(color: _panelBorder),
         ),
@@ -2150,61 +2694,399 @@ class _LguDashboardState extends State<LguDashboard>
 
   // ==================== DASHBOARD SECTION ====================
   Widget _buildDashboardContent() {
-    return RefreshIndicator(
-      onRefresh: _loadData,
-      color: _primaryOrange,
-      child: _buildFramedContentShell(
-        title: 'Dashboard',
-        subtitle: _municipalityName != null
-            ? '$_municipalityName - LGU Office'
-            : 'LGU Office Management Panel',
-        preBody: _showAllDataBanner
-            ? Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
+    final cityLabel = _dashboardCityDisplayName;
+
+    return ColoredBox(
+      color: _darkBg,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildPremiumDashboardTopBar(cityLabel: cityLabel),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _loadData,
+              color: _primaryOrange,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: EdgeInsets.fromLTRB(
+                  _isMobile ? 16 : 24,
+                  16,
+                  _isMobile ? 16 : 24,
+                  32,
                 ),
-                color: _accentOrange.withOpacity(0.2),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Icon(Icons.info_outline, color: _primaryOrange, size: 20),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Showing all data. Use a municipality-specific account (e.g. tourism.oroquieta@misocc.gov.ph) to see only your municipality\'s check-ins and spots.',
-                        style: TextStyle(fontSize: 13, color: _textDark),
-                      ),
+                    if (_showAllDataBanner) ...[
+                      _buildDashboardAllDataBanner(),
+                      const SizedBox(height: 16),
+                    ],
+                    _buildDashboardHeroBanner(cityLabel: cityLabel),
+                    const SizedBox(height: 20),
+                    _buildQuickStats(),
+                    const SizedBox(height: 24),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final showRightRail = constraints.maxWidth >= 1100;
+                        final touristsBlock =
+                            (_isLoadingDetails && _tourists.isEmpty)
+                            ? const ShimmerScope(
+                                child: SkeletonListTiles(count: 3),
+                              )
+                            : DashboardFadeIn(
+                                child: _buildDashboardRecentTourists(),
+                              );
+
+                        if (!showRightRail) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              touristsBlock,
+                              const SizedBox(height: 24),
+                              _buildDashboardRightRail(),
+                              const SizedBox(height: 24),
+                              _buildSpotQRCodesDashboardCard(),
+                              const SizedBox(height: 24),
+                              if (_isLoadingDetails &&
+                                  _recentActivity.isEmpty)
+                                const ShimmerScope(
+                                  child: SkeletonListTiles(count: 3),
+                                )
+                              else
+                                DashboardFadeIn(
+                                  child: _buildRecentActivity(),
+                                ),
+                            ],
+                          );
+                        }
+
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(flex: 7, child: touristsBlock),
+                                const SizedBox(width: 24),
+                                Expanded(
+                                  flex: 3,
+                                  child: _buildDashboardRightRail(),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 24),
+                            _buildSpotQRCodesDashboardCard(),
+                            const SizedBox(height: 24),
+                            if (_isLoadingDetails && _recentActivity.isEmpty)
+                              const ShimmerScope(
+                                child: SkeletonListTiles(count: 3),
+                              )
+                            else
+                              DashboardFadeIn(child: _buildRecentActivity()),
+                          ],
+                        );
+                      },
                     ),
                   ],
                 ),
-              )
-            : null,
-        body: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.all(_isMobile ? 14 : 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDashboardAllDataBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: _tintOrange,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _primaryOrange.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.info_outline, color: _primaryOrange, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Showing all data. Use a municipality-specific account (e.g. tourism.oroquieta@misocc.gov.ph) to see only your municipality\'s check-ins and spots.',
+              style: GoogleFonts.inter(fontSize: 13, color: _textDark),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPremiumDashboardTopBar({required String cityLabel}) {
+    final notifBadge = _unreadNotifications + _eventsNavBadgeCount;
+    const onHeader = Colors.white;
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: _isMobile ? 14 : 20,
+        vertical: _isMobile ? 12 : 14,
+      ),
+      decoration: BoxDecoration(
+        gradient: _lguBrandGradient,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.12),
+            blurRadius: 14,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          if (!_isSidebarExpanded && !_isMobile)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: IconButton(
+                onPressed: _toggleSidebar,
+                icon: const Icon(Icons.menu_rounded, color: onHeader),
+                tooltip: 'Open sidebar',
+              ),
+            ),
+          if (_isMobile)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: IconButton(
+                onPressed: _toggleSidebar,
+                icon: const Icon(Icons.menu_rounded, color: onHeader),
+                tooltip: 'Menu',
+              ),
+            ),
+          Expanded(
+            flex: _isMobile ? 3 : 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Dashboard',
+                  style: GoogleFonts.inter(
+                    color: onHeader,
+                    fontSize: _isMobile ? 18 : 21,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.2,
+                    height: 1.1,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$cityLabel â€” live registrations, visits, and spots',
+                  style: GoogleFonts.inter(
+                    color: onHeader.withValues(alpha: 0.9),
+                    fontSize: _isMobile ? 11.5 : 13,
+                    fontWeight: FontWeight.w500,
+                    height: 1.3,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          if (!_isMobile) ...[
+            const SizedBox(width: 16),
+            Expanded(
+              flex: 3,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.95),
+                  borderRadius: BorderRadius.circular(999),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.08),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: TextField(
+                  controller: _dashboardSearchController,
+                  onSubmitted: (q) {
+                    final query = q.trim();
+                    if (query.isEmpty) return;
+                    _touristsSearchController.text = query;
+                    setState(() => _selectedIndex = 4);
+                  },
+                  style: GoogleFonts.inter(fontSize: 14, color: _textDark),
+                  decoration: InputDecoration(
+                    hintText: 'Search tourists, spots, or reports...',
+                    hintStyle: GoogleFonts.inter(
+                      color: _textMuted,
+                      fontSize: 13,
+                    ),
+                    prefixIcon: const Icon(
+                      Icons.search_rounded,
+                      color: _textMuted,
+                      size: 22,
+                    ),
+                    filled: true,
+                    fillColor: Colors.white,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 14,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(999),
+                      borderSide: BorderSide.none,
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(999),
+                      borderSide: BorderSide.none,
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(999),
+                      borderSide: const BorderSide(
+                        color: Colors.white,
+                        width: 1.5,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            _buildHeaderAction(
+              Icons.notifications_outlined,
+              badge: notifBadge > 0 ? '$notifBadge' : null,
+              onTap: _showNotificationsDialog,
+              onColoredHeader: true,
+            ),
+            const SizedBox(width: 10),
+            _buildDesktopHeaderProfileMenu(onColoredHeader: true),
+          ] else ...[
+            _buildHeaderAction(
+              Icons.notifications_outlined,
+              badge: notifBadge > 0 ? '$notifBadge' : null,
+              onTap: _showNotificationsDialog,
+              onColoredHeader: true,
+            ),
+            const SizedBox(width: 4),
+            _buildMobileHeaderProfileAction(onColoredHeader: true),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDashboardHeroBanner({required String cityLabel}) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: SizedBox(
+        height: _isMobile ? 176 : 196,
+        child: DecoratedBox(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: [
+                Color(0xFFFFF3E8),
+                Color(0xFFFFE7D1),
+                Color(0xFFFFF8F3),
+              ],
+            ),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _buildDashboardWelcomeCard(),
-              const SizedBox(height: 16),
-              _buildDashboardQuickActions(),
-              const SizedBox(height: 18),
-              _buildDashboardSectionLabel(
-                title: 'Overview',
-                subtitle: 'Live performance snapshot',
+              Expanded(
+                flex: _isMobile ? 5 : 6,
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    _isMobile ? 18 : 28,
+                    _isMobile ? 18 : 24,
+                    12,
+                    _isMobile ? 18 : 24,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        'GOOD DAY, LGU OFFICE!',
+                        style: GoogleFonts.inter(
+                          color: const Color(0xFFEA580C),
+                          fontSize: _isMobile ? 12 : 13,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(
+                              text:
+                                  'Together for a Smarter, More Vibrant $cityLabel ',
+                              style: GoogleFonts.poppins(
+                                color: _textDark,
+                                fontSize: _isMobile ? 17 : 22,
+                                fontWeight: FontWeight.w700,
+                                height: 1.25,
+                              ),
+                            ),
+                            TextSpan(
+                              text: 'ðŸ§¡',
+                              style: TextStyle(
+                                fontSize: _isMobile ? 17 : 20,
+                              ),
+                            ),
+                          ],
+                        ),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Track. Manage. Promote. A better tourism experience for everyone.',
+                        style: GoogleFonts.inter(
+                          color: _textMuted,
+                          fontSize: 13,
+                          height: 1.4,
+                          fontWeight: FontWeight.w400,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              const SizedBox(height: 10),
-              _buildQuickStats(),
-              const SizedBox(height: 16),
-              _buildDashboardSectionLabel(
-                title: 'Municipality QR',
-                subtitle: 'Official QR for public registration and check-in',
-              ),
-              const SizedBox(height: 10),
-              _buildSpotQRCodesDashboardCard(),
-              const SizedBox(height: 18),
-              _buildRecentActivity(),
+              if (!_isMobile)
+                Expanded(
+                  flex: 5,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Image.network(
+                        SupabaseStorageConfig.resolve(_dashboardHeroImageAsset),
+                        fit: BoxFit.cover,
+                        alignment: Alignment.center,
+                        errorBuilder: (_, __, ___) =>
+                            Container(color: _tintOrange),
+                      ),
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.centerLeft,
+                            end: Alignment.centerRight,
+                            colors: [
+                              const Color(0xFFFFE7D1),
+                              const Color(0xFFFFE7D1).withValues(alpha: 0.55),
+                              Colors.transparent,
+                            ],
+                            stops: const [0.0, 0.22, 0.55],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
             ],
           ),
         ),
@@ -2212,163 +3094,392 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
+  Widget _buildDashboardRightRail() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: _tourismPanelDecoration(),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.bolt_rounded,
+                    color: _primaryOrange,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Quick Actions',
+                    style: GoogleFonts.poppins(
+                      color: _textDark,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              GridView.count(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisCount: 2,
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+                childAspectRatio: 1.55,
+                children: [
+                  _buildQuickActionGridTile(
+                    icon: Icons.qr_code_2_rounded,
+                    label: 'Generate QR Code',
+                    onTap: () => setState(() {
+                      _selectedIndex = _spotQRCodesIndex;
+                      if (_isMobile) _isSidebarExpanded = false;
+                    }),
+                  ),
+                  _buildQuickActionGridTile(
+                    icon: Icons.add_location_alt_rounded,
+                    label: 'Add Tourist Spot',
+                    onTap: _showAddSpotDialog,
+                  ),
+                  _buildQuickActionGridTile(
+                    icon: Icons.analytics_outlined,
+                    label: 'View Analytics',
+                    onTap: () => setState(() {
+                      _selectedIndex = _analyticsIndex;
+                      if (_isMobile) _isSidebarExpanded = false;
+                    }),
+                  ),
+                  _buildQuickActionGridTile(
+                    icon: Icons.description_outlined,
+                    label: 'Create Report',
+                    onTap: () => setState(() {
+                      _selectedIndex = _analyticsIndex;
+                      if (_isMobile) _isSidebarExpanded = false;
+                    }),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildQuickActionGridTile({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Ink(
+          decoration: BoxDecoration(
+            color: _tintOrange,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: _primaryOrange.withValues(alpha: 0.22),
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, color: _primaryOrange, size: 18),
+                const SizedBox(height: 4),
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.inter(
+                    color: const Color(0xFF9A3412),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    height: 1.15,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Map<String, dynamic>> _dashboardRecentRegisteredTourists({
+    int limit = 5,
+  }) {
+    final sorted = _sortedTouristsByRegistrationDate(
+      _filterRealTourists(_tourists),
+    );
+    if (sorted.length <= limit) return sorted;
+    return sorted.take(limit).toList(growable: false);
+  }
+
+  Widget _buildDashboardRecentTourists() {
+    final recent = _dashboardRecentRegisteredTourists();
+    final munLabel =
+        (_municipalityName ?? _storedMunicipalityId ?? 'this LGU').trim();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+      decoration: _tourismPanelDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Registered tourists',
+                      style: GoogleFonts.inter(
+                        color: _textDark,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Newest sign-ups â€” names hidden for data privacy',
+                      style: GoogleFonts.inter(
+                        color: _textMuted,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              TextButton(
+                onPressed: () => setState(() {
+                  _selectedIndex = 4;
+                  if (_isMobile) _isSidebarExpanded = false;
+                }),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  backgroundColor: _primaryOrange,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+                child: Text(
+                  'View all â†’',
+                  style: GoogleFonts.inter(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          if (recent.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Text(
+                'No registered tourists for $munLabel yet. '
+                'New sign-ups via your municipality QR appear here.',
+                style: GoogleFonts.inter(
+                  color: _textMuted,
+                  fontSize: 14,
+                  height: 1.4,
+                ),
+              ),
+            )
+          else if (_isMobile)
+            ...List.generate(recent.length, (index) {
+              final t = recent[index];
+              return _buildDashboardTouristMobileRow(t, index == 0);
+            })
+          else
+            _buildDashboardTouristsTable(recent),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDashboardTouristsTable(List<Map<String, dynamic>> recent) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
+          child: Row(
+            children: [
+              const SizedBox(width: 44),
+              Expanded(flex: 3, child: _tableHeader('Tourist ID')),
+              Expanded(flex: 2, child: _tableHeader('Registration Date')),
+              const SizedBox(width: 44),
+            ],
+          ),
+        ),
+        ...List.generate(recent.length, (index) {
+          final t = recent[index];
+          final id = TouristIdHelper.displayForTourist(t);
+          final regDt = _registeredDateTimeNullableFromTourist(t);
+
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () => _showTouristDetailsDialog(t),
+                borderRadius: BorderRadius.circular(16),
+                hoverColor: _tintOrange.withValues(alpha: 0.55),
+                child: Ink(
+                  decoration: BoxDecoration(
+                    color:
+                        index.isEven ? const Color(0xFFFAFAFA) : Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 10,
+                    ),
+                    child: Row(
+                      children: [
+                        _buildVisitPrivacyAvatar(radius: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          flex: 3,
+                          child: _buildVisitTouristIdChip(id, maxWidth: 260),
+                        ),
+                        Expanded(
+                          flex: 2,
+                          child: Text(
+                            _formatRegisteredDateOnlyDisplay(regDt),
+                            style: GoogleFonts.inter(
+                              color: _textMuted,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                        SizedBox(
+                          width: 44,
+                          child: IconButton(
+                            tooltip: 'View',
+                            onPressed: () => _showTouristDetailsDialog(t),
+                            icon: Container(
+                              width: 32,
+                              height: 32,
+                              decoration: const BoxDecoration(
+                                color: _tintOrange,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.visibility_rounded,
+                                color: _primaryOrange,
+                                size: 18,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  Widget _tableHeader(String label) {
+    return Text(
+      label,
+      style: GoogleFonts.inter(
+        color: _textMuted,
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0.2,
+      ),
+    );
+  }
+
+  Widget _buildDashboardTouristMobileRow(
+    Map<String, dynamic> t,
+    bool isFirst,
+  ) {
+    final id = TouristIdHelper.displayForTourist(t);
+    final regDt = _registeredDateTimeNullableFromTourist(t);
+
+    return Padding(
+      padding: EdgeInsets.only(top: isFirst ? 0 : 8),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _showTouristDetailsDialog(t),
+          borderRadius: BorderRadius.circular(16),
+          child: Ink(
+            decoration: BoxDecoration(
+              color: _surfaceBg,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: _panelBorder.withValues(alpha: 0.7)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  _buildVisitPrivacyAvatar(radius: 20),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildVisitTouristIdChip(id, maxWidth: 220),
+                        const SizedBox(height: 4),
+                        Text(
+                          _formatRegisteredDateOnlyDisplay(regDt),
+                          style: GoogleFonts.inter(
+                            color: _textMuted,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => _showTouristDetailsDialog(t),
+                    icon: const Icon(
+                      Icons.visibility_rounded,
+                      color: _primaryOrange,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Greeting helper kept for possible future header use.
+  // ignore: unused_element
   String _timeBasedGreeting() {
     final h = DateTime.now().hour;
     if (h < 12) return 'Good morning';
     if (h < 17) return 'Good afternoon';
     return 'Good evening';
-  }
-
-  Widget _buildDashboardWelcomeCard() {
-    final name = _profileName.trim().isNotEmpty ? _profileName.trim() : 'LGU Office';
-    final municipality = _municipalityName?.trim().isNotEmpty == true
-        ? _municipalityName!.trim()
-        : 'Misamis Occidental';
-    final pendingVisits =
-        _realCheckIns.where((c) => c['status']?.toString() == 'Pending').length;
-
-    return Container(
-      width: double.infinity,
-      padding: EdgeInsets.all(_isMobile ? 16 : 20),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            _primaryOrange.withValues(alpha: 0.92),
-            const Color(0xFFC2410C).withValues(alpha: 0.96),
-          ],
-        ),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: _primaryOrange.withValues(alpha: 0.22),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${_timeBasedGreeting()}, $name',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.2,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  municipality,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.92),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  '$_todayCheckIns visits today ? $_totalTourists registered visitors',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.88),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                if (pendingVisits > 0) ...[
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.18),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
-                    ),
-                    child: Text(
-                      '$pendingVisits visit${pendingVisits == 1 ? '' : 's'} pending review',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.16),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
-            ),
-            child: const Icon(Icons.location_city_rounded, color: Colors.white, size: 28),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDashboardQuickActions() {
-    final actions = <({String label, IconData icon, int tabIndex})>[
-      (label: 'Visit log', icon: Icons.qr_code_scanner_rounded, tabIndex: 1),
-      (label: 'Tourist Spots', icon: Icons.place_rounded, tabIndex: 2),
-      (label: 'Spot QR', icon: Icons.qr_code_2_rounded, tabIndex: _spotQRCodesIndex),
-      (label: 'Reports', icon: Icons.assessment_rounded, tabIndex: _reportsIndex),
-    ];
-
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: actions.map((action) {
-        return Material(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          child: InkWell(
-            onTap: () => setState(() {
-              _selectedIndex = action.tabIndex;
-              if (_isMobile) _isSidebarExpanded = false;
-            }),
-            borderRadius: BorderRadius.circular(12),
-            child: Container(
-              padding: EdgeInsets.symmetric(
-                horizontal: _isMobile ? 12 : 14,
-                vertical: _isMobile ? 10 : 12,
-              ),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: _panelBorder),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(action.icon, color: _primaryOrange, size: 18),
-                  const SizedBox(width: 8),
-                  Text(
-                    action.label,
-                    style: const TextStyle(
-                      color: _textDark,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      }).toList(),
-    );
   }
 
   Widget _buildDashboardSectionLabel({
@@ -2380,20 +3491,20 @@ class _LguDashboardState extends State<LguDashboard>
       children: [
         Text(
           title,
-          style: const TextStyle(
+          style: GoogleFonts.poppins(
             color: _textDark,
-            fontSize: 17,
-            fontWeight: FontWeight.w800,
+            fontSize: 24,
+            fontWeight: FontWeight.w600,
             letterSpacing: -0.2,
           ),
         ),
-        const SizedBox(height: 2),
+        const SizedBox(height: 4),
         Text(
           subtitle,
-          style: TextStyle(
+          style: GoogleFonts.inter(
             color: _textMuted,
-            fontSize: _isMobile ? 11 : 12,
-            fontWeight: FontWeight.w500,
+            fontSize: _isMobile ? 12 : 14,
+            fontWeight: FontWeight.w400,
           ),
         ),
       ],
@@ -2414,11 +3525,7 @@ class _LguDashboardState extends State<LguDashboard>
         vertical: _isMobile ? 12 : 14,
       ),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFFF97316), Color(0xFFEA580C)],
-        ),
+        gradient: _lguBrandGradient,
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.12),
@@ -2470,28 +3577,18 @@ class _LguDashboardState extends State<LguDashboard>
           if (_isMobile) ...[
             _buildHeaderAction(
               Icons.notifications_outlined,
-              badge: _unreadNotifications > 0 ? '$_unreadNotifications' : null,
+              badge: (_unreadNotifications + _eventsNavBadgeCount) > 0
+                  ? '${_unreadNotifications + _eventsNavBadgeCount}'
+                  : null,
               onTap: _showNotificationsDialog,
-              onColoredHeader: true,
-            ),
-            const SizedBox(width: 6),
-            _buildHeaderAction(
-              Icons.settings_outlined,
-              highlighted: _selectedIndex == _settingsIndex,
-              onTap: _openSettings,
               onColoredHeader: true,
             ),
           ] else if (_selectedIndex == 0) ...[
             _buildHeaderAction(
-              Icons.settings_outlined,
-              highlighted: _selectedIndex == _settingsIndex,
-              onTap: _openSettings,
-              onColoredHeader: true,
-            ),
-            const SizedBox(width: 6),
-            _buildHeaderAction(
               Icons.notifications_outlined,
-              badge: _unreadNotifications > 0 ? '$_unreadNotifications' : null,
+              badge: (_unreadNotifications + _eventsNavBadgeCount) > 0
+                  ? '${_unreadNotifications + _eventsNavBadgeCount}'
+                  : null,
               onTap: _showNotificationsDialog,
               onColoredHeader: true,
             ),
@@ -2550,7 +3647,7 @@ class _LguDashboardState extends State<LguDashboard>
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildSidebarAvatar(size: 30),
+            _buildHeaderProfileAvatar(size: 30),
             const SizedBox(width: 8),
             Text(
               _profileName.isNotEmpty ? _profileName : 'Tourism',
@@ -2617,7 +3714,7 @@ class _LguDashboardState extends State<LguDashboard>
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildSidebarAvatar(size: 30),
+            _buildHeaderProfileAvatar(size: 30),
             const SizedBox(width: 6),
             Icon(Icons.keyboard_arrow_down_rounded, color: fg, size: 18),
           ],
@@ -2700,24 +3797,69 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   Widget _buildQuickStats() {
+    if (_isBootstrapping && !_hasCachedStats) {
+      final crossCount = _isMobile ? 2 : (_isTablet ? 2 : 4);
+      if (crossCount == 2) {
+        return const ShimmerScope(
+          child: Column(
+            children: [
+              SkeletonStatCardsRow(count: 2),
+              SizedBox(height: 8),
+              SkeletonStatCardsRow(count: 2),
+            ],
+          ),
+        );
+      }
+      return const ShimmerScope(child: SkeletonStatCardsRow(count: 4));
+    }
+
     final activeVrCount = _vrTours.where((v) => v['status'] == 'Active').length;
     final inactiveSpots = (_touristSpots.length - _activeSpots).clamp(0, 999);
+    final weekCounts = _last7DayCheckInCounts();
+    final weekVisits = weekCounts.fold<double>(0, (a, b) => a + b).round();
+    final yesterdayVisits = weekCounts.length >= 2 ? weekCounts[5].round() : 0;
+    final todayTrendPct = yesterdayVisits == 0
+        ? (_todayCheckIns == 0 ? 0 : 100)
+        : (((_todayCheckIns - yesterdayVisits) / yesterdayVisits) * 100)
+            .round();
+    final monthTourists = _touristsRegisteredInLastDays(30);
+    final touristTrendPct = _totalTourists == 0
+        ? 0
+        : ((monthTourists / math.max(_totalTourists, 1)) * 100).round().clamp(
+            0,
+            999,
+          );
+    final priorWeek = _checkInsInDayRange(7, 14);
+    final weekDelta = weekVisits - priorWeek;
+
     final stats = [
       _StatCard(
-        title: 'Today\'s visits',
+        title: 'Today\'s Visits',
         value: '$_todayCheckIns',
-        subtitle: 'Recorded today',
+        subtitle: 'QR check-ins today',
         icon: Icons.qr_code_scanner_rounded,
         color: _kpiOrange,
+        tint: _tintOrange,
+        trendLabel: todayTrendPct >= 0
+            ? 'â†‘ $todayTrendPct% from yesterday'
+            : 'â†“ ${todayTrendPct.abs()}% from yesterday',
+        trendPositive: todayTrendPct >= 0,
       ),
       _StatCard(
-        title: _storedMunicipalityId != null
-            ? 'Visitors'
-            : 'Visitors (province)',
+        title: 'Registered Tourists',
         value: '$_totalTourists',
-        subtitle: 'Linked to QR visits',
+        subtitle: _storedMunicipalityId != null
+            ? 'This municipality only'
+            : 'Province (no LGU filter)',
         icon: Icons.people_alt_rounded,
         color: _kpiBlue,
+        tint: _tintBlue,
+        trendLabel: 'â†‘ +$touristTrendPct% from last month',
+        trendPositive: true,
+        onTap: () => setState(() {
+          _selectedIndex = 4;
+          if (_isMobile) _isSidebarExpanded = false;
+        }),
       ),
       _StatCard(
         title: 'Active Spots',
@@ -2727,37 +3869,88 @@ class _LguDashboardState extends State<LguDashboard>
             : 'All spots active',
         icon: Icons.place_rounded,
         color: _kpiGreen,
+        tint: _tintGreen,
+        trendLabel: inactiveSpots > 0
+            ? 'â†’ $inactiveSpots need attention'
+            : 'âœ“ 100% operational',
+        trendPositive: inactiveSpots == 0,
       ),
       _StatCard(
-        title: 'Spots with VR',
-        value: '$_totalVRTours',
+        title: 'Visits 7 days',
+        value: '$weekVisits',
         subtitle: activeVrCount > 0
-            ? '$activeVrCount active ? tap Tourist Spots'
-            : 'Add VR link when editing a spot',
-        icon: Icons.vrpano_rounded,
+            ? '$activeVrCount spots with VR'
+            : 'Last 7 days in this LGU',
+        icon: Icons.insights_rounded,
         color: _kpiPurple,
+        tint: _tintPurple,
+        trendLabel: weekDelta == 0
+            ? 'â†’ No change'
+            : (weekDelta > 0
+                ? 'â†‘ +$weekDelta vs prior week'
+                : 'â†“ ${weekDelta.abs()} vs prior week'),
+        trendPositive: weekDelta >= 0,
         onTap: () => setState(() {
-          _selectedIndex = _touristSpotsNavIndex;
-          _spotVrFilter = 'With VR';
+          _selectedIndex = 1;
+          if (_isMobile) _isSidebarExpanded = false;
         }),
       ),
     ];
 
     final crossCount = _isMobile ? 2 : (_isTablet ? 2 : 4);
-    final childAspectRatio = crossCount == 2 ? (_isMobile ? 0.98 : 1.12) : 1.38;
+    const gap = 16.0;
 
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: crossCount,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
-        childAspectRatio: childAspectRatio,
+    return DashboardFadeIn(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final cardWidth =
+              (constraints.maxWidth - gap * (crossCount - 1)) / crossCount;
+          return Wrap(
+            spacing: gap,
+            runSpacing: gap,
+            children: [
+              for (final stat in stats)
+                SizedBox(
+                  width: cardWidth,
+                  child: _buildStatCard(stat),
+                ),
+            ],
+          );
+        },
       ),
-      itemCount: stats.length,
-      itemBuilder: (context, index) => _buildStatCard(stats[index]),
     );
+  }
+
+  int _touristsRegisteredInLastDays(int days) {
+    final cutoff = DateTime.now().subtract(Duration(days: days));
+    var count = 0;
+    for (final t in _filterRealTourists(_tourists)) {
+      final dt = _registeredDateTimeNullableFromTourist(t);
+      if (dt != null && !dt.isBefore(cutoff)) count++;
+    }
+    return count;
+  }
+
+  int _checkInsInDayRange(int startExclusiveDaysAgo, int endExclusiveDaysAgo) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    var count = 0;
+    for (final c in _realCheckIns) {
+      final ts = c['timestamp'];
+      DateTime? date;
+      if (ts is Timestamp) {
+        date = ts.toDate();
+      } else if (ts is DateTime) {
+        date = ts;
+      }
+      if (date == null) continue;
+      final day = DateTime(date.year, date.month, date.day);
+      final diff = today.difference(day).inDays;
+      if (diff >= startExclusiveDaysAgo && diff < endExclusiveDaysAgo) {
+        count++;
+      }
+    }
+    return count;
   }
 
   List<double> _last7DayCheckInCounts() {
@@ -2780,16 +3973,6 @@ class _LguDashboardState extends State<LguDashboard>
       }
     }
     return counts;
-  }
-
-  List<double>? _statSparklineValues(_StatCard stat) {
-    if (stat.title.contains('visit') ||
-        stat.title.contains('Check-in') ||
-        stat.title.contains('Today')) {
-      final week = _last7DayCheckInCounts();
-      if (week.any((v) => v > 0)) return week;
-    }
-    return null;
   }
 
   /// LGU id for QR: prefer session, else any loaded spot with [municipalityId].
@@ -2831,21 +4014,8 @@ class _LguDashboardState extends State<LguDashboard>
     return mid;
   }
 
-  String _lguQrPayloadString(String municipalityId) {
-    final coords = getMunicipalityAnchorCoordinates(municipalityId);
-    if (coords != null) {
-      return lguQrData(
-        municipalityId,
-        anchorLat: coords.lat,
-        anchorLng: coords.lng,
-      );
-    }
-    return lguQrData(municipalityId);
-  }
-
   Widget _buildSpotQRCodesDashboardCard() {
-    final mid = _effectiveLguMunicipalityId();
-    final lguQrDataStr = mid != null ? _lguQrPayloadString(mid) : null;
+    final spotCount = _touristSpots.length;
 
     return Container(
       width: double.infinity,
@@ -2864,7 +4034,7 @@ class _LguDashboardState extends State<LguDashboard>
                     Container(
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
-                        color: _primaryOrange.withOpacity(0.15),
+                        color: _primaryOrange.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(24),
                       ),
                       child: Icon(
@@ -2876,7 +4046,7 @@ class _LguDashboardState extends State<LguDashboard>
                     const SizedBox(width: 16),
                     const Expanded(
                       child: Text(
-                        'Municipality QR code',
+                        'Spot QR codes',
                         style: TextStyle(
                           color: _textDark,
                           fontSize: 18,
@@ -2886,37 +4056,12 @@ class _LguDashboardState extends State<LguDashboard>
                     ),
                   ],
                 ),
-                if (lguQrDataStr != null) ...[
-                  const SizedBox(height: 16),
-                  Center(
-                    child: Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: Colors.grey.shade200),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.06),
-                            blurRadius: 8,
-                            offset: const Offset(0, 2),
-                          ),
-                        ],
-                      ),
-                      child: QrImageView(
-                        data: lguQrDataStr,
-                        version: QrVersions.auto,
-                        size: 120,
-                        backgroundColor: Colors.white,
-                        errorCorrectionLevel: QrErrorCorrectLevel.H,
-                      ),
-                    ),
-                  ),
-                ],
                 const SizedBox(height: 12),
                 Text(
-                  'Use one official QR code for your municipality. Download PNG or PDF for posters and sharing.',
-                  style: TextStyle(
+                  spotCount == 0
+                      ? 'Add a QR for each tourist spot (Plaza, El Triunfo, etc.) so you can see where visitors check in.'
+                      : 'Each attraction has its own QR. Manage $spotCount spot code${spotCount == 1 ? '' : 's'} to track visits by place.',
+                  style: const TextStyle(
                     color: Color(0xFF4B5563),
                     fontSize: 14,
                     height: 1.45,
@@ -2930,7 +4075,7 @@ class _LguDashboardState extends State<LguDashboard>
                     onPressed: () =>
                         setState(() => _selectedIndex = _spotQRCodesIndex),
                     icon: const Icon(Icons.qr_code_2_rounded, size: 20),
-                    label: const Text('View & download municipality QR'),
+                    label: const Text('Manage spot QR codes'),
                     style: FilledButton.styleFrom(
                       backgroundColor: _primaryOrange,
                       foregroundColor: Colors.white,
@@ -2946,49 +4091,25 @@ class _LguDashboardState extends State<LguDashboard>
           : Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                if (lguQrDataStr != null)
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.grey.shade200),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.06),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: QrImageView(
-                      data: lguQrDataStr,
-                      version: QrVersions.auto,
-                      size: 100,
-                      backgroundColor: Colors.white,
-                      errorCorrectionLevel: QrErrorCorrectLevel.H,
-                    ),
-                  )
-                else
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: _primaryOrange.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(24),
-                    ),
-                    child: Icon(
-                      Icons.qr_code_2_rounded,
-                      color: _primaryOrange,
-                      size: 36,
-                    ),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: _primaryOrange.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(24),
                   ),
+                  child: Icon(
+                    Icons.qr_code_2_rounded,
+                    color: _primaryOrange,
+                    size: 36,
+                  ),
+                ),
                 const SizedBox(width: 20),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Municipality QR code',
+                        'Spot QR codes',
                         style: TextStyle(
                           color: _textDark,
                           fontSize: 18,
@@ -2997,7 +4118,9 @@ class _LguDashboardState extends State<LguDashboard>
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'Use one official QR code for your municipality. Download PNG or PDF for posters and sharing.',
+                        spotCount == 0
+                            ? 'Add a QR for each tourist spot (Plaza, El Triunfo, etc.) so you can see where visitors check in.'
+                            : 'Each attraction has its own QR. Manage $spotCount spot code${spotCount == 1 ? '' : 's'} to track visits by place.',
                         style: const TextStyle(
                           color: Color(0xFF4B5563),
                           fontSize: 14,
@@ -3012,7 +4135,7 @@ class _LguDashboardState extends State<LguDashboard>
                   onPressed: () =>
                       setState(() => _selectedIndex = _spotQRCodesIndex),
                   icon: const Icon(Icons.qr_code_2_rounded, size: 20),
-                  label: const Text('View & download municipality QR'),
+                  label: const Text('Manage spot QR codes'),
                   style: FilledButton.styleFrom(
                     backgroundColor: _primaryOrange,
                     foregroundColor: Colors.white,
@@ -3031,151 +4154,123 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   Widget _buildStatCard(_StatCard stat) {
-    final sparkH = _isMobile ? 14.0 : 18.0;
-    final valueSize = _isMobile ? 28.0 : 32.0;
-    final labelSize = _isMobile ? 11.0 : 12.0;
-    final sparkValues = _statSparklineValues(stat);
+    final valueSize = _isMobile ? 28.0 : 34.0;
+    final tint = stat.tint ?? stat.color.withValues(alpha: 0.1);
+    final trend = stat.trendLabel ?? '';
+    final trendColor = stat.trendPositive
+        ? const Color(0xFF059669)
+        : const Color(0xFFDC2626);
 
-    final card = Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Colors.white,
-            stat.color.withValues(alpha: 0.06),
+    return _HoverLiftCard(
+      onTap: stat.onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Colors.white,
+              tint.withValues(alpha: 0.7),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: stat.color.withValues(alpha: 0.12)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 20,
+              offset: const Offset(0, 8),
+            ),
           ],
         ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: stat.color.withValues(alpha: 0.18)),
-        boxShadow: [
-          BoxShadow(
-            color: stat.color.withValues(alpha: 0.12),
-            blurRadius: 14,
-            offset: const Offset(0, 5),
-          ),
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            height: 4,
-            width: double.infinity,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  stat.color.withValues(alpha: 0.85),
-                  stat.color.withValues(alpha: 0.35),
-                ],
+        clipBehavior: Clip.antiAlias,
+        child: Stack(
+          children: [
+            Positioned(
+              right: -10,
+              bottom: -8,
+              child: Icon(
+                stat.icon,
+                size: 72,
+                color: stat.color.withValues(alpha: 0.08),
               ),
             ),
-          ),
-          Padding(
-            padding: EdgeInsets.fromLTRB(
-              _isMobile ? 12 : 14,
-              _isMobile ? 10 : 12,
-              _isMobile ? 12 : 14,
-              _isMobile ? 10 : 12,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        stat.title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: _textDark,
-                          fontSize: labelSize,
-                          fontWeight: FontWeight.w600,
-                          height: 1.2,
+            Padding(
+              padding: EdgeInsets.all(_isMobile ? 14 : 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: tint,
+                          borderRadius: BorderRadius.circular(12),
                         ),
+                        child: Icon(stat.icon, color: stat.color, size: 18),
                       ),
+                      const Spacer(),
+                      if (trend.isNotEmpty)
+                        Flexible(
+                          child: Text(
+                            trend,
+                            textAlign: TextAlign.right,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.inter(
+                              color: trendColor,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    stat.value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.inter(
+                      color: _textDark,
+                      fontSize: valueSize,
+                      fontWeight: FontWeight.w800,
+                      height: 1.05,
+                      letterSpacing: -0.8,
                     ),
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: stat.color.withValues(alpha: 0.14),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(
-                        stat.icon,
-                        color: stat.color,
-                        size: _isMobile ? 16 : 18,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    stat.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.inter(
+                      color: _textDark,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (stat.subtitle != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      stat.subtitle!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.inter(
+                        color: _textMuted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w400,
                       ),
                     ),
                   ],
-                ),
-                SizedBox(height: _isMobile ? 8 : 10),
-                Text(
-                  stat.value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: stat.color,
-                    fontSize: valueSize,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.5,
-                    height: 1.05,
-                  ),
-                ),
-                if (stat.subtitle != null) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    stat.subtitle!,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: _textMuted,
-                      fontSize: _isMobile ? 10 : 10.5,
-                      fontWeight: FontWeight.w500,
-                      height: 1.25,
-                    ),
-                  ),
                 ],
-                if (sparkValues != null) ...[
-                  const SizedBox(height: 10),
-                  Container(
-                    height: 1,
-                    color: stat.color.withValues(alpha: 0.2),
-                  ),
-                  const SizedBox(height: 6),
-                  SizedBox(
-                    height: sparkH,
-                    width: double.infinity,
-                    child: CustomPaint(
-                      painter: _TourismMiniSparklinePainter(
-                        values: sparkValues,
-                        lineColor: stat.color.withValues(alpha: 0.9),
-                      ),
-                    ),
-                  ),
-                ],
-              ],
+              ),
             ),
-          ),
-        ],
-      ),
-    );
-
-    if (stat.onTap == null) return card;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: stat.onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: card,
+          ],
+        ),
       ),
     );
   }
@@ -3189,10 +4284,10 @@ class _LguDashboardState extends State<LguDashboard>
           children: [
             Text(
               'Recent Activity',
-              style: TextStyle(
+              style: GoogleFonts.poppins(
                 color: const Color(0xFF111827),
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
+                fontSize: 24,
+                fontWeight: FontWeight.w600,
               ),
             ),
             TextButton(
@@ -3200,9 +4295,9 @@ class _LguDashboardState extends State<LguDashboard>
                 _selectedIndex = 1;
                 if (_isMobile) _isSidebarExpanded = false;
               }),
-              child: const Text(
+              child: Text(
                 'View all',
-                style: TextStyle(
+                style: GoogleFonts.poppins(
                   color: _primaryOrange,
                   fontWeight: FontWeight.w600,
                 ),
@@ -3328,15 +4423,13 @@ class _LguDashboardState extends State<LguDashboard>
   Widget _buildCheckInsContent() {
     final filteredCheckIns = _checkIns.where((c) {
       final searchQuery = _checkInsSearchController.text.toLowerCase();
+      final id = _displayTouristIdFromCheckIn(c).toLowerCase();
       final matchesSearch =
           searchQuery.isEmpty ||
-          (c['touristName']?.toString() ?? '').toLowerCase().contains(
-            searchQuery,
-          ) ||
+          id.contains(searchQuery) ||
           (c['touristId']?.toString() ?? '').toLowerCase().contains(
             searchQuery,
           ) ||
-          (c['userId']?.toString() ?? '').toLowerCase().contains(searchQuery) ||
           (c['location']?.toString() ?? '').toLowerCase().contains(searchQuery) ||
           (c['spot_name']?.toString() ?? '').toLowerCase().contains(searchQuery) ||
           (c['spotId']?.toString() ?? '').toLowerCase().contains(searchQuery);
@@ -3349,40 +4442,175 @@ class _LguDashboardState extends State<LguDashboard>
       return matchesSearch && matchesStatus && matchesDate;
     }).toList();
 
+    final munLabel =
+        (_municipalityName ?? _storedMunicipalityId ?? 'your LGU').trim();
+
     return RefreshIndicator(
       onRefresh: _loadData,
       color: _primaryOrange,
       child: _buildFramedContentShell(
-        title: 'Visit log',
+        title: 'Tourist Visits',
         subtitle:
-            'Shows QR visits at tourist spots in your municipality only '
-            '(${_municipalityName ?? _storedMunicipalityId ?? 'your LGU'}). '
-            'A scan at a spot in another town appears on that town\'s tourism dashboard.',
-        body: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.all(_isMobile ? 12 : 16),
-          child: _wrapTourismPanel(
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+            'QR check-ins in $munLabel â€” names hidden for data privacy',
+        body: Padding(
+          padding: EdgeInsets.fromLTRB(
+            _isMobile ? 12 : 16,
+            12,
+            _isMobile ? 12 : 16,
+            16,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildLguVisitsSummaryBar(sumCheckInVisitors(filteredCheckIns)),
+              const SizedBox(height: 10),
+              _buildCheckInDateFilterBar(),
+              const SizedBox(height: 12),
+              Expanded(
+                child: Container(
+                  decoration: _tourismPanelDecoration(),
+                  clipBehavior: Clip.antiAlias,
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          _isMobile ? 12 : 16,
+                          14,
+                          _isMobile ? 12 : 16,
+                          10,
+                        ),
+                        child: _buildCheckInsSearchAndStatusRow(),
+                      ),
+                      const Divider(height: 1, color: _panelBorder),
+                      Expanded(
+                        child: filteredCheckIns.isEmpty
+                            ? _buildEmptyState(
+                                'No visits match your filters',
+                                icon: Icons.qr_code_scanner_rounded,
+                                iconColor: _primaryOrange,
+                                subtitle:
+                                    'Scans from your municipality QR appear here.',
+                              )
+                            : _isMobile
+                            ? ListView(
+                                padding: const EdgeInsets.fromLTRB(
+                                  12,
+                                  12,
+                                  12,
+                                  16,
+                                ),
+                                children: [
+                                  _buildCheckInsListMobile(filteredCheckIns),
+                                ],
+                              )
+                            : SingleChildScrollView(
+                                padding: const EdgeInsets.fromLTRB(
+                                  12,
+                                  12,
+                                  12,
+                                  16,
+                                ),
+                                child: _buildCheckInsTable(filteredCheckIns),
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLguVisitsSummaryBar(int visibleCount) {
+    final munLabel =
+        (_municipalityName ?? _storedMunicipalityId ?? 'Your LGU').trim();
+    final pending = _checkIns.where((c) => c['status'] == 'Pending').length;
+    final verified = _checkIns.where((c) => c['status'] == 'Verified').length;
+    final today = _checkIns.where((c) {
+      final t = _parseCheckInTimestamp(c);
+      if (t == null) return false;
+      final now = DateTime.now();
+      return t.year == now.year && t.month == now.month && t.day == now.day;
+    }).length;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _panelBorder),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: _primaryOrange.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(
+              Icons.qr_code_scanner_rounded,
+              color: _primaryOrange,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _buildCheckInsFilters(),
-                const SizedBox(height: 16),
-                if (filteredCheckIns.isEmpty)
-                  _buildEmptyState(
-                    'No visits found',
-                    icon: Icons.qr_code_scanner_rounded,
-                    iconColor: _primaryOrange,
-                    subtitle:
-                        'Scans from your municipality QR will appear here.',
-                  )
-                else if (_isMobile)
-                  _buildCheckInsListMobile(filteredCheckIns)
-                else
-                  _buildCheckInsTable(filteredCheckIns),
+                Text(
+                  '$visibleCount of ${sumCheckInVisitors(_checkIns)} visitors',
+                  style: const TextStyle(
+                    color: _textDark,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Text(
+                  'Today $today Â· Verified $verified Â· Pending $pending',
+                  style: const TextStyle(color: _textMuted, fontSize: 11),
+                ),
               ],
             ),
           ),
-        ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: const Color(0xFFECFDF3),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: const Color(0xFF86EFAC)),
+            ),
+            child: const Text(
+              'Privacy on',
+              style: TextStyle(
+                color: Color(0xFF15803D),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: const Color(0xFFDCFCE7),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: const Color(0xFF86EFAC)),
+            ),
+            child: Text(
+              munLabel,
+              style: const TextStyle(
+                color: Color(0xFF15803D),
+                fontWeight: FontWeight.w700,
+                fontSize: 11,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -3406,118 +4634,102 @@ class _LguDashboardState extends State<LguDashboard>
     }
   }
 
-  Widget _buildCheckInDateFilterChips() {
-    const options = ['All', 'Today', '7 days', '30 days'];
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: options.map((option) {
-          final selected = _checkInDateFilter == option;
-          return Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: FilterChip(
-              label: Text(option),
-              selected: selected,
-              showCheckmark: false,
-              labelStyle: TextStyle(
-                color: selected ? Colors.white : _textDark,
-                fontWeight: FontWeight.w600,
-                fontSize: 12,
-              ),
-              selectedColor: _primaryOrange,
-              backgroundColor: Colors.white,
-              side: BorderSide(
-                color: selected ? _primaryOrange : _panelBorder,
-              ),
-              onSelected: (_) => setState(() => _checkInDateFilter = option),
-            ),
-          );
-        }).toList(),
-      ),
-    );
-  }
+  Widget _buildCheckInDateFilterBar() {
+    Widget modeChip(String option) {
+      final selected = _checkInDateFilter == option;
+      return FilterChip(
+        label: Text(option),
+        selected: selected,
+        showCheckmark: false,
+        onSelected: (_) => setState(() => _checkInDateFilter = option),
+        selectedColor: _primaryOrange.withValues(alpha: 0.18),
+        labelStyle: TextStyle(
+          color: selected ? _primaryOrange : _textDark,
+          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+          fontSize: 12,
+        ),
+        side: BorderSide(
+          color: selected
+              ? _primaryOrange.withValues(alpha: 0.45)
+              : _panelBorder,
+        ),
+        backgroundColor: Colors.white,
+        visualDensity: VisualDensity.compact,
+      );
+    }
 
-  Widget _buildCheckInsFilters() {
-    final searchField = AppSearchBar(
-      controller: _checkInsSearchController,
-      hintText: 'Search by name, ID, or location...',
-      onChanged: (value) => setState(() {}),
-      horizontalPadding: 0,
-      backgroundColor: Colors.white,
-      borderColor: _panelBorder,
-      showMicrophone: false,
-      height: 48,
-      showShadow: false,
-    );
+    Widget statusChip(String option) {
+      final selected = _checkInStatusFilter == option;
+      return FilterChip(
+        label: Text(option == 'All' ? 'All status' : option),
+        selected: selected,
+        showCheckmark: false,
+        onSelected: (_) => setState(() => _checkInStatusFilter = option),
+        selectedColor: _primaryOrange.withValues(alpha: 0.18),
+        labelStyle: TextStyle(
+          color: selected ? _primaryOrange : _textDark,
+          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+          fontSize: 12,
+        ),
+        side: BorderSide(
+          color: selected
+              ? _primaryOrange.withValues(alpha: 0.45)
+              : _panelBorder,
+        ),
+        backgroundColor: Colors.white,
+        visualDensity: VisualDensity.compact,
+      );
+    }
 
-    final filterChip = Container(
-      height: 48,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      alignment: Alignment.centerLeft,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: _panelBorder),
       ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: _checkInStatusFilter,
-          isExpanded: true,
-          borderRadius: BorderRadius.circular(14),
-          dropdownColor: Colors.white,
-          icon: Icon(Icons.expand_more_rounded, color: _textDark, size: 22),
-          style: const TextStyle(
-            color: _textDark,
-            fontWeight: FontWeight.w600,
-            fontSize: 14,
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          const Text(
+            'Filter by visit:',
+            style: TextStyle(
+              color: _textMuted,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
           ),
-          items: ['All', 'Verified', 'Pending']
-              .map(
-                (s) => DropdownMenuItem<String>(
-                  value: s,
-                  child: Text(
-                    s,
-                    style: const TextStyle(
-                      color: _textDark,
-                      fontWeight: FontWeight.w500,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-              )
-              .toList(),
-          onChanged: (value) => setState(() => _checkInStatusFilter = value!),
-        ),
+          modeChip('All'),
+          modeChip('Today'),
+          modeChip('7 days'),
+          modeChip('30 days'),
+          Container(
+            width: 1,
+            height: 22,
+            color: _panelBorder,
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+          ),
+          statusChip('All'),
+          statusChip('Verified'),
+          statusChip('Pending'),
+        ],
       ),
     );
+  }
 
-    if (_isMobile) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          searchField,
-          const SizedBox(height: 12),
-          _buildCheckInDateFilterChips(),
-          const SizedBox(height: 12),
-          SizedBox(width: double.infinity, child: filterChip),
-        ],
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Expanded(child: searchField),
-            const SizedBox(width: 14),
-            SizedBox(width: 168, child: filterChip),
-          ],
-        ),
-        const SizedBox(height: 12),
-        _buildCheckInDateFilterChips(),
-      ],
+  Widget _buildCheckInsSearchAndStatusRow() {
+    return AppSearchBar(
+      controller: _checkInsSearchController,
+      hintText: 'Search by Tourist ID or location...',
+      onChanged: (value) => setState(() {}),
+      horizontalPadding: 0,
+      backgroundColor: const Color(0xFFF9FAFB),
+      borderColor: _panelBorder,
+      showMicrophone: false,
+      height: 46,
+      showShadow: false,
     );
   }
 
@@ -3641,7 +4853,6 @@ class _LguDashboardState extends State<LguDashboard>
                     bottom: BorderSide(color: _kAnalyticsSurfaceBorder),
                   ),
                   columns: [
-                    const DataColumn(label: Text('Tourist')),
                     const DataColumn(label: Text('Tourist ID')),
                     const DataColumn(label: Text('Location')),
                     const DataColumn(label: Text('Time')),
@@ -3679,17 +4890,10 @@ class _LguDashboardState extends State<LguDashboard>
       cells: [
         DataCell(_buildCheckInTouristCell(c)),
         DataCell(
-          SelectableText(
-            c['touristId'] ?? 'N/A',
-            style: const TextStyle(
-              color: _textMuted,
-              fontWeight: FontWeight.w500,
-              fontSize: 12,
-            ),
+          Text(
+            c['location']?.toString() ?? '',
+            style: const TextStyle(color: _textDark),
           ),
-        ),
-        DataCell(
-          Text(c['location'] ?? '', style: const TextStyle(color: _textDark)),
         ),
         DataCell(
           Text(
@@ -3697,7 +4901,7 @@ class _LguDashboardState extends State<LguDashboard>
             style: const TextStyle(color: _textMuted, fontSize: 13),
           ),
         ),
-        DataCell(_buildStatusBadge(c['status'])),
+        DataCell(_buildStatusBadge(c['status']?.toString() ?? '')),
         DataCell(
           SizedBox(
             width: 88,
@@ -3705,7 +4909,7 @@ class _LguDashboardState extends State<LguDashboard>
               child: Tooltip(
                 message: 'View details',
                 child: Material(
-                  color: _primaryOrange.withOpacity(0.12),
+                  color: _primaryOrange.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(12),
                   child: InkWell(
                     onTap: () => _showCheckInDetailsDialog(c),
@@ -3755,6 +4959,7 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   void _showCheckInDetailsDialog(Map<String, dynamic> checkIn) {
+    final id = _displayTouristIdFromCheckIn(checkIn);
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -3772,36 +4977,27 @@ class _LguDashboardState extends State<LguDashboard>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Center(child: _buildCheckInProfileAvatar(checkIn, radius: 36)),
+            Center(child: _buildVisitPrivacyAvatar(radius: 28)),
             const SizedBox(height: 12),
-            Center(
+            Center(child: _buildVisitTouristIdChip(id)),
+            const SizedBox(height: 8),
+            const Center(
               child: Text(
-                checkIn['touristName']?.toString() ?? 'Tourist',
-                style: const TextStyle(
-                  color: _textDark,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                ),
-                textAlign: TextAlign.center,
+                'Name hidden for data privacy',
+                style: TextStyle(color: _textMuted, fontSize: 12),
               ),
             ),
-            if ((checkIn['touristEmail']?.toString() ?? '').isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Center(
-                  child: Text(
-                    checkIn['touristEmail'].toString(),
-                    style: TextStyle(color: _textMuted, fontSize: 12),
-                  ),
-                ),
-              ),
             const SizedBox(height: 12),
-            _buildDetailRow('Tourist ID', checkIn['touristId'] ?? 'N/A'),
-            if ((checkIn['touristOrigin']?.toString() ?? '').isNotEmpty)
-              _buildDetailRow('Origin', checkIn['touristOrigin'].toString()),
-            _buildDetailRow('Location', checkIn['location']),
+            _buildDetailRow('Tourist ID', id),
+            _buildDetailRow(
+              'Location',
+              checkIn['location']?.toString() ?? 'â€”',
+            ),
             _buildDetailRow('Time', _formatTime(checkIn['timestamp'])),
-            _buildDetailRow('Status', checkIn['status']),
+            _buildDetailRow(
+              'Status',
+              checkIn['status']?.toString() ?? 'â€”',
+            ),
           ],
         ),
         actions: [
@@ -3891,21 +5087,22 @@ class _LguDashboardState extends State<LguDashboard>
     if (_isBackfillingSpotQr) return;
     setState(() => _isBackfillingSpotQr = true);
     try {
-      final result =
-          await TouristSpotsFirestoreService.enforceCanonicalSpotDocuments();
+      // Non-destructive: seed missing defaults + backfill QR/images.
+      // Do NOT call enforceCanonicalSpotDocuments() here â€” that deletes
+      // LGU-created spots (e.g. Ambak-Ambak Falls) on refresh.
+      final result = await TouristSpotsFirestoreService.syncAllSpotQrData();
       if (!mounted || !showSnack) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            (result.upserted == 0 &&
-                    result.removed == 0 &&
+            (result.created == 0 &&
                     result.backfilled == 0 &&
                     result.imagesUpdated == 0)
                 ? 'No spot changes needed (or you may be offline).'
-                : 'Sync complete: ${result.upserted} canonical spot(s), '
-                      'removed ${result.removed} other doc(s), '
+                : 'Sync complete: ${result.created} seed spot(s), '
                       '${result.backfilled} QR field(s), '
-                      '${result.imagesUpdated} image(s) saved to Firestore.',
+                      '${result.imagesUpdated} image(s) saved to Firestore. '
+                      'Custom LGU spots were kept.',
           ),
           backgroundColor: _primaryOrange,
           behavior: SnackBarBehavior.floating,
@@ -3999,8 +5196,8 @@ class _LguDashboardState extends State<LguDashboard>
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Pushes all municipality spot images (assets catalog) into tourist_spots '
-                    'as image_url / image, enforces 17 canonical LGU spots, and fills QR fields.',
+                    'Pushes municipality spot images into tourist_spots, '
+                    'fills QR fields for seed spots, and keeps custom LGU-created spots.',
                     style: TextStyle(
                       color: _textMuted,
                       fontSize: 12,
@@ -4079,8 +5276,8 @@ class _LguDashboardState extends State<LguDashboard>
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          'Saves municipality images to tourist_spots (image_url / image), '
-                          'enforces 17 canonical LGU spots, and fills QR metadata.',
+                          'Saves municipality images to tourist_spots, fills QR metadata '
+                          'for seed spots, and keeps custom LGU-created spots.',
                           style: TextStyle(
                             color: _textMuted,
                             fontSize: 13,
@@ -4251,6 +5448,7 @@ class _LguDashboardState extends State<LguDashboard>
       spotName: spot.name,
       vrLink: vrLink,
       imageUrl: spot.imageUrl,
+      allowWeb: true,
     );
     if (!mounted) return;
     await _loadData();
@@ -4369,192 +5567,15 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
-  /// One QR per LGU (`ATMOS-TRS-LGU:municipalityId` + optional anchor) ? downloadable PNG/PDF.
-  Widget _buildLguQrCardForDashboard(
-    String municipalityId,
-    String displayName,
-  ) {
-    final coords = getMunicipalityAnchorCoordinates(municipalityId);
-    final qrData = _lguQrPayloadString(municipalityId);
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: _tourismPanelDecoration(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: _primaryOrange.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.location_city_rounded,
-                  color: _primaryOrange,
-                  size: 16,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'Your LGU QR code',
-                  style: TextStyle(
-                    color: _primaryOrange,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            displayName,
-            style: TextStyle(
-              color: _textDark,
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.2,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Unique to your municipality ? download for posters, flyers, or social media.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: _textMuted,
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          const SizedBox(height: 18),
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.grey.shade200),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.07),
-                  blurRadius: 14,
-                  offset: const Offset(0, 5),
-                ),
-              ],
-            ),
-            child: QrImageView(
-              data: qrData,
-              version: QrVersions.auto,
-              size: _isMobile ? 190 : 210,
-              backgroundColor: Colors.white,
-              errorCorrectionLevel: QrErrorCorrectLevel.H,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.75),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.grey.shade200),
-            ),
-            child: SelectableText(
-              qrData,
-              style: TextStyle(
-                color: _textMuted,
-                fontSize: 11,
-                fontFamily: 'monospace',
-                height: 1.25,
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Wrap(
-            spacing: 12,
-            runSpacing: 8,
-            alignment: WrapAlignment.center,
-            children: [
-              ElevatedButton.icon(
-                onPressed: () async {
-                  await downloadLguQrPng(
-                    municipalityId,
-                    anchorLat: coords?.lat,
-                    anchorLng: coords?.lng,
-                  );
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'If download did not start, check browser downloads or use the share sheet on mobile.',
-                        ),
-                        backgroundColor: _primaryOrange,
-                        behavior: SnackBarBehavior.floating,
-                      ),
-                    );
-                  }
-                },
-                icon: Icon(
-                  Icons.download_rounded,
-                  color: Colors.white,
-                  size: 20,
-                ),
-                label: const Text(
-                  'Download PNG',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _primaryOrange,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 12,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                ),
-              ),
-              OutlinedButton.icon(
-                onPressed: () async {
-                  await downloadLguQrPdf(
-                    municipalityId,
-                    displayName,
-                    anchorLat: coords?.lat,
-                    anchorLng: coords?.lng,
-                  );
-                },
-                icon: Icon(
-                  Icons.picture_as_pdf_rounded,
-                  color: _primaryOrange,
-                  size: 20,
-                ),
-                label: Text(
-                  'Download PDF',
-                  style: TextStyle(
-                    color: _primaryOrange,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: _panelBorder),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 12,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
+  Future<void> _copyQrPayloadToClipboard(String payload, {String label = 'Link'}) async {
+    await Clipboard.setData(ClipboardData(text: payload));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$label copied'),
+        backgroundColor: _primaryOrange,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
       ),
     );
   }
@@ -4563,48 +5584,858 @@ class _LguDashboardState extends State<LguDashboard>
     final effectiveMunicipalityId = _effectiveLguMunicipalityId();
     final municipalityDisplayName =
         _effectiveLguQrDisplayName() ?? effectiveMunicipalityId;
+    final spots = List<TouristSpot>.from(_touristSpots)
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    final spotsNeedingQr = spots
+        .where((s) => (s.qrPayload ?? '').trim().isEmpty)
+        .toList();
+    final savedCount =
+        spots.where((s) => (s.qrPayload ?? '').trim().isNotEmpty).length;
+
+    void openAddDialog() {
+      if (effectiveMunicipalityId == null || effectiveMunicipalityId.isEmpty) {
+        return;
+      }
+      _showGenerateSpotQrDialog(
+        municipalityId: effectiveMunicipalityId,
+        municipalityDisplayName:
+            municipalityDisplayName ?? effectiveMunicipalityId,
+        candidates: spotsNeedingQr,
+      );
+    }
 
     return RefreshIndicator(
       onRefresh: _loadData,
       color: _primaryOrange,
       child: _buildFramedContentShell(
         title: 'Spot QR Codes',
-        subtitle: municipalityDisplayName != null
-            ? 'One official LGU QR for $municipalityDisplayName only ? use PNG/PDF for sharing and posters.'
-            : 'One official municipality QR only ? use PNG/PDF for sharing and posters.',
+        subtitle:
+            'Each tourist spot has its own check-in QR so you can see where visitors go.',
+        actions: [
+          if (effectiveMunicipalityId != null &&
+              effectiveMunicipalityId.isNotEmpty) ...[
+            if (!_isMobile)
+              TextButton.icon(
+                onPressed: openAddDialog,
+                icon: const Icon(Icons.add_rounded, size: 18),
+                label: const Text('Add spot QR'),
+                style: TextButton.styleFrom(
+                  foregroundColor: _primaryOrange,
+                  backgroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              )
+            else
+              IconButton(
+                tooltip: 'Add spot QR',
+                onPressed: openAddDialog,
+                icon: const Icon(Icons.add_rounded, color: Colors.white),
+              ),
+          ],
+        ],
         body: effectiveMunicipalityId == null || effectiveMunicipalityId.isEmpty
             ? Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.qr_code_2_rounded, size: 64, color: _textMuted),
-                    const SizedBox(height: 16),
-                    Text(
-                      'No municipality QR available yet',
-                      style: TextStyle(color: _textMuted, fontSize: 16),
-                    ),
-                    const SizedBox(height: 8),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
-                      child: Text(
-                        'Set your LGU municipality on the account (or ensure at least one tourist spot includes a municipality) so the official QR can load.',
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.qr_code_2_rounded, size: 56, color: _textMuted),
+                      const SizedBox(height: 14),
+                      const Text(
+                        'Municipality not set',
+                        style: TextStyle(
+                          color: _textDark,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Set your LGU municipality in Settings so spot QR codes can load.',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: _textMuted, fontSize: 14),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               )
             : SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                padding: EdgeInsets.all(_isMobile ? 12 : 16),
-                child: _buildLguQrCardForDashboard(
-                  effectiveMunicipalityId,
-                  municipalityDisplayName ?? effectiveMunicipalityId,
+                padding: EdgeInsets.all(_isMobile ? 14 : 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF7ED),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: _primaryOrange.withValues(alpha: 0.25),
+                        ),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            Icons.place_rounded,
+                            color: _primaryOrange,
+                            size: 22,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              spots.isEmpty
+                                  ? 'Add a spot QR for each attraction (e.g. Plaza, El Triunfo). '
+                                      'Scans are counted per place in Analytics.'
+                                  : '$savedCount of ${spots.length} spots have a saved QR. '
+                                      'Print each code at its location so visits show as Plaza vs El Triunfo, not a general city scan.',
+                              style: const TextStyle(
+                                color: Color(0xFF9A3412),
+                                fontSize: 13,
+                                height: 1.4,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (spots.isEmpty)
+                      Container(
+                        padding: const EdgeInsets.all(22),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: _panelBorder),
+                        ),
+                        child: Column(
+                          children: [
+                            Icon(
+                              Icons.travel_explore_rounded,
+                              size: 40,
+                              color: _textMuted,
+                            ),
+                            const SizedBox(height: 12),
+                            const Text(
+                              'No spot QRs yet',
+                              style: TextStyle(
+                                color: _textDark,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 15,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            const Text(
+                              'Add a spot QR for each attraction (e.g. Plaza, El Triunfo).',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: _textMuted,
+                                fontSize: 13,
+                                height: 1.35,
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                            FilledButton.icon(
+                              onPressed: openAddDialog,
+                              icon: const Icon(Icons.add_rounded, size: 18),
+                              label: const Text('Add spot QR'),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: _primaryOrange,
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    else
+                      ...spots.map(
+                        (spot) => Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: _buildSpotQrCard(
+                            spot: spot,
+                            municipalityId: effectiveMunicipalityId,
+                            municipalityDisplayName:
+                                municipalityDisplayName ??
+                                    effectiveMunicipalityId,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
       ),
     );
+  }
+
+  String _spotQrPayloadFor(TouristSpot spot, String municipalityId) {
+    final stored = (spot.qrPayload ?? '').trim();
+    if (stored.isNotEmpty) return stored;
+    final mid = normalizeMunicipalityId(
+      spot.municipalityId.isNotEmpty ? spot.municipalityId : municipalityId,
+    );
+    return spotQrData(
+      mid.isNotEmpty ? mid : municipalityId,
+      spot.id,
+      latitude: spot.latitude,
+      longitude: spot.longitude,
+    );
+  }
+
+  Widget _buildSpotQrCard({
+    required TouristSpot spot,
+    required String municipalityId,
+    required String municipalityDisplayName,
+  }) {
+    final mid = normalizeMunicipalityId(
+      spot.municipalityId.isNotEmpty ? spot.municipalityId : municipalityId,
+    );
+    final qrData = _spotQrPayloadFor(spot, municipalityId);
+    final hasSavedPayload = (spot.qrPayload ?? '').trim().isNotEmpty;
+    final placeLabel = spot.municipality.isNotEmpty
+        ? spot.municipality
+        : municipalityDisplayName;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _panelBorder),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 640;
+          final preview = Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF9FAFB),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _panelBorder),
+            ),
+            child: QrImageView(
+              data: qrData,
+              version: QrVersions.auto,
+              size: wide ? 96 : 120,
+              backgroundColor: Colors.white,
+              errorCorrectionLevel: QrErrorCorrectLevel.H,
+            ),
+          );
+
+          final details = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          spot.name,
+                          style: GoogleFonts.poppins(
+                            color: _textDark,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          '${spot.category} · $placeLabel',
+                          style: const TextStyle(
+                            color: _textMuted,
+                            fontSize: 12.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: hasSavedPayload
+                          ? _tintGreen
+                          : _primaryOrange.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      hasSavedPayload ? 'Ready' : 'Needs save',
+                      style: TextStyle(
+                        color: hasSavedPayload
+                            ? const Color(0xFF15803D)
+                            : _primaryOrange,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  if (!hasSavedPayload)
+                    ElevatedButton.icon(
+                      onPressed: () => _persistSpotQr(
+                        spot: spot,
+                        municipalityId: mid.isNotEmpty ? mid : municipalityId,
+                      ),
+                      icon: const Icon(Icons.save_rounded, size: 16),
+                      label: const Text('Save QR'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _primaryOrange,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        visualDensity: VisualDensity.compact,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      await downloadSpotQrPng(
+                        mid.isNotEmpty ? mid : municipalityId,
+                        spot.id,
+                        latitude: spot.latitude,
+                        longitude: spot.longitude,
+                      );
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('PNG download started (check Downloads)'),
+                          backgroundColor: _primaryOrange,
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.download_rounded, size: 16),
+                    label: const Text('PNG'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: hasSavedPayload
+                          ? _primaryOrange
+                          : const Color(0xFFEA580C),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      visualDensity: VisualDensity.compact,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      await downloadSpotQrPdf(
+                        municipalityId:
+                            mid.isNotEmpty ? mid : municipalityId,
+                        spotId: spot.id,
+                        spotName: spot.name,
+                        municipalityDisplayName: municipalityDisplayName,
+                        latitude: spot.latitude,
+                        longitude: spot.longitude,
+                      );
+                    },
+                    icon: Icon(
+                      Icons.picture_as_pdf_rounded,
+                      color: _primaryOrange,
+                      size: 16,
+                    ),
+                    label: Text(
+                      'PDF',
+                      style: TextStyle(
+                        color: _primaryOrange,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: _panelBorder),
+                      visualDensity: VisualDensity.compact,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => _copyQrPayloadToClipboard(
+                      qrData,
+                      label: 'Spot QR link',
+                    ),
+                    icon: Icon(
+                      Icons.copy_rounded,
+                      size: 15,
+                      color: _primaryOrange,
+                    ),
+                    label: Text(
+                      'Copy link',
+                      style: TextStyle(
+                        color: _primaryOrange,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          );
+
+          if (!wide) {
+            return Column(
+              children: [
+                preview,
+                const SizedBox(height: 12),
+                details,
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              preview,
+              const SizedBox(width: 14),
+              Expanded(child: details),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _persistSpotQr({
+    required TouristSpot spot,
+    required String municipalityId,
+  }) async {
+    final ok = await TouristSpotsFirestoreService.ensureSpotQrMetadata(
+      spotId: spot.id,
+      municipalityId: municipalityId,
+      latitude: spot.latitude,
+      longitude: spot.longitude,
+    );
+    if (!mounted) return;
+    if (ok) await _loadData();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Unique QR saved for ${spot.name}'
+              : 'Could not save QR. Check Firebase permissions.',
+        ),
+        backgroundColor: ok ? _primaryOrange : Colors.redAccent,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  void _showGenerateSpotQrDialog({
+    required String municipalityId,
+    required String municipalityDisplayName,
+    required List<TouristSpot> candidates,
+  }) {
+    final nameController = TextEditingController();
+    final descriptionController = TextEditingController();
+    final latController = TextEditingController();
+    final lngController = TextEditingController();
+    final anchor = getMunicipalityAnchorCoordinates(municipalityId);
+    if (anchor != null) {
+      latController.text = anchor.lat.toStringAsFixed(6);
+      lngController.text = anchor.lng.toStringAsFixed(6);
+    }
+
+    var createNewSpot = true;
+    String selectedCategory = 'Beach';
+    TouristSpot? selectedExisting =
+        candidates.isNotEmpty ? candidates.first : null;
+    var saving = false;
+
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final canGenerateExisting =
+              !createNewSpot && selectedExisting != null;
+          final generateEnabled = !saving &&
+              (createNewSpot || canGenerateExisting);
+
+          return AlertDialog(
+            backgroundColor: _cardBg,
+            title: Text(
+              'Add QR Code',
+              style: GoogleFonts.inter(
+                color: _textDark,
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            content: SizedBox(
+              width: 460,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Create a new tourist spot with its own unique QR, or attach a QR to an existing spot that still needs one. Spots with a saved QR cannot get another.',
+                      style: GoogleFonts.inter(
+                        color: _textMuted,
+                        fontSize: 13,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    SegmentedButton<bool>(
+                      segments: const [
+                        ButtonSegment<bool>(
+                          value: true,
+                          label: Text('New spot'),
+                          icon: Icon(Icons.add_location_alt_outlined, size: 18),
+                        ),
+                        ButtonSegment<bool>(
+                          value: false,
+                          label: Text('Existing'),
+                          icon: Icon(Icons.list_alt_rounded, size: 18),
+                        ),
+                      ],
+                      selected: {createNewSpot},
+                      onSelectionChanged: saving
+                          ? null
+                          : (s) => setDialogState(() {
+                                createNewSpot = s.first;
+                              }),
+                      style: ButtonStyle(
+                        foregroundColor:
+                            WidgetStateProperty.resolveWith((states) {
+                          if (states.contains(WidgetState.selected)) {
+                            return Colors.white;
+                          }
+                          return _textDark;
+                        }),
+                        backgroundColor:
+                            WidgetStateProperty.resolveWith((states) {
+                          if (states.contains(WidgetState.selected)) {
+                            return _primaryOrange;
+                          }
+                          return Colors.white;
+                        }),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (createNewSpot) ...[
+                      _buildDialogTextField(
+                        nameController,
+                        'Tourist Spot Name',
+                        Icons.place_rounded,
+                        hintText: 'e.g. Rizal Park Viewpoint',
+                      ),
+                      const SizedBox(height: 14),
+                      InputDecorator(
+                        decoration: InputDecoration(
+                          labelText: 'Category (optional)',
+                          filled: true,
+                          fillColor: const Color(0xFFF9FAFB),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: _panelBorder),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: _panelBorder),
+                          ),
+                        ),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: selectedCategory,
+                            isExpanded: true,
+                            items: _categories
+                                .where((c) => c != 'All')
+                                .map(
+                                  (c) => DropdownMenuItem(
+                                    value: c,
+                                    child: Text(c),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: saving
+                                ? null
+                                : (v) {
+                                    if (v == null) return;
+                                    setDialogState(
+                                      () => selectedCategory = v,
+                                    );
+                                  },
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      _buildDialogTextField(
+                        descriptionController,
+                        'Description (optional)',
+                        Icons.description_outlined,
+                        maxLines: 3,
+                      ),
+                      const SizedBox(height: 14),
+                      _buildSpotGpsFields(
+                        latController: latController,
+                        lngController: lngController,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Saved under $municipalityDisplayName only.',
+                        style: GoogleFonts.inter(
+                          color: _textMuted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ] else if (candidates.isEmpty) ...[
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: _tintOrange,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: _primaryOrange.withValues(alpha: 0.25),
+                          ),
+                        ),
+                        child: Text(
+                          'All existing spots already have a saved QR. Switch to New spot to add another unique code.',
+                          style: GoogleFonts.inter(
+                            color: _textDark,
+                            fontSize: 13,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ] else ...[
+                      InputDecorator(
+                        decoration: InputDecoration(
+                          labelText: 'Existing spot without QR',
+                          filled: true,
+                          fillColor: const Color(0xFFF9FAFB),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: _panelBorder),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: _panelBorder),
+                          ),
+                        ),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<TouristSpot>(
+                            value: selectedExisting,
+                            isExpanded: true,
+                            items: candidates
+                                .map(
+                                  (s) => DropdownMenuItem(
+                                    value: s,
+                                    child: Text(
+                                      s.name,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: saving
+                                ? null
+                                : (v) => setDialogState(
+                                      () => selectedExisting = v,
+                                    ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed:
+                    saving ? null : () => Navigator.pop(dialogContext),
+                child: const Text(
+                  'Cancel',
+                  style: TextStyle(color: _textMuted),
+                ),
+              ),
+              ElevatedButton.icon(
+                onPressed: !generateEnabled
+                    ? null
+                    : () async {
+                        if (createNewSpot) {
+                          final name = nameController.text.trim();
+                          if (name.isEmpty) {
+                            ScaffoldMessenger.of(this.context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Tourist Spot Name is required.',
+                                ),
+                                backgroundColor: Colors.redAccent,
+                              ),
+                            );
+                            return;
+                          }
+                          final coordError = _validateSpotCoordinates(
+                            latController.text,
+                            lngController.text,
+                          );
+                          if (coordError != null) {
+                            ScaffoldMessenger.of(this.context).showSnackBar(
+                              SnackBar(
+                                content: Text(coordError),
+                                backgroundColor: Colors.redAccent,
+                              ),
+                            );
+                            return;
+                          }
+                          final lat = _tryParseCoord(latController.text)!;
+                          final lng = _tryParseCoord(lngController.text)!;
+                          final mid = normalizeMunicipalityId(municipalityId);
+                          if (mid.isEmpty) {
+                            ScaffoldMessenger.of(this.context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Could not determine your LGU municipality.',
+                                ),
+                                backgroundColor: Colors.redAccent,
+                              ),
+                            );
+                            return;
+                          }
+
+                          setDialogState(() => saving = true);
+                          final result =
+                              await TouristSpotsFirestoreService.addSpotDetailed(
+                            TouristSpot(
+                              id: '',
+                              name: name,
+                              category: selectedCategory,
+                              municipality: municipalityDisplayName,
+                              description:
+                                  descriptionController.text.trim(),
+                              rating: 0,
+                              latitude: lat,
+                              longitude: lng,
+                              status: 'Active',
+                              visitors: 0,
+                              municipalityId: mid,
+                            ),
+                          );
+                          if (!dialogContext.mounted) return;
+                          Navigator.pop(dialogContext);
+                          if (!mounted) return;
+                          if (result.ok) await _loadData();
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(this.context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                result.ok
+                                    ? 'Unique QR created for "$name"'
+                                    : (result.error ??
+                                        'Failed to create spot QR. Check Firebase.'),
+                              ),
+                              backgroundColor: result.ok
+                                  ? _primaryOrange
+                                  : Colors.redAccent,
+                              behavior: SnackBarBehavior.floating,
+                              duration: Duration(
+                                seconds: result.ok ? 4 : 8,
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+
+                        final spot = selectedExisting;
+                        if (spot == null) return;
+                        if ((spot.qrPayload ?? '').trim().isNotEmpty) {
+                          ScaffoldMessenger.of(this.context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'This spot already has a saved QR. Pick another or create a new spot.',
+                              ),
+                              backgroundColor: Colors.redAccent,
+                            ),
+                          );
+                          return;
+                        }
+
+                        setDialogState(() => saving = true);
+                        final mid = normalizeMunicipalityId(
+                          spot.municipalityId.isNotEmpty
+                              ? spot.municipalityId
+                              : municipalityId,
+                        );
+                        final ok =
+                            await TouristSpotsFirestoreService.ensureSpotQrMetadata(
+                          spotId: spot.id,
+                          municipalityId:
+                              mid.isNotEmpty ? mid : municipalityId,
+                          latitude: spot.latitude,
+                          longitude: spot.longitude,
+                        );
+                        if (!dialogContext.mounted) return;
+                        Navigator.pop(dialogContext);
+                        if (!mounted) return;
+                        if (ok) await _loadData();
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(this.context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              ok
+                                  ? 'Unique QR generated for ${spot.name}'
+                                  : 'Failed to generate QR. Check Firebase.',
+                            ),
+                            backgroundColor:
+                                ok ? _primaryOrange : Colors.redAccent,
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      },
+                icon: saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.qr_code_2_rounded, size: 18),
+                label: Text(
+                  saving
+                      ? 'Savingâ€¦'
+                      : (createNewSpot ? 'Create & Generate' : 'Generate'),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _primaryOrange,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    ).whenComplete(() {
+      nameController.dispose();
+      descriptionController.dispose();
+      latController.dispose();
+      lngController.dispose();
+    });
   }
 
   Widget _buildSpotsFilters() {
@@ -4929,6 +6760,7 @@ class _LguDashboardState extends State<LguDashboard>
     final descriptionController = TextEditingController();
     final imageUrlController = TextEditingController();
     final vrLinkController = TextEditingController();
+    final dotCodeController = TextEditingController();
     final latController = TextEditingController();
     final lngController = TextEditingController();
     String selectedCategory = 'Beach';
@@ -5023,6 +6855,13 @@ class _LguDashboardState extends State<LguDashboard>
                       hintText: 'https://tiiny.host/? or your published tiiny.site URL',
                     ),
                     const SizedBox(height: 16),
+                    _buildDialogTextField(
+                      dotCodeController,
+                      'DOT Attraction Code (VAR 2, optional)',
+                      Icons.tag_rounded,
+                      hintText: 'e.g. 202, 108, 414',
+                    ),
+                    const SizedBox(height: 16),
                     _buildSpotGpsFields(
                       latController: latController,
                       lngController: lngController,
@@ -5102,11 +6941,16 @@ class _LguDashboardState extends State<LguDashboard>
                       status: 'Active',
                       visitors: 0,
                       municipalityId: municipalityId,
+                      dotAttractionCode: dotCodeController.text.trim(),
                     );
-                    final docId = await TouristSpotsFirestoreService.addSpot(
+                    final result =
+                        await TouristSpotsFirestoreService.addSpotDetailed(
                       spot,
                     );
-                    if (docId != null && spot.vrLink != null && spot.vrLink!.isNotEmpty) {
+                    final docId = result.id;
+                    if (docId != null &&
+                        spot.vrLink != null &&
+                        spot.vrLink!.isNotEmpty) {
                       await VrTourFirestoreService.syncAnalyticsDocForSpot(
                         spotId: docId,
                         spotName: spot.name,
@@ -5118,16 +6962,31 @@ class _LguDashboardState extends State<LguDashboard>
                     Navigator.pop(context);
                     if (docId != null && mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Tourist spot added successfully'),
+                        SnackBar(
+                          content: Text(
+                            'Tourist spot added. A unique QR was created for "${nameController.text.trim()}".',
+                          ),
                           backgroundColor: _primaryOrange,
+                          behavior: SnackBarBehavior.floating,
+                          action: SnackBarAction(
+                            label: 'View QR',
+                            textColor: Colors.white,
+                            onPressed: () {
+                              setState(() => _selectedIndex = _spotQRCodesIndex);
+                            },
+                          ),
                         ),
                       );
                     } else if (mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Failed to add spot. Check Firebase.'),
+                        SnackBar(
+                          content: Text(
+                            result.error ??
+                                'Failed to add spot. Check Firebase.',
+                          ),
                           backgroundColor: Colors.redAccent,
+                          behavior: SnackBarBehavior.floating,
+                          duration: const Duration(seconds: 8),
                         ),
                       );
                     }
@@ -5151,6 +7010,7 @@ class _LguDashboardState extends State<LguDashboard>
     final descriptionController = TextEditingController(text: spot.description);
     final imageUrlController = TextEditingController(text: spot.imageUrl ?? '');
     final vrLinkController = TextEditingController(text: spot.vrLink ?? '');
+    final dotCodeController = TextEditingController(text: spot.dotAttractionCode);
     final latController = TextEditingController(
       text: _formatCoordForField(spot.latitude),
     );
@@ -5234,6 +7094,13 @@ class _LguDashboardState extends State<LguDashboard>
                       hintText: 'https://tiiny.host/? or your published tiiny.site URL',
                     ),
                     const SizedBox(height: 16),
+                    _buildDialogTextField(
+                      dotCodeController,
+                      'DOT Attraction Code (VAR 2)',
+                      Icons.tag_rounded,
+                      hintText: 'e.g. 202, 108, 414',
+                    ),
+                    const SizedBox(height: 16),
                     _buildSpotGpsFields(
                       latController: latController,
                       lngController: lngController,
@@ -5287,6 +7154,10 @@ class _LguDashboardState extends State<LguDashboard>
                           'vr_link': vrLinkController.text.trim().isNotEmpty
                               ? vrLinkController.text.trim()
                               : null,
+                          'dotAttractionCode':
+                              dotCodeController.text.trim().isNotEmpty
+                                  ? dotCodeController.text.trim()
+                                  : null,
                           if (municipalityId.isNotEmpty)
                             'municipalityId': municipalityId,
                           'qrValue': spot.id,
@@ -5534,32 +7405,126 @@ class _LguDashboardState extends State<LguDashboard>
     return null;
   }
 
+  List<Map<String, dynamic>> _sortedTouristsByRegistrationDate(
+    List<Map<String, dynamic>> tourists,
+  ) {
+    final sorted = List<Map<String, dynamic>>.from(tourists)
+      ..sort((a, b) {
+        final aDt = _registeredDateTimeNullableFromTourist(a);
+        final bDt = _registeredDateTimeNullableFromTourist(b);
+        if (aDt == null && bDt == null) return 0;
+        if (aDt == null) return 1;
+        if (bDt == null) return -1;
+        return bDt.compareTo(aDt); // newest registration first
+      });
+    return sorted;
+  }
+
+  Widget _buildLguTouristsSummaryBar(int visibleCount) {
+    final munLabel =
+        (_municipalityName ?? _storedMunicipalityId ?? 'Your LGU').trim();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: _primaryOrange.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(
+              Icons.people_alt_rounded,
+              color: _primaryOrange,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$visibleCount of ${_tourists.length} registered tourists',
+                  style: const TextStyle(
+                    color: _textDark,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
+                ),
+                const Text(
+                  'Unique people Â· names hidden',
+                  style: TextStyle(color: _textMuted, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: const Color(0xFFECFDF3),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: const Color(0xFF86EFAC)),
+            ),
+            child: const Text(
+              'Privacy on',
+              style: TextStyle(
+                color: Color(0xFF15803D),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: const Color(0xFFDCFCE7),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: const Color(0xFF86EFAC)),
+            ),
+            child: Text(
+              munLabel,
+              style: const TextStyle(
+                color: Color(0xFF15803D),
+                fontWeight: FontWeight.w700,
+                fontSize: 11,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildTouristsContent() {
     final filteredTourists = _tourists.where((t) {
       final searchQuery = _touristsSearchController.text.toLowerCase();
-      final name = t['fullName']?.toString() ?? t['name']?.toString() ?? '';
       final id = TouristIdHelper.displayForTourist(t);
       final origin = t['city']?.toString() ?? t['origin']?.toString() ?? '';
-      final email = t['email']?.toString() ?? '';
       return searchQuery.isEmpty ||
-          name.toLowerCase().contains(searchQuery) ||
           id.toLowerCase().contains(searchQuery) ||
-          origin.toLowerCase().contains(searchQuery) ||
-          email.toLowerCase().contains(searchQuery);
+          origin.toLowerCase().contains(searchQuery);
     }).toList();
+
+    final munLabel =
+        (_municipalityName ?? _storedMunicipalityId ?? 'your municipality')
+            .trim();
 
     return RefreshIndicator(
       onRefresh: _loadData,
       color: _primaryOrange,
       child: _buildFramedContentShell(
-        title: _storedMunicipalityId != null ? 'Registered visitors' : 'Visitors',
+        title: 'Registered Tourists',
         subtitle: _storedMunicipalityId != null
-            ? 'Tourists who registered via your municipality QR or selected your '
-                  'city as a prior destination, plus anyone with a check-in here. '
-                  'Province-wide list: Governor dashboard only.'
-            : 'Assign an LGU municipality to your account to see visitor '
-                  'profiles tied to your check-ins. Province-wide registrations '
-                  'are on the Governor dashboard only.',
+            ? '$munLabel â€” unique registrations, names hidden for data privacy'
+            : 'Assign an LGU municipality to your account to see tourists who '
+                'registered here. Province-wide list is on the Governor dashboard.',
         body: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: EdgeInsets.all(_isMobile ? 12 : 16),
@@ -5567,19 +7532,22 @@ class _LguDashboardState extends State<LguDashboard>
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                _buildLguTouristsSummaryBar(filteredTourists.length),
+                const SizedBox(height: 12),
                 _buildTouristsFilters(),
                 const SizedBox(height: 16),
                 if (filteredTourists.isEmpty)
                   _buildEmptyState(
                     _storedMunicipalityId != null
-                        ? 'No visitors yet'
-                        : 'No visitors loaded',
+                        ? 'No registered tourists yet'
+                        : 'No tourists loaded',
                     icon: Icons.people_alt_rounded,
                     iconColor: _primaryOrange,
                     subtitle: _storedMunicipalityId != null
-                        ? 'New sign-ups from your QR appear here after registration. '
-                              'QR visits also appear in the Visit log.'
-                        : 'Assign your LGU municipality to load visitor profiles from check-ins.',
+                        ? 'Tourists who register via your municipality QR '
+                            '(or select this city) appear here â€” IDs only, '
+                            'same privacy as Governor.'
+                        : 'Assign your LGU municipality to load registered tourists.',
                   )
                 else if (_isMobile)
                   _buildTouristsListMobile(filteredTourists)
@@ -5602,7 +7570,7 @@ class _LguDashboardState extends State<LguDashboard>
           width: _isMobile ? double.infinity : 380,
           child: AppSearchBar(
             controller: _touristsSearchController,
-            hintText: 'Search by name, ID, or origin...',
+            hintText: 'Search by Tourist ID or origin...',
             onChanged: (value) => setState(() {}),
             horizontalPadding: 0,
             showMicrophone: false,
@@ -5641,25 +7609,14 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   Widget _buildTouristsListMobile(List<Map<String, dynamic>> tourists) {
-    int visitCount(Map<String, dynamic> t) {
-      final v = t['totalVisits'] ?? t['visits'] ?? 0;
-      if (v is int) return v;
-      if (v is num) return v.toInt();
-      return int.tryParse(v.toString()) ?? 0;
-    }
-
-    final sorted = List<Map<String, dynamic>>.from(tourists)
-      ..sort((a, b) => visitCount(b).compareTo(visitCount(a)));
+    final sorted = _sortedTouristsByRegistrationDate(tourists);
 
     return Column(
       children: sorted.map((t) {
-        final name = _getTouristDisplayName(t);
         final touristId = TouristIdHelper.displayForTourist(t);
         final origin = _getTouristOrigin(t);
         final visits = t['totalVisits'] ?? t['visits'] ?? 0;
         final isLocal = t['isLocal'] == true || t['localOrForeign'] == 'Local';
-        final avatar = _touristAvatarImage(t);
-        final hasProfileImage = avatar != null;
 
         return Container(
           margin: const EdgeInsets.only(bottom: 12),
@@ -5669,7 +7626,7 @@ class _LguDashboardState extends State<LguDashboard>
             borderRadius: BorderRadius.circular(20),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.04),
+                color: Colors.black.withValues(alpha: 0.04),
                 blurRadius: 8,
                 offset: const Offset(0, 2),
               ),
@@ -5683,37 +7640,22 @@ class _LguDashboardState extends State<LguDashboard>
               children: [
                 Row(
                   children: [
-                    CircleAvatar(
-                      radius: 20,
-                      backgroundColor: _primaryOrange.withOpacity(0.15),
-                      backgroundImage: avatar,
-                      child: hasProfileImage
-                          ? null
-                          : Text(
-                              name.isNotEmpty
-                                  ? name.substring(0, 1).toUpperCase()
-                                  : '?',
-                              style: const TextStyle(
-                                color: _primaryOrange,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                    ),
+                    _buildVisitPrivacyAvatar(radius: 20),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          _buildVisitTouristIdChip(touristId, maxWidth: 220),
+                          const SizedBox(height: 4),
                           Text(
-                            name,
-                            style: const TextStyle(
-                              color: _textDark,
-                              fontWeight: FontWeight.w600,
+                            'From: $origin',
+                            style: TextStyle(
+                              color: _textMuted,
+                              fontSize: 12,
+                              fontStyle:
+                                  origin == '?' ? FontStyle.italic : null,
                             ),
-                          ),
-                          Text(
-                            touristId,
-                            style: TextStyle(color: _textMuted, fontSize: 12),
                           ),
                         ],
                       ),
@@ -5728,8 +7670,8 @@ class _LguDashboardState extends State<LguDashboard>
                           ),
                           decoration: BoxDecoration(
                             color: isLocal
-                                ? Colors.green.withOpacity(0.12)
-                                : Colors.purple.withOpacity(0.12),
+                                ? Colors.green.withValues(alpha: 0.12)
+                                : Colors.purple.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(28),
                           ),
                           child: Text(
@@ -5746,8 +7688,8 @@ class _LguDashboardState extends State<LguDashboard>
                         const SizedBox(height: 4),
                         Text(
                           '$visits visits',
-                          style: TextStyle(
-                            color: const Color(0xFF0284C7),
+                          style: const TextStyle(
+                            color: Color(0xFF0284C7),
                             fontSize: 11,
                             fontWeight: FontWeight.w500,
                           ),
@@ -5758,21 +7700,12 @@ class _LguDashboardState extends State<LguDashboard>
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'From: $origin',
-                  style: TextStyle(
-                    color: _textMuted,
-                    fontSize: 12,
-                    fontStyle: origin == '?' ? FontStyle.italic : null,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
                   'Date: ${_formatRegisteredDateOnlyDisplay(_registeredDateTimeNullableFromTourist(t))}',
-                  style: TextStyle(color: _textMuted, fontSize: 11),
+                  style: const TextStyle(color: _textMuted, fontSize: 11),
                 ),
                 Text(
                   'Time: ${_formatRegisteredTimeOnlyDisplay(_registeredDateTimeNullableFromTourist(t))}',
-                  style: TextStyle(color: _textMuted, fontSize: 11),
+                  style: const TextStyle(color: _textMuted, fontSize: 11),
                 ),
               ],
             ),
@@ -5783,16 +7716,7 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   Widget _buildTouristsTable(List<Map<String, dynamic>> tourists) {
-    // Sort by visits descending (most visits first / by rank)
-    int visitCount(Map<String, dynamic> t) {
-      final v = t['totalVisits'] ?? t['visits'] ?? 0;
-      if (v is int) return v;
-      if (v is num) return v.toInt();
-      return int.tryParse(v.toString()) ?? 0;
-    }
-
-    final sorted = List<Map<String, dynamic>>.from(tourists)
-      ..sort((a, b) => visitCount(b).compareTo(visitCount(a)));
+    final sorted = _sortedTouristsByRegistrationDate(tourists);
 
     return Container(
       decoration: BoxDecoration(
@@ -5800,7 +7724,7 @@ class _LguDashboardState extends State<LguDashboard>
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withValues(alpha: 0.04),
             blurRadius: 12,
             offset: const Offset(0, 2),
           ),
@@ -5812,17 +7736,16 @@ class _LguDashboardState extends State<LguDashboard>
           scrollDirection: Axis.horizontal,
           child: DataTable(
             headingRowColor: WidgetStateProperty.all(Colors.grey.shade50),
-            headingTextStyle: TextStyle(
+            headingTextStyle: const TextStyle(
               color: _textDark,
               fontWeight: FontWeight.w700,
               fontSize: 13,
             ),
-            dataTextStyle: TextStyle(color: _textDark, fontSize: 14),
+            dataTextStyle: const TextStyle(color: _textDark, fontSize: 14),
             dividerThickness: 0,
             horizontalMargin: 20,
             columnSpacing: 28,
             columns: const [
-              DataColumn(label: Text('Name')),
               DataColumn(label: Text('Tourist ID')),
               DataColumn(label: Text('Type')),
               DataColumn(label: Text('Origin')),
@@ -5833,18 +7756,13 @@ class _LguDashboardState extends State<LguDashboard>
               DataColumn(label: Text('Actions')),
             ],
             rows: sorted.map((t) {
-              final name = _getTouristDisplayName(t);
-              final touristId =
-                  TouristIdHelper.displayForTourist(t);
+              final touristId = TouristIdHelper.displayForTourist(t);
               final origin = _getTouristOrigin(t);
               final visits = t['totalVisits'] ?? t['visits'] ?? 0;
               final regDt = _registeredDateTimeNullableFromTourist(t);
               final isLocal =
                   t['isLocal'] == true || t['localOrForeign'] == 'Local';
               final status = t['status']?.toString() ?? 'Active';
-              final avatar = _touristAvatarImage(t);
-              final hasProfileImage = avatar != null;
-              final email = t['email']?.toString() ?? '';
 
               return DataRow(
                 cells: [
@@ -5852,54 +7770,10 @@ class _LguDashboardState extends State<LguDashboard>
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        CircleAvatar(
-                          radius: 18,
-                          backgroundColor: _primaryOrange.withOpacity(0.15),
-                          backgroundImage: avatar,
-                          child: hasProfileImage
-                              ? null
-                              : Text(
-                                  name.isNotEmpty
-                                      ? name.substring(0, 1).toUpperCase()
-                                      : '?',
-                                  style: const TextStyle(
-                                    color: _primaryOrange,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                        ),
-                        const SizedBox(width: 12),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              name,
-                              style: const TextStyle(
-                                color: _textDark,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 14,
-                              ),
-                            ),
-                            if (email.isNotEmpty)
-                              Text(
-                                email,
-                                style: TextStyle(
-                                  color: _textMuted,
-                                  fontSize: 12,
-                                ),
-                              ),
-                          ],
-                        ),
+                        _buildVisitPrivacyAvatar(radius: 16),
+                        const SizedBox(width: 10),
+                        _buildVisitTouristIdChip(touristId, maxWidth: 180),
                       ],
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      touristId,
-                      style: TextStyle(color: _textMuted, fontSize: 13),
                     ),
                   ),
                   DataCell(
@@ -5910,8 +7784,8 @@ class _LguDashboardState extends State<LguDashboard>
                       ),
                       decoration: BoxDecoration(
                         color: isLocal
-                            ? Colors.green.withOpacity(0.12)
-                            : Colors.purple.withOpacity(0.12),
+                            ? Colors.green.withValues(alpha: 0.12)
+                            : Colors.purple.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(28),
                       ),
                       child: Text(
@@ -5955,7 +7829,7 @@ class _LguDashboardState extends State<LguDashboard>
                         vertical: 5,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF0EA5E9).withOpacity(0.12),
+                        color: const Color(0xFF0EA5E9).withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(28),
                       ),
                       child: Text(
@@ -5976,8 +7850,8 @@ class _LguDashboardState extends State<LguDashboard>
                       ),
                       decoration: BoxDecoration(
                         color: status == 'Active'
-                            ? Colors.green.withOpacity(0.12)
-                            : Colors.red.withOpacity(0.12),
+                            ? Colors.green.withValues(alpha: 0.12)
+                            : Colors.red.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(28),
                       ),
                       child: Text(
@@ -6004,7 +7878,7 @@ class _LguDashboardState extends State<LguDashboard>
                       style: IconButton.styleFrom(
                         backgroundColor: const Color(
                           0xFF0EA5E9,
-                        ).withOpacity(0.1),
+                        ).withValues(alpha: 0.1),
                       ),
                     ),
                   ),
@@ -6052,61 +7926,42 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   void _showTouristDetailsDialog(Map<String, dynamic> tourist) {
-    final name = _getTouristDisplayName(tourist);
     final touristId = TouristIdHelper.displayForTourist(tourist);
-    final email = tourist['email']?.toString() ?? 'N/A';
-    final mobile = tourist['mobile']?.toString() ?? 'N/A';
-    final nationality = tourist['nationality']?.toString() ?? 'N/A';
     final isLocal =
         tourist['isLocal'] == true || tourist['localOrForeign'] == 'Local';
     final visits = tourist['totalVisits'] ?? tourist['visits'] ?? 0;
     final status = tourist['status']?.toString() ?? 'Active';
-    final avatar = _touristAvatarImage(tourist);
-    final hasProfileImage = avatar != null;
-
-    // Build origin string
-    String origin = '';
-    if (tourist['city'] != null) {
-      origin = tourist['city'];
-      if (tourist['province'] != null) origin += ', ${tourist['province']}';
-      if (tourist['country'] != null) origin += ', ${tourist['country']}';
-    } else {
-      origin = tourist['origin']?.toString() ?? 'N/A';
-    }
+    final origin = _getTouristOrigin(tourist);
 
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: _cardBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Row(
           children: [
-            CircleAvatar(
-              radius: 24,
-              backgroundColor: _primaryOrange.withOpacity(0.2),
-              backgroundImage: avatar,
-              child: hasProfileImage
-                  ? null
-                  : Text(
-                      name.substring(0, 1).toUpperCase(),
-                      style: const TextStyle(
-                        color: _primaryOrange,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 20,
-                      ),
-                    ),
-            ),
-            const SizedBox(width: 16),
+            _buildVisitPrivacyAvatar(radius: 22),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    name,
-                    style: const TextStyle(color: _textDark, fontSize: 18),
+                  const Text(
+                    'Registered tourist',
+                    style: TextStyle(
+                      color: _textMuted,
+                      fontWeight: FontWeight.w500,
+                      fontSize: 12,
+                    ),
                   ),
                   Text(
                     touristId,
-                    style: TextStyle(color: _textMuted, fontSize: 12),
+                    style: const TextStyle(
+                      color: _textDark,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16,
+                      fontFamily: 'monospace',
+                    ),
                   ),
                   const SizedBox(height: 4),
                   Row(
@@ -6118,8 +7973,8 @@ class _LguDashboardState extends State<LguDashboard>
                         ),
                         decoration: BoxDecoration(
                           color: isLocal
-                              ? Colors.green.withOpacity(0.15)
-                              : Colors.purple.withOpacity(0.15),
+                              ? Colors.green.withValues(alpha: 0.15)
+                              : Colors.purple.withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Text(
@@ -6138,8 +7993,8 @@ class _LguDashboardState extends State<LguDashboard>
                         ),
                         decoration: BoxDecoration(
                           color: status == 'Active'
-                              ? Colors.green.withOpacity(0.15)
-                              : Colors.red.withOpacity(0.15),
+                              ? Colors.green.withValues(alpha: 0.15)
+                              : Colors.red.withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Text(
@@ -6159,81 +8014,172 @@ class _LguDashboardState extends State<LguDashboard>
             ),
           ],
         ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade200,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: QrImageView(
-                  data: touristId,
-                  version: QrVersions.auto,
-                  size: 150,
-                  backgroundColor: Colors.white,
-                ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Name hidden for data privacy',
+              style: TextStyle(color: _textMuted, fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            _buildDetailRow('Tourist ID', touristId),
+            _buildDetailRow('Origin', origin),
+            _buildDetailRow('Total Visits', '$visits'),
+            _buildDetailRow(
+              'Date registered',
+              _formatRegisteredDateOnlyDisplay(
+                _registeredDateTimeNullableFromTourist(tourist),
               ),
-              const SizedBox(height: 20),
-              _buildDetailRow('Email', email),
-              _buildDetailRow('Mobile', mobile),
-              _buildDetailRow('Nationality', nationality),
-              _buildDetailRow('Origin', origin),
-              _buildDetailRow('Total Visits', '$visits'),
-              _buildDetailRow(
-                'Date registered',
-                _formatRegisteredDateOnlyDisplay(
-                  _registeredDateTimeNullableFromTourist(tourist),
-                ),
+            ),
+            _buildDetailRow(
+              'Time registered',
+              _formatRegisteredTimeOnlyDisplay(
+                _registeredDateTimeNullableFromTourist(tourist),
               ),
-              _buildDetailRow(
-                'Time registered',
-                _formatRegisteredTimeOnlyDisplay(
-                  _registeredDateTimeNullableFromTourist(tourist),
-                ),
-              ),
-              if (tourist['travelHistory'] != null) ...[
-                const Divider(color: Colors.white24, height: 24),
-                const Text(
-                  'Travel History',
-                  style: TextStyle(
-                    color: _primaryOrange,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                _buildDetailRow(
-                  '1st Destination',
-                  tourist['travelHistory']['firstDestination'] ?? 'N/A',
-                ),
-                _buildDetailRow(
-                  '2nd Destination',
-                  tourist['travelHistory']['secondDestination'] ?? 'N/A',
-                ),
-                _buildDetailRow(
-                  '3rd Destination',
-                  tourist['travelHistory']['thirdDestination'] ?? 'N/A',
-                ),
-                _buildDetailRow(
-                  'How Heard About',
-                  tourist['travelHistory']['howHeardAbout'] ?? 'N/A',
-                ),
-              ],
-              if (tourist['transportation'] != null)
-                _buildDetailRow('Transportation', tourist['transportation']),
-            ],
-          ),
+            ),
+          ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Close', style: TextStyle(color: _primaryOrange)),
+            child: const Text('Close', style: TextStyle(color: _textMuted)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _confirmDeleteTouristAccount(tourist);
+            },
+            child: const Text(
+              'Delete account',
+              style: TextStyle(
+                color: Color(0xFFDC2626),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _confirmDeleteTouristAccount(Map<String, dynamic> tourist) async {
+    final touristId = TouristIdHelper.displayForTourist(tourist);
+    final uid = TouristAccountAdminService.resolveTouristUid(tourist);
+    if (uid == null || uid.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Cannot delete: tourist id is missing.'),
+          backgroundColor: Color(0xFFDC2626),
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _cardBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Delete tourist account?',
+          style: TextStyle(color: _textDark, fontWeight: FontWeight.w700),
+        ),
+        content: Text(
+          'This permanently removes tourist $touristId from ATMOS-TRS '
+          '(profile, check-ins, and login). This cannot be undone.',
+          style: const TextStyle(color: _textMuted, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: _textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    BuildContext? loadingDialogContext;
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        useRootNavigator: true,
+        builder: (ctx) {
+          loadingDialogContext = ctx;
+          return const PopScope(
+            canPop: false,
+            child: Center(
+              child: Card(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: CircularProgressIndicator(color: _primaryOrange),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+
+    void closeLoadingDialog() {
+      final dialogCtx = loadingDialogContext;
+      if (dialogCtx != null && dialogCtx.mounted) {
+        Navigator.of(dialogCtx).pop();
+      }
+    }
+
+    try {
+      final result =
+          await TouristAccountAdminService.deleteTouristAccount(uid);
+      if (!mounted) return;
+      closeLoadingDialog();
+      setState(() {
+        _tourists = _tourists
+            .where((t) {
+              final id = TouristAccountAdminService.resolveTouristUid(t);
+              return id != uid &&
+                  !TouristAccountAdminService.isDeletedTouristRow(t);
+            })
+            .toList(growable: true);
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.authDeleted
+                ? 'Deleted account for $touristId'
+                : 'Removed $touristId from Registered Tourists.',
+          ),
+          backgroundColor: _primaryOrange,
+        ),
+      );
+      unawaited(_loadData());
+    } catch (e) {
+      if (!mounted) return;
+      closeLoadingDialog();
+      final message = e is FirebaseFunctionsException
+          ? TouristAccountAdminService.userFacingError(e)
+          : e
+              .toString()
+              .replaceFirst('Bad state: ', '')
+              .replaceFirst('Exception: ', '');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: const Color(0xFFDC2626),
+        ),
+      );
+    }
   }
 
   DateTime? _registeredDateTimeNullableFromTourist(Map<String, dynamic> t) {
@@ -6345,7 +8291,7 @@ class _LguDashboardState extends State<LguDashboard>
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                'Visitors export',
+                'Registered Tourists export',
                 style: const TextStyle(
                   color: _textDark,
                   fontSize: 20,
@@ -6370,7 +8316,7 @@ class _LguDashboardState extends State<LguDashboard>
                 child: _tourists.isEmpty
                     ? Center(
                         child: Text(
-                          'No visitors to export.',
+                          'No registered tourists to export.',
                           style: TextStyle(color: _textMuted, fontSize: 16),
                         ),
                       )
@@ -6473,447 +8419,15 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
-  /// Renders generated report text as a printable ?paper? document (not raw monospace).
-  Widget _buildReportDocumentBody(String content) {
-    final lines = content.split('\n');
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: _parseReportLinesToDocumentWidgets(lines),
-    );
-  }
-
-  List<Widget> _parseReportLinesToDocumentWidgets(List<String> lines) {
-    final out = <Widget>[];
-    for (final line in lines) {
-      final t = line.trimRight();
-      if (t.isEmpty) {
-        out.add(const SizedBox(height: 8));
-        continue;
-      }
-      if (t.startsWith('===') && t.endsWith('===')) {
-        final inner = t.replaceAll('=', '').trim();
-        out.add(
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Text(
-              inner,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: _textDark,
-                fontSize: 20,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.4,
-              ),
-            ),
-          ),
-        );
-        out.add(Divider(color: Colors.grey.shade300, thickness: 1.2));
-        out.add(const SizedBox(height: 12));
-        continue;
-      }
-      if (t.startsWith('---') && t.endsWith('---')) {
-        final inner = t.replaceAll('-', '').trim();
-        out.add(const SizedBox(height: 8));
-        out.add(_reportDocumentSectionHeader(inner));
-        out.add(const SizedBox(height: 10));
-        continue;
-      }
-      if (RegExp(r'^\s{2,}').hasMatch(line) && line.trim().isNotEmpty) {
-        out.add(
-          Padding(
-            padding: const EdgeInsets.only(bottom: 6, left: 4),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: const Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
-                ),
-                child: SelectableText(
-                  line.trim(),
-                  style: const TextStyle(
-                    color: _textDark,
-                    fontSize: 11.5,
-                    height: 1.35,
-                    fontFamily: 'monospace',
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-        continue;
-      }
-      final colonIdx = t.indexOf(':');
-      if (colonIdx > 0) {
-        final key = t.substring(0, colonIdx).trim();
-        final val = t.substring(colonIdx + 1).trim();
-        if (val.isEmpty) {
-          out.add(
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Text(
-                t,
-                style: const TextStyle(
-                  color: _textDark,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          );
-        } else {
-          out.add(_reportDocumentKeyValueRow(key, val));
-        }
-        continue;
-      }
-      out.add(
-        Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: SelectableText(
-            t,
-            style: const TextStyle(
-              color: _textDark,
-              fontSize: 13,
-              height: 1.45,
-            ),
-          ),
-        ),
-      );
-    }
-    return out;
-  }
-
-  Widget _reportDocumentSectionHeader(String title) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: _primaryOrange.withOpacity(0.12),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Text(
-        title.toUpperCase(),
-        style: const TextStyle(
-          color: _textDark,
-          fontSize: 12,
-          fontWeight: FontWeight.w800,
-          letterSpacing: 0.9,
-        ),
-      ),
-    );
-  }
-
-  Widget _reportDocumentKeyValueRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          if (constraints.maxWidth < 420) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: Colors.grey.shade700,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                SelectableText(
-                  value,
-                  style: const TextStyle(
-                    color: _textDark,
-                    fontSize: 13,
-                    height: 1.4,
-                  ),
-                ),
-              ],
-            );
-          }
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                width: 168,
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    color: Colors.grey.shade700,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              Expanded(
-                child: SelectableText(
-                  value,
-                  style: const TextStyle(
-                    color: _textDark,
-                    fontSize: 13,
-                    height: 1.4,
-                  ),
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  void _showExportPreview(
-    String title,
-    String content, {
-    String? csvData,
-    String? csvFilename,
-    String? detailCsvData,
-    String? detailCsvFilename,
-  }) {
-    final fullScreenWeb = kIsWeb;
-    showDialog<void>(
-      context: context,
-      barrierDismissible: !fullScreenWeb,
-      builder: (dialogContext) {
-        final mq = MediaQuery.of(context);
-        final dialogW =
-            fullScreenWeb ? mq.size.width : math.min(720.0, mq.size.width - 40);
-        final dialogH =
-            fullScreenWeb ? mq.size.height : mq.size.height * 0.82;
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: fullScreenWeb
-              ? EdgeInsets.zero
-              : const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 24,
-                ),
-          child: SizedBox(
-            width: dialogW,
-            height: dialogH,
-            child: Material(
-              color: Colors.white,
-              elevation: fullScreenWeb ? 0 : 8,
-              shadowColor: Colors.black26,
-              borderRadius: fullScreenWeb
-                  ? BorderRadius.zero
-                  : BorderRadius.circular(26),
-              clipBehavior: Clip.antiAlias,
-              child: Column(
-                children: [
-                  Container(
-                    width: double.infinity,
-                    padding: EdgeInsets.fromLTRB(20, fullScreenWeb ? 14 : 18, 12, fullScreenWeb ? 14 : 18),
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Color(0xFFEA580C), Color(0xFFF97316)],
-                        begin: Alignment.centerLeft,
-                        end: Alignment.centerRight,
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: const Icon(
-                            Icons.description_outlined,
-                            color: Colors.white,
-                            size: 26,
-                          ),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                title,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: 0.2,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                'ATMOS-TRS ? LGU Office ? Export preview',
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(0.92),
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (fullScreenWeb)
-                          IconButton(
-                            tooltip: 'Close',
-                            onPressed: () => Navigator.pop(dialogContext),
-                            icon: const Icon(Icons.close_rounded, color: Colors.white),
-                          ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: Container(
-                      color: const Color(0xFFE8E8E8),
-                      padding: EdgeInsets.all(fullScreenWeb ? 20 : 16),
-                      child: Scrollbar(
-                        thumbVisibility: true,
-                        child: SingleChildScrollView(
-                          child: Align(
-                            alignment: Alignment.topCenter,
-                            child: Container(
-                              width: double.infinity,
-                              constraints: fullScreenWeb
-                                  ? const BoxConstraints(maxWidth: 960)
-                                  : null,
-                              margin: fullScreenWeb
-                                  ? const EdgeInsets.symmetric(horizontal: 24)
-                                  : null,
-                              padding:
-                                  const EdgeInsets.fromLTRB(28, 32, 28, 36),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(4),
-                                boxShadow: const [
-                                  BoxShadow(
-                                    color: Color(0x1A000000),
-                                    blurRadius: 12,
-                                    offset: Offset(0, 4),
-                                  ),
-                                ],
-                              ),
-                              child: _buildReportDocumentBody(content),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(color: const Color(0xFFFFFBF7)),
-                    child: Wrap(
-                      alignment: WrapAlignment.end,
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        if (csvData != null &&
-                            csvData.isNotEmpty &&
-                            csvFilename != null &&
-                            csvFilename.isNotEmpty)
-                          TextButton.icon(
-                            onPressed: () async {
-                              await downloadCsvFile(csvFilename, csvData);
-                              if (!dialogContext.mounted) return;
-                              Navigator.pop(dialogContext);
-                              if (!mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    csvDownloadUsesClipboard
-                                        ? 'Summary CSV copied ? paste into Excel'
-                                        : 'Summary CSV download started',
-                                  ),
-                                  backgroundColor: _primaryOrange,
-                                  behavior: SnackBarBehavior.floating,
-                                ),
-                              );
-                            },
-                            icon: Icon(
-                              Icons.table_chart_rounded,
-                              color: _primaryOrange,
-                              size: 20,
-                            ),
-                            label: Text(
-                              'Download summary CSV',
-                              style: TextStyle(
-                                color: _primaryOrange,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        if (detailCsvData != null &&
-                            detailCsvData.isNotEmpty &&
-                            detailCsvFilename != null &&
-                            detailCsvFilename.isNotEmpty)
-                          TextButton.icon(
-                            onPressed: () async {
-                              await downloadCsvFile(
-                                detailCsvFilename,
-                                detailCsvData,
-                              );
-                              if (!dialogContext.mounted) return;
-                              Navigator.pop(dialogContext);
-                              if (!mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    csvDownloadUsesClipboard
-                                        ? 'Detail log CSV copied ? paste into Excel'
-                                        : 'Detail log CSV download started',
-                                  ),
-                                  backgroundColor: _primaryOrange,
-                                  behavior: SnackBarBehavior.floating,
-                                ),
-                              );
-                            },
-                            icon: Icon(
-                              Icons.list_alt_rounded,
-                              color: _primaryOrange,
-                              size: 20,
-                            ),
-                            label: Text(
-                              'Download detail log',
-                              style: TextStyle(
-                                color: _primaryOrange,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        TextButton(
-                          onPressed: () => Navigator.pop(dialogContext),
-                          child: const Text(
-                            'Close',
-                            style: TextStyle(
-                              color: _primaryOrange,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   // ==================== ANALYTICS (LGU-scoped) ====================
+  /// 0 = Overview (insights + charts), 1 = DOT exports
+  int _analyticsTab = 0;
+
   Widget _buildAnalyticsContent() {
+    final city = (_municipalityName ?? _storedMunicipalityId ?? 'your LGU').trim();
     final subtitle = _municipalityName != null
-        ? '$_municipalityName ? insights from your check-ins and registered visitors'
-        : 'Insights from loaded check-ins and visitors (sign in with a municipality account to scope data)';
+        ? '$city — insights and municipal DOT exports'
+        : 'Insights and municipal DOT exports from loaded check-ins';
 
     return RefreshIndicator(
       onRefresh: _loadData,
@@ -6921,159 +8435,535 @@ class _LguDashboardState extends State<LguDashboard>
       child: _buildFramedContentShell(
         title: 'Analytics',
         subtitle: subtitle,
-        body: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.all(_isMobile ? 16 : 24),
-          child: Column(
-            children: [
-              _buildLguAnalyticsCards(),
-              const SizedBox(height: 24),
-              _buildLguVisitorTrendsChart(),
-              const SizedBox(height: 24),
-              _buildLguTopSpotsChart(),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLguAnalyticsCards() {
-    return GridView.count(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisCount: _isMobile ? 2 : 4,
-      crossAxisSpacing: 16,
-      mainAxisSpacing: 16,
-      childAspectRatio: _isMobile ? 1.05 : 1.42,
-      children: [
-        _buildLguAnalyticsCard(
-          'Daily Avg',
-          '$_lguAnalyticsDailyAvg',
-          Icons.calendar_today,
-          Colors.blue,
-        ),
-        _buildLguAnalyticsCard(
-          'Peak Hour',
-          _lguAnalyticsPeakHour,
-          Icons.access_time,
-          _primaryOrange,
-        ),
-        _buildLguAnalyticsCard(
-          'Top Origin',
-          _lguAnalyticsTopOrigin,
-          Icons.flight,
-          Colors.green,
-        ),
-        _buildLguAnalyticsCard(
-          'Active Spots',
-          '${_touristSpots.where((s) => s.status == 'Active').length}',
-          Icons.place_rounded,
-          Colors.purple,
-        ),
-      ],
-    );
-  }
-
-  Widget _buildLguAnalyticsCard(
-    String label,
-    String value,
-    IconData icon,
-    Color color,
-  ) {
-    final softTint = Color.lerp(Colors.white, color, 0.07) ?? Colors.white;
-    final deepTint = Color.lerp(Colors.white, color, 0.13) ?? Colors.white;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: _kAnalyticsSurfaceBorder),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Colors.white, softTint, deepTint],
-          stops: const [0.0, 0.48, 1.0],
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: color.withOpacity(0.28),
-            blurRadius: 30,
-            offset: const Offset(0, 12),
-            spreadRadius: -8,
-          ),
-          BoxShadow(
-            color: Colors.black.withOpacity(0.12),
-            blurRadius: 22,
-            offset: const Offset(0, 9),
-          ),
-          BoxShadow(
-            color: Colors.white.withOpacity(0.74),
-            blurRadius: 14,
-            offset: const Offset(0, -2),
-            spreadRadius: -8,
-          ),
+        actions: [
+          if (_analyticsTab == 0)
+            Tooltip(
+              message: 'Save an image of analytics (key insights and charts)',
+              child: IconButton(
+                onPressed: _reportsScreenshotBusy
+                    ? null
+                    : _captureReportsSectionScreenshot,
+                icon: _reportsScreenshotBusy
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: _primaryOrange,
+                        ),
+                      )
+                    : const Icon(Icons.screenshot_monitor_outlined),
+                color: Colors.white,
+              ),
+            ),
         ],
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                _isMobile ? 16 : 24,
+                16,
+                _isMobile ? 16 : 24,
+                0,
+              ),
+              child: _buildAnalyticsSegmentTabs(),
+            ),
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                switchInCurve: Curves.easeOut,
+                switchOutCurve: Curves.easeIn,
+                child: _analyticsTab == 0
+                    ? KeyedSubtree(
+                        key: const ValueKey('analytics-overview'),
+                        child: _buildAnalyticsOverviewScroll(city),
+                      )
+                    : KeyedSubtree(
+                        key: const ValueKey('analytics-exports'),
+                        child: _buildAnalyticsExportsScroll(),
+                      ),
+              ),
+            ),
+          ],
+        ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            height: 3,
-            margin: const EdgeInsets.only(bottom: 8),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              gradient: LinearGradient(
-                colors: [
-                  color.withOpacity(0.0),
-                  color.withOpacity(0.58),
-                  color.withOpacity(0.0),
+    );
+  }
+
+  Widget _buildAnalyticsSegmentTabs() {
+    Widget chip(String label, IconData icon, int index) {
+      final selected = _analyticsTab == index;
+      return Expanded(
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => setState(() => _analyticsTab = index),
+            borderRadius: BorderRadius.circular(12),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 10),
+              decoration: BoxDecoration(
+                color: selected ? _primaryOrange : Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: selected ? _primaryOrange : _panelBorder,
+                ),
+                boxShadow: selected
+                    ? [
+                        BoxShadow(
+                          color: _primaryOrange.withValues(alpha: 0.22),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    icon,
+                    size: 17,
+                    color: selected ? Colors.white : _textMuted,
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      label,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: selected ? Colors.white : _textDark,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
           ),
-          Center(
-            child: Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.16),
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: _kAnalyticsSurfaceBorder, width: 1),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3F4F6),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          chip('Overview', Icons.insights_rounded, 0),
+          const SizedBox(width: 6),
+          chip('DOT exports', Icons.description_outlined, 1),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAnalyticsOverviewScroll(String city) {
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: EdgeInsets.fromLTRB(
+        _isMobile ? 16 : 24,
+        16,
+        _isMobile ? 16 : 24,
+        28,
+      ),
+      child: RepaintBoundary(
+        key: _reportsRepaintKey,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _buildAnalyticsIntroBanner(city),
+            const SizedBox(height: 18),
+            Text(
+              'Key insights',
+              style: GoogleFonts.poppins(
+                color: _textDark,
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.2,
               ),
-              child: Icon(icon, color: color, size: 24),
             ),
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: Center(
-              child: Text(
-                value,
-                style: TextStyle(
-                  color: _textDark,
-                  fontSize: value.contains('\n') || value.length > 18
-                      ? 14
-                      : (value.length > 12 ? 17 : 22),
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.3,
-                  height: 1.2,
-                ),
-                textAlign: TextAlign.center,
-                maxLines: 4,
-                overflow: TextOverflow.ellipsis,
+            const SizedBox(height: 4),
+            const Text(
+              'From check-ins and registrations in your municipality',
+              style: TextStyle(color: _textMuted, fontSize: 12.5, height: 1.35),
+            ),
+            const SizedBox(height: 12),
+            _buildLguAnalyticsCards(),
+            const SizedBox(height: 22),
+            Text(
+              'Trends & rankings',
+              style: GoogleFonts.poppins(
+                color: _textDark,
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.2,
               ),
             ),
-          ),
+            const SizedBox(height: 4),
+            const Text(
+              'Visitor movement and most visited spots',
+              style: TextStyle(color: _textMuted, fontSize: 12.5, height: 1.35),
+            ),
+            const SizedBox(height: 12),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final sideBySide = !_isMobile && constraints.maxWidth >= 980;
+                if (!sideBySide) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildLguVisitorTrendsChart(),
+                      const SizedBox(height: 14),
+                      _buildLguTopSpotsChart(),
+                    ],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(flex: 5, child: _buildLguVisitorTrendsChart()),
+                    const SizedBox(width: 14),
+                    Expanded(flex: 4, child: _buildLguTopSpotsChart()),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAnalyticsExportsScroll() {
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: EdgeInsets.fromLTRB(
+        _isMobile ? 16 : 24,
+        16,
+        _isMobile ? 16 : 24,
+        28,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
           Text(
-            label.toUpperCase(),
-            style: TextStyle(
-              color: _textMuted,
-              fontSize: 10,
+            'Municipal DOT exports',
+            style: GoogleFonts.poppins(
+              color: _textDark,
+              fontSize: 15,
               fontWeight: FontWeight.w700,
-              height: 1.15,
-              letterSpacing: 0.7,
+              letterSpacing: -0.2,
             ),
-            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Official Supabase templates filled from your LGU check-ins only',
+            style: TextStyle(color: _textMuted, fontSize: 12.5, height: 1.35),
+          ),
+          const SizedBox(height: 14),
+          _buildLguDotReportExports(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAnalyticsIntroBanner(String city) {
+    final visits = _realCheckIns.length;
+    final tourists = _realTouristsList.length;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        _isMobile ? 16 : 20,
+        _isMobile ? 16 : 18,
+        _isMobile ? 16 : 20,
+        _isMobile ? 16 : 18,
+      ),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFFFFF7ED),
+            Color(0xFFFFEDD5),
+            Color(0xFFFFF1E6),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _primaryOrange.withValues(alpha: 0.22)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  city,
+                  style: GoogleFonts.poppins(
+                    color: _textDark,
+                    fontSize: _isMobile ? 17 : 19,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Live snapshot of visits, origins, and spot performance',
+                  style: TextStyle(
+                    color: _textMuted,
+                    fontSize: 12.5,
+                    height: 1.35,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _analyticsStatChip('$visits recent visits'),
+                    _analyticsStatChip('$tourists registered'),
+                    _analyticsStatChip(
+                      '${_touristSpots.where((s) => s.status == 'Active').length} active spots',
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          if (!_isMobile) ...[
+            const SizedBox(width: 12),
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.85),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: const Icon(
+                Icons.analytics_rounded,
+                color: Color(0xFFEA580C),
+                size: 26,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _analyticsStatChip(String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.88),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: _primaryOrange.withValues(alpha: 0.18)),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: Color(0xFF9A3412),
+          fontSize: 11.5,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLguDotReportExports() {
+    final scopeName = (_municipalityName ?? _storedMunicipalityId ?? 'LGU')
+        .trim();
+    final scopeLabel = scopeName.toLowerCase().contains('misamis occidental')
+        ? scopeName
+        : '$scopeName, Misamis Occidental';
+    final slug = normalizeMunicipalityId(_storedMunicipalityId);
+    final catalog = _touristSpots
+        .map(
+          (s) => DotVar2SpotCatalogEntry(
+            spotId: s.id,
+            name: s.name,
+            dotAttractionCode: s.dotAttractionCode,
+          ),
+        )
+        .toList();
+
+    return DotReportExportPanel(
+      primaryColor: _primaryOrange,
+      textDark: _textDark,
+      textMuted: _textMuted,
+      borderColor: _panelBorder,
+      scopeLabel: scopeLabel,
+      scopeSlug: slug.isEmpty ? 'lgu' : slug,
+      isProvincial: false,
+      isMobile: _isMobile,
+      municipalityId: _storedMunicipalityId,
+      checkIns: _realCheckIns,
+      tourists: _tourists,
+      catalogSpots: catalog,
+      parseTimestamp: _parseCheckInTimestamp,
+      wrapPanel: (child) => _wrapTourismPanel(child),
+    );
+  }
+
+  Widget _buildLguAnalyticsCards() {
+    final cards = [
+      (
+        title: 'Daily average',
+        subtitle: 'Check-ins per active day',
+        value: '$_lguAnalyticsDailyAvg',
+        icon: Icons.calendar_today_rounded,
+        accent: const Color(0xFF2563EB),
+      ),
+      (
+        title: 'Peak hour',
+        subtitle: 'Busiest QR scan window',
+        value: _lguAnalyticsPeakHour,
+        icon: Icons.access_time_rounded,
+        accent: _primaryOrange,
+      ),
+      (
+        title: 'Top origin',
+        subtitle: 'Most common registration source',
+        value: _lguAnalyticsTopOrigin,
+        icon: Icons.flight_takeoff_rounded,
+        accent: const Color(0xFF059669),
+      ),
+      (
+        title: 'Active spots',
+        subtitle: 'Tourist spots currently active',
+        value:
+            '${_touristSpots.where((s) => s.status == 'Active').length}',
+        icon: Icons.place_rounded,
+        accent: const Color(0xFF0F766E),
+      ),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 900;
+        if (wide) {
+          return Row(
+            children: [
+              for (var i = 0; i < cards.length; i++) ...[
+                if (i > 0) const SizedBox(width: 12),
+                Expanded(
+                  child: _buildLguAnalyticsCard(
+                    title: cards[i].title,
+                    subtitle: cards[i].subtitle,
+                    value: cards[i].value,
+                    icon: cards[i].icon,
+                    accent: cards[i].accent,
+                  ),
+                ),
+              ],
+            ],
+          );
+        }
+        return Column(
+          children: [
+            for (var row = 0; row < 2; row++) ...[
+              if (row > 0) const SizedBox(height: 10),
+              Row(
+                children: [
+                  for (var col = 0; col < 2; col++) ...[
+                    if (col > 0) const SizedBox(width: 10),
+                    Expanded(
+                      child: _buildLguAnalyticsCard(
+                        title: cards[row * 2 + col].title,
+                        subtitle: cards[row * 2 + col].subtitle,
+                        value: cards[row * 2 + col].value,
+                        icon: cards[row * 2 + col].icon,
+                        accent: cards[row * 2 + col].accent,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildLguAnalyticsCard({
+    required String title,
+    required String subtitle,
+    required String value,
+    required IconData icon,
+    required Color accent,
+  }) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _kAnalyticsSurfaceBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: Icon(icon, color: accent, size: 18),
+              ),
+              const Spacer(),
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: accent,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(
+            value,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: _textDark,
+              fontSize: value.contains('\n') || value.length > 16 ? 17 : 24,
+              fontWeight: FontWeight.w800,
+              height: 1.12,
+              letterSpacing: -0.4,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            title,
+            style: const TextStyle(
+              color: _textDark,
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            subtitle,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: _textMuted,
+              fontSize: 11.5,
+              height: 1.3,
+            ),
           ),
         ],
       ),
@@ -7083,16 +8973,16 @@ class _LguDashboardState extends State<LguDashboard>
   Widget _buildLguVisitorTrendsChart() {
     final values = _lguAnalyticsTrendValues;
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.all(_isMobile ? 14 : 18),
       decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: _kAnalyticsSurfaceBorder, width: 1),
-        boxShadow: [
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _kAnalyticsSurfaceBorder),
+        boxShadow: const [
           BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 14,
-            offset: const Offset(0, 4),
+            color: Color(0x08000000),
+            blurRadius: 12,
+            offset: Offset(0, 4),
           ),
         ],
       ),
@@ -7102,26 +8992,24 @@ class _LguDashboardState extends State<LguDashboard>
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
+              const Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       'Visitor trends',
                       style: TextStyle(
                         color: _textDark,
-                        fontSize: 17,
+                        fontSize: 14.5,
                         fontWeight: FontWeight.w700,
-                        letterSpacing: -0.2,
                       ),
                     ),
-                    const SizedBox(height: 6),
+                    SizedBox(height: 4),
                     Text(
-                      'Visits per day (last 14 days, local time)',
+                      'Visits per day Â· last 14 days',
                       style: TextStyle(
-                        color: const Color(0xFF374151),
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
+                        color: _textMuted,
+                        fontSize: 12,
                         height: 1.35,
                       ),
                     ),
@@ -7129,32 +9017,25 @@ class _LguDashboardState extends State<LguDashboard>
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF3F4F6),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: _kAnalyticsSurfaceBorder,
-                    width: 1,
-                  ),
+                  color: const Color(0xFFFFF7ED),
+                  borderRadius: BorderRadius.circular(999),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(
+                    const Icon(
                       Icons.trending_up_rounded,
-                      size: 16,
-                      color: _primaryOrange,
+                      size: 14,
+                      color: Color(0xFFC2410C),
                     ),
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 5),
                     Text(
                       'Total ${values.fold<double>(0, (a, b) => a + b).toStringAsFixed(0)}',
                       style: const TextStyle(
-                        color: _textDark,
-                        fontSize: 12,
+                        color: Color(0xFFC2410C),
+                        fontSize: 11.5,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -7163,7 +9044,7 @@ class _LguDashboardState extends State<LguDashboard>
               ),
             ],
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 16),
           _AnalyticsTrendChart(values: values, color: _primaryOrange),
         ],
       ),
@@ -7171,45 +9052,63 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   Widget _buildLguTopSpotsChart() {
-    final spots = _lguAnalyticsTopSpots.take(10).toList();
+    final spots = _lguAnalyticsTopSpots.take(8).toList();
     final maxVisits = spots.isEmpty ? 1 : (spots.first['visits'] as int);
 
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.all(_isMobile ? 14 : 18),
       decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: _kAnalyticsSurfaceBorder, width: 1),
-        boxShadow: [
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _kAnalyticsSurfaceBorder),
+        boxShadow: const [
           BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 14,
-            offset: const Offset(0, 4),
+            color: Color(0x08000000),
+            blurRadius: 12,
+            offset: Offset(0, 4),
           ),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Most visited spots',
-            style: TextStyle(
-              color: _textDark,
-              fontSize: 17,
-              fontWeight: FontWeight.w700,
-              letterSpacing: -0.2,
-            ),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Most visited spots',
+                  style: TextStyle(
+                    color: _textDark,
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF1F5F9),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '${spots.length} listed',
+                  style: const TextStyle(
+                    color: _textMuted,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 14),
           if (spots.isEmpty)
             const Padding(
-              padding: EdgeInsets.symmetric(vertical: 24),
-              child: Text(
-                'No check-in data yet.',
-                style: TextStyle(
-                  color: Color(0xFF374151),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
+              padding: EdgeInsets.symmetric(vertical: 28),
+              child: Center(
+                child: Text(
+                  'No check-in data yet',
+                  style: TextStyle(color: _textMuted, fontSize: 13),
                 ),
               ),
             )
@@ -7218,26 +9117,27 @@ class _LguDashboardState extends State<LguDashboard>
               final index = entry.key;
               final spot = entry.value;
               final visits = spot['visits'] as int;
+              final isTop = index == 0;
               return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
+                padding: EdgeInsets.only(
+                  bottom: index == spots.length - 1 ? 0 : 12,
+                ),
                 child: Row(
                   children: [
                     Container(
-                      width: 24,
-                      height: 24,
+                      width: 28,
+                      height: 28,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
-                        color: index == 0
-                            ? _primaryOrange
-                            : _primaryOrange.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(12),
+                        color: isTop ? _primaryOrange : const Color(0xFFF1F5F9),
+                        borderRadius: BorderRadius.circular(9),
                       ),
                       child: Text(
                         '${index + 1}',
                         style: TextStyle(
-                          color: index == 0 ? Colors.white : _primaryOrange,
+                          color: isTop ? Colors.white : _textMuted,
                           fontSize: 12,
-                          fontWeight: FontWeight.bold,
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
                     ),
@@ -7248,21 +9148,26 @@ class _LguDashboardState extends State<LguDashboard>
                         children: [
                           Text(
                             spot['name'] as String,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               color: _textDark,
                               fontSize: 13,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
-                          const SizedBox(height: 4),
+                          const SizedBox(height: 7),
                           ClipRRect(
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(999),
                             child: LinearProgressIndicator(
                               value: maxVisits > 0 ? visits / maxVisits : 0,
-                              backgroundColor: Colors.grey.shade200,
+                              backgroundColor: const Color(0xFFF1F5F9),
                               valueColor: AlwaysStoppedAnimation<Color>(
-                                _primaryOrange.withOpacity(0.8),
+                                isTop
+                                    ? _primaryOrange
+                                    : _primaryOrange.withValues(alpha: 0.55),
                               ),
-                              minHeight: 4,
+                              minHeight: 7,
                             ),
                           ),
                         ],
@@ -7271,9 +9176,10 @@ class _LguDashboardState extends State<LguDashboard>
                     const SizedBox(width: 12),
                     Text(
                       '$visits',
-                      style: const TextStyle(
-                        color: _primaryOrange,
-                        fontWeight: FontWeight.w600,
+                      style: TextStyle(
+                        color: isTop ? _primaryOrange : _textDark,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
                       ),
                     ),
                   ],
@@ -7300,7 +9206,7 @@ class _LguDashboardState extends State<LguDashboard>
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Reports view is not ready yet. Try again.'),
+              content: Text('Analytics view is not ready yet. Try again.'),
               behavior: SnackBarBehavior.floating,
             ),
           );
@@ -7327,23 +9233,20 @@ class _LguDashboardState extends State<LguDashboard>
         await SharePlus.instance.share(
           ShareParams(
             files: [xfile],
-            text: 'ATMOS-TRS ? Reports',
-            title: 'Reports screenshot',
+            text: 'ATMOS-TRS â€” Analytics',
+            title: 'Analytics screenshot',
           ),
         );
       } else {
         switch (defaultTargetPlatform) {
           case TargetPlatform.android:
           case TargetPlatform.iOS:
-            final result = await ImageGallerySaverPlus.saveImage(
-              png,
-              quality: 100,
-              name: baseName,
-            );
-            final ok =
-                result is Map &&
-                (result['isSuccess'] == true || result['success'] == true);
-            if (!ok) throw Exception('gallery save failed');
+            final hasAccess = await Gal.hasAccess();
+            if (!hasAccess) {
+              final granted = await Gal.requestAccess();
+              if (!granted) throw Exception('gallery permission denied');
+            }
+            await Gal.putImageBytes(png, name: fileName);
             break;
           default:
             final xfile = XFile.fromData(
@@ -7354,8 +9257,8 @@ class _LguDashboardState extends State<LguDashboard>
             await SharePlus.instance.share(
               ShareParams(
                 files: [xfile],
-                text: 'ATMOS-TRS ? Reports',
-                title: 'Reports screenshot',
+                text: 'ATMOS-TRS â€” Analytics',
+                title: 'Analytics screenshot',
               ),
             );
         }
@@ -7389,934 +9292,63 @@ class _LguDashboardState extends State<LguDashboard>
     }
   }
 
-  Widget _buildReportsContent() {
-    return RefreshIndicator(
-      onRefresh: _loadData,
-      color: _primaryOrange,
-      child: _buildFramedContentShell(
-        title: 'Reports',
-        subtitle:
-            'Check-in stats use your selected date range only (e.g. March 1?31). Use Custom for a full month.',
-        actions: [
-          Tooltip(
-            message:
-                'Save an image of this whole page (quick exports + custom report)',
-            child: IconButton(
-              onPressed: _reportsScreenshotBusy
-                  ? null
-                  : _captureReportsSectionScreenshot,
-              icon: _reportsScreenshotBusy
-                  ? const SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: _primaryOrange,
-                      ),
-                    )
-                  : const Icon(Icons.screenshot_monitor_outlined),
-              color: _textDark,
-            ),
-          ),
-        ],
-        body: SingleChildScrollView(
+  Widget _buildEventsContent() {
+    final scope = (_municipalityName ?? _storedMunicipalityId ?? 'LGU').trim();
+    return _buildFramedContentShell(
+      title: 'Events & Posts',
+      subtitle: '$scope — live province feed (auto-published)',
+      body: RefreshIndicator(
+        onRefresh: () async {
+          LguEventService.invalidateEventsCache();
+          await _loadData();
+        },
+        color: _primaryOrange,
+        child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.all(_isMobile ? 16 : 24),
-          child: RepaintBoundary(
-            key: _reportsRepaintKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildQuickReports(),
-                const SizedBox(height: 24),
-                _buildCustomReportGenerator(),
-              ],
-            ),
+          padding: EdgeInsets.all(_isMobile ? 14 : 20),
+          child: LguEventsPanel(
+            key: const ValueKey('lgu-events-panel'),
+            municipalityId: _storedMunicipalityId,
+            municipalityName: _municipalityName,
+            primaryColor: _primaryOrange,
+            initialTabIndex: _eventsPanelTab,
+            showChrome: false,
           ),
         ),
       ),
     );
-  }
-
-  Widget _buildQuickReports() {
-    return _wrapTourismPanel(
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: _primaryOrange.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(
-                  Icons.folder_open_rounded,
-                  color: _primaryOrange,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 10),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Quick export documents',
-                      style: TextStyle(
-                        color: _textDark,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      'Preset windows for fast exports. Tap a row to generate.',
-                      style: TextStyle(
-                        color: _textMuted,
-                        fontSize: 12,
-                        height: 1.35,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Column(
-            children: [
-              _buildQuickReportDocumentRow(
-                title: 'Daily Report',
-                subtitle:
-                    "Today's activity snapshot (check-ins filtered to today)",
-                icon: Icons.today_rounded,
-                accent: Colors.blue,
-                type: 'daily',
-              ),
-              const SizedBox(height: 10),
-              _buildQuickReportDocumentRow(
-                title: 'Weekly Report',
-                subtitle: 'Last 7 days including today',
-                icon: Icons.date_range_rounded,
-                accent: Colors.orange,
-                type: 'weekly',
-              ),
-              const SizedBox(height: 10),
-              _buildQuickReportDocumentRow(
-                title: 'Monthly Report',
-                subtitle: 'From the 1st of this month through today',
-                icon: Icons.calendar_month_rounded,
-                accent: _primaryOrange,
-                type: 'monthly',
-              ),
-              const SizedBox(height: 10),
-              _buildQuickReportDocumentRow(
-                title: 'Annual Report',
-                subtitle: 'Year-to-date from January 1 through today',
-                icon: Icons.calendar_today_rounded,
-                accent: Colors.purple,
-                type: 'annual',
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildQuickReportDocumentRow({
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    required Color accent,
-    required String type,
-  }) {
-    final rangeText = _quickReportRangeText(type);
-
-    return InkWell(
-      onTap: () => _generateQuickReport(type),
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: _panelBorder),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: accent.withOpacity(0.16),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(icon, color: accent, size: 18),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: const TextStyle(
-                          color: _textDark,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        subtitle,
-                        style: const TextStyle(
-                          color: _textMuted,
-                          fontSize: 11,
-                          height: 1.3,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                if (!_isMobile)
-                  Text(
-                    rangeText,
-                    style: TextStyle(
-                      color: accent.withOpacity(0.95),
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                if (_isMobile)
-                  Expanded(
-                    child: Text(
-                      rangeText,
-                      style: TextStyle(
-                        color: accent.withOpacity(0.95),
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  )
-                else
-                  const Spacer(),
-                const SizedBox(width: 8),
-                FilledButton.icon(
-                  onPressed: () => _generateQuickReport(type),
-                  icon: const Icon(Icons.download_rounded, size: 14),
-                  label: const Text('Export'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: accent,
-                    foregroundColor: Colors.white,
-                    elevation: 2,
-                    shadowColor: accent.withOpacity(0.35),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 8,
-                    ),
-                    textStyle: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _quickReportRangeText(String type) {
-    final now = DateTime.now();
-    switch (type) {
-      case 'daily':
-        return '[${_formatDateDisplay(now)}]';
-      case 'weekly':
-        final start = now.subtract(const Duration(days: 6));
-        return '[${_formatDateDisplay(start)} ? ${_formatDateDisplay(now)}]';
-      case 'monthly':
-        final start = DateTime(now.year, now.month, 1);
-        return '[${_formatDateDisplay(start)} ? ${_formatDateDisplay(now)}]';
-      case 'annual':
-        final start = DateTime(now.year, 1, 1);
-        return '[${_formatDateDisplay(start)} ? ${_formatDateDisplay(now)}]';
-      default:
-        return '[${_formatDateDisplay(now)}]';
-    }
-  }
-
-  Widget _buildCustomReportGenerator() {
-    return _wrapTourismPanel(
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: _primaryOrange.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  Icons.tune_rounded,
-                  color: _primaryOrange,
-                  size: 16,
-                ),
-              ),
-              const SizedBox(width: 8),
-              const Text(
-                'Generate Custom Report',
-                style: TextStyle(
-                  color: _textDark,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Choose date range and report type, then export your file.',
-            style: TextStyle(color: _textMuted, fontSize: 11.5, height: 1.3),
-          ),
-          const SizedBox(height: 12),
-          _isMobile ? _buildCustomReportMobile() : _buildCustomReportDesktop(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCustomReportMobile() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildDatePicker(
-          'Start Date',
-          _reportStartDate,
-          (date) => setState(() => _reportStartDate = date),
-        ),
-        const SizedBox(height: 12),
-        _buildDatePicker(
-          'End Date',
-          _reportEndDate,
-          (date) => setState(() => _reportEndDate = date),
-        ),
-        const SizedBox(height: 12),
-        _buildReportTypeDropdown(),
-        const SizedBox(height: 12),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton.icon(
-            onPressed: _generateCustomReport,
-            icon: _isExporting
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.download, size: 17),
-            label: Text(_isExporting ? 'Generating...' : 'Generate'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _primaryOrange,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildCustomReportDesktop() {
-    const fieldWidth = 200.0;
-    const typeWidth = 168.0;
-
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Wrap(
-        spacing: 12,
-        runSpacing: 12,
-        crossAxisAlignment: WrapCrossAlignment.end,
-        children: [
-          SizedBox(
-            width: fieldWidth,
-            child: _buildDatePicker(
-              'Start Date',
-              _reportStartDate,
-              (date) => setState(() => _reportStartDate = date),
-            ),
-          ),
-          SizedBox(
-            width: fieldWidth,
-            child: _buildDatePicker(
-              'End Date',
-              _reportEndDate,
-              (date) => setState(() => _reportEndDate = date),
-            ),
-          ),
-          SizedBox(width: typeWidth, child: _buildReportTypeDropdown()),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 1),
-            child: ElevatedButton.icon(
-              onPressed: _generateCustomReport,
-              icon: _isExporting
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.download_rounded, size: 17),
-              label: Text(_isExporting ? 'Generating...' : 'Generate'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _primaryOrange,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 11,
-                ),
-                minimumSize: const Size(0, 40),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDatePicker(
-    String label,
-    DateTime? selectedDate,
-    ValueChanged<DateTime> onSelect,
-  ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(label, style: TextStyle(color: _textMuted, fontSize: 11)),
-        const SizedBox(height: 4),
-        InkWell(
-          onTap: () async {
-            final date = await showDatePicker(
-              context: context,
-              initialDate: selectedDate ?? DateTime.now(),
-              firstDate: DateTime(2020),
-              lastDate: DateTime.now(),
-              builder: (context, child) {
-                return Theme(
-                  data: Theme.of(context).copyWith(
-                    colorScheme: ColorScheme.light(
-                      primary: _primaryOrange,
-                      onPrimary: Colors.white,
-                      surface: const Color(0xFFFFFBF5),
-                      onSurface: _textDark,
-                      surfaceContainerHighest: const Color(0xFFF7F0E8),
-                    ),
-                    dialogBackgroundColor: const Color(0xFFFFFBF5),
-                    datePickerTheme: DatePickerThemeData(
-                      backgroundColor: const Color(0xFFFFFBF5),
-                      surfaceTintColor: Colors.transparent,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(32),
-                      ),
-                      headerBackgroundColor: Colors.transparent,
-                      headerForegroundColor: _textDark,
-                      headerHeadlineStyle: const TextStyle(
-                        color: _textDark,
-                        fontSize: 24,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      headerHelpStyle: TextStyle(
-                        color: _textMuted,
-                        fontSize: 13,
-                      ),
-                      weekdayStyle: TextStyle(
-                        color: _textMuted,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      dayStyle: const TextStyle(color: _textDark, fontSize: 14),
-                      dayForegroundColor: WidgetStateProperty.resolveWith((
-                        Set<WidgetState> states,
-                      ) {
-                        if (states.contains(WidgetState.selected))
-                          return Colors.white;
-                        return null;
-                      }),
-                      dayBackgroundColor: WidgetStateProperty.resolveWith((
-                        Set<WidgetState> states,
-                      ) {
-                        if (states.contains(WidgetState.selected))
-                          return _primaryOrange;
-                        return null;
-                      }),
-                      todayForegroundColor: WidgetStateProperty.resolveWith((
-                        Set<WidgetState> states,
-                      ) {
-                        return _primaryOrange;
-                      }),
-                      todayBackgroundColor: WidgetStateProperty.resolveWith((
-                        Set<WidgetState> states,
-                      ) {
-                        return null;
-                      }),
-                      todayBorder: const BorderSide(
-                        color: _primaryOrange,
-                        width: 2,
-                      ),
-                      dividerColor: Colors.grey.shade300,
-                      cancelButtonStyle: TextButton.styleFrom(
-                        foregroundColor: _primaryOrange,
-                        textStyle: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      confirmButtonStyle: TextButton.styleFrom(
-                        foregroundColor: _primaryOrange,
-                        textStyle: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ),
-                  child: child!,
-                );
-              },
-            );
-            if (date != null) onSelect(date);
-          },
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _kAnalyticsSurfaceBorder),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.04),
-                  blurRadius: 6,
-                  offset: const Offset(0, 1),
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Text(
-                    selectedDate != null
-                        ? _formatDateDisplay(selectedDate)
-                        : 'Select date',
-                    style: TextStyle(
-                      color: selectedDate != null ? _textDark : _textMuted,
-                      fontSize: 13,
-                      fontWeight: selectedDate != null
-                          ? FontWeight.w600
-                          : FontWeight.normal,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                Icon(
-                  Icons.calendar_today_rounded,
-                  color: _primaryOrange,
-                  size: 18,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildReportTypeDropdown() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text('Report Type', style: TextStyle(color: _textMuted, fontSize: 11)),
-        const SizedBox(height: 4),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(
-            color: Colors.grey.shade200,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.grey.shade300),
-          ),
-          child: DropdownButton<String>(
-            value: _reportType,
-            isExpanded: true,
-            isDense: true,
-            dropdownColor: Colors.white,
-            underline: const SizedBox(),
-            style: const TextStyle(color: _textDark, fontSize: 13),
-            icon: Icon(Icons.keyboard_arrow_down, color: _textMuted, size: 20),
-            items: _reportTypes
-                .map(
-                  (t) => DropdownMenuItem(
-                    value: t,
-                    child: Text(
-                      t,
-                      style: const TextStyle(color: _textDark, fontSize: 13),
-                    ),
-                  ),
-                )
-                .toList(),
-            onChanged: (value) => setState(() => _reportType = value!),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Future<void> _generateQuickReport(String type) async {
-    final now = DateTime.now();
-    late DateTime startDate;
-    late DateTime endDate;
-
-    switch (type) {
-      case 'daily':
-        startDate = DateTime(now.year, now.month, now.day);
-        endDate = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
-        break;
-      case 'weekly':
-        final todayStart = DateTime(now.year, now.month, now.day);
-        startDate = todayStart.subtract(const Duration(days: 6));
-        endDate = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
-        break;
-      case 'monthly':
-        // This calendar month only (e.g. all of March when in March).
-        startDate = DateTime(now.year, now.month, 1);
-        endDate = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
-        break;
-      case 'annual':
-        startDate = DateTime(now.year, 1, 1);
-        endDate = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
-        break;
-      default:
-        startDate = DateTime(now.year, now.month, now.day);
-        endDate = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
-    }
-
-    await _generateReport(startDate, endDate, 'All Data', type);
-  }
-
-  Future<void> _generateCustomReport() async {
-    if (_reportStartDate == null || _reportEndDate == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please select both start and end dates'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
-    final start = DateTime(
-      _reportStartDate!.year,
-      _reportStartDate!.month,
-      _reportStartDate!.day,
-    );
-    final end = DateTime(
-      _reportEndDate!.year,
-      _reportEndDate!.month,
-      _reportEndDate!.day,
-      23,
-      59,
-      59,
-      999,
-    );
-    if (end.isBefore(start)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('End date must be on or after start date'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
-    await _generateReport(start, end, _reportType, 'custom');
-  }
-
-  Future<void> _generateReport(
-    DateTime startDate,
-    DateTime endDate,
-    String type,
-    String period,
-  ) async {
-    setState(() {
-      _isExporting = true;
-      _exportProgress = 0.0;
-    });
-
-    for (int i = 1; i <= 10; i++) {
-      await Future.delayed(const Duration(milliseconds: 100));
-      setState(() => _exportProgress = i / 10);
-    }
-
-    final filteredCheckIns = _checkInsInDateRange(startDate, endDate);
-
-    String report = '=== ATMOS-TRS REPORT ===\n';
-    report += 'Generated: ${DateTime.now()}\n';
-    report +=
-        'Period (check-ins filtered): ${_formatDate(startDate)} to ${_formatDate(endDate)}\n';
-    report += 'Report type: $type\n';
-    report +=
-        'Note: Check-in counts and lists below include ONLY records in this date range.\n\n';
-
-    final includeVisits = type == 'All Data' ||
-        type == 'Visits only' ||
-        type == 'DOT Visitor to Attraction Report';
-    final includeTourists = type == 'All Data' ||
-        type == 'Tourists Only' ||
-        type == 'DOT Visitor to Attraction Report';
-    final includeSpots = type == 'All Data' ||
-        type == 'Tourist Spots Only' ||
-        type == 'DOT Visitor to Attraction Report';
-    final includeAccommodation = type == 'All Data' ||
-        type == 'DOT Accommodation Establishment Data';
-
-    String? checkInsSummaryCsv;
-    String? checkInsDetailCsv;
-    if (includeVisits) {
-      report += '--- CHECK-INS (within period) ---\n';
-      report += 'Count in period: ${filteredCheckIns.length}\n';
-      final verified = filteredCheckIns
-          .where((c) => c['status'] == 'Verified')
-          .length;
-      final pending = filteredCheckIns
-          .where((c) => c['status'] == 'Pending')
-          .length;
-      report += 'Verified (with status field): $verified\n';
-      report += 'Pending (with status field): $pending\n\n';
-
-      final summary = buildCheckInSummaryReport(
-        checkIns: filteredCheckIns,
-        startDate: startDate,
-        endDate: endDate,
-        period: period,
-        parseTimestamp: _parseCheckInTimestamp,
-      );
-      report += '--- SUMMARY BY SPOT ---\n';
-      report += '${summary.textSummary}\n\n';
-
-      if (filteredCheckIns.isEmpty) {
-        report += 'No check-ins in this period.\n\n';
-      } else {
-        report += 'Detail (sorted newest first):\n';
-        final sorted = List<Map<String, dynamic>>.from(filteredCheckIns);
-        sorted.sort((a, b) {
-          final ta = _parseCheckInTimestamp(a);
-          final tb = _parseCheckInTimestamp(b);
-          if (ta == null && tb == null) return 0;
-          if (ta == null) return 1;
-          if (tb == null) return -1;
-          return tb.compareTo(ta);
-        });
-        for (final c in sorted) {
-          final t = _parseCheckInTimestamp(c);
-          final when = t != null ? t.toIso8601String() : '?';
-          final spotId =
-              c['spotId']?.toString() ?? c['spot_id']?.toString() ?? '?';
-          final spotName = c['spot_name']?.toString() ?? '';
-          final uid =
-              c['userId']?.toString() ?? c['tourist_id']?.toString() ?? '?';
-          final spotLabel = spotName.isNotEmpty ? spotName : spotId;
-          report += '  $when | $spotLabel | user=$uid\n';
-        }
-        report += '\n';
-      }
-      checkInsSummaryCsv = summary.csv;
-      checkInsDetailCsv = _buildCheckInsCsv(filteredCheckIns);
-    }
-
-    if (includeTourists) {
-      report +=
-          '--- TOURISTS (LGU: visitors linked to your check-ins only; full app registry is Governor admin) ---\n';
-      report += 'Count in this scope: ${_tourists.length}\n';
-      var visitSum = 0;
-      for (final t in _tourists) {
-        final v = t['visits'] ?? t['totalVisits'];
-        if (v is int) {
-          visitSum += v;
-        } else if (v is num) {
-          visitSum += v.toInt();
-        }
-      }
-      report += 'Total Visits (profile field): $visitSum\n\n';
-    }
-
-    if (includeSpots) {
-      report += '--- TOURIST SPOTS (current list; not filtered by date) ---\n';
-      report += 'Total Spots: ${_touristSpots.length}\n';
-      report += 'Active: $_activeSpots\n';
-      report += 'Inactive: ${_touristSpots.length - _activeSpots}\n\n';
-
-      report += 'By Category:\n';
-      for (var cat in _categories.where((c) => c != 'All')) {
-        final count = _touristSpots.where((s) => s.category == cat).length;
-        report += '  $cat: $count\n';
-      }
-      report += '\n';
-    }
-
-    if (type == 'DOT Visitor to Attraction Report') {
-      report += '--- DOT VISITOR TO ATTRACTION REPORT ---\n';
-      report +=
-          'Attraction,Total Visits,Unique Visitors,Latest Visit (ISO timestamp)\n';
-      final byAttraction = <String, Map<String, dynamic>>{};
-      for (final c in filteredCheckIns) {
-        final spotId = (c['spotId'] ?? c['spot_id'] ?? 'Unknown').toString();
-        final spotName = (c['spot_name'] ?? '').toString().trim();
-        final key = spotName.isNotEmpty ? spotName : spotId;
-        final userId =
-            (c['userId'] ?? c['tourist_id'] ?? c['user_id'] ?? '').toString();
-        final ts = _parseCheckInTimestamp(c);
-        final row = byAttraction.putIfAbsent(
-          key,
-          () => <String, dynamic>{
-            'visits': 0,
-            'users': <String>{},
-            'latest': null,
-          },
-        );
-        row['visits'] = (row['visits'] as int) + 1;
-        if (userId.isNotEmpty) (row['users'] as Set<String>).add(userId);
-        final latest = row['latest'] as DateTime?;
-        if (ts != null && (latest == null || ts.isAfter(latest))) {
-          row['latest'] = ts;
-        }
-      }
-      final sortedRows = byAttraction.entries.toList()
-        ..sort((a, b) =>
-            (b.value['visits'] as int).compareTo(a.value['visits'] as int));
-      if (sortedRows.isEmpty) {
-        report += 'No visitor-to-attraction data in selected period.\n\n';
-      } else {
-        for (final e in sortedRows) {
-          final visits = e.value['visits'] as int;
-          final uniqueUsers = (e.value['users'] as Set<String>).length;
-          final latest = e.value['latest'] as DateTime?;
-          report +=
-              '${e.key},$visits,$uniqueUsers,${latest?.toIso8601String() ?? '?'}\n';
-        }
-        report += '\n';
-      }
-    }
-
-    if (includeAccommodation) {
-      final accommodations = await _loadAccommodationRowsForReport();
-      report += '--- DOT ACCOMMODATION ESTABLISHMENT DATA ---\n';
-      report += 'Total establishments: ${accommodations.length}\n';
-      final active = accommodations
-          .where((a) => (a['status'] ?? '').toString().toLowerCase() == 'active')
-          .length;
-      report += 'Active establishments: $active\n';
-      final totalRooms = accommodations.fold<int>(0, (total, a) {
-        final rooms = a['roomCount'];
-        return total + (rooms is num ? rooms.toInt() : 0);
-      });
-      report += 'Total room count: $totalRooms\n';
-      final byType = <String, int>{};
-      for (final a in accommodations) {
-        final t = (a['type'] ?? 'Unspecified').toString();
-        byType[t] = (byType[t] ?? 0) + 1;
-      }
-      if (byType.isNotEmpty) {
-        report += 'By type:\n';
-        byType.forEach((k, v) => report += '  $k: $v\n');
-      }
-      report += '\n';
-    }
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('report_${period}_$type', report);
-
-    setState(() => _isExporting = false);
-
-    if (!mounted) return;
-    final summaryCsvName = checkInSummaryCsvFilename(
-      period: period,
-      startDate: startDate,
-      endDate: endDate,
-    );
-    final detailCsvName =
-        'checkins_detail_${_formatDate(startDate)}_to_${_formatDate(endDate)}.csv';
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '${period.capitalize()} report generated (${filteredCheckIns.length} check-ins in period)',
-        ),
-        backgroundColor: _primaryOrange,
-        action: SnackBarAction(
-          label: 'Preview',
-          textColor: Colors.white,
-          onPressed: () => _showExportPreview(
-            '$period Report',
-            report,
-            csvData: checkInsSummaryCsv,
-            csvFilename: summaryCsvName,
-            detailCsvData: checkInsDetailCsv,
-            detailCsvFilename: detailCsvName,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<List<Map<String, dynamic>>> _loadAccommodationRowsForReport() async {
-    try {
-      final db = FirebaseFirestore.instance;
-      final mid = (_storedMunicipalityId ?? '').trim();
-      Query<Map<String, dynamic>> q = db.collection('accommodation_establishments');
-      if (mid.isNotEmpty) {
-        final ids = municipalityIdsForQuery(mid);
-        if (ids.length == 1) {
-          q = q.where('municipalityId', isEqualTo: ids.first);
-        } else if (ids.length > 1) {
-          q = q.where('municipalityId', whereIn: ids.take(10).toList());
-        }
-      }
-      final snap = await q.limit(500).get();
-      return snap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
-    } catch (_) {
-      return const [];
-    }
   }
 
   // ==================== DIALOGS ====================
+  List<Map<String, String>> _unreadCrossLguEventNotifications() {
+    final myMun = (_storedMunicipalityId ?? '').trim();
+    if (myMun.isEmpty) return const [];
+    final items = <Map<String, String>>[];
+    for (final e in _lguEvents) {
+      if (!LguEventService.isVisibleToTourists(e)) continue;
+      if (LguEventService.matchesMunicipality(e, myMun)) continue;
+      final id = e['id']?.toString() ?? '';
+      if (id.isEmpty) continue;
+      if (_seenCrossLguEventIds.contains(_crossLguEventSeenKey(id))) continue;
+      final title = e['title']?.toString().trim() ?? 'Event';
+      final from = LguEventService.sourceMunicipalityLabel(e);
+      final date = e['date']?.toString().trim() ?? '';
+      items.add({
+        'title': 'New event from $from',
+        'message': date.isEmpty ? title : '$title Â· $date',
+        'time': 'New',
+      });
+    }
+    return items;
+  }
+
   void _showNotificationsDialog() {
+    final eventNotifs = _unreadCrossLguEventNotifications();
+    final combined = [...eventNotifs, ..._notifications];
+    // Opening the bell clears event unread; other alerts clear via Clear All.
+    if (eventNotifs.isNotEmpty) {
+      unawaited(_markAllEventDecisionsSeen());
+    }
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -8334,6 +9366,7 @@ class _LguDashboardState extends State<LguDashboard>
                   _notifications.clear();
                   _unreadNotifications = 0;
                 });
+                unawaited(_markAllEventDecisionsSeen());
                 Navigator.pop(context);
               },
               child: const Text(
@@ -8345,7 +9378,7 @@ class _LguDashboardState extends State<LguDashboard>
         ),
         content: SizedBox(
           width: 350,
-          child: _notifications.isEmpty
+          child: combined.isEmpty
               ? const Center(
                   child: Text(
                     'No notifications',
@@ -8354,7 +9387,7 @@ class _LguDashboardState extends State<LguDashboard>
                 )
               : Column(
                   mainAxisSize: MainAxisSize.min,
-                  children: _notifications
+                  children: combined
                       .map(
                         (n) => Container(
                           margin: const EdgeInsets.only(bottom: 12),
@@ -8414,6 +9447,17 @@ class _LguDashboardState extends State<LguDashboard>
                 ),
         ),
         actions: [
+          if (eventNotifs.isNotEmpty)
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                setState(() {
+                  _selectedIndex = _eventsIndex;
+                  _eventsPanelTab = 0;
+                });
+              },
+              child: const Text('View Events'),
+            ),
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Close', style: TextStyle(color: _primaryOrange)),
@@ -8423,30 +9467,48 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
-  // --- Profile (header + sidebar; same pattern as governor dashboard) ---
-  Widget _buildSidebarAvatar({required double size}) {
+  /// Sidebar brand mark â€” always ATMOS logo (not the account profile photo).
+  Widget _buildSidebarBrandLogo({required double size}) {
+    return AtmosSquareLogo(
+      height: size,
+      width: size,
+      padding: EdgeInsets.all(size * 0.1),
+      borderRadius: size * 0.2,
+      elevation: 0,
+    );
+  }
+
+  /// Header account chip â€” profile photo when set (same as Governor).
+  Widget _buildHeaderProfileAvatar({required double size}) {
+    if (_profilePhotoBytes != null) {
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white.withValues(alpha: 0.9), width: 2),
+        ),
+        child: ClipOval(
+          child: Image.memory(_profilePhotoBytes!, fit: BoxFit.cover),
+        ),
+      );
+    }
+
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(shape: BoxShape.circle),
-      child: ClipOval(
-        child: _profilePhotoBytes != null
-            ? Image.memory(_profilePhotoBytes!, fit: BoxFit.cover)
-            : Container(
-                color: const Color(0xFFFFF7ED),
-                child: Center(
-                  child: Text(
-                    _profileName.isNotEmpty
-                        ? _profileName[0].toUpperCase()
-                        : 'T',
-                    style: TextStyle(
-                      color: _primaryOrange,
-                      fontSize: size * 0.45,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: const Color(0xFFFFF7ED),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.85),
+          width: 1.5,
+        ),
+      ),
+      child: Icon(
+        Icons.person_rounded,
+        size: size * 0.55,
+        color: _primaryOrange,
       ),
     );
   }
@@ -8509,7 +9571,7 @@ class _LguDashboardState extends State<LguDashboard>
                 Icons.download_outlined,
                 _isExporting
                     ? 'Exporting... ${(_exportProgress * 100).toInt()}%'
-                    : 'Export tourists and check-ins data',
+                    : 'Download registered tourist data as CSV',
                 _showTourismExportDataDialog,
               ),
               _buildTourismSettingsTileWithSubtitle(
@@ -8686,6 +9748,85 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
+  InputDecoration _tourismChangePasswordFieldDecoration({
+    required String hint,
+    required bool obscure,
+    required VoidCallback onToggleObscure,
+  }) {
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: const TextStyle(
+        color: _textMuted,
+        fontSize: 14,
+        fontWeight: FontWeight.w500,
+      ),
+      filled: true,
+      fillColor: const Color(0xFFF8FAFC),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.grey.shade300, width: 1.2),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: _primaryOrange, width: 2),
+      ),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.grey.shade300),
+      ),
+      suffixIcon: IconButton(
+        tooltip: obscure ? 'Show password' : 'Hide password',
+        icon: Icon(
+          obscure ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+          color: _textMuted,
+        ),
+        onPressed: onToggleObscure,
+      ),
+    );
+  }
+
+  Widget _tourismChangePasswordFieldLabel(String label) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: _textDark,
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Widget _tourismPasswordRequirementRow(String text, bool met) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          Icon(
+            met ? Icons.check_circle_rounded : Icons.radio_button_unchecked,
+            size: 18,
+            color: met ? const Color(0xFF16A34A) : _textMuted,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                color: met ? const Color(0xFF166534) : _textDark,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                height: 1.25,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showTourismChangePasswordDialog() {
     final currentPasswordController = TextEditingController();
     final newPasswordController = TextEditingController();
@@ -8695,10 +9836,11 @@ class _LguDashboardState extends State<LguDashboard>
     bool obscureCurrent = true;
     bool obscureNew = true;
     bool obscureConfirm = true;
+    var newPassword = '';
 
     showDialog<void>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
+      builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) {
           bool validatePassword(String password) {
             if (password.length < 8) return false;
@@ -8711,136 +9853,198 @@ class _LguDashboardState extends State<LguDashboard>
             return true;
           }
 
+          final hasLen = newPassword.length >= 8;
+          final hasUpper = newPassword.contains(RegExp(r'[A-Z]'));
+          final hasLower = newPassword.contains(RegExp(r'[a-z]'));
+          final hasNumber = newPassword.contains(RegExp(r'[0-9]'));
+          final hasSpecial =
+              newPassword.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]'));
+
           return AlertDialog(
             backgroundColor: _cardBg,
-            title: const Text(
-              'Change Password',
-              style: TextStyle(color: _textDark, fontWeight: FontWeight.w600),
+            surfaceTintColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
             ),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (errorMessage != null)
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      margin: const EdgeInsets.only(bottom: 16),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.error_outline,
-                            color: Colors.redAccent,
-                            size: 18,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              errorMessage!,
-                              style: const TextStyle(
-                                color: Colors.redAccent,
-                                fontSize: 12,
+            insetPadding: EdgeInsets.symmetric(
+              horizontal: _isMobile ? 16 : 40,
+              vertical: 24,
+            ),
+            titlePadding: const EdgeInsets.fromLTRB(24, 22, 24, 0),
+            contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+            actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            title: const Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Change Password',
+                  style: TextStyle(
+                    color: _textDark,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                SizedBox(height: 6),
+                Text(
+                  'Update your LGU Tourism Office account password. Use a strong password you have not used before.',
+                  style: TextStyle(
+                    color: _textMuted,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 420,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (errorMessage != null)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        margin: const EdgeInsets.only(bottom: 14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEE2E2),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFFECACA)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.error_outline_rounded,
+                              color: Color(0xFFDC2626),
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                errorMessage!,
+                                style: const TextStyle(
+                                  color: Color(0xFFB91C1C),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  TextField(
-                    controller: currentPasswordController,
-                    obscureText: obscureCurrent,
-                    decoration: InputDecoration(
-                      hintText: 'Current Password',
-                      hintStyle: TextStyle(color: _textMuted),
-                      filled: true,
-                      fillColor: Colors.white,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          obscureCurrent
-                              ? Icons.visibility_off
-                              : Icons.visibility,
-                          color: _textMuted,
+                          ],
                         ),
-                        onPressed: () => setDialogState(
+                      ),
+                    _tourismChangePasswordFieldLabel('Current password'),
+                    TextField(
+                      controller: currentPasswordController,
+                      obscureText: obscureCurrent,
+                      style: const TextStyle(
+                        color: _textDark,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      decoration: _tourismChangePasswordFieldDecoration(
+                        hint: 'Enter your current password',
+                        obscure: obscureCurrent,
+                        onToggleObscure: () => setDialogState(
                           () => obscureCurrent = !obscureCurrent,
                         ),
                       ),
                     ),
-                    style: const TextStyle(color: _textDark),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: newPasswordController,
-                    obscureText: obscureNew,
-                    decoration: InputDecoration(
-                      hintText: 'New Password',
-                      hintStyle: TextStyle(color: _textMuted),
-                      filled: true,
-                      fillColor: Colors.white,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
+                    const SizedBox(height: 16),
+                    _tourismChangePasswordFieldLabel('New password'),
+                    TextField(
+                      controller: newPasswordController,
+                      obscureText: obscureNew,
+                      onChanged: (v) => setDialogState(() => newPassword = v),
+                      style: const TextStyle(
+                        color: _textDark,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
                       ),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          obscureNew ? Icons.visibility_off : Icons.visibility,
-                          color: _textMuted,
-                        ),
-                        onPressed: () =>
+                      decoration: _tourismChangePasswordFieldDecoration(
+                        hint: 'Create a new password',
+                        obscure: obscureNew,
+                        onToggleObscure: () =>
                             setDialogState(() => obscureNew = !obscureNew),
                       ),
                     ),
-                    style: const TextStyle(color: _textDark),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Password must contain: 8+ chars, uppercase, lowercase, number, special char',
-                    style: TextStyle(color: _textMuted, fontSize: 11),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: confirmPasswordController,
-                    obscureText: obscureConfirm,
-                    decoration: InputDecoration(
-                      hintText: 'Confirm New Password',
-                      hintStyle: TextStyle(color: _textMuted),
-                      filled: true,
-                      fillColor: Colors.white,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF7ED),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFFED7AA)),
                       ),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          obscureConfirm
-                              ? Icons.visibility_off
-                              : Icons.visibility,
-                          color: _textMuted,
-                        ),
-                        onPressed: () => setDialogState(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Password must include:',
+                            style: TextStyle(
+                              color: _textDark,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          _tourismPasswordRequirementRow(
+                            'At least 8 characters',
+                            hasLen,
+                          ),
+                          _tourismPasswordRequirementRow(
+                            'One uppercase letter (Aâ€“Z)',
+                            hasUpper,
+                          ),
+                          _tourismPasswordRequirementRow(
+                            'One lowercase letter (aâ€“z)',
+                            hasLower,
+                          ),
+                          _tourismPasswordRequirementRow(
+                            'One number (0â€“9)',
+                            hasNumber,
+                          ),
+                          _tourismPasswordRequirementRow(
+                            'One special character (!@#\$%â€¦)',
+                            hasSpecial,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _tourismChangePasswordFieldLabel('Confirm new password'),
+                    TextField(
+                      controller: confirmPasswordController,
+                      obscureText: obscureConfirm,
+                      style: const TextStyle(
+                        color: _textDark,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      decoration: _tourismChangePasswordFieldDecoration(
+                        hint: 'Re-enter new password',
+                        obscure: obscureConfirm,
+                        onToggleObscure: () => setDialogState(
                           () => obscureConfirm = !obscureConfirm,
                         ),
                       ),
                     ),
-                    style: const TextStyle(color: _textDark),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
             actions: [
               TextButton(
-                onPressed: isLoading ? null : () => Navigator.pop(context),
+                onPressed: isLoading ? null : () => Navigator.pop(dialogContext),
                 child: const Text(
                   'Cancel',
-                  style: TextStyle(color: _textMuted),
+                  style: TextStyle(
+                    color: _textMuted,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                  ),
                 ),
               ),
               ElevatedButton(
@@ -8865,7 +10069,7 @@ class _LguDashboardState extends State<LguDashboard>
                         if (!validatePassword(newPasswordController.text)) {
                           setDialogState(() {
                             errorMessage =
-                                'New password does not meet requirements';
+                                'New password does not meet all requirements below';
                             isLoading = false;
                           });
                           return;
@@ -8874,23 +10078,74 @@ class _LguDashboardState extends State<LguDashboard>
                         if (newPasswordController.text !=
                             confirmPasswordController.text) {
                           setDialogState(() {
-                            errorMessage = 'Passwords do not match';
+                            errorMessage =
+                                'New password and confirmation do not match';
                             isLoading = false;
                           });
                           return;
                         }
 
-                        await Future.delayed(const Duration(seconds: 1));
+                        final newPassword = newPasswordController.text;
+                        final typedCurrent = currentPasswordController.text;
+                        final authEmail =
+                            FirebaseAuth.instance.currentUser?.email?.trim() ??
+                                SessionStorage.tourismEmail;
+                        try {
+                          await AuthService.reauthenticateAndUpdatePassword(
+                            email: authEmail,
+                            currentPassword: typedCurrent,
+                            newPassword: newPassword,
+                          );
+                        } on FirebaseAuthException catch (authErr) {
+                          final code = authErr.code;
+                          final canRetryDefault = code == 'wrong-password' ||
+                              code == 'invalid-credential' ||
+                              code == 'invalid-login-credentials';
+                          if (!canRetryDefault ||
+                              typedCurrent == SessionStorage.tourismPassword) {
+                            setDialogState(() {
+                              errorMessage = authErr.message?.trim().isNotEmpty ==
+                                      true
+                                  ? authErr.message!
+                                  : 'Could not update Firebase password. Try logging in again.';
+                              isLoading = false;
+                            });
+                            return;
+                          }
+                          try {
+                            await AuthService.reauthenticateAndUpdatePassword(
+                              email: authEmail,
+                              currentPassword: SessionStorage.tourismPassword,
+                              newPassword: newPassword,
+                            );
+                          } on FirebaseAuthException catch (authErr2) {
+                            setDialogState(() {
+                              errorMessage = authErr2.message?.trim().isNotEmpty ==
+                                      true
+                                  ? authErr2.message!
+                                  : 'Could not update Firebase password. Try logging in again.';
+                              isLoading = false;
+                            });
+                            return;
+                          }
+                        } catch (e) {
+                          setDialogState(() {
+                            errorMessage = 'Could not update password: $e';
+                            isLoading = false;
+                          });
+                          return;
+                        }
 
                         final prefs = await SharedPreferences.getInstance();
                         await prefs.setString(
                           'tourism_password',
-                          newPasswordController.text,
+                          newPassword,
                         );
 
-                        if (!context.mounted) return;
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
+                        if (!dialogContext.mounted) return;
+                        Navigator.pop(dialogContext);
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(this.context).showSnackBar(
                           const SnackBar(
                             content: Text('Password updated successfully'),
                             backgroundColor: _primaryOrange,
@@ -8899,6 +10154,14 @@ class _LguDashboardState extends State<LguDashboard>
                       },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _primaryOrange,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 12,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
                 child: isLoading
                     ? const SizedBox(
@@ -8909,7 +10172,14 @@ class _LguDashboardState extends State<LguDashboard>
                           color: Colors.white,
                         ),
                       )
-                    : const Text('Update'),
+                    : const Text(
+                        'Update Password',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                        ),
+                      ),
               ),
             ],
           );
@@ -9113,20 +10383,11 @@ class _LguDashboardState extends State<LguDashboard>
           mainAxisSize: MainAxisSize.min,
           children: [
             _buildTourismExportOption(
-              'Visitors data (CSV)',
+              'Registered Tourists data (CSV)',
               Icons.people_alt_rounded,
               () {
                 Navigator.pop(context);
                 _exportTouristsData();
-              },
-            ),
-            const SizedBox(height: 12),
-            _buildTourismExportOption(
-              'Check-ins (use Reports tab for full export)',
-              Icons.qr_code_scanner_rounded,
-              () {
-                Navigator.pop(context);
-                setState(() => _selectedIndex = _reportsIndex);
               },
             ),
           ],
@@ -9564,6 +10825,50 @@ class _TourismAnalyticsChartPainter extends CustomPainter {
   }
 }
 
+/// Lazily builds an LGU sidebar tab on first visit and keeps it alive afterward
+/// so switching features (Visits → Spots → Events) is instant with no reload flash.
+class _LguLazyKeepAliveTab extends StatefulWidget {
+  const _LguLazyKeepAliveTab({
+    required this.active,
+    required this.builder,
+  });
+
+  final bool active;
+  final Widget Function() builder;
+
+  @override
+  State<_LguLazyKeepAliveTab> createState() => _LguLazyKeepAliveTabState();
+}
+
+class _LguLazyKeepAliveTabState extends State<_LguLazyKeepAliveTab>
+    with AutomaticKeepAliveClientMixin {
+  bool _activated = false;
+
+  @override
+  bool get wantKeepAlive => _activated;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.active) _activated = true;
+  }
+
+  @override
+  void didUpdateWidget(covariant _LguLazyKeepAliveTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.active && !_activated) {
+      setState(() => _activated = true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    if (!_activated) return const SizedBox.expand();
+    return widget.builder();
+  }
+}
+
 class _NavItem {
   final IconData icon;
   final String label;
@@ -9576,6 +10881,10 @@ class _StatCard {
   final String? subtitle;
   final IconData icon;
   final Color color;
+  final Color? tint;
+  final String? chipLabel;
+  final String? trendLabel;
+  final bool trendPositive;
   final VoidCallback? onTap;
   _StatCard({
     required this.title,
@@ -9583,8 +10892,53 @@ class _StatCard {
     this.subtitle,
     required this.icon,
     required this.color,
+    this.tint,
+    this.chipLabel,
+    this.trendLabel,
+    this.trendPositive = true,
     this.onTap,
   });
+}
+
+/// Soft lift + scale on hover for premium KPI / action cards.
+class _HoverLiftCard extends StatefulWidget {
+  const _HoverLiftCard({required this.child, this.onTap});
+
+  final Widget child;
+  final VoidCallback? onTap;
+
+  @override
+  State<_HoverLiftCard> createState() => _HoverLiftCardState();
+}
+
+class _HoverLiftCardState extends State<_HoverLiftCard> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedScale(
+        scale: _hovered ? 1.02 : 1.0,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOutCubic,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOutCubic,
+          transform: Matrix4.translationValues(0, _hovered ? -4 : 0, 0),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: widget.onTap,
+              borderRadius: BorderRadius.circular(20),
+              child: widget.child,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// White sparkline on flat KPI cards.
@@ -9632,8 +10986,3 @@ class _TourismMiniSparklinePainter extends CustomPainter {
       oldDelegate.values != values || oldDelegate.lineColor != lineColor;
 }
 
-extension StringExtension on String {
-  String capitalize() {
-    return '${this[0].toUpperCase()}${substring(1)}';
-  }
-}

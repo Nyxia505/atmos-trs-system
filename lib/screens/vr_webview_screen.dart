@@ -1,41 +1,36 @@
-// VR tour launcher — bundled Marzipano (mobile), system browser (Clear Pano / web).
+// VR tour launcher — bundled Marzipano (mobile), in-app WebView for hosted tours.
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/vr_tour_config.dart';
 import 'package:atmos_trs_system/screens/hosted_vr_tour_screen.dart';
 import 'package:atmos_trs_system/screens/simple_image_vr_screen.dart';
 import 'package:atmos_trs_system/services/vr_tour_firestore_service.dart';
+import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 // -----------------------------------------------------------------------------
 // Helper: open VR tour (all platforms)
 // -----------------------------------------------------------------------------
 
-/// Opens the VR tour in-app (mobile WebView / bundled) or system browser when
-/// required (Clear Pano password tours, Flutter web).
+/// Opens the VR tour in-app (mobile). On web, tourists are prompted to download
+/// the app unless [allowWeb] is true (e.g. tourism staff preview).
 Future<void> openVrTour(
   BuildContext context, {
   bool useLocalTour = false,
   String? url,
   String title = 'VR Tour',
+  bool allowWeb = false,
 }) async {
   if (!context.mounted) return;
+  if (!await VrDownloadAppPrompt.ensureAllowed(context, allowWeb: allowWeb)) {
+    return;
+  }
 
   final configured = url ?? kVrTourUrl;
   final hosted = hostedVrUrlForLaunch(useLocalTour ? null : configured);
 
   if (hosted == null || useLocalTour || useBundledTourForUrl(hosted)) {
-    if (kIsWeb) {
-      await _openVrTourExternally(
-        context,
-        Uri.parse(kVrTourUrl),
-        title: title,
-        reason: 'browser',
-      );
-      return;
-    }
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         fullscreenDialog: true,
@@ -52,12 +47,12 @@ Future<void> openVrTour(
   }
   if (!context.mounted) return;
 
-  if (kIsWeb || isClearPanoTourUrl(hosted)) {
+  if (isClearPanoTourUrl(hosted)) {
     await _openVrTourExternally(
       context,
       uri,
       title: title,
-      reason: isClearPanoTourUrl(hosted) ? 'clearpano' : 'browser',
+      reason: 'clearpano',
     );
     return;
   }
@@ -71,8 +66,12 @@ Future<void> openVrTour(
 }
 
 /// Convenience: open VR tour with URL as first argument after context.
-Future<void> openVrTourWithUrl(BuildContext context, String url) =>
-    openVrTour(context, url: url);
+Future<void> openVrTourWithUrl(
+  BuildContext context,
+  String url, {
+  bool allowWeb = false,
+}) =>
+    openVrTour(context, url: url, allowWeb: allowWeb);
 
 /// Opens hosted VR (Teleport360) or static panorama preview for a tourist spot.
 Future<void> openVrForTouristSpot(
@@ -82,7 +81,12 @@ Future<void> openVrForTouristSpot(
   String? vrLink,
   String? vrPanoramaUrl,
   String? imageUrl,
+  bool allowWeb = false,
 }) async {
+  if (!context.mounted) return;
+  if (!await VrDownloadAppPrompt.ensureAllowed(context, allowWeb: allowWeb)) {
+    return;
+  }
   var effectiveLink = vrLink?.trim();
   if (effectiveLink == null || effectiveLink.isEmpty) {
     effectiveLink = await VrTourFirestoreService.resolveVrUrlForSpot(
@@ -97,11 +101,21 @@ Future<void> openVrForTouristSpot(
     spotName: spotName,
   );
   if (hosted != null && hosted.isNotEmpty) {
-    await openVrTour(context, url: hosted, title: spotName);
+    await openVrTour(
+      context,
+      url: hosted,
+      title: spotName,
+      allowWeb: allowWeb,
+    );
     return;
   }
   if (isOroquietaPlazaSpot(spotId: spotId, spotName: spotName)) {
-    await openVrTour(context, url: kOroquietaCityPlazaVrUrl, title: spotName);
+    await openVrTour(
+      context,
+      url: kOroquietaCityPlazaVrUrl,
+      title: spotName,
+      allowWeb: allowWeb,
+    );
     return;
   }
   final pano = vrPanoramaUrl?.trim();

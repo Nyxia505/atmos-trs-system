@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
+import 'package:atmos_trs_system/config/supabase_storage_config.dart';
 import 'package:atmos_trs_system/config/user_profile_storage.dart';
 import 'package:atmos_trs_system/services/profile_photo_hydration.dart';
 import 'package:atmos_trs_system/services/tourist_profile_hydration.dart';
@@ -17,10 +18,14 @@ import 'package:atmos_trs_system/services/user_activity_service.dart'
     as activity;
 import 'package:atmos_trs_system/services/local_qr_spot_checkin_service.dart';
 import 'package:atmos_trs_system/screens/qr_spot_checkin_screen.dart';
+import 'package:atmos_trs_system/services/lgu_event_service.dart';
+import 'package:atmos_trs_system/screens/event_detail_screen.dart';
+import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:atmos_trs_system/navigation/post_logout_navigation.dart';
 import 'package:atmos_trs_system/widgets/app_logout_button.dart';
 
 /// Main User Dashboard - Container for all user navigation
@@ -41,6 +46,7 @@ class _UserDashboardScreenState extends State<UserDashboardScreen>
   int _unreadNotificationCount = 0;
   Set<String> _unreadAnnouncementIds = <String>{};
   Timer? _notificationPollTimer;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _announcementsSub;
 
   // Theme colors
   static const Color _primaryOrange = Color(0xFFF97316);
@@ -55,11 +61,15 @@ class _UserDashboardScreenState extends State<UserDashboardScreen>
     _loadAnnouncements();
     _refreshNotificationCount();
     _startNotificationAutoRefresh();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) PendingEventOpen.consumeIfAny(context);
+    });
   }
 
   @override
   void dispose() {
     _notificationPollTimer?.cancel();
+    _announcementsSub?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -69,6 +79,7 @@ class _UserDashboardScreenState extends State<UserDashboardScreen>
     if (state == AppLifecycleState.resumed) {
       _refreshNotificationCount();
       _startNotificationAutoRefresh();
+      if (mounted) PendingEventOpen.consumeIfAny(context);
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
       _notificationPollTimer?.cancel();
@@ -238,61 +249,48 @@ class _UserDashboardScreenState extends State<UserDashboardScreen>
 
   Future<void> _loadAnnouncements() async {
     try {
-      if (Firebase.apps.isNotEmpty) {
-        QuerySnapshot<Map<String, dynamic>> snapshot;
-        try {
-          snapshot = await FirebaseFirestore.instance
-              .collection('announcements')
-              .where('published', isEqualTo: true)
-              .orderBy('createdAt', descending: true)
-              .limit(20)
-              .get();
-        } catch (_) {
-          // Fallback if composite index (published, createdAt) is missing
-          final all = await FirebaseFirestore.instance
-              .collection('announcements')
-              .where('published', isEqualTo: true)
-              .limit(50)
-              .get();
-          final list = all.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+      if (Firebase.apps.isEmpty) {
+        setState(() => _isLoadingAnnouncements = false);
+        return;
+      }
+      await _announcementsSub?.cancel();
+      Query<Map<String, dynamic>> query = FirebaseFirestore.instance
+          .collection('announcements')
+          .where('published', isEqualTo: true);
+      _announcementsSub = query.snapshots().listen(
+        (snapshot) {
+          final list = snapshot.docs
+              .map((doc) => {'id': doc.id, ...doc.data()})
+              .where(LguEventService.isVisibleToTourists)
+              .toList();
           list.sort((a, b) {
-            final aAt = a['createdAt'];
-            final bAt = b['createdAt'];
-            if (aAt == null && bAt == null) return 0;
-            if (aAt == null) return 1;
-            if (bAt == null) return -1;
-            final aTime = aAt is Timestamp
-                ? aAt.toDate()
-                : (aAt is DateTime ? aAt : null);
-            final bTime = bAt is Timestamp
-                ? bAt.toDate()
-                : (bAt is DateTime ? bAt : null);
-            if (aTime == null || bTime == null) return 0;
+            final aAt = a['publishedAt'] ?? a['approvedAt'] ?? a['createdAt'];
+            final bAt = b['publishedAt'] ?? b['approvedAt'] ?? b['createdAt'];
+            DateTime? toTime(dynamic v) {
+              if (v is Timestamp) return v.toDate();
+              if (v is DateTime) return v;
+              return null;
+            }
+            final aTime = toTime(aAt);
+            final bTime = toTime(bAt);
+            if (aTime == null && bTime == null) return 0;
+            if (aTime == null) return 1;
+            if (bTime == null) return -1;
             return bTime.compareTo(aTime);
           });
-          if (mounted) {
-            setState(() {
-              _firestoreAnnouncements = list.take(20).toList();
-              _isLoadingAnnouncements = false;
-            });
-            _syncAnnouncementsToNotifications(_firestoreAnnouncements);
-          }
-          _refreshNotificationCount();
-          return;
-        }
-        if (mounted) {
+          if (!mounted) return;
           setState(() {
-            _firestoreAnnouncements = snapshot.docs
-                .map((doc) => {'id': doc.id, ...doc.data()})
-                .toList();
+            _firestoreAnnouncements = list.take(20).toList();
             _isLoadingAnnouncements = false;
           });
           _syncAnnouncementsToNotifications(_firestoreAnnouncements);
-        }
-        _refreshNotificationCount();
-      } else {
-        setState(() => _isLoadingAnnouncements = false);
-      }
+          _refreshNotificationCount();
+        },
+        onError: (e) {
+          debugPrint('Error loading announcements: $e');
+          if (mounted) setState(() => _isLoadingAnnouncements = false);
+        },
+      );
     } catch (e) {
       debugPrint('Error loading announcements: $e');
       if (mounted) setState(() => _isLoadingAnnouncements = false);
@@ -321,6 +319,8 @@ class _UserDashboardScreenState extends State<UserDashboardScreen>
         title: title,
         message: content.isEmpty ? title : content,
         type: type,
+        imageUrl: LguEventService.resolveDisplayImage(ann),
+        municipalityName: ann['municipalityName']?.toString(),
       );
     }
   }
@@ -422,6 +422,8 @@ class _UserDashboardScreenState extends State<UserDashboardScreen>
         'announcementId': ann['id']?.toString() ?? '',
         'title': ann['title'] ?? 'Announcement',
         'message': ann['content'] ?? '',
+        'imageUrl': LguEventService.resolveDisplayImage(ann) ?? '',
+        'municipalityName': ann['municipalityName']?.toString() ?? '',
         'icon': icon,
         'color': _primaryOrange,
         'time': _formatAnnouncementTime(ann['createdAt']),
@@ -846,39 +848,44 @@ class _UserDashboardScreenState extends State<UserDashboardScreen>
                     borderRadius: const BorderRadius.vertical(
                       top: Radius.circular(16),
                     ),
-                    child: (promo['image'] as String).startsWith('http')
-                        ? Image.network(
-                            promo['image'] as String,
-                            width: 280,
-                            height: 100,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Container(
+                    child: (() {
+                      final promoImage = SupabaseStorageConfig.resolve(
+                        promo['image'] as String,
+                      );
+                      return promoImage.startsWith('http')
+                          ? Image.network(
+                              promoImage,
                               width: 280,
                               height: 100,
-                              color: _primaryOrange.withOpacity(0.2),
-                              child: const Icon(
-                                Icons.local_offer,
-                                color: _primaryOrange,
-                                size: 40,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => Container(
+                                width: 280,
+                                height: 100,
+                                color: _primaryOrange.withOpacity(0.2),
+                                child: const Icon(
+                                  Icons.local_offer,
+                                  color: _primaryOrange,
+                                  size: 40,
+                                ),
                               ),
-                            ),
-                          )
-                        : Image.asset(
-                            promo['image'] as String,
-                            width: 280,
-                            height: 100,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Container(
+                            )
+                          : Image.asset(
+                              promoImage,
                               width: 280,
                               height: 100,
-                              color: _primaryOrange.withOpacity(0.2),
-                              child: const Icon(
-                                Icons.local_offer,
-                                color: _primaryOrange,
-                                size: 40,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => Container(
+                                width: 280,
+                                height: 100,
+                                color: _primaryOrange.withOpacity(0.2),
+                                child: const Icon(
+                                  Icons.local_offer,
+                                  color: _primaryOrange,
+                                  size: 40,
+                                ),
                               ),
-                            ),
-                          ),
+                            );
+                    })(),
                   ),
                   Positioned(
                     top: 8,
@@ -1070,6 +1077,7 @@ class _UserDashboardScreenState extends State<UserDashboardScreen>
     final isUnread =
         announcementId.isNotEmpty &&
         _unreadAnnouncementIds.contains('ann_$announcementId');
+    final imageUrl = ann['imageUrl']?.toString().trim() ?? '';
 
     return Material(
       color: Colors.transparent,
@@ -1077,7 +1085,19 @@ class _UserDashboardScreenState extends State<UserDashboardScreen>
         borderRadius: BorderRadius.circular(12),
         onTap: announcementId.isEmpty
             ? null
-            : () => _markAnnouncementAsRead(announcementId),
+            : () async {
+                await _markAnnouncementAsRead(announcementId);
+                if (!mounted) return;
+                await EventDetailScreen.open(
+                  context,
+                  eventId: announcementId,
+                  title: ann['title']?.toString(),
+                  content: ann['message']?.toString(),
+                  imageUrl: imageUrl.isNotEmpty ? imageUrl : null,
+                  municipalityName: ann['municipalityName']?.toString(),
+                  type: ann['type']?.toString(),
+                );
+              },
         child: Container(
           margin: const EdgeInsets.only(bottom: 10),
           padding: const EdgeInsets.all(14),
@@ -1092,18 +1112,28 @@ class _UserDashboardScreenState extends State<UserDashboardScreen>
           ),
           child: Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: (ann['color'] as Color).withOpacity(0.15),
+              if (imageUrl.isNotEmpty)
+                ClipRRect(
                   borderRadius: BorderRadius.circular(10),
+                  child: SizedBox(
+                    width: 56,
+                    height: 56,
+                    child: SpotImage(imageUrl: imageUrl, fit: BoxFit.cover),
+                  ),
+                )
+              else
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: (ann['color'] as Color).withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    ann['icon'] as IconData,
+                    color: ann['color'] as Color,
+                    size: 22,
+                  ),
                 ),
-                child: Icon(
-                  ann['icon'] as IconData,
-                  color: ann['color'] as Color,
-                  size: 22,
-                ),
-              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -1155,6 +1185,8 @@ class _UserDashboardScreenState extends State<UserDashboardScreen>
                   fontSize: 11,
                 ),
               ),
+              const SizedBox(width: 4),
+              Icon(Icons.chevron_right, color: Colors.white.withOpacity(0.35)),
             ],
           ),
         ),
@@ -1629,7 +1661,7 @@ class _UserDashboardScreenState extends State<UserDashboardScreen>
                       );
                       if (confirmed != true) return;
                       AuthConfig.currentUserUid = null;
-                      Navigator.pushReplacementNamed(context, '/login');
+                      navigateAfterLogout(context);
                     },
                   ),
                   const SizedBox(height: 32),

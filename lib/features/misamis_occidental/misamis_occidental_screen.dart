@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
+import 'package:atmos_trs_system/config/supabase_storage_config.dart';
 import 'package:atmos_trs_system/models/municipality.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
 import 'package:atmos_trs_system/features/explore/explore_screen.dart' show TouristSpot, kMockSpots;
@@ -1095,17 +1096,21 @@ class _TouristSpotPopupCard extends StatelessWidget {
             child: SizedBox(
               height: 160,
               width: double.infinity,
-              child: spot.imageUrl.startsWith('http')
-                  ? Image.network(
-                      spot.imageUrl,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => _placeholder(),
-                    )
-                  : Image.asset(
-                      spot.imageUrl,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => _placeholder(),
-                    ),
+              child: (() {
+                final imageUrl =
+                    SupabaseStorageConfig.resolve(spot.imageUrl);
+                return imageUrl.startsWith('http')
+                    ? Image.network(
+                        imageUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => _placeholder(),
+                      )
+                    : Image.asset(
+                        imageUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => _placeholder(),
+                      );
+              })(),
             ),
           ),
           Padding(

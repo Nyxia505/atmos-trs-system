@@ -16,6 +16,14 @@
         { "fieldPath": "municipalityId", "order": "ASCENDING" },
         { "fieldPath": "timestamp", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "qr_checkins",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lguId", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

@@ -1,8 +1,12 @@
+import 'dart:async' show unawaited;
+
+import 'package:atmos_trs_system/features/navigation/tourist_web_layout.dart';
 import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/app_theme_controller.dart';
 import 'package:atmos_trs_system/services/qr_checkin_service.dart';
 import 'package:atmos_trs_system/services/notification_firestore_service.dart';
+import 'package:atmos_trs_system/services/push_notification_service.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart';
 import 'package:atmos_trs_system/utils/visit_record_image_resolver.dart';
 
@@ -20,7 +24,7 @@ Future<void> showQRCheckInSuccessDialog(
       ? title!.trim()
       : 'Thank you!';
 
-  return showDialog<void>(
+  return showTouristDialog<void>(
     context: context,
     barrierDismissible: false,
     barrierColor: Colors.black.withValues(alpha: 0.45),
@@ -136,10 +140,16 @@ Future<void> showQRCheckInSuccessDialog(
 String _errorDialogTitle(String message) {
   final m = message.toLowerCase();
   if (m.contains('sorry') ||
+      m.contains('almost there') ||
       m.contains('location') ||
       m.contains('gps') ||
       m.contains('meters') ||
-      m.contains('within about')) {
+      m.contains('within about') ||
+      m.contains('digital') ||
+      m.contains('printed') ||
+      m.contains('tourist spot') ||
+      m.contains('on site') ||
+      m.contains('on-site')) {
     return 'Almost there';
   }
   return 'Check-in failed';
@@ -147,7 +157,7 @@ String _errorDialogTitle(String message) {
 
 /// Shows an error dialog when QR check-in save fails.
 void showQRCheckInErrorDialog(BuildContext context, String message) {
-  showDialog<void>(
+  showTouristDialog<void>(
     context: context,
     barrierColor: Colors.black.withValues(alpha: 0.45),
     builder: (dialogContext) {
@@ -253,6 +263,9 @@ void showQRCheckInErrorDialog(BuildContext context, String message) {
 /// Call this after a successful QR scan with the decoded [municipalityId] and [spotId].
 /// Optionally pass [spotName] and [municipality] (e.g. from Firestore) to store in qr_checkins.
 ///
+/// [onBeforeDialog] runs after the save finishes and before any dialog is shown,
+/// so callers can clear loading UI while the dialog is visible.
+///
 /// Returns `true` if check-in was saved, `false` otherwise.
 Future<bool> performQRCheckIn(
   BuildContext context, {
@@ -262,6 +275,10 @@ Future<bool> performQRCheckIn(
   String? spotName,
   String? municipality,
   String? category,
+  int partySize = 1,
+  int femaleCount = 0,
+  int maleCount = 0,
+  VoidCallback? onBeforeDialog,
 }) async {
   final result = await QRCheckInService.saveCheckIn(
     municipalityId: municipalityId,
@@ -269,8 +286,13 @@ Future<bool> performQRCheckIn(
     userId: userId,
     spotName: spotName,
     municipality: municipality,
+    partySize: partySize,
+    femaleCount: femaleCount,
+    maleCount: maleCount,
   );
 
+  if (!context.mounted) return false;
+  onBeforeDialog?.call();
   if (!context.mounted) return false;
 
   switch (result) {
@@ -297,8 +319,14 @@ Future<bool> performQRCheckIn(
         ),
       );
       if (uid != null && uid.isNotEmpty) {
-        NotificationFirestoreService.createCheckInNotification(uid, displayName);
+        unawaited(
+          NotificationFirestoreService.createCheckInNotification(
+            uid,
+            displayName,
+          ),
+        );
       }
+      unawaited(showCheckInLocalNotification(displayName));
       return true;
     case QRCheckInFailure(:final message):
       showQRCheckInErrorDialog(context, message);

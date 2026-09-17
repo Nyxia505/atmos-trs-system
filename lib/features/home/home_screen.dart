@@ -20,6 +20,7 @@ import 'package:atmos_trs_system/features/explore/explore_screen.dart'
     show kMockSpots;
 import 'package:atmos_trs_system/models/tourist_destination_detail.dart';
 import 'package:atmos_trs_system/screens/tourist_destination_detail_screen.dart';
+import 'package:atmos_trs_system/screens/event_detail_screen.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/app_theme_controller.dart';
 import 'package:atmos_trs_system/config/vr_tour_config.dart';
@@ -30,15 +31,13 @@ import 'package:atmos_trs_system/services/qr_checkin_ui.dart';
 import 'package:atmos_trs_system/data/featured_destinations.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_display_spots.dart';
 import 'package:atmos_trs_system/data/tourist_spot_image_catalog.dart';
+import 'package:atmos_trs_system/widgets/recent_reviews_section.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:atmos_trs_system/utils/visit_record_image_resolver.dart';
 import 'package:atmos_trs_system/services/tourist_activity_firestore_sync.dart';
 import 'package:atmos_trs_system/features/home/widgets/app_faq_sheet.dart';
 import 'package:atmos_trs_system/utils/maps_directions_launcher.dart';
 
-const Color _kDarkText = Color(0xFF111827);
-const Color _kMuted = Color(0xFF6B7280);
-const Color _kPageBg = Color(0xFFF8FAFC);
 const double _kHomeCenterPanelMaxWidth = 480;
 
 /// Misamis Occidental center (used e.g. for VR preview location)
@@ -58,7 +57,7 @@ class _FeaturedCarouselScrollBehavior extends MaterialScrollBehavior {
   };
 }
 
-/// Seven priority VR / featured destinations on the home Discover carousel.
+/// Six priority VR / featured destinations on the home Discover carousel.
 /// Categories for Featured Destinations filter.
 const List<String> _featuredCategories = [
   'All',
@@ -150,7 +149,7 @@ class _HomeScreenState extends State<HomeScreen> {
     List<Widget>? actions,
   }) {
     return AppBar(
-      backgroundColor: Colors.white,
+      backgroundColor: AppTheme.cardBackground,
       elevation: 0,
       scrolledUnderElevation: 0,
       leadingWidth: 80,
@@ -179,8 +178,8 @@ class _HomeScreenState extends State<HomeScreen> {
       title: subtitle == null
           ? Text(
               title,
-              style: const TextStyle(
-                color: _kDarkText,
+              style: TextStyle(
+                color: AppTheme.textPrimary,
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
               ),
@@ -190,8 +189,8 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Text(
                   title,
-                  style: const TextStyle(
-                    color: _kDarkText,
+                  style: TextStyle(
+                    color: AppTheme.textPrimary,
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
                   ),
@@ -415,7 +414,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String _featuredImageForDestination(Map<String, dynamic> destination) {
     final explicit = destination['image']?.toString().trim();
     if (explicit != null && explicit.isNotEmpty) {
-      return TouristSpotImageCatalog.normalizeAssetPath(explicit);
+      return TouristSpotImageCatalog.displayUrl(preferred: explicit);
     }
     final spotId = destination['spotId']?.toString() ?? '';
     final known = MisamisOccidentalDisplaySpots.findByAnyId(
@@ -688,8 +687,8 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               Text(
                 title,
-                style: const TextStyle(
-                  color: _kDarkText,
+                style: TextStyle(
+                  color: AppTheme.textPrimary,
                   fontSize: 18,
                   fontWeight: FontWeight.w800,
                   letterSpacing: -0.2,
@@ -699,7 +698,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(height: 2),
                 Text(
                   subtitle,
-                  style: const TextStyle(color: _kMuted, fontSize: 12.5),
+                  style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 12.5),
                 ),
               ],
             ],
@@ -772,10 +771,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   Expanded(
                     child: Text(
                       title,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
-                        color: _kDarkText,
+                        color: AppTheme.textPrimary,
                       ),
                     ),
                   ),
@@ -839,7 +838,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   Expanded(
                     child: _quickActionTile(
                       icon: Icons.help_outline_rounded,
-                      label: 'FAQ',
+                      label: 'Ask Tala',
                       accent: accent,
                       onTap: () => _showFaq(context),
                     ),
@@ -956,7 +955,7 @@ class _HomeScreenState extends State<HomeScreen> {
         final accent = AppTheme.primary;
 
         return Scaffold(
-          backgroundColor: _kPageBg,
+          backgroundColor: AppTheme.pageBackground,
           body: Column(
             children: [
               _buildHeader(context, accent),
@@ -975,6 +974,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           _buildQuickActionsRow(),
                           const SizedBox(height: 24),
                           _buildDiscoverSection(),
+                          const SizedBox(height: 24),
+                          const RecentReviewsSection(),
                           const SizedBox(height: 24),
                           _buildRecentlyViewedSection(),
                           const SizedBox(height: 20),
@@ -1187,7 +1188,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
                 child: Text(
                   notificationCount > 9 ? '9+' : notificationCount.toString(),
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: Colors.white,
                     fontSize: 10,
                     fontWeight: FontWeight.bold,
@@ -1232,12 +1233,12 @@ class _HomeScreenState extends State<HomeScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
+                  Text(
                     'Notifications',
                     style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
-                      color: _kDarkText,
+                      color: AppTheme.textPrimary,
                     ),
                   ),
                   if (_notifications.isNotEmpty)
@@ -1316,6 +1317,20 @@ class _HomeScreenState extends State<HomeScreen> {
                                 setModalState(() {});
                                 if (mounted) setState(() {});
                               }
+                              final id = notification.id;
+                              if (id.startsWith('ann_') && mounted) {
+                                Navigator.of(context).pop();
+                                await EventDetailScreen.open(
+                                  context,
+                                  eventId: id.substring(4),
+                                  title: notification.title,
+                                  content: notification.message,
+                                  type: notification.type.name,
+                                  imageUrl: notification.imageUrl,
+                                  municipalityName:
+                                      notification.municipalityName,
+                                );
+                              }
                             },
                           );
                         },
@@ -1380,14 +1395,29 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         child: Row(
           children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.1),
+            if ((notification.imageUrl?.trim().isNotEmpty ?? false))
+              ClipRRect(
                 borderRadius: BorderRadius.circular(12),
+                child: SizedBox(
+                  width: 52,
+                  height: 52,
+                  child: SpotImage(
+                    imageUrl: notification.imageUrl,
+                    fit: BoxFit.cover,
+                    width: 52,
+                    height: 52,
+                  ),
+                ),
+              )
+            else
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: color, size: 24),
               ),
-              child: Icon(icon, color: color, size: 24),
-            ),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
@@ -1402,7 +1432,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             fontWeight: notification.isRead
                                 ? FontWeight.w500
                                 : FontWeight.w600,
-                            color: _kDarkText,
+                            color: AppTheme.textPrimary,
                           ),
                         ),
                       ),
@@ -1453,7 +1483,7 @@ class _HomeScreenState extends State<HomeScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: _buildSectionHeader(
             title: 'Discover',
-            subtitle: 'Seven priority destinations for virtual tours',
+            subtitle: 'Six priority destinations for virtual tours',
             icon: Icons.auto_awesome_rounded,
             trailing: TextButton(
               onPressed: _showAllDestinationsDialog,
@@ -1541,7 +1571,7 @@ class _HomeScreenState extends State<HomeScreen> {
         MaterialPageRoute<void>(
           fullscreenDialog: true,
           builder: (ctx) => Scaffold(
-            backgroundColor: Colors.white,
+            backgroundColor: AppTheme.cardBackground,
             appBar: _mobileSheetAppBar(ctx, title: 'Visited Places'),
             body: visitedBody(visitsFuture),
           ),
@@ -1594,9 +1624,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Text(
                       visit.spotName,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w600,
-                        color: _kDarkText,
+                        color: AppTheme.textPrimary,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -1689,12 +1719,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  const Text(
+                  Text(
                     'Earned Badges',
                     style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
-                      color: _kDarkText,
+                      color: AppTheme.textPrimary,
                     ),
                   ),
                 ],
@@ -1772,9 +1802,9 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 8),
           Text(
             badge.name,
-            style: const TextStyle(
+            style: TextStyle(
               fontWeight: FontWeight.bold,
-              color: _kDarkText,
+              color: AppTheme.textPrimary,
               fontSize: 14,
             ),
             textAlign: TextAlign.center,
@@ -1866,7 +1896,7 @@ class _HomeScreenState extends State<HomeScreen> {
           fullscreenDialog: true,
           builder: (ctx) => StatefulBuilder(
             builder: (ctx, setSheetState) => Scaffold(
-              backgroundColor: Colors.white,
+              backgroundColor: AppTheme.cardBackground,
               appBar: _mobileSheetAppBar(ctx, title: 'Saved Spots'),
               body: savedBody(
                 future: prepareFuture,
@@ -1923,9 +1953,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Text(
                       spot.name,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w600,
-                        color: _kDarkText,
+                        color: AppTheme.textPrimary,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -1947,16 +1977,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               fontSize: 10,
                               fontWeight: FontWeight.w600,
                             ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Icon(Icons.star, size: 12, color: AppTheme.primary),
-                        const SizedBox(width: 2),
-                        Text(
-                          spot.rating.toStringAsFixed(1),
-                          style: TextStyle(
-                            color: Colors.grey.shade600,
-                            fontSize: 12,
                           ),
                         ),
                       ],
@@ -2010,10 +2030,10 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 2),
           Text(
             value,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w800,
-              color: _kDarkText,
+              color: AppTheme.textPrimary,
               letterSpacing: -0.5,
               height: 1,
             ),
@@ -2324,7 +2344,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   child: Text(
                     destination['category'] as String,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: Colors.white,
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -2341,37 +2361,21 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     Text(
                       destination['name'] as String,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: Colors.white,
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Icon(Icons.star, color: AppTheme.primary, size: 16),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${destination['rating']}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            destination['description'] as String,
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(0.8),
-                              fontSize: 12,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
+                    Text(
+                      destination['description'] as String,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.8),
+                        fontSize: 12,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
@@ -2526,8 +2530,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           children: [
                             Text(
                               spot.name,
-                              style: const TextStyle(
-                                color: _kDarkText,
+                              style: TextStyle(
+                                color: AppTheme.textPrimary,
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -2551,23 +2555,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                       fontSize: 11,
                                       fontWeight: FontWeight.w600,
                                     ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Icon(
-                                  Icons.star,
-                                  size: 14,
-                                  color: AppTheme.primary,
-                                ),
-                                const SizedBox(width: 2),
-                                Text(
-                                  spot.rating > 0
-                                      ? spot.rating.toStringAsFixed(1)
-                                      : 'â€”',
-                                  style: TextStyle(
-                                    color: AppTheme.primary,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
                                   ),
                                 ),
                               ],
@@ -2706,7 +2693,7 @@ class _HomeScreenState extends State<HomeScreen> {
         MaterialPageRoute<void>(
           fullscreenDialog: true,
           builder: (ctx) => Scaffold(
-            backgroundColor: Colors.white,
+            backgroundColor: AppTheme.cardBackground,
             appBar: _mobileSheetAppBar(
               ctx,
               title: 'All Destinations',
@@ -2775,9 +2762,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   Text(
                     spot.name,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontWeight: FontWeight.w600,
-                      color: _kDarkText,
+                      color: AppTheme.textPrimary,
                       fontSize: 15,
                     ),
                   ),
@@ -2800,16 +2787,6 @@ class _HomeScreenState extends State<HomeScreen> {
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
                           ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Icon(Icons.star, size: 14, color: AppTheme.primary),
-                      const SizedBox(width: 2),
-                      Text(
-                        spot.rating.toStringAsFixed(1),
-                        style: TextStyle(
-                          color: Colors.grey.shade600,
-                          fontSize: 12,
                         ),
                       ),
                     ],
@@ -2879,11 +2856,11 @@ class _HomeScreenState extends State<HomeScreen> {
                           color: accent.withValues(alpha: 0.55),
                         ),
                         const SizedBox(width: 16),
-                        const Expanded(
+                        Expanded(
                           child: Text(
                             'Open any spot from All places or your lists â€” it will show up here.',
                             style: TextStyle(
-                              color: _kMuted,
+                              color: AppTheme.unselectedMuted,
                               fontSize: 13,
                               height: 1.35,
                             ),
@@ -2995,8 +2972,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             entry.spotName,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: _kDarkText,
+                            style: TextStyle(
+                              color: AppTheme.textPrimary,
                               fontSize: 14,
                               fontWeight: FontWeight.w700,
                               height: 1.2,
@@ -3222,10 +3199,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   Text(
                     visit.spotName,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontWeight: FontWeight.w600,
                       fontSize: 13,
-                      color: _kDarkText,
+                      color: AppTheme.textPrimary,
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -3367,6 +3344,8 @@ class _FeaturedDestinationFullScreenPageState
         final featuredDetail =
             TouristDestinationDetail.fromFeaturedMap(destination);
         final nearbyHotelCards = featuredDetail.nearbyHotels;
+        final nearbyCafeCards = featuredDetail.nearbyCafes;
+        final nearbyAttractionCards = featuredDetail.nearbyAttractions;
         final nearbyHotels = (destination['nearbyHotels'] as List?)
             ?.map((e) {
               if (e is Map) return e['name']?.toString() ?? '';
@@ -3378,13 +3357,13 @@ class _FeaturedDestinationFullScreenPageState
         final screenH = MediaQuery.sizeOf(context).height;
 
         return Scaffold(
-          backgroundColor: Colors.white,
+          backgroundColor: AppTheme.cardBackground,
           body: CustomScrollView(
             slivers: [
               SliverAppBar(
                 pinned: true,
                 expandedHeight: screenH * 0.42,
-                backgroundColor: Colors.white,
+                backgroundColor: AppTheme.cardBackground,
                 foregroundColor: Colors.black87,
                 leadingWidth: 80,
                 leading: Padding(
@@ -3444,6 +3423,12 @@ class _FeaturedDestinationFullScreenPageState
                     nearbyHotelCards: nearbyHotelCards,
                     nearbyHotelsNote:
                         destination['nearbyHotelsNote']?.toString() ?? '',
+                    nearbyCafeCards: nearbyCafeCards,
+                    nearbyCafesNote:
+                        destination['nearbyCafesNote']?.toString() ?? '',
+                    nearbyAttractionCards: nearbyAttractionCards,
+                    nearbyAttractionsNote:
+                        destination['nearbyAttractionsNote']?.toString() ?? '',
                     isSaved: _isSaved,
                     isSaving: _isSaving,
                     onDirections: () {
@@ -3482,6 +3467,10 @@ class _FeaturedDestinationDetailBody extends StatelessWidget {
     this.nearbyHotels = const [],
     this.nearbyHotelCards = const [],
     this.nearbyHotelsNote = '',
+    this.nearbyCafeCards = const [],
+    this.nearbyCafesNote = '',
+    this.nearbyAttractionCards = const [],
+    this.nearbyAttractionsNote = '',
     this.isSaved = false,
     this.isSaving = false,
     this.onDirections,
@@ -3505,6 +3494,10 @@ class _FeaturedDestinationDetailBody extends StatelessWidget {
   final List<String> nearbyHotels;
   final List<NearbyPlaceCard> nearbyHotelCards;
   final String nearbyHotelsNote;
+  final List<NearbyPlaceCard> nearbyCafeCards;
+  final String nearbyCafesNote;
+  final List<NearbyPlaceCard> nearbyAttractionCards;
+  final String nearbyAttractionsNote;
   final bool isSaved;
   final bool isSaving;
   final VoidCallback? onDirections;
@@ -3542,22 +3535,15 @@ class _FeaturedDestinationDetailBody extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(width: 8),
-            Icon(Icons.star, size: 16, color: color),
-            const SizedBox(width: 4),
-            Text(
-              '$rating',
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
           ],
         ),
         const SizedBox(height: 10),
         Text(
           name,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 22,
             fontWeight: FontWeight.bold,
-            color: _kDarkText,
+            color: AppTheme.textPrimary,
           ),
         ),
         const SizedBox(height: 12),
@@ -3628,7 +3614,12 @@ class _FeaturedDestinationDetailBody extends StatelessWidget {
             ),
           ],
         ),
-        if (nearbyRestaurantCards.isNotEmpty || restaurants.isNotEmpty || hotels.isNotEmpty) ...[
+        if (nearbyRestaurantCards.isNotEmpty ||
+            restaurants.isNotEmpty ||
+            hotels.isNotEmpty ||
+            nearbyHotelCards.isNotEmpty ||
+            nearbyCafeCards.isNotEmpty ||
+            nearbyAttractionCards.isNotEmpty) ...[
           const SizedBox(height: 18),
           if (nearbyRestaurantCards.isNotEmpty) ...[
             Row(
@@ -3647,7 +3638,7 @@ class _FeaturedDestinationDetailBody extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             SizedBox(
-              height: 168,
+              height: 220,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: nearbyRestaurantCards.length,
@@ -3656,7 +3647,6 @@ class _FeaturedDestinationDetailBody extends StatelessWidget {
                     _FeaturedNearbyRestaurantTile(
                       place: nearbyRestaurantCards[i],
                       accent: color,
-                      buildImage: buildImage,
                     ),
               ),
             ),
@@ -3699,7 +3689,7 @@ class _FeaturedDestinationDetailBody extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               SizedBox(
-                height: 168,
+                height: 220,
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
                   itemCount: nearbyHotelCards.length,
@@ -3707,7 +3697,6 @@ class _FeaturedDestinationDetailBody extends StatelessWidget {
                   itemBuilder: (_, i) => _FeaturedNearbyRestaurantTile(
                     place: nearbyHotelCards[i],
                     accent: color,
-                    buildImage: buildImage,
                   ),
                 ),
               ),
@@ -3720,6 +3709,88 @@ class _FeaturedDestinationDetailBody extends StatelessWidget {
               ),
             ],
           ],
+          if (nearbyCafeCards.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            if (nearbyCafesNote.trim().isNotEmpty) ...[
+              Text(
+                nearbyCafesNote,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.4,
+                  color: Colors.grey.shade700,
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+            Row(
+              children: [
+                Icon(Icons.local_cafe_outlined, color: color, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Nearby Cafés',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: color,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 220,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: nearbyCafeCards.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 12),
+                itemBuilder: (_, i) => _FeaturedNearbyRestaurantTile(
+                  place: nearbyCafeCards[i],
+                  accent: color,
+                ),
+              ),
+            ),
+          ],
+          if (nearbyAttractionCards.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            if (nearbyAttractionsNote.trim().isNotEmpty) ...[
+              Text(
+                nearbyAttractionsNote,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.4,
+                  color: Colors.grey.shade700,
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+            Row(
+              children: [
+                Icon(Icons.attractions_outlined, color: color, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Nearby Tourist Attractions',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: color,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 220,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: nearbyAttractionCards.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 12),
+                itemBuilder: (_, i) => _FeaturedNearbyRestaurantTile(
+                  place: nearbyAttractionCards[i],
+                  accent: color,
+                ),
+              ),
+            ),
+          ],
         ],
       ],
     );
@@ -3730,12 +3801,10 @@ class _FeaturedNearbyRestaurantTile extends StatelessWidget {
   const _FeaturedNearbyRestaurantTile({
     required this.place,
     required this.accent,
-    required this.buildImage,
   });
 
   final NearbyPlaceCard place;
   final Color accent;
-  final Widget Function(String imageUrl) buildImage;
 
   @override
   Widget build(BuildContext context) {
@@ -3751,7 +3820,7 @@ class _FeaturedNearbyRestaurantTile extends StatelessWidget {
         },
         borderRadius: BorderRadius.circular(18),
         child: Container(
-      width: 152,
+      width: 176,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(18),
@@ -3764,14 +3833,40 @@ class _FeaturedNearbyRestaurantTile extends StatelessWidget {
           ),
         ],
       ),
-      clipBehavior: Clip.antiAlias,
+      clipBehavior: Clip.none,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            height: 72,
-            width: double.infinity,
-            child: buildImage(place.imageUrl ?? ''),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
+            child: Container(
+              height: 118,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: const Color(0xFFF3F4F6),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Colors.black.withValues(alpha: 0.08),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.14),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.06),
+                    blurRadius: 2,
+                    offset: const Offset(0, 1),
+                  ),
+                ],
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: SpotImage(
+                imageUrl: place.imageUrl,
+                fit: BoxFit.contain,
+              ),
+            ),
           ),
           Expanded(
             child: Padding(
@@ -3783,27 +3878,21 @@ class _FeaturedNearbyRestaurantTile extends StatelessWidget {
                     place.name,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
-                      color: _kDarkText,
+                      color: AppTheme.textPrimary,
                     ),
                   ),
                   const Spacer(),
-                  Row(
-                    children: [
-                      Icon(Icons.star_rounded, size: 12, color: accent),
-                      Text(
-                        place.rating.toStringAsFixed(1),
-                        style: const TextStyle(fontSize: 11),
-                      ),
-                      const Spacer(),
-                      Text(
-                        place.priceRange,
-                        style: TextStyle(fontSize: 11, color: accent),
-                      ),
-                    ],
-                  ),
+                  if (place.contact != null &&
+                      place.contact!.trim().isNotEmpty)
+                    Text(
+                      'Contact: ${place.contact}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 11, color: accent),
+                    ),
                   Row(
                     children: [
                       Expanded(
@@ -3811,7 +3900,10 @@ class _FeaturedNearbyRestaurantTile extends StatelessWidget {
                           place.driveMinutes != null
                               ? '~${place.driveMinutes!.round()} min drive'
                               : '${place.distanceKm.toStringAsFixed(1)} km',
-                          style: const TextStyle(fontSize: 10, color: _kMuted),
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: AppTheme.unselectedMuted,
+                          ),
                         ),
                       ),
                       Icon(Icons.directions_rounded, size: 14, color: accent),
@@ -3901,10 +3993,10 @@ class _NearbySummaryCard extends StatelessWidget {
                   primary.isEmpty ? 'â€”' : primary,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w800,
-                    color: _kDarkText,
+                    color: AppTheme.textPrimary,
                   ),
                 ),
                 if (extra > 0) ...[
@@ -3980,7 +4072,7 @@ class _InfoChip extends StatelessWidget {
                     v.isEmpty ? 'â€”' : v,
                     maxLines: label == 'Location' ? 2 : 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
                       color: Color(0xFF111827),

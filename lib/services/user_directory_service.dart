@@ -21,7 +21,8 @@ import 'package:atmos_trs_system/config/session_storage.dart';
 /// }
 /// ```
 ///
-/// Staff roles: `governor`, `tourism_office` (or legacy `tourism`).
+/// Staff roles: `governor`, `provincial_tourism` / `tourism_province`,
+/// `tourism_office` (or legacy `tourism`).
 class AppUserProfile {
   const AppUserProfile({
     required this.uid,
@@ -29,7 +30,9 @@ class AppUserProfile {
     required this.roleRaw,
     this.fullName,
     this.municipality = '',
+    this.municipalityId = '',
     this.isVerified = false,
+    this.status = '',
   });
 
   final String uid;
@@ -38,17 +41,36 @@ class AppUserProfile {
   final String? fullName;
   final String municipality;
 
+  /// Canonical municipality id (e.g. oroquieta) when stored on the user doc.
+  final String municipalityId;
+
   /// For tourists: EmailJS OTP completed.
   final bool isVerified;
 
+  /// Establishment / LGU approval status (`pending`, `active`, …).
+  final String status;
+
   bool get isGovernor => roleRaw == 'governor';
 
-  /// Municipal / provincial tourism office dashboard.
+  /// Provincial Tourism Office (province-wide tourism program ops).
+  bool get isProvincialTourism =>
+      roleRaw == 'provincial_tourism' || roleRaw == 'tourism_province';
+
+  /// Municipal LGU tourism office dashboard.
   bool get isTourismOffice =>
-      roleRaw == 'tourism_office' ||
-      roleRaw == 'tourism';
+      !isProvincialTourism &&
+      (roleRaw == 'tourism_office' || roleRaw == 'tourism');
 
   bool get isTourist => roleRaw == 'tourist';
+
+  /// Tourism establishment (hotel, resort, restaurant, attraction, etc.).
+  bool get isTourismEstablishment =>
+      roleRaw == 'tourism_establishment' ||
+      roleRaw == 'tourismestablishment' ||
+      roleRaw == 'establishment';
+
+  bool get isAnyStaff =>
+      isGovernor || isProvincialTourism || isTourismOffice;
 
   static AppUserProfile? fromMap(String uid, Map<String, dynamic> data) {
     final email = data['email'] as String?;
@@ -62,7 +84,9 @@ class AppUserProfile {
       roleRaw: role,
       fullName: data['fullName'] as String?,
       municipality: (data['municipality'] as String? ?? '').trim(),
+      municipalityId: (data['municipalityId'] as String? ?? '').trim(),
       isVerified: data['isVerified'] as bool? ?? false,
+      status: (data['status'] as String? ?? '').trim().toLowerCase(),
     );
   }
 }
@@ -72,6 +96,32 @@ class UserDirectoryService {
   UserDirectoryService._();
 
   static const String collectionId = 'users';
+
+  static String? _preparedStaffUid;
+  static DateTime? _preparedStaffAt;
+  static const Duration _staffPrepTtl = Duration(minutes: 30);
+
+  static void clearStaffAccessCache() {
+    _preparedStaffUid = null;
+    _preparedStaffAt = null;
+  }
+
+  /// Called after login finalization confirms staff Firestore access.
+  static void markStaffFirestoreAccessReady(String uid) {
+    if (uid.isEmpty) return;
+    _markStaffPrepared(uid);
+  }
+
+  static bool _staffPrepIsFresh(String uid) {
+    return _preparedStaffUid == uid &&
+        _preparedStaffAt != null &&
+        DateTime.now().difference(_preparedStaffAt!) < _staffPrepTtl;
+  }
+
+  static void _markStaffPrepared(String uid) {
+    _preparedStaffUid = uid;
+    _preparedStaffAt = DateTime.now();
+  }
 
   static bool get _ready {
     try {
@@ -114,18 +164,28 @@ class UserDirectoryService {
 
   /// True only after in-app OTP sets `isVerified` on `users` / `tourists`.
   static Future<bool> touristEmailVerificationComplete(String uid) async {
-    if (!_ready || uid.isEmpty) return false;
-    final profile = await getProfileByUid(uid, preferServer: true);
-    if (profile != null && profile.isTourist && profile.isVerified) {
+    if (uid.isEmpty) return false;
+    if (await SessionStorage.isTouristEmailVerifiedCached(uid)) {
       return true;
     }
-    return await getTouristIsVerifiedFromTouristsDoc(uid) == true;
+    if (!_ready) return false;
+    final profile = await getProfileByUid(uid, preferServer: true);
+    if (profile != null && profile.isTourist && profile.isVerified) {
+      await SessionStorage.setTouristEmailVerified(uid, verified: true);
+      return true;
+    }
+    final touristsVerified = await getTouristIsVerifiedFromTouristsDoc(uid);
+    if (touristsVerified == true) {
+      await SessionStorage.setTouristEmailVerified(uid, verified: true);
+      return true;
+    }
+    return false;
   }
 
   /// True when [email] maps to governor or any tourism/LGU staff account.
   static bool isProvincialStaffEmail(String email) {
     final role = SessionStorage.getRoleFromEmail(email);
-    return role == UserRole.governor || role == UserRole.tourism;
+    return SessionStorage.isStaffRole(role);
   }
 
   /// True when the signed-in user may run provincial/LGU Firestore list queries.
@@ -135,17 +195,25 @@ class UserDirectoryService {
     final email = auth.email?.trim() ?? '';
     if (email.isNotEmpty && isProvincialStaffEmail(email)) return true;
     final storedRole = await SessionStorage.getStoredRole();
-    if (storedRole == UserRole.governor || storedRole == UserRole.tourism) {
+    if (SessionStorage.isStaffRole(storedRole)) {
       return true;
     }
     final profile = await getProfileByUid(
       auth.uid,
       preferServer: preferServer,
     );
-    if (profile != null && (profile.isGovernor || profile.isTourismOffice)) {
+    if (profile != null && profile.isAnyStaff) {
       return true;
     }
     return false;
+  }
+
+  static bool _isAllowedStaffRoleRaw(String role) {
+    return role == 'governor' ||
+        role == 'tourism' ||
+        role == 'tourism_office' ||
+        role == 'provincial_tourism' ||
+        role == 'tourism_province';
   }
 
   /// Creates/updates `users/{uid}` for Governor or tourism staff (required for Firestore rules).
@@ -158,7 +226,7 @@ class UserDirectoryService {
   }) async {
     if (!_ready || uid.isEmpty) return false;
     final role = roleRaw.trim().toLowerCase();
-    if (role != 'governor' && role != 'tourism' && role != 'tourism_office') {
+    if (!_isAllowedStaffRoleRaw(role)) {
       return false;
     }
     final mun = (municipalityId ?? '').trim();
@@ -167,8 +235,8 @@ class UserDirectoryService {
         'firebaseUid': uid,
         'email': email.trim(),
         'role': role,
-        'fullName': fullName?.trim() ?? '',
-        'municipality': mun,
+        if (fullName != null) 'fullName': fullName.trim(),
+        // Prefer municipalityId only — do not overwrite display `municipality`.
         if (mun.isNotEmpty) 'municipalityId': mun,
         'isVerified': true,
         'updatedAt': FieldValue.serverTimestamp(),
@@ -195,7 +263,7 @@ class UserDirectoryService {
     final storedRole = await SessionStorage.getStoredRole();
     final storedUid = await SessionStorage.getStoredUser();
     final sessionIsStaff = storedUid == uid &&
-        (storedRole == UserRole.governor || storedRole == UserRole.tourism);
+        SessionStorage.isStaffRole(storedRole);
     final emailIsStaff =
         normalizedEmail.isNotEmpty && isProvincialStaffEmail(normalizedEmail);
 
@@ -207,9 +275,17 @@ class UserDirectoryService {
       return false;
     }
 
+    if (_staffPrepIsFresh(uid)) {
+      return true;
+    }
+
     final effectiveRole = storedRole == UserRole.governor
         ? 'governor'
-        : (roleRaw.trim().isNotEmpty ? roleRaw.trim().toLowerCase() : 'tourism');
+        : storedRole == UserRole.provincialTourism
+            ? 'provincial_tourism'
+            : (roleRaw.trim().isNotEmpty
+                ? roleRaw.trim().toLowerCase()
+                : 'tourism');
     var mun = (municipalityId ?? '').trim();
     if (mun.isEmpty) {
       mun = await SessionStorage.getStoredMunicipalityId() ?? '';
@@ -218,44 +294,21 @@ class UserDirectoryService {
       mun = SessionStorage.getMunicipalityIdFromTourismEmail(normalizedEmail) ?? '';
     }
 
-    var wrote = await ensureStaffUserDoc(
-      uid: uid,
-      email: normalizedEmail.isNotEmpty ? normalizedEmail : email,
-      roleRaw: effectiveRole,
-      fullName: fullName,
-      municipalityId: mun.isNotEmpty ? mun : null,
-    );
-
-    // Legacy: staff profile stored under a different doc id (email query).
-    if (!wrote || normalizedEmail.isNotEmpty) {
-      final byEmail = await getProfileByEmail(normalizedEmail);
-      if (byEmail != null &&
-          byEmail.uid != uid &&
-          (byEmail.isGovernor || byEmail.isTourismOffice)) {
-        wrote = await ensureStaffUserDoc(
-          uid: uid,
-          email: byEmail.email,
-          roleRaw: byEmail.roleRaw,
-          fullName: byEmail.fullName ?? fullName,
-          municipalityId: mun.isNotEmpty ? mun : municipalityId,
-        );
-      }
+    // Trusted staff session/email: one merge write, skip email lookup + server get.
+    // Login already marks prep ready; this covers cold start / cache miss.
+    if (sessionIsStaff || emailIsStaff) {
+      await ensureStaffUserDoc(
+        uid: uid,
+        email: normalizedEmail.isNotEmpty ? normalizedEmail : email,
+        roleRaw: effectiveRole,
+        fullName: fullName,
+        municipalityId: mun.isNotEmpty ? mun : null,
+      );
+      _markStaffPrepared(uid);
+      return true;
     }
 
-    try {
-      final doc = await _db
-          .collection(collectionId)
-          .doc(uid)
-          .get(const GetOptions(source: Source.server));
-      final role =
-          (doc.data()?['role'] as String? ?? '').trim().toLowerCase();
-      return role == 'governor' ||
-          role == 'tourism' ||
-          role == 'tourism_office';
-    } catch (e) {
-      debugPrint('UserDirectoryService.prepareProvincialStaffFirestoreAccess: $e');
-      return false;
-    }
+    return false;
   }
 
   /// Fallback: query by email (case variants).

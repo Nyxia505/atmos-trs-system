@@ -18,7 +18,7 @@ class HomeHeader extends StatelessWidget {
     return Container(
       width: double.infinity,
       padding: EdgeInsets.fromLTRB(padding, 12, padding, 16),
-      decoration: const BoxDecoration(color: AppTheme.scaffoldBackground),
+      decoration: BoxDecoration(color: AppTheme.scaffoldBackground),
       child: Row(
         children: [
           // Avatar with online dot

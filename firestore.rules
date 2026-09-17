@@ -21,6 +21,8 @@ service cloud.firestore {
       return userExists()
         && (
           staffRole().matches('(?i)^\\s*governor\\s*$')
+          || staffRole().matches('(?i)^\\s*provincial[_\\s-]?tourism\\s*$')
+          || staffRole().matches('(?i)^\\s*tourism[_\\s-]?province\\s*$')
           || staffRole().matches('(?i)^\\s*tourism(_office)?\\s*$')
           || staffRole().matches('(?i)^\\s*lgu\\s*tourism\\s*$')
           || staffRole().matches('(?i)^\\s*tourism\\s*office\\s*$')
@@ -34,6 +36,8 @@ service cloud.firestore {
         && (
           request.auth.token.email.matches('(?i)^governor\\.atmos@misocc-demo\\.ph$')
           || request.auth.token.email.matches('(?i)^tourismoffice\\.atmos@misocc-demo\\.ph$')
+          || request.auth.token.email.matches('(?i)^provincial\\.tourism@misocc-demo\\.ph$')
+          || request.auth.token.email.matches('(?i)^tourism@gmail\\.com$')
           || request.auth.token.email.matches('(?i)^tourism\\.[^@]+@.+$')
           || request.auth.token.email.matches('(?i)^tourismoroquieta@.+$')
           || request.auth.token.email.matches('(?i)^oroquieta\\.tourism@.+$')
@@ -113,7 +117,8 @@ service cloud.firestore {
       // Signed-in read: LGU dashboards list/filter tourists; tourists read own profile.
       allow read: if isSignedIn();
       allow create, update: if isSignedIn() && request.auth.uid == touristId;
-      allow delete: if false;
+      // Governor / tourism may remove tourist profiles from dashboards.
+      allow delete: if isLguStaff();
     }
 
     match /vr_tours/{vrTourId} {
@@ -134,14 +139,21 @@ service cloud.firestore {
 
     match /announcements/{announcementId} {
       allow read: if true;
-      allow create, update, delete: if isSignedIn();
+      // LGU staff create/edit events; Governor (provincial staff) approve/reject/publish.
+      allow create, update, delete: if isLguStaff();
     }
 
     match /users/{userId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && request.auth.uid == userId;
       allow update: if isSignedIn() && request.auth.uid == userId;
-      allow delete: if false;
+      // Staff may delete tourist role docs (never used for self-service Auth delete).
+      allow delete: if isLguStaff()
+        && (
+          !('role' in resource.data)
+          || resource.data.role == 'tourist'
+          || resource.data.role == 'Tourist'
+        );
 
       match /faq_chats/{messageId} {
         allow read, create, update, delete: if isSignedIn()
@@ -151,18 +163,20 @@ service cloud.firestore {
 
     match /tourist_activity/{userId} {
       allow read, write: if isSignedIn() && request.auth.uid == userId;
+      allow delete: if isLguStaff();
     }
 
     match /email_otps/{otpUid} {
       allow read, create, update, delete: if isSignedIn()
                                           && request.auth.uid == otpUid;
+      allow delete: if isLguStaff();
     }
 
     match /check_ins/{docId} {
       allow get: if isLguStaff() || canReadOwnCheckInRow();
       allow list: if isLguStaff() || canReadOwnCheckInRow() || checkInInLguMunicipality();
       allow create, update: if isSignedIn();
-      allow delete: if false;
+      allow delete: if isLguStaff();
     }
 
     match /qr_checkins/{docId} {
@@ -171,19 +185,28 @@ service cloud.firestore {
       allow create: if isQrCheckInOwner();
       allow update: if isSignedIn()
                     && resource.data.get('tourist_id', '') == request.auth.uid;
-      allow delete: if false;
+      allow delete: if isLguStaff();
     }
 
     match /checkins/{docId} {
       allow get: if isLguStaff() || canReadOwnCheckInRow();
       allow list: if isLguStaff() || canReadOwnCheckInRow() || checkInInLguMunicipality();
       allow create: if isCheckInOwner();
-      allow update, delete: if false;
+      allow update: if false;
+      allow delete: if isLguStaff();
     }
 
     match /tourist_spots/{spotId} {
       allow read: if true;
-      allow create, update, delete: if isSignedIn();
+      // LGU / provincial tourism create & edit spots + QR metadata.
+      allow create, update: if isSignedIn();
+      allow delete: if isLguStaff();
+    }
+
+    /// Provincial Tourism Office campaigns (province-wide promotions).
+    match /provincial_campaigns/{campaignId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isProvincialStaff();
     }
 
     match /spot_reviews/{reviewId} {
@@ -198,19 +221,57 @@ service cloud.firestore {
       allow update: if isSignedIn()
                     && resource.data.userId == request.auth.uid
                     && request.resource.data.userId == request.auth.uid;
-      allow delete: if false;
+      allow delete: if (isSignedIn() && resource.data.userId == request.auth.uid)
+                    || isLguStaff();
     }
 
     match /tourist_qr_codes/{touristId} {
       allow read: if isSignedIn() && request.auth.uid == touristId;
       allow create, update: if isSignedIn() && request.auth.uid == touristId;
-      allow delete: if false;
+      allow delete: if (isSignedIn() && request.auth.uid == touristId)
+                    || isLguStaff();
     }
 
     match /tourist_qr_codes/{touristId}/history/{historyId} {
       allow read: if isSignedIn() && request.auth.uid == touristId;
       allow create: if isSignedIn() && request.auth.uid == touristId;
-      allow update, delete: if false;
+      allow update: if false;
+      allow delete: if (isSignedIn() && request.auth.uid == touristId)
+                    || isLguStaff();
+    }
+
+    /// Unique usernames for tourism establishment accounts.
+    /// Public get allows pre-signup availability checks; writes require auth.
+    match /usernames/{usernameId} {
+      allow get: if true;
+      allow list: if isSignedIn() || isLguStaff();
+      allow create: if isSignedIn()
+                    && request.resource.data.uid == request.auth.uid;
+      allow update: if isSignedIn()
+                    && resource.data.uid == request.auth.uid
+                    && request.resource.data.uid == request.auth.uid;
+      allow delete: if (isSignedIn() && resource.data.uid == request.auth.uid)
+                    || isLguStaff();
+    }
+
+    /// Tourism establishments (hotels, resorts, restaurants, attractions, …).
+    match /accommodation_establishments/{estId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+                    && (
+                      request.resource.data.get('ownerUid', '') == request.auth.uid
+                      || request.resource.data.get('authUid', '') == request.auth.uid
+                      || estId == request.auth.uid
+                      || isLguStaff()
+                    );
+      allow update: if isSignedIn()
+                    && (
+                      resource.data.get('ownerUid', '') == request.auth.uid
+                      || resource.data.get('authUid', '') == request.auth.uid
+                      || estId == request.auth.uid
+                      || isLguStaff()
+                    );
+      allow delete: if isLguStaff();
     }
 
     match /{document=**} {

@@ -34,6 +34,63 @@ class SpotReviewService {
     return '${safeSpot}__$userId';
   }
 
+  static List<SpotReview> _sortedNewestFirst(Iterable<SpotReview> reviews) {
+    return reviews.toList()
+      ..sort((a, b) {
+        final aTime = a.updatedAt ?? a.createdAt;
+        final bTime = b.updatedAt ?? b.createdAt;
+        return bTime.compareTo(aTime);
+      });
+  }
+
+  static List<SpotReview> _withComments(Iterable<SpotReview> reviews) {
+    return reviews.where((r) => r.comment.isNotEmpty).toList();
+  }
+
+  /// Live feed of the latest reviews from all tourists, newest first.
+  static Stream<List<SpotReview>> watchRecentReviews({int limit = 15}) {
+    if (!_firebaseReady) {
+      return Stream.value(const []);
+    }
+
+    return _firestore
+        .collection(_collectionId)
+        .limit(100)
+        .snapshots()
+        .map((snap) {
+      final reviews = _sortedNewestFirst(_withComments(
+        snap.docs.map(SpotReview.fromFirestore),
+      ));
+      if (reviews.length <= limit) return reviews;
+      return reviews.sublist(0, limit);
+    });
+  }
+
+  /// Live reviews for the signed-in user, newest first.
+  static Stream<List<SpotReview>> watchUserReviews() async* {
+    if (!_firebaseReady) {
+      yield const [];
+      return;
+    }
+    final uid = await _uid();
+    if (uid == null || uid.isEmpty) {
+      yield const [];
+      return;
+    }
+
+    yield* _firestore
+        .collection(_collectionId)
+        .where('userId', isEqualTo: uid)
+        .limit(50)
+        .snapshots()
+        .map((snap) {
+      final reviews = _sortedNewestFirst(_withComments(
+        snap.docs.map(SpotReview.fromFirestore),
+      ));
+      return reviews;
+    });
+  }
+
   /// Live reviews for a spot, newest first.
   static Stream<SpotReviewSummary> watchSpotReviews(String spotId) {
     if (!_firebaseReady || spotId.trim().isEmpty) {
@@ -46,11 +103,9 @@ class SpotReviewService {
         .limit(50)
         .snapshots()
         .map((snap) {
-      final reviews = snap.docs
-          .map(SpotReview.fromFirestore)
-          .where((r) => r.comment.isNotEmpty)
-          .toList()
-        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      final reviews = _sortedNewestFirst(_withComments(
+        snap.docs.map(SpotReview.fromFirestore),
+      ));
       if (reviews.isEmpty) return SpotReviewSummary.empty;
       final avg = reviews.map((r) => r.rating).reduce((a, b) => a + b) / reviews.length;
       return SpotReviewSummary(

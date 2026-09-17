@@ -1,11 +1,11 @@
 import 'dart:async' show unawaited;
 
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/services/fcm_background_handler.dart';
+import 'package:atmos_trs_system/config/atmos_font_preloader.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/app_theme_controller.dart';
 import 'package:atmos_trs_system/widgets/onboarding_hero_video.dart';
@@ -13,8 +13,13 @@ import 'package:atmos_trs_system/screens/landing_page.dart';
 import 'package:atmos_trs_system/screens/login_screen.dart';
 import 'package:atmos_trs_system/screens/forgot_password_screen.dart';
 import 'package:atmos_trs_system/screens/signup_screen.dart';
+import 'package:atmos_trs_system/screens/signup_account_type_screen.dart';
+import 'package:atmos_trs_system/screens/establishment_signup_screen.dart';
+import 'package:atmos_trs_system/screens/lgu_signup_screen.dart';
+import 'package:atmos_trs_system/screens/establishment_dashboard_screen.dart';
 import 'package:atmos_trs_system/screens/governor_dashboard.dart';
 import 'package:atmos_trs_system/screens/tourism_dashboard.dart';
+import 'package:atmos_trs_system/screens/provincial_tourism_dashboard.dart';
 import 'package:atmos_trs_system/screens/verify_otp_screen.dart';
 import 'package:atmos_trs_system/features/navigation/main_shell.dart';
 import 'package:atmos_trs_system/screens/municipality_map_and_spots_screen.dart';
@@ -25,6 +30,7 @@ import 'package:atmos_trs_system/widgets/session_inactivity_guard.dart';
 import 'package:atmos_trs_system/services/qr_launch_bootstrap.dart';
 import 'package:atmos_trs_system/services/startup_route_resolver.dart';
 import 'package:atmos_trs_system/screens/qr_scan_welcome_screen.dart';
+import 'package:atmos_trs_system/screens/mobile_onboarding_screen.dart';
 
 /// Root navigator for session timeout and global navigation after sign-out.
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -84,6 +90,7 @@ void main() async {
   }
 
   await AppThemeController.instance.load();
+  await preloadAtmosBrandFonts();
 
   final initialRoute = await StartupRouteResolver.resolveQuickInitialRoute();
 
@@ -137,17 +144,21 @@ class _MyAppState extends State<MyApp> {
             navigatorKey: rootNavigatorKey,
             title: 'ATMOS-TRS',
             theme: AppTheme.asensoTheme,
-            themeMode: ThemeMode.light,
+            darkTheme: AppTheme.asensoDarkTheme,
+            themeMode: AppThemeController.instance.isDarkMode
+                ? ThemeMode.dark
+                : ThemeMode.light,
             debugShowCheckedModeBanner: false,
             initialRoute: widget.initialRoute,
             builder: (context, child) {
+              final loadingBg = Theme.of(context).scaffoldBackgroundColor;
               return SessionInactivityGuard(
                 navigatorKey: rootNavigatorKey,
                 child:
                     child ??
-                    const ColoredBox(
-                      color: Color(0xFFFFFFFF),
-                      child: Center(child: CircularProgressIndicator()),
+                    ColoredBox(
+                      color: loadingBg,
+                      child: const Center(child: CircularProgressIndicator()),
                     ),
               );
             },
@@ -155,13 +166,21 @@ class _MyAppState extends State<MyApp> {
           '/': (context) => kIsWeb ? const LandingPage() : const LoginScreen(),
           '/landing': (context) => const LandingPage(),
           '/qr-welcome': (context) => const QrScanWelcomeScreen(),
+          '/mobile-onboarding': (context) => const MobileOnboardingScreen(),
           '/login': (context) => const LoginScreen(),
           '/forgot-password': (context) {
             final email = ModalRoute.of(context)?.settings.arguments as String?;
             return ForgotPasswordScreen(initialEmail: email);
           },
-          '/signup': (context) => const SignupScreen(),
+          '/signup': (context) => const SignupAccountTypeScreen(),
+          '/signup-tourist': (context) => const SignupScreen(),
+          '/signup-lgu': (context) => const LguSignupScreen(),
+          '/signup-lgu-info': (context) => const LguSignupScreen(),
+          '/signup-establishment': (context) =>
+              const EstablishmentSignupScreen(),
           '/verify-otp': (context) => const VerifyOtpScreen(),
+          '/establishment-dashboard': (context) =>
+              const EstablishmentDashboardScreen(),
           '/dashboard': (context) {
             final args = ModalRoute.of(context)?.settings.arguments;
             final mapArgs = args is Map ? args : null;
@@ -180,6 +199,8 @@ class _MyAppState extends State<MyApp> {
           '/governor-dashboard': (context) => const GovernorDashboard(),
           '/lgu-dashboard': (context) => const LguDashboard(),
           '/tourism-dashboard': (context) => const LguDashboard(),
+          '/provincial-tourism-dashboard': (context) =>
+              const ProvincialTourismDashboard(),
             },
           ),
         );

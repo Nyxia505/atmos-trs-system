@@ -1,3 +1,4 @@
+import 'package:atmos_trs_system/services/lgu_event_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
@@ -107,7 +108,10 @@ class NotificationFirestoreService {
             .limit(30)
             .get();
       }
-      final list = snapshot.docs.map(_announcementDocToItem).toList();
+      final list = snapshot.docs
+          .where((d) => LguEventService.isVisibleToTourists(d.data()))
+          .map(_announcementDocToItem)
+          .toList();
       list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
       return list;
     } catch (e) {
@@ -224,6 +228,8 @@ class NotificationFirestoreService {
       createdAt = created;
     }
     final message = data['content'] as String? ?? data['message'] as String? ?? '';
+    final municipalityName = data['municipalityName']?.toString().trim();
+    final resolvedImage = LguEventService.resolveDisplayImage(data);
     return NotificationItem(
       id: d.id,
       title: data['title'] as String? ?? 'Announcement',
@@ -234,6 +240,11 @@ class NotificationFirestoreService {
       isRead: false,
       userId: null,
       isAnnouncement: true,
+      imageUrl: resolvedImage,
+      municipalityName:
+          (municipalityName != null && municipalityName.isNotEmpty)
+              ? municipalityName
+              : null,
     );
   }
 }

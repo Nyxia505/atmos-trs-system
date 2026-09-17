@@ -633,6 +633,8 @@ class UserActivityService {
     required String title,
     required String message,
     NotificationType type = NotificationType.system,
+    String? imageUrl,
+    String? municipalityName,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final notifications = await getNotifications();
@@ -645,6 +647,8 @@ class UserActivityService {
       type: type,
       createdAt: DateTime.now(),
       isRead: false,
+      imageUrl: imageUrl,
+      municipalityName: municipalityName,
     ));
     final trimmed = notifications.take(50).toList();
     await prefs.setString(
@@ -861,6 +865,8 @@ class AppNotification {
   final NotificationType type;
   final DateTime createdAt;
   final bool isRead;
+  final String? imageUrl;
+  final String? municipalityName;
 
   AppNotification({
     required this.id,
@@ -869,6 +875,8 @@ class AppNotification {
     required this.type,
     required this.createdAt,
     required this.isRead,
+    this.imageUrl,
+    this.municipalityName,
   });
 
   factory AppNotification.fromJson(Map<String, dynamic> json) {
@@ -882,6 +890,8 @@ class AppNotification {
       ),
       createdAt: DateTime.tryParse(json['createdAt'] ?? '') ?? DateTime.now(),
       isRead: json['isRead'] ?? false,
+      imageUrl: json['imageUrl'] as String?,
+      municipalityName: json['municipalityName'] as String?,
     );
   }
 
@@ -893,6 +903,9 @@ class AppNotification {
       'type': type.name,
       'createdAt': createdAt.toIso8601String(),
       'isRead': isRead,
+      if (imageUrl != null && imageUrl!.isNotEmpty) 'imageUrl': imageUrl,
+      if (municipalityName != null && municipalityName!.isNotEmpty)
+        'municipalityName': municipalityName,
     };
   }
 
@@ -904,6 +917,8 @@ class AppNotification {
       type: type,
       createdAt: createdAt,
       isRead: isRead ?? this.isRead,
+      imageUrl: imageUrl,
+      municipalityName: municipalityName,
     );
   }
 }

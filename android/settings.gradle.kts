@@ -19,7 +19,9 @@ pluginManagement {
 
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
-    id("com.android.application") version "8.11.1" apply false
+    // AGP 8.12+ required by newer plugins (e.g. share_plus). Stay on AGP 8.x while
+    // Flutter 3.44 keeps android.builtInKotlin=false for unmigrated plugins.
+    id("com.android.application") version "8.12.1" apply false
     id("org.jetbrains.kotlin.android") version "2.3.10" apply false
 }
 

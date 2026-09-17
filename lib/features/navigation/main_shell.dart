@@ -18,7 +18,9 @@ import 'package:atmos_trs_system/features/home/home_screen.dart';
 import 'package:atmos_trs_system/features/explore/explore_screen.dart';
 import 'package:atmos_trs_system/features/navigation/placeholder_pages.dart';
 import 'package:atmos_trs_system/features/navigation/bottom_nav.dart';
+import 'package:atmos_trs_system/features/navigation/tourist_web_layout.dart';
 import 'package:atmos_trs_system/widgets/theme_reactive_scope.dart';
+import 'package:atmos_trs_system/screens/event_detail_screen.dart';
 
 /// Responsive shell: Home, Explore, Scan (center elevated), Notification, Account.
 /// Uses IndexedStack so each tab keeps state.
@@ -31,12 +33,13 @@ class MainShell extends StatefulWidget {
   State<MainShell> createState() => _MainShellState();
 }
 
-class _MainShellState extends State<MainShell> {
+class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   late int _currentIndex;
   final _badge = NotificationBadgeNotifier.instance;
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _currentIndex = widget.initialIndex;
     _badge.addListener(_onBadgeChanged);
     if (!kIsWeb) {
@@ -60,10 +63,21 @@ class _MainShellState extends State<MainShell> {
       );
     }
     _badge.refresh(userId: uid);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) PendingEventOpen.consumeIfAny(context);
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      PendingEventOpen.consumeIfAny(context);
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _badge.removeListener(_onBadgeChanged);
     super.dispose();
   }
@@ -80,48 +94,72 @@ class _MainShellState extends State<MainShell> {
         const ThemeReactiveScope(child: ProfileTabPage()),
       ];
 
+  void _onNavTap(int index) {
+    setState(() => _currentIndex = index);
+    if (index == 3) {
+      _badge.refresh();
+    }
+  }
+
+  Widget _tabBody(List<Widget> pages) {
+    // On web, IndexedStack keeps Google Maps HtmlElementViews in the DOM and
+    // they steal clicks from the bottom nav. Mount only the active tab instead.
+    if (kIsWeb) {
+      return pages[_currentIndex];
+    }
+    return IndexedStack(index: _currentIndex, children: pages);
+  }
+
+  Widget _buildBottomNav() {
+    return BottomNav(
+      currentIndex: _currentIndex,
+      unreadNotificationCount: _badge.count,
+      onTap: _onNavTap,
+    );
+  }
+
+  Widget _buildMobileScaffold(List<Widget> pages, {bool includeBottomNav = true}) {
+    return Scaffold(
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      body: _tabBody(pages),
+      bottomNavigationBar: includeBottomNav ? _buildBottomNav() : null,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
-    final isMobile = size.width < 768;
+    // Tourist web always stays phone-sized; native apps/tablets get sidebar at ≥768px.
+    final isMobile = kIsWeb || size.width < 768;
 
     return ListenableBuilder(
       listenable: AppThemeController.instance,
       builder: (context, _) {
         final pages = _buildPages();
         if (isMobile) {
-          return Scaffold(
-            backgroundColor: Colors.white,
-            body: IndexedStack(index: _currentIndex, children: pages),
-            bottomNavigationBar: BottomNav(
-              currentIndex: _currentIndex,
-              unreadNotificationCount: _badge.count,
-              onTap: (index) {
-                setState(() => _currentIndex = index);
-                if (index == 3) {
-                  _badge.refresh();
-                }
-              },
-            ),
-          );
+          if (kIsWeb) {
+            // Bottom nav outside nested Navigator so taps always work on web.
+            return TouristWebMobileFrame(
+              bottomBar: _buildBottomNav(),
+              child: _buildMobileScaffold(pages, includeBottomNav: false),
+            );
+          }
+          return _buildMobileScaffold(pages);
         }
 
         return Scaffold(
-          backgroundColor: Colors.white,
+          backgroundColor: Theme.of(context).scaffoldBackgroundColor,
           body: Row(
             children: [
               _SidebarNav(
                 currentIndex: _currentIndex,
                 unreadNotificationCount: _badge.count,
-                onTap: (index) {
-                  setState(() => _currentIndex = index);
-                  if (index == 3) _badge.refresh();
-                },
+                onTap: _onNavTap,
               ),
               Expanded(
                 child: ColoredBox(
                   color: Colors.white,
-                  child: IndexedStack(index: _currentIndex, children: pages),
+                  child: _tabBody(pages),
                 ),
               ),
             ],

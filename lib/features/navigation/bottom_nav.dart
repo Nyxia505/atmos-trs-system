@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:pointer_interceptor/pointer_interceptor.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 
 /// Bottom nav items: Home, Explore, Scan (center elevated), Notification, Account.
@@ -27,38 +29,39 @@ class BottomNav extends StatelessWidget {
   Widget build(BuildContext context) {
     final showLabels = MediaQuery.sizeOf(context).width >= 360;
     final padding = _adaptiveHorizontalPadding(context);
-    return Container(
-      decoration: BoxDecoration(
-        color: AppTheme.cardBackground,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 12,
-            offset: const Offset(0, -2),
-          ),
-        ],
-      ),
+    final bar = Material(
+      color: AppTheme.cardBackground,
+      elevation: 12,
+      shadowColor: Colors.black.withValues(alpha: 0.25),
       child: SafeArea(
+        top: false,
         child: Padding(
           padding: EdgeInsets.symmetric(horizontal: padding, vertical: 8),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: List.generate(kBottomNavItems.length, (index) {
               final item = kBottomNavItems[index];
-              return _NavItem(
-                icon: item.$1,
-                label: item.$2,
-                isSelected: index == currentIndex,
-                isScanTab: index == 2,
-                showLabel: showLabels,
-                badgeCount: index == 3 ? unreadNotificationCount : 0,
-                onTap: () => onTap(index),
+              return Expanded(
+                child: _NavItem(
+                  icon: item.$1,
+                  label: item.$2,
+                  isSelected: index == currentIndex,
+                  isScanTab: index == 2,
+                  showLabel: showLabels,
+                  badgeCount: index == 3 ? unreadNotificationCount : 0,
+                  onTap: () => onTap(index),
+                ),
               );
             }),
           ),
         ),
       ),
     );
+
+    // On web, platform views can sit above the Flutter canvas; intercept clicks.
+    if (kIsWeb) {
+      return PointerInterceptor(child: bar);
+    }
+    return bar;
   }
 
   static double _adaptiveHorizontalPadding(BuildContext context) {
@@ -91,11 +94,10 @@ class _NavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = isSelected ? AppTheme.primary : AppTheme.unselectedMuted;
-    final iconSize = isScanTab ? 28.0 : 24.0;
 
     Widget iconWidget = Icon(
       icon,
-      size: iconSize,
+      size: isScanTab ? 26 : 24,
       color: isScanTab && isSelected ? AppTheme.primary : color,
     );
 
@@ -104,8 +106,15 @@ class _NavItem extends StatelessWidget {
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: isSelected ? AppTheme.primary.withOpacity(0.2) : Colors.transparent,
-          border: isSelected ? Border.all(color: AppTheme.primary.withOpacity(0.6), width: 1.5) : null,
+          color: isSelected
+              ? AppTheme.primary.withValues(alpha: 0.2)
+              : Colors.transparent,
+          border: isSelected
+              ? Border.all(
+                  color: AppTheme.primary.withValues(alpha: 0.6),
+                  width: 1.5,
+                )
+              : null,
         ),
         child: Icon(
           icon,
@@ -126,30 +135,37 @@ class _NavItem extends StatelessWidget {
           )
         : iconWidget;
 
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            iconWithBadge,
-            if (showLabel) ...[
-              const SizedBox(height: 4),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-                  color: color,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        mouseCursor: SystemMouseCursors.click,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              iconWithBadge,
+              if (showLabel) ...[
+                const SizedBox(height: 4),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                    color: color,
+                  ),
                 ),
-              ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
   }
 }
-    

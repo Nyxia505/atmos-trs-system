@@ -1,5 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:atmos_trs_system/data/tourist_spots_default_seed.dart';
 import 'package:atmos_trs_system/data/tourist_spot_image_catalog.dart';
 import 'package:atmos_trs_system/models/tourist_spot.dart';
@@ -7,6 +10,16 @@ import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/spot_qr_helper.dart';
 
 const String _collectionId = 'tourist_spots';
+
+/// Result of [TouristSpotsFirestoreService.addSpot].
+class AddTouristSpotResult {
+  const AddTouristSpotResult({this.id, this.error});
+
+  final String? id;
+  final String? error;
+
+  bool get ok => id != null && id!.isNotEmpty;
+}
 
 /// Firestore service for tourist_spots collection.
 /// Use StreamBuilder or FutureBuilder for reactive or one-time data.
@@ -99,25 +112,195 @@ class TouristSpotsFirestoreService {
     }
   }
 
-  /// Add a new spot. Returns the document id.
-  /// Writes [qrValue] (= new doc id), [qr_payload] (check-in URL), [createdAt] (server time).
+  /// Add a new spot. Returns the document id in [AddTouristSpotResult.id].
+  /// Writes [qrValue] (= new doc id), [qr_payload] (check-in URL), [createdAt].
   static Future<String?> addSpot(TouristSpot spot) async {
-    if (!_isFirebaseInitialized) return null;
-    try {
-      final ref = _firestore.collection(_collectionId).doc();
-      final data = spot.toFirestore();
-      data['qrValue'] = ref.id;
-      data['qr_payload'] = spotQrData(
-        spot.municipalityId,
-        ref.id,
-        latitude: spot.latitude,
-        longitude: spot.longitude,
+    final result = await addSpotDetailed(spot);
+    return result.id;
+  }
+
+  /// Same as [addSpot] but surfaces a user-facing [AddTouristSpotResult.error].
+  static Future<AddTouristSpotResult> addSpotDetailed(TouristSpot spot) async {
+    if (!_isFirebaseInitialized) {
+      return const AddTouristSpotResult(
+        error: 'Firebase is not initialized. Restart the app and try again.',
       );
-      data['createdAt'] = FieldValue.serverTimestamp();
-      await ref.set(data);
-      return ref.id;
-    } catch (_) {
-      return null;
+    }
+
+    final mid = normalizeMunicipalityId(spot.municipalityId);
+    if (mid.isEmpty) {
+      return const AddTouristSpotResult(
+        error: 'Missing municipality for this LGU. Sign in again with your tourism account.',
+      );
+    }
+    final name = spot.name.trim();
+    if (name.isEmpty) {
+      return const AddTouristSpotResult(
+        error: 'Tourist Spot Name is required.',
+      );
+    }
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return const AddTouristSpotResult(
+        error: 'Your session expired. Please sign in again.',
+      );
+    }
+
+    try {
+      await user.getIdToken(true);
+    } catch (e) {
+      debugPrint('[TouristSpots] getIdToken failed: $e');
+      return const AddTouristSpotResult(
+        error: 'Could not refresh your login. Please sign in again.',
+      );
+    }
+
+    Future<AddTouristSpotResult> writeOnce() async {
+      final ref = _firestore.collection(_collectionId).doc();
+      final payload = <String, dynamic>{
+        'name': name,
+        'category': spot.category.trim().isEmpty ? 'Spot' : spot.category.trim(),
+        'municipality': spot.municipality.trim().isEmpty
+            ? mid
+            : spot.municipality.trim(),
+        'municipalityId': mid,
+        'description': spot.description.trim(),
+        'rating': spot.rating,
+        'latitude': spot.latitude,
+        'longitude': spot.longitude,
+        'status': spot.status.trim().isEmpty ? 'Active' : spot.status.trim(),
+        'visitors': spot.visitors,
+        'qrValue': ref.id,
+        'qr_payload': spotQrData(
+          mid,
+          ref.id,
+          latitude: spot.latitude,
+          longitude: spot.longitude,
+        ),
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'createdByUid': user.uid,
+        if (user.email != null && user.email!.trim().isNotEmpty)
+          'createdByEmail': user.email!.trim(),
+      };
+      if (spot.imageUrl != null && spot.imageUrl!.trim().isNotEmpty) {
+        payload['image_url'] = spot.imageUrl!.trim();
+        payload['image'] = spot.imageUrl!.trim();
+      }
+      if (spot.vrLink != null && spot.vrLink!.trim().isNotEmpty) {
+        payload['vr_link'] = spot.vrLink!.trim();
+        payload['hasVR'] = true;
+      }
+      if (spot.dotAttractionCode.trim().isNotEmpty) {
+        payload['dotAttractionCode'] = spot.dotAttractionCode.trim();
+      }
+
+      await ref.set(payload);
+      return AddTouristSpotResult(id: ref.id);
+    }
+
+    try {
+      return await writeOnce();
+    } on FirebaseException catch (e) {
+      debugPrint('[TouristSpots] addSpot FirebaseException: ${e.code} ${e.message}');
+      if (e.code == 'permission-denied') {
+        try {
+          await user.reload();
+          await FirebaseAuth.instance.currentUser?.getIdToken(true);
+          return await writeOnce();
+        } on FirebaseException catch (e2) {
+          debugPrint(
+            '[TouristSpots] addSpot retry failed: ${e2.code} ${e2.message}',
+          );
+          final viaCf = await _addSpotViaCloudFunction(spot, mid, name, user);
+          if (viaCf.ok) return viaCf;
+          return AddTouristSpotResult(
+            error: viaCf.error ?? _friendlyFirestoreWriteError(e2),
+          );
+        } catch (e2) {
+          debugPrint('[TouristSpots] addSpot retry failed: $e2');
+          final viaCf = await _addSpotViaCloudFunction(spot, mid, name, user);
+          if (viaCf.ok) return viaCf;
+          return AddTouristSpotResult(
+            error: viaCf.error ?? _friendlyFirestoreWriteError(e),
+          );
+        }
+      }
+      return AddTouristSpotResult(error: _friendlyFirestoreWriteError(e));
+    } catch (e) {
+      debugPrint('[TouristSpots] addSpot failed: $e');
+      final viaCf = await _addSpotViaCloudFunction(spot, mid, name, user);
+      if (viaCf.ok) return viaCf;
+      return AddTouristSpotResult(
+        error: viaCf.error ?? 'Could not save tourist spot. $e',
+      );
+    }
+  }
+
+  static Future<AddTouristSpotResult> _addSpotViaCloudFunction(
+    TouristSpot spot,
+    String mid,
+    String name,
+    User user,
+  ) async {
+    try {
+      final functions = FirebaseFunctions.instanceFor(region: 'asia-southeast1');
+      final callable = functions.httpsCallable(
+        'createLguTouristSpot',
+        options: HttpsCallableOptions(timeout: const Duration(seconds: 30)),
+      );
+      final response = await callable.call<Map<String, dynamic>>({
+        'name': name,
+        'category': spot.category,
+        'municipality': spot.municipality,
+        'municipalityId': mid,
+        'description': spot.description,
+        'rating': spot.rating,
+        'latitude': spot.latitude,
+        'longitude': spot.longitude,
+        'status': spot.status,
+        'visitors': spot.visitors,
+        'image_url': spot.imageUrl,
+        'vr_link': spot.vrLink,
+        'dotAttractionCode': spot.dotAttractionCode,
+      });
+      final data = response.data;
+      final id = data['id']?.toString();
+      if (id != null && id.isNotEmpty) {
+        return AddTouristSpotResult(id: id);
+      }
+      return const AddTouristSpotResult(
+        error: 'Cloud Function did not return a spot id.',
+      );
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint('[TouristSpots] createLguTouristSpot CF: ${e.code} ${e.message}');
+      return AddTouristSpotResult(
+        error: e.message?.trim().isNotEmpty == true
+            ? e.message!.trim()
+            : 'Cloud Function error [${e.code}]. Deploy functions if missing.',
+      );
+    } catch (e) {
+      debugPrint('[TouristSpots] createLguTouristSpot CF failed: $e');
+      return AddTouristSpotResult(
+        error:
+            'Permission denied and Cloud Function fallback failed. Deploy createLguTouristSpot / firestore.rules. ($e)',
+      );
+    }
+  }
+
+  static String _friendlyFirestoreWriteError(FirebaseException e) {
+    switch (e.code) {
+      case 'permission-denied':
+        return 'Permission denied writing tourist_spots. Re-login with your LGU tourism account, or publish the latest firestore.rules.';
+      case 'unauthenticated':
+        return 'Not authenticated. Please sign in again.';
+      case 'unavailable':
+        return 'Firestore is temporarily unavailable. Check your connection and try again.';
+      default:
+        final msg = (e.message ?? '').trim();
+        if (msg.isNotEmpty) return 'Firestore [${e.code}]: $msg';
+        return 'Firestore error [${e.code}].';
     }
   }
 
@@ -230,11 +413,12 @@ class TouristSpotsFirestoreService {
     );
   }
 
-  /// Strict mode: enforce exactly the 17 canonical spot documents (slug ids).
+  /// Upserts the 17 canonical seed spot documents (slug ids).
   ///
-  /// - Upserts rows from [kDefaultTouristSpotSeeds] with document id == spot slug
-  /// - Deletes any other documents in `tourist_spots`
-  /// - Backfills QR metadata after enforcement
+  /// - Merges rows from [kDefaultTouristSpotSeeds] with document id == spot slug
+  /// - Never deletes LGU-created / custom spots (docs with [createdByUid], or
+  ///   any non-seed id) — those must remain after Add QR Code / Add Spot
+  /// - Backfills QR metadata after upsert
   static Future<
       ({
         int upserted,
@@ -251,9 +435,8 @@ class TouristSpotsFirestoreService {
       );
     }
     var upserted = 0;
-    var removed = 0;
+    const removed = 0;
     final seeds = kDefaultTouristSpotSeeds;
-    final canonicalIds = {for (final s in seeds) s.docId};
 
     final batch = _firestore.batch();
     for (final seed in seeds) {
@@ -269,23 +452,8 @@ class TouristSpotsFirestoreService {
     }
     await batch.commit();
 
-    final existing = await _firestore.collection(_collectionId).get();
-    var deleteBatch = _firestore.batch();
-    var ops = 0;
-    for (final d in existing.docs) {
-      if (canonicalIds.contains(d.id)) continue;
-      deleteBatch.delete(d.reference);
-      removed++;
-      ops++;
-      if (ops >= 450) {
-        await deleteBatch.commit();
-        deleteBatch = _firestore.batch();
-        ops = 0;
-      }
-    }
-    if (ops > 0) {
-      await deleteBatch.commit();
-    }
+    // Intentionally do not delete non-canonical docs. LGU tourism officers
+    // create additional spots (e.g. Ambak-Ambak Falls) that must persist.
 
     final backfilled = await backfillQrMetadata();
     final images = await backfillSpotImagesInFirestore(overwriteExisting: true);
@@ -304,6 +472,47 @@ class TouristSpotsFirestoreService {
       await _firestore.collection(_collectionId).doc(id).update(fields);
       return true;
     } catch (_) {
+      return false;
+    }
+  }
+
+  /// Persists unique per-spot QR fields on an existing `tourist_spots` doc.
+  /// Uses [spotQrData] with [spotId] so payloads stay unique per spot.
+  static Future<bool> ensureSpotQrMetadata({
+    required String spotId,
+    required String municipalityId,
+    double? latitude,
+    double? longitude,
+  }) async {
+    if (!_isFirebaseInitialized || spotId.trim().isEmpty) return false;
+    final mid = normalizeMunicipalityId(municipalityId);
+    if (mid.isEmpty) return false;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return false;
+    try {
+      await user.getIdToken(true);
+      final ref = _firestore.collection(_collectionId).doc(spotId.trim());
+      final snap = await ref.get();
+      if (!snap.exists) return false;
+      final data = snap.data() ?? <String, dynamic>{};
+      final lat = latitude ?? (data['latitude'] as num?)?.toDouble();
+      final lng = longitude ?? (data['longitude'] as num?)?.toDouble();
+      await ref.set({
+        'qrValue': spotId.trim(),
+        'qr_payload': spotQrData(
+          mid,
+          spotId.trim(),
+          latitude: lat,
+          longitude: lng,
+        ),
+        'municipalityId': mid,
+        'updatedAt': FieldValue.serverTimestamp(),
+        if (data['createdAt'] == null && data['created_at'] == null)
+          'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      return true;
+    } catch (e) {
+      debugPrint('[TouristSpots] ensureSpotQrMetadata failed: $e');
       return false;
     }
   }

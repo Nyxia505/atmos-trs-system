@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 
-const String _kLogoAsset = 'assets/images/logo.png';
+const String _kLogoAsset = 'assets/images/final logo.png';
 
 /// Cached logo bytes with white/near-white pixels made transparent.
 Uint8List? _cachedLogoNoWhite;
@@ -75,31 +75,43 @@ class TransparentLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Uint8List?>(
-      future: logoWithoutWhiteFuture,
-      builder: (context, snapshot) {
-        final bytes = snapshot.data;
-        if (bytes != null && bytes.isNotEmpty) {
-          return Image.memory(
-            bytes,
-            width: width,
-            height: height,
-            fit: fit,
-            alignment: alignment,
-            errorBuilder: (_, __, ___) => _fallback(context),
-          );
-        }
-        return _fallback(context);
-      },
+    // Always square so a wide parent cannot stretch the mark into a strip.
+    final side = width ?? height ?? 40.0;
+    final boxSide = width != null && height != null
+        ? (width! < height! ? width! : height!)
+        : side;
+    // Prefer contain — cover was stretching the landscape asset horizontally.
+    final effectiveFit = fit == BoxFit.cover ? BoxFit.contain : fit;
+
+    return SizedBox(
+      width: boxSide,
+      height: boxSide,
+      child: FutureBuilder<Uint8List?>(
+        future: logoWithoutWhiteFuture,
+        builder: (context, snapshot) {
+          final bytes = snapshot.data;
+          if (bytes != null && bytes.isNotEmpty) {
+            return Image.memory(
+              bytes,
+              width: boxSide,
+              height: boxSide,
+              fit: effectiveFit,
+              alignment: alignment,
+              errorBuilder: (_, __, ___) => _fallback(context, boxSide),
+            );
+          }
+          return _fallback(context, boxSide);
+        },
+      ),
     );
   }
 
-  Widget _fallback(BuildContext context) {
+  Widget _fallback(BuildContext context, double boxSide) {
     return Image.asset(
       _kLogoAsset,
-      width: width,
-      height: height,
-      fit: fit,
+      width: boxSide,
+      height: boxSide,
+      fit: BoxFit.contain,
       alignment: alignment,
       errorBuilder: (_, __, ___) => Icon(
         errorIcon ?? Icons.public,

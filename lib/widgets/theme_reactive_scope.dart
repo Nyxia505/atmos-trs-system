@@ -19,7 +19,7 @@ class ThemeReactiveScope extends StatelessWidget {
       listenable: AppThemeController.instance,
       builder: (context, _) {
         return KeyedSubtree(
-          key: ValueKey<String>(AppThemeController.instance.presetId),
+          key: ValueKey<String>(AppThemeController.instance.appearanceKey),
           child: child,
         );
       },

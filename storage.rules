@@ -15,6 +15,15 @@ service firebase.storage {
       allow write: if request.auth != null && request.auth.uid == userId;
     }
 
+    // LGU event photos (submitted with Events for Governor approval).
+    match /lgu_events/{municipalityId}/{fileName} {
+      // Public read so tourist Image.network / download URLs always work.
+      allow read: if true;
+      allow write: if request.auth != null
+                   && request.resource.size < 10 * 1024 * 1024
+                   && request.resource.contentType.matches('image/.*');
+    }
+
     match /{allPaths=**} {
       allow read, write: if false;
     }

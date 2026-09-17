@@ -141,12 +141,12 @@ exports.saveTouristRegistration = onCall(
   },
 );
 
-/** EmailJS defaults — override with Firebase env vars (see lib/config/emailjs_config.dart). */
+/** EmailJS defaults — ATMOS-TRS / atmostrs@gmail.com (see lib/config/emailjs_config.dart). */
 const EMAILJS_DEFAULTS = {
-  serviceId: 'service_7l17oui',
-  templateId: 'template_fk8jzbr',
-  publicKey: '8JZA_nboZm39-Rihv',
-  privateKey: 'axQ3F4ykxyBz1GTozodYe',
+  serviceId: 'service_l6fdttb',
+  templateId: 'template_ngd8f9t',
+  publicKey: 'C3P2wYh7zDIMtMGtd',
+  privateKey: 'cCuOD6UxqxuNOI6pKtjRP',
 };
 
 function generateSixDigitOtp() {
@@ -248,8 +248,8 @@ exports.peekEmailOtp = onCall({region: 'asia-southeast1'}, async (request) => {
 });
 
 const OTP_INBOX_REPLY_TO =
-  process.env.OTP_INBOX_REPLY_TO || 'tourismoffice.atmos@misocc-demo.ph';
-const OTP_INBOX_FROM_NAME = process.env.OTP_INBOX_FROM_NAME || 'ATMOS-TRS Tourism';
+  process.env.OTP_INBOX_REPLY_TO || 'atmostrs@gmail.com';
+const OTP_INBOX_FROM_NAME = process.env.OTP_INBOX_FROM_NAME || 'ATMOS-TRS';
 
 function otpEmailSubject(purpose) {
   if (purpose === 'password_reset') {
@@ -1630,5 +1630,243 @@ exports.seedTourismDummyData = onCall(
         governorPassword: DEMO_GOVERNOR_PASSWORD,
       },
     };
+  },
+);
+
+/**
+ * Creates a tourist_spots doc + QR metadata for LGU / provincial staff.
+ * Used when client Firestore rules block the direct write.
+ */
+exports.createLguTouristSpot = onCall(
+  {region: 'asia-southeast1'},
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Must be signed in.');
+    }
+
+    const callerUid = request.auth.uid;
+    const callerEmail = normalizeField(
+      request.auth.token && request.auth.token.email,
+    ).toLowerCase();
+
+    try {
+      await assertProvincialStaff(callerUid);
+    } catch (err) {
+      const looksStaff =
+        callerEmail === 'governor.atmos@misocc-demo.ph' ||
+        callerEmail === 'tourismoffice.atmos@misocc-demo.ph' ||
+        callerEmail === 'provincial.tourism@misocc-demo.ph' ||
+        callerEmail.startsWith('tourism.') ||
+        callerEmail.includes('tourism');
+      if (!looksStaff) {
+        throw err;
+      }
+    }
+
+    const data = request.data || {};
+    const name = normalizeField(data.name);
+    const municipalityId = normalizeField(data.municipalityId).toLowerCase();
+    if (!name) {
+      throw new HttpsError('invalid-argument', 'Tourist Spot Name is required.');
+    }
+    if (!municipalityId) {
+      throw new HttpsError('invalid-argument', 'municipalityId is required.');
+    }
+
+    const lat = Number(data.latitude);
+    const lng = Number(data.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      throw new HttpsError(
+        'invalid-argument',
+        'Valid latitude and longitude are required.',
+      );
+    }
+
+    const ref = db.collection('tourist_spots').doc();
+    const qrPayload = normalizeField(data.qr_payload) ||
+      `https://atmos-trs-system.web.app/#/landing?type=spot&municipality_id=${encodeURIComponent(municipalityId)}&spot_id=${encodeURIComponent(ref.id)}&lat=${lat.toFixed(6)}&lng=${lng.toFixed(6)}`;
+
+    const payload = {
+      name,
+      category: normalizeField(data.category) || 'Spot',
+      municipality: normalizeField(data.municipality) || municipalityId,
+      municipalityId,
+      description: normalizeField(data.description),
+      rating: Number(data.rating) || 0,
+      latitude: lat,
+      longitude: lng,
+      status: normalizeField(data.status) || 'Active',
+      visitors: Number(data.visitors) || 0,
+      qrValue: ref.id,
+      qr_payload: qrPayload,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      createdByUid: callerUid,
+      createdByEmail: callerEmail || null,
+      createdVia: 'createLguTouristSpot',
+    };
+    if (normalizeField(data.image_url)) {
+      payload.image_url = normalizeField(data.image_url);
+      payload.image = payload.image_url;
+    }
+    if (normalizeField(data.vr_link)) {
+      payload.vr_link = normalizeField(data.vr_link);
+      payload.hasVR = true;
+    }
+    if (normalizeField(data.dotAttractionCode)) {
+      payload.dotAttractionCode = normalizeField(data.dotAttractionCode);
+    }
+
+    await ref.set(payload);
+    return {ok: true, id: ref.id};
+  },
+);
+
+/**
+ * Deletes a tourist account (Firebase Auth + related Firestore docs).
+ * Governor / tourism staff only. Does not delete staff accounts.
+ */
+exports.deleteTouristAccount = onCall(
+  {region: 'asia-southeast1'},
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Must be signed in.');
+    }
+
+    const callerUid = request.auth.uid;
+    const callerEmail = normalizeField(
+      request.auth.token && request.auth.token.email,
+    ).toLowerCase();
+
+    try {
+      await assertProvincialStaff(callerUid);
+    } catch (err) {
+      const looksStaff =
+        callerEmail === 'governor.atmos@misocc-demo.ph' ||
+        callerEmail === 'tourismoffice.atmos@misocc-demo.ph' ||
+        callerEmail.startsWith('tourism.');
+      if (!looksStaff) {
+        throw err;
+      }
+    }
+
+    const targetUid = normalizeField(
+      (request.data && (request.data.uid || request.data.touristId)) || '',
+    );
+    if (!targetUid) {
+      throw new HttpsError('invalid-argument', 'Tourist uid is required.');
+    }
+    if (targetUid === callerUid) {
+      throw new HttpsError(
+        'invalid-argument',
+        'You cannot delete your own signed-in account here.',
+      );
+    }
+
+    const userRef = db.collection('users').doc(targetUid);
+    const touristRef = db.collection('tourists').doc(targetUid);
+    const [userSnap, touristSnap] = await Promise.all([
+      userRef.get(),
+      touristRef.get(),
+    ]);
+
+    if (!userSnap.exists && !touristSnap.exists) {
+      throw new HttpsError('not-found', 'Tourist account was not found.');
+    }
+
+    const role = normalizeField(
+      (userSnap.exists && userSnap.data()?.role) ||
+        (touristSnap.exists && touristSnap.data()?.role) ||
+        'tourist',
+    ).toLowerCase();
+    if (
+      STAFF_ROLES.has(role) ||
+      role === 'governor' ||
+      role === 'tourism' ||
+      role === 'tourism_office'
+    ) {
+      throw new HttpsError(
+        'permission-denied',
+        'Staff accounts cannot be deleted from Registered Tourists.',
+      );
+    }
+
+    async function deleteByQuery(query) {
+      const snap = await query.limit(400).get();
+      if (snap.empty) return 0;
+      const batch = db.batch();
+      snap.docs.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+      if (snap.size >= 400) {
+        return snap.size + (await deleteByQuery(query));
+      }
+      return snap.size;
+    }
+
+    async function deleteSubcollection(parentRef, subName) {
+      const snap = await parentRef.collection(subName).limit(400).get();
+      if (snap.empty) return;
+      const batch = db.batch();
+      snap.docs.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+      if (snap.size >= 400) {
+        await deleteSubcollection(parentRef, subName);
+      }
+    }
+
+    const checkInFields = ['tourist_id', 'userId', 'user_id', 'touristId'];
+    for (const collection of ['qr_checkins', 'check_ins', 'checkins']) {
+      for (const field of checkInFields) {
+        try {
+          await deleteByQuery(
+            db.collection(collection).where(field, '==', targetUid),
+          );
+        } catch (e) {
+          console.warn(`[deleteTouristAccount] ${collection}.${field}:`, e.message);
+        }
+      }
+    }
+
+    try {
+      await deleteByQuery(
+        db.collection('spot_reviews').where('userId', '==', targetUid),
+      );
+    } catch (e) {
+      console.warn('[deleteTouristAccount] spot_reviews:', e.message);
+    }
+
+    try {
+      await deleteByQuery(
+        db.collection('notifications').where('user_id', '==', targetUid),
+      );
+    } catch (e) {
+      console.warn('[deleteTouristAccount] notifications:', e.message);
+    }
+
+    await deleteSubcollection(userRef, 'faq_chats');
+    const qrRef = db.collection('tourist_qr_codes').doc(targetUid);
+    await deleteSubcollection(qrRef, 'history');
+
+    const batch = db.batch();
+    batch.delete(touristRef);
+    batch.delete(userRef);
+    batch.delete(db.collection('tourist_activity').doc(targetUid));
+    batch.delete(db.collection('email_otps').doc(targetUid));
+    batch.delete(qrRef);
+    await batch.commit();
+
+    let authDeleted = false;
+    try {
+      await getAuth().deleteUser(targetUid);
+      authDeleted = true;
+    } catch (e) {
+      if (e.code !== 'auth/user-not-found') {
+        console.warn('[deleteTouristAccount] auth delete:', e.code || e.message);
+      } else {
+        authDeleted = true;
+      }
+    }
+
+    return {ok: true, uid: targetUid, authDeleted};
   },
 );

@@ -49,12 +49,14 @@
 	<string>This app uses the camera to scan QR codes at tourist spots for check-in.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Your location is used to confirm you are near the QR code and prevent remote check-in abuse.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>ATMOS TRS saves QR codes and report screenshots to your photo library.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>ATMOS TRS needs photo library access to save QR codes and screenshots.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
 	</array>
-	<key>FLTEnableImpeller</key>
-	<false/>
 	<key>GMSApiKey</key>
 	<string>AIzaSyB9VpH9L8BD57CjGQBTTY1ZpLa8OtvYhRI</string>
 </dict>

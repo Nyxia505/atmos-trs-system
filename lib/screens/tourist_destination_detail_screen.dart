@@ -2,7 +2,6 @@ import 'dart:async' show unawaited;
 
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/app_theme_controller.dart';
-import 'package:atmos_trs_system/features/navigation/placeholder_pages.dart';
 import 'package:atmos_trs_system/models/spot_review.dart';
 import 'package:atmos_trs_system/models/tourist_destination_detail.dart';
 import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
@@ -36,7 +35,7 @@ class _TouristDestinationDetailScreenState
     extends State<TouristDestinationDetailScreen> {
   static const Color _textDark = Color(0xFF111827);
   static const Color _textMuted = Color(0xFF6B7280);
-  static const Color _pageBg = Color(0xFFF8FAFC);
+  static const Color _pageBg = Color(0xFFE8ECF0);
 
   final PageController _galleryController = PageController();
   int _galleryIndex = 0;
@@ -168,19 +167,6 @@ class _TouristDestinationDetailScreenState
     );
   }
 
-  void _openScanQr() {
-    Navigator.of(context)
-        .push<void>(
-      MaterialPageRoute<void>(
-        fullscreenDialog: true,
-        builder: (_) => const ScanTabPage(),
-      ),
-    )
-        .then((_) {
-      if (mounted) _loadReviewEligibility();
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -203,17 +189,23 @@ class _TouristDestinationDetailScreenState
               return CustomScrollView(
             slivers: [
               _buildAppBar(accent),
+              // ── Edge-to-edge hero image + hours strip ──
+              SliverToBoxAdapter(child: _buildHeroGallery(accent)),
+              // ── Padded content ──
               SliverToBoxAdapter(
                 child: Center(
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 720),
                     child: Padding(
-                      padding: EdgeInsets.fromLTRB(contentPad, 0, contentPad, 120),
+                      padding: EdgeInsets.fromLTRB(
+                        contentPad,
+                        20,
+                        contentPad,
+                        24 + MediaQuery.paddingOf(context).bottom,
+                      ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          _buildHeroGallery(accent),
-                          const SizedBox(height: 20),
                           _buildHeaderInfo(accent, reviewSummary),
                           const SizedBox(height: 20),
                           _buildInfoCard(accent),
@@ -271,7 +263,6 @@ class _TouristDestinationDetailScreenState
           );
             },
           ),
-          bottomNavigationBar: _buildBottomBar(accent),
         );
       },
     );
@@ -308,68 +299,174 @@ class _TouristDestinationDetailScreenState
 
   Widget _buildHeroGallery(Color accent) {
     final images = d.imageUrls;
-    final height = MediaQuery.sizeOf(context).width >= 600 ? 280.0 : 220.0;
+    final screenW = MediaQuery.sizeOf(context).width;
+    final height = screenW >= 600 ? 320.0 : 260.0;
 
-    return Column(
+    return Stack(
       children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(20),
-          child: SizedBox(
-            height: height,
-            width: double.infinity,
-            child: images.length <= 1
-                ? SpotImage(
-                    imageUrl: images.isNotEmpty ? images.first : null,
+        SizedBox(
+          height: height,
+          width: double.infinity,
+          child: images.length <= 1
+              ? SpotImage(
+                  imageUrl: images.isNotEmpty ? images.first : null,
+                  spotId: d.spotId,
+                  spotName: d.name,
+                  category: d.category,
+                  width: double.infinity,
+                  height: height,
+                  fit: BoxFit.cover,
+                )
+              : PageView.builder(
+                  controller: _galleryController,
+                  itemCount: images.length,
+                  onPageChanged: (i) => setState(() => _galleryIndex = i),
+                  itemBuilder: (_, i) => SpotImage(
+                    imageUrl: images[i],
                     spotId: d.spotId,
                     spotName: d.name,
                     category: d.category,
                     width: double.infinity,
                     height: height,
                     fit: BoxFit.cover,
-                  )
-                : PageView.builder(
-                    controller: _galleryController,
-                    itemCount: images.length,
-                    onPageChanged: (i) => setState(() => _galleryIndex = i),
-                    itemBuilder: (_, i) => SpotImage(
-                      imageUrl: images[i],
-                      spotId: d.spotId,
-                      spotName: d.name,
-                      category: d.category,
-                      width: double.infinity,
-                      height: height,
-                      fit: BoxFit.cover,
-                    ),
                   ),
-          ),
-        ),
-        if (images.length > 1) ...[
-          const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: List.generate(images.length, (i) {
-              final active = i == _galleryIndex;
-              return AnimatedContainer(
-                duration: const Duration(milliseconds: 220),
-                margin: const EdgeInsets.symmetric(horizontal: 4),
-                width: active ? 22 : 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: active ? accent : accent.withValues(alpha: 0.25),
-                  borderRadius: BorderRadius.circular(8),
                 ),
-              );
-            }),
+        ),
+        // Dot indicators overlay on bottom-center of image
+        if (images.length > 1)
+          Positioned(
+            bottom: 12,
+            left: 0,
+            right: 0,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(images.length, (i) {
+                final active = i == _galleryIndex;
+                return AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  margin: const EdgeInsets.symmetric(horizontal: 3),
+                  width: active ? 22 : 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    color: active
+                        ? Colors.white
+                        : Colors.white.withValues(alpha: 0.45),
+                    borderRadius: BorderRadius.circular(4),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.3),
+                        blurRadius: 4,
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ),
           ),
-        ],
       ],
     );
   }
 
+  Widget _buildOpeningHoursStrip(Color accent) {
+    final isOpen = _isCurrentlyOpen(d.openingHours);
+    final statusColor = isOpen ? const Color(0xFF16A34A) : const Color(0xFFDC2626);
+    final statusLabel = isOpen ? 'Open Now' : 'Closed';
+    final statusIcon = isOpen ? Icons.check_circle_rounded : Icons.cancel_rounded;
+
+    return Container(
+      width: double.infinity,
+      color: const Color(0xFF1E2530),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      child: Row(
+        children: [
+          Icon(Icons.access_time_rounded, color: Colors.white70, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              d.openingHours,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: statusColor.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: statusColor.withValues(alpha: 0.6)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(statusIcon, color: statusColor, size: 13),
+                const SizedBox(width: 4),
+                Text(
+                  statusLabel,
+                  style: TextStyle(
+                    color: statusColor,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Rough heuristic — checks if current time falls in any "HH AM–HH PM" range
+  /// found in [openingHours]. Falls back to `true` (open) if unparseable.
+  bool _isCurrentlyOpen(String hours) {
+    final now = TimeOfDay.now();
+    final nowMins = now.hour * 60 + now.minute;
+
+    // Match patterns like "8 AM–10 PM", "8:00 AM – 5:00 PM", "Open 24 hours"
+    if (hours.toLowerCase().contains('24') ||
+        hours.toLowerCase().contains('open daily')) {
+      return true;
+    }
+    if (hours.toLowerCase().contains('closed')) return false;
+
+    final timeRange = RegExp(
+      r'(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\s*[–\-]\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)',
+      caseSensitive: false,
+    );
+
+    final matches = timeRange.allMatches(hours);
+    for (final m in matches) {
+      int toMins(int h, int min, String ampm) {
+        var hh = h;
+        if (ampm.toUpperCase() == 'PM' && hh != 12) hh += 12;
+        if (ampm.toUpperCase() == 'AM' && hh == 12) hh = 0;
+        return hh * 60 + min;
+      }
+
+      final openH = int.tryParse(m.group(1) ?? '') ?? 0;
+      final openMin = int.tryParse(m.group(2) ?? '0') ?? 0;
+      final openAmPm = m.group(3) ?? 'AM';
+      final closeH = int.tryParse(m.group(4) ?? '') ?? 0;
+      final closeMin = int.tryParse(m.group(5) ?? '0') ?? 0;
+      final closeAmPm = m.group(6) ?? 'PM';
+
+      final openMins = toMins(openH, openMin, openAmPm);
+      var closeMins = toMins(closeH, closeMin, closeAmPm);
+      // Handle past-midnight (e.g. 9 AM – 3 AM)
+      if (closeMins < openMins) closeMins += 24 * 60;
+
+      if (nowMins >= openMins && nowMins < closeMins) return true;
+    }
+    return false;
+  }
+
   Widget _buildHeaderInfo(Color accent, SpotReviewSummary reviewSummary) {
-    final displayRating = reviewSummary.reviewCount > 0
-        ? reviewSummary.averageRating
-        : d.rating;
     final displayCount = reviewSummary.reviewCount;
     final countLabel = displayCount == 0
         ? 'No reviews yet'
@@ -395,21 +492,29 @@ class _TouristDestinationDetailScreenState
                 ),
               ),
             ),
-            const Spacer(),
-            Icon(Icons.star_rounded, color: accent, size: 20),
-            const SizedBox(width: 4),
-            Text(
-              displayRating.toStringAsFixed(1),
-              style: const TextStyle(
-                fontWeight: FontWeight.w800,
-                fontSize: 16,
-                color: _textDark,
+            if (displayCount > 0) ...[
+              const Spacer(),
+              Icon(Icons.star_rounded, color: accent, size: 20),
+              const SizedBox(width: 4),
+              Text(
+                reviewSummary.averageRating.toStringAsFixed(1),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 16,
+                  color: _textDark,
+                ),
               ),
-            ),
-            Text(
-              '  ($countLabel)',
-              style: const TextStyle(color: _textMuted, fontSize: 13),
-            ),
+              Text(
+                '  ($countLabel)',
+                style: const TextStyle(color: _textMuted, fontSize: 13),
+              ),
+            ] else ...[
+              const Spacer(),
+              Text(
+                countLabel,
+                style: const TextStyle(color: _textMuted, fontSize: 13),
+              ),
+            ],
           ],
         ),
         const SizedBox(height: 10),
@@ -504,10 +609,10 @@ class _TouristDestinationDetailScreenState
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: accent.withValues(alpha: 0.18)),
+                border: Border.all(color: accent.withValues(alpha: 0.5), width: 1.5),
                 boxShadow: [
                   BoxShadow(
-                    color: accent.withValues(alpha: 0.06),
+                    color: accent.withValues(alpha: 0.10),
                     blurRadius: 12,
                     offset: const Offset(0, 4),
                   ),
@@ -657,7 +762,7 @@ class _TouristDestinationDetailScreenState
         ),
         const SizedBox(height: 12),
         SizedBox(
-          height: 168,
+          height: 220,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             itemCount: items.length,
@@ -680,11 +785,8 @@ class _TouristDestinationDetailScreenState
   }
 
   Widget _buildReviewsSection(Color accent, SpotReviewSummary reviewSummary) {
-    final reviews = reviewSummary.reviews.take(3).toList();
+    final reviews = _previewReviews(reviewSummary.reviews);
     final totalCount = reviewSummary.reviewCount;
-    final displayRating = totalCount > 0
-        ? reviewSummary.averageRating
-        : d.rating;
 
     return _surfaceCard(
       child: Column(
@@ -711,27 +813,31 @@ class _TouristDestinationDetailScreenState
                   ),
                 ],
               ),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: accent.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.star_rounded, color: accent, size: 18),
-                    const SizedBox(width: 4),
-                    Text(
-                      displayRating.toStringAsFixed(1),
-                      style: TextStyle(
-                        fontWeight: FontWeight.w800,
-                        color: accent,
+              if (totalCount > 0) ...[
+                const Spacer(),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: accent.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: accent.withValues(alpha: 0.4), width: 1.2),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.star_rounded, color: accent, size: 18),
+                      const SizedBox(width: 4),
+                      Text(
+                        reviewSummary.averageRating.toStringAsFixed(1),
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          color: accent,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
           if (d.spotId.isNotEmpty) ...[
@@ -788,6 +894,7 @@ class _TouristDestinationDetailScreenState
                     dateLabel: r.dateLabel,
                   ),
                   accent: accent,
+                  isOwnReview: _userReview != null && r.userId == _userReview!.userId,
                 ),
               ),
             ),
@@ -811,41 +918,12 @@ class _TouristDestinationDetailScreenState
     );
   }
 
-  Widget _buildBottomBar(Color accent) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.08),
-            blurRadius: 16,
-            offset: const Offset(0, -4),
-          ),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
-          child: SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: _openScanQr,
-              icon: const Icon(Icons.qr_code_scanner_rounded),
-              label: const Text('Scan QR to Check In'),
-              style: FilledButton.styleFrom(
-                backgroundColor: accent,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
+  List<SpotReview> _previewReviews(List<SpotReview> all) {
+    final uid = _userReview?.userId;
+    if (uid == null || uid.isEmpty) return all.take(3).toList();
+    final own = all.where((r) => r.userId == uid).toList();
+    final others = all.where((r) => r.userId != uid).toList();
+    return [...own, ...others].take(3).toList();
   }
 
   Widget _surfaceCard({required Widget child}) {
@@ -853,11 +931,12 @@ class _TouristDestinationDetailScreenState
       width: double.infinity,
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: const Color(0xFFEDF0F4),
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFB0BAC5), width: 1.5),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
+            color: Colors.black.withValues(alpha: 0.08),
             blurRadius: 18,
             offset: const Offset(0, 6),
           ),
@@ -882,18 +961,19 @@ class _TouristDestinationDetailScreenState
                 Text(
                   label,
                   style: const TextStyle(
-                    fontSize: 12,
-                    color: _textMuted,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                    color: _textDark,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 3),
                 Text(
                   value,
                   style: const TextStyle(
                     fontSize: 14,
-                    color: _textDark,
-                    height: 1.35,
+                    color: _textMuted,
+                    height: 1.4,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
               ],
@@ -907,7 +987,7 @@ class _TouristDestinationDetailScreenState
   Widget _divider() => Divider(color: Colors.grey.shade200, height: 1);
 }
 
-class _NearbyPlaceTile extends StatelessWidget {
+class _NearbyPlaceTile extends StatefulWidget {
   const _NearbyPlaceTile({
     required this.place,
     required this.accent,
@@ -919,107 +999,359 @@ class _NearbyPlaceTile extends StatelessWidget {
   final VoidCallback? onDirections;
 
   @override
+  State<_NearbyPlaceTile> createState() => _NearbyPlaceTileState();
+}
+
+class _NearbyPlaceTileState extends State<_NearbyPlaceTile> {
+  NearbyPlaceCard get place => widget.place;
+  Color get accent => widget.accent;
+
+  bool get _hasGallery => place.gallery.length > 1;
+
+  void _showGallery() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _NearbyGallerySheet(place: place, accent: accent),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: onDirections,
+        onTap: _hasGallery ? _showGallery : widget.onDirections,
         borderRadius: BorderRadius.circular(18),
         child: Container(
-      width: 152,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: accent.withValues(alpha: 0.12)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
+          width: 176,
+          decoration: BoxDecoration(
+            color: const Color(0xFFDDE2E8),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: accent.withValues(alpha: 0.45), width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.05),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            height: 72,
-            width: double.infinity,
-            child: SpotImage(
-              imageUrl: place.imageUrl,
-              fit: BoxFit.cover,
-            ),
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    place.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF111827),
+          clipBehavior: Clip.none,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
+                child: Stack(
+                  children: [
+                    Container(
+                      height: 118,
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFCDD3DA),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Colors.black.withValues(alpha: 0.22),
+                          width: 1.2,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.14),
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          ),
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.06),
+                            blurRadius: 2,
+                            offset: const Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: SpotImage(
+                        imageUrl: place.imageUrl,
+                        fit: BoxFit.cover,
+                      ),
                     ),
-                  ),
-                  const Spacer(),
-                  Row(
-                    children: [
-                      Icon(Icons.star_rounded, size: 12, color: accent),
-                      Text(
-                        place.rating.toStringAsFixed(1),
-                        style: const TextStyle(fontSize: 11),
-                      ),
-                      const Spacer(),
-                      Text(
-                        place.priceRange,
-                        style: TextStyle(fontSize: 11, color: accent),
-                      ),
-                    ],
-                  ),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          place.driveMinutes != null
-                              ? '~${place.driveMinutes!.round()} min drive'
-                              : '${place.distanceKm.toStringAsFixed(1)} km',
-                          style: const TextStyle(
-                            fontSize: 10,
-                            color: Color(0xFF6B7280),
+                    if (_hasGallery)
+                      Positioned(
+                        bottom: 6,
+                        right: 6,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.62),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.photo_library_rounded,
+                                  size: 11, color: Colors.white),
+                              const SizedBox(width: 3),
+                              Text(
+                                '${place.gallery.length}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
-                      if (onDirections != null)
-                        Icon(Icons.directions_rounded, size: 14, color: accent),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        place.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF111827),
+                        ),
+                      ),
+                      const Spacer(),
+                      if (place.contact != null &&
+                          place.contact!.trim().isNotEmpty)
+                        Text(
+                          'Contact: ${place.contact}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 11, color: accent),
+                        ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              place.driveMinutes != null
+                                  ? '~${place.driveMinutes!.round()} min drive'
+                                  : '${place.distanceKm.toStringAsFixed(1)} km',
+                              style: const TextStyle(
+                                fontSize: 10,
+                                color: Color(0xFF6B7280),
+                              ),
+                            ),
+                          ),
+                          if (_hasGallery)
+                            Icon(Icons.collections_rounded,
+                                size: 14, color: accent)
+                          else if (widget.onDirections != null)
+                            Icon(Icons.directions_rounded,
+                                size: 14, color: accent),
+                        ],
+                      ),
                     ],
                   ),
-                ],
+                ),
               ),
-            ),
+            ],
           ),
-        ],
-      ),
         ),
       ),
     );
   }
 }
 
-class _ReviewTile extends StatelessWidget {
-  const _ReviewTile({required this.review, required this.accent});
-
-  final VisitorReview review;
+// ---------------------------------------------------------------------------
+// Gallery carousel bottom sheet
+// ---------------------------------------------------------------------------
+class _NearbyGallerySheet extends StatefulWidget {
+  const _NearbyGallerySheet({required this.place, required this.accent});
+  final NearbyPlaceCard place;
   final Color accent;
 
   @override
+  State<_NearbyGallerySheet> createState() => _NearbyGallerySheetState();
+}
+
+class _NearbyGallerySheetState extends State<_NearbyGallerySheet> {
+  final PageController _ctrl = PageController();
+  int _index = 0;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Row(
+    final images = widget.place.gallery;
+    final accent = widget.accent;
+    final bottomPad = MediaQuery.paddingOf(context).bottom;
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: Color(0xFF111827),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: EdgeInsets.only(bottom: bottomPad + 16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Handle
+          Container(
+            margin: const EdgeInsets.only(top: 12, bottom: 8),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+          // Title row
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+            child: Row(
+              children: [
+                Icon(Icons.hotel_rounded, color: accent, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    widget.place.name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                Text(
+                  '${_index + 1} / ${images.length}',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.6),
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          // Carousel
+          SizedBox(
+            height: 280,
+            child: PageView.builder(
+              controller: _ctrl,
+              itemCount: images.length,
+              onPageChanged: (i) => setState(() => _index = i),
+              itemBuilder: (_, i) => Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: SpotImage(
+                    imageUrl: images[i],
+                    fit: BoxFit.cover,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          // Dot indicators
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(images.length, (i) {
+              final active = i == _index;
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 220),
+                margin: const EdgeInsets.symmetric(horizontal: 3),
+                width: active ? 20 : 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  color: active
+                      ? accent
+                      : Colors.white.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              );
+            }),
+          ),
+          const SizedBox(height: 16),
+          // Contact + directions row
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(
+              children: [
+                if (widget.place.contact != null &&
+                    widget.place.contact!.trim().isNotEmpty)
+                  Flexible(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                            color: accent.withValues(alpha: 0.4), width: 1),
+                      ),
+                      child: Text(
+                        'Contact: ${widget.place.contact}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: accent,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                const Spacer(),
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(backgroundColor: accent),
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    await MapsDirectionsLauncher.open(
+                      destinationLabel: widget.place.directionsLabel,
+                    );
+                  },
+                  icon: const Icon(Icons.directions_rounded, size: 16),
+                  label: const Text('Directions'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReviewTile extends StatelessWidget {
+  const _ReviewTile({
+    required this.review,
+    required this.accent,
+    this.isOwnReview = false,
+  });
+
+  final VisitorReview review;
+  final Color accent;
+  final bool isOwnReview;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: isOwnReview ? const EdgeInsets.all(12) : EdgeInsets.zero,
+      decoration: isOwnReview
+          ? BoxDecoration(
+              color: accent.withValues(alpha: 0.04),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: accent.withValues(alpha: 0.5), width: 1.5),
+            )
+          : null,
+      child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         CircleAvatar(
@@ -1044,6 +1376,27 @@ class _ReviewTile extends StatelessWidget {
                       fontSize: 14,
                     ),
                   ),
+                  if (isOwnReview) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        'Your review',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: accent,
+                        ),
+                      ),
+                    ),
+                  ],
                   const Spacer(),
                   Icon(Icons.star_rounded, size: 14, color: accent),
                   Text(
@@ -1065,6 +1418,7 @@ class _ReviewTile extends StatelessWidget {
           ),
         ),
       ],
+    ),
     );
   }
 }

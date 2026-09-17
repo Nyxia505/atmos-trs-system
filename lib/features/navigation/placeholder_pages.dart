@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'package:geolocator/geolocator.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
@@ -11,6 +12,7 @@ import 'package:atmos_trs_system/config/app_theme_controller.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/config/vr_tour_config.dart';
+import 'package:atmos_trs_system/features/navigation/tourist_web_layout.dart';
 import 'package:atmos_trs_system/services/qr_checkin_ui.dart';
 import 'package:atmos_trs_system/services/qr_checkin_service.dart';
 import 'package:atmos_trs_system/services/qr_scan_demo_guard.dart';
@@ -18,7 +20,9 @@ import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/screens/spot_checkin_screen.dart';
 import 'package:atmos_trs_system/screens/lgu_checkin_screen.dart';
+import 'package:atmos_trs_system/screens/event_detail_screen.dart';
 import 'package:atmos_trs_system/services/announcement_notification_sync.dart';
+import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:atmos_trs_system/services/notification_badge_notifier.dart';
 import 'package:atmos_trs_system/services/notification_firestore_service.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart' as activity;
@@ -482,7 +486,8 @@ class _ScanTabPageState extends State<ScanTabPage> {
       if (!mounted) {
         return;
       }
-      Navigator.pushReplacementNamed(context, '/qr-welcome');
+      Navigator.of(context, rootNavigator: true)
+          .pushReplacementNamed('/qr-welcome');
       _clearProcessing();
       return;
     }
@@ -587,12 +592,8 @@ class _ScanTabPageState extends State<ScanTabPage> {
       }
     }
 
-    final routedLguId = BetaTestingGuard.isActive
-        ? BetaTestingGuard.dashboardMunicipalityId
-        : municipalityId;
-    final routedLguName = BetaTestingGuard.isActive
-        ? BetaTestingGuard.dashboardMunicipalityName
-        : displayName;
+    final routedLguId = municipalityId;
+    final routedLguName = displayName;
 
     if (uid != null && uid.isNotEmpty) {
       if (!mounted) return;
@@ -618,7 +619,7 @@ class _ScanTabPageState extends State<ScanTabPage> {
     );
 
     if (!mounted) return;
-    Navigator.of(context).pushReplacementNamed('/qr-welcome');
+    Navigator.of(context, rootNavigator: true).pushReplacementNamed('/qr-welcome');
   }
 
   /// Parses JSON tourist QR payload. Returns tourist_id if type is "tourist", else null.
@@ -659,7 +660,7 @@ class _ScanTabPageState extends State<ScanTabPage> {
       final city = data['city'] as String? ?? '';
       String fullName = '$firstName ${middleName != null && middleName.isNotEmpty ? '${middleName[0]}.' : ''} $lastName'.trim();
       if (fullName.isEmpty) fullName = email.isNotEmpty ? email : 'Unknown';
-      showDialog<void>(
+      showTouristDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('Tourist QR scanned'),
@@ -792,8 +793,9 @@ class _ScanTabPageState extends State<ScanTabPage> {
                         'You will register or sign in, then finish check-in.'
                     : QrScanDemoGuard.isDemoActive
                     ? 'Demo: use Oroquieta City spot or LGU QR (camera or laptop webcam).'
-                    : 'Align the QR inside the frame to check in at an LGU checkpoint '
-                        'or tourist spot. Stay at the location and keep GPS enabled.',
+                    : 'Align the QR inside the frame to check in. '
+                        'Stay at the tourist spot with Location on — '
+                        'photos or prints scanned from far away will not work.',
                 style: TextStyle(
                   color: AppTheme.unselectedMuted,
                   fontSize: 14,
@@ -968,11 +970,22 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
   bool _markingAll = false;
   String? _errorMessage;
   _AlertsFilter _filter = _AlertsFilter.all;
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      if (!mounted) return;
+      _load(quiet: true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
   }
 
   Future<String?> _resolveUid() async {
@@ -1024,12 +1037,14 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
     return next;
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool quiet = false}) async {
     if (!mounted) return;
-    setState(() {
-      _loading = true;
-      _errorMessage = null;
-    });
+    if (!quiet) {
+      setState(() {
+        _loading = true;
+        _errorMessage = null;
+      });
+    }
     try {
       final uid = await _resolveUid();
       final list = await AnnouncementNotificationSync.loadAlertItems(
@@ -1432,7 +1447,7 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
   }
 
   Future<void> _deleteUserNotification(NotificationItem item) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTouristDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete notification?'),
@@ -1474,7 +1489,7 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
   }
 
   Future<void> _confirmDismissAnnouncement(NotificationItem item) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTouristDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Remove from list?'),
@@ -1496,11 +1511,25 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
   Future<void> _openNotificationDetail(NotificationItem item) async {
     await _markAsRead(item);
     if (!mounted) return;
+
+    if (item.isAnnouncement) {
+      await EventDetailScreen.open(
+        context,
+        eventId: item.id,
+        title: item.title,
+        content: item.message,
+        imageUrl: item.imageUrl,
+        municipalityName: item.municipalityName,
+        type: item.type,
+      );
+      return;
+    }
+
     final typeLabel = item.type.isEmpty ? 'Notice' : item.type;
     final visual = _notificationVisualFor(item);
     final accent = AppTheme.primary;
 
-    await showDialog<void>(
+    await showTouristDialog<void>(
       context: context,
       builder: (ctx) => Dialog(
         insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
@@ -1864,15 +1893,29 @@ class _NotificationCard extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: visual.color.withValues(alpha: 0.12),
+                  if (item.isAnnouncement &&
+                      (item.imageUrl?.trim().isNotEmpty ?? false))
+                    ClipRRect(
                       borderRadius: BorderRadius.circular(10),
+                      child: SizedBox(
+                        width: 52,
+                        height: 52,
+                        child: SpotImage(
+                          imageUrl: item.imageUrl,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    )
+                  else
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: visual.color.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(visual.icon, color: visual.color, size: 18),
                     ),
-                    child: Icon(visual.icon, color: visual.color, size: 18),
-                  ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(

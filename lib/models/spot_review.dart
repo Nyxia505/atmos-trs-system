@@ -11,6 +11,7 @@ class SpotReview {
     required this.comment,
     required this.createdAt,
     this.updatedAt,
+    this.spotName = '',
   });
 
   final String id;
@@ -21,6 +22,15 @@ class SpotReview {
   final String comment;
   final DateTime createdAt;
   final DateTime? updatedAt;
+  final String spotName;
+
+  String get displaySpotName {
+    final name = spotName.trim();
+    if (name.isNotEmpty) return name;
+    final id = spotId.trim();
+    if (id.isEmpty) return 'Destination';
+    return id.replaceAll('_', ' ');
+  }
 
   String get dateLabel => _formatDateLabel(createdAt);
 
@@ -37,6 +47,7 @@ class SpotReview {
       comment: data['comment']?.toString().trim() ?? '',
       createdAt: _readTimestamp(data['createdAt']) ?? DateTime.now(),
       updatedAt: _readTimestamp(data['updatedAt']),
+      spotName: data['spotName']?.toString().trim() ?? '',
     );
   }
 

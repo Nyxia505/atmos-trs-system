@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/atmos_brand_typography.dart';
 import 'package:atmos_trs_system/data/app_faq_content.dart';
+import 'package:atmos_trs_system/features/navigation/tourist_web_layout.dart';
 import 'package:atmos_trs_system/models/faq_chat_message_record.dart';
 import 'package:atmos_trs_system/services/faq_chat_store.dart';
 import 'package:atmos_trs_system/services/faq_chatbot_service.dart';
@@ -256,7 +257,7 @@ class _FaqChatBodyState extends State<_FaqChatBody>
   }
 
   Future<void> _confirmDeleteMessage(FaqChatMessageRecord message) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTouristDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete message?'),
@@ -429,7 +430,7 @@ class _FaqChatBodyState extends State<_FaqChatBody>
                   child: Padding(
                     padding: const EdgeInsets.all(24),
                     child: Text(
-                      'No messages yet. Say hi to ATMOS-TRS AI!',
+                      'No messages yet. Say hi to Tala AI!',
                       textAlign: TextAlign.center,
                       style: AtmosBrandTypography.meaningTagline(
                         color: AppTheme.unselectedMuted,
@@ -574,7 +575,7 @@ class _FaqChatMenuButton extends StatelessWidget {
   const _FaqChatMenuButton();
 
   Future<void> _confirmNewChat(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTouristDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Start new chat?'),
@@ -598,7 +599,7 @@ class _FaqChatMenuButton extends StatelessWidget {
   }
 
   Future<void> _confirmDeleteConversation(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTouristDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete conversation?'),

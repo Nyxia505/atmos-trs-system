@@ -7,6 +7,7 @@ import 'package:atmos_trs_system/services/user_activity_service.dart'
     as activity;
 import 'package:intl/intl.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
+import 'package:atmos_trs_system/config/supabase_storage_config.dart';
 import 'package:atmos_trs_system/widgets/ui_skeleton.dart';
 import 'package:atmos_trs_system/config/app_theme_controller.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_display_spots.dart';
@@ -962,9 +963,10 @@ class _ExploreScreenState extends State<ExploreScreen> {
       );
     }
     Widget image;
-    if (imageUrl.startsWith('assets/')) {
+    final resolved = SupabaseStorageConfig.resolve(imageUrl);
+    if (resolved.startsWith('assets/')) {
       image = Image.asset(
-        imageUrl,
+        resolved,
         width: size,
         height: size,
         fit: BoxFit.cover,
@@ -976,7 +978,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
       );
     } else {
       image = Image.network(
-        imageUrl,
+        resolved,
         width: size,
         height: size,
         fit: BoxFit.cover,
@@ -1084,9 +1086,10 @@ class _ExploreScreenState extends State<ExploreScreen> {
         child: const Icon(Icons.place, color: Colors.grey),
       );
     }
-    if (imageUrl.startsWith('assets/')) {
+    final resolved = SupabaseStorageConfig.resolve(imageUrl);
+    if (resolved.startsWith('assets/')) {
       return Image.asset(
-        imageUrl,
+        resolved,
         fit: BoxFit.cover,
         errorBuilder: (_, __, ___) => Container(
           color: Colors.grey.shade200,
@@ -1095,7 +1098,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
       );
     }
     return Image.network(
-      imageUrl,
+      resolved,
       fit: BoxFit.cover,
       errorBuilder: (_, __, ___) => Container(
         color: Colors.grey.shade200,

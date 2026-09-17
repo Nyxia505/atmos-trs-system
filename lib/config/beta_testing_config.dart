@@ -1,16 +1,18 @@
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 
 // =============================================================================
-// BETA TESTING MODE — temporary; disable before production release
+// BETA TESTING MODE — DEMO ONLY; disable before production release
 // -----------------------------------------------------------------------------
-// Set [betaTestingMode] to false to restore:
-//   • GPS / geofence validation on QR scans
-//   • Municipality restrictions on check-in
-//   • Registration routing based on scanned LGU / prior destinations
+// ENABLE (client demo / dummy QR from any device — no on-site GPS required):
+//   betaTestingMode = true;
+//
+// REVERT (production — enforce GPS / geofence / municipality rules):
+//   betaTestingMode = false;
 // =============================================================================
 
-/// Production: GPS/geofence and municipality rules apply on scan.
-const bool betaTestingMode = false;
+/// DEMO ONLY: when true, skips GPS/geofence and municipality scan restrictions.
+/// Set back to [false] before production release.
+const bool betaTestingMode = true;
 
 /// Canonical LGU dashboard used during beta testing.
 const String kBetaTestingLguMunicipalityId = 'oroquieta';

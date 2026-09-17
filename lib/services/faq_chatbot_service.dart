@@ -15,7 +15,7 @@ class FaqChatMessage {
   final DateTime timestamp;
 }
 
-/// ATMOS-TRS AI — official tourism assistant for the ATMOS-TRS mobile app.
+/// Tala AI — official tourism assistant for the ATMOS-TRS mobile app.
 class FaqChatbotService {
   FaqChatbotService._();
 
@@ -23,15 +23,19 @@ class FaqChatbotService {
 
   factory FaqChatbotService() => instance;
 
-  static const botName = 'ATMOS-TRS AI';
+  static const botName = 'Tala AI';
 
   /// Remembers the user's language for the current chat session.
   AtmosLanguage _sessionLanguage = AtmosLanguage.en;
+
+  /// After a helpful tourism/app answer, a short "ok/thanks" should get a warm reply.
+  bool _awaitingAcknowledgement = false;
 
   AtmosLanguage get sessionLanguage => _sessionLanguage;
 
   void resetSession() {
     _sessionLanguage = AtmosLanguage.en;
+    _awaitingAcknowledgement = false;
   }
 
   void restoreSessionLanguage(AtmosLanguage lang) {
@@ -39,17 +43,17 @@ class FaqChatbotService {
   }
 
   static const welcomeEn =
-      'Hey! 👋 I\'m ATMOS-TRS AI, your tourism assistant for Misamis Occidental.\n\n'
+      'Hey! 👋 I\'m Tala AI, your tourism assistant for Misamis Occidental.\n\n'
       'Chat with me like a friend — ask how I am, or get help with the app, '
       'destinations, QR check-in, and more. English, Filipino, or Bisaya is fine!';
 
   static const welcomeFil =
-      'Kumusta! 👋 Ako si ATMOS-TRS AI, ang tourism assistant mo para sa Misamis Occidental.\n\n'
+      'Kumusta! 👋 Ako si Tala AI, ang tourism assistant mo para sa Misamis Occidental.\n\n'
       'Puwede tayong mag-usap ng natural — tanungin mo kung kumusta ako, o humingi ng tulong '
       'sa app, destinations, QR check-in, at iba pa. English, Filipino, o Bisaya — okay lang!';
 
   static const welcomeCeb =
-      'Kumusta! 👋 Ako si ATMOS-TRS AI, ang imong tourism assistant sa Misamis Occidental.\n\n'
+      'Kumusta! 👋 Ako si Tala AI, ang imong tourism assistant sa Misamis Occidental.\n\n'
       'Puwede ta mag-storya nga natural — pangutan-a ko kung kumusta ko, o pangayo og tabang '
       'sa app, destinations, QR check-in, ug uban pa. English, Filipino, o Bisaya — okay ra!';
 
@@ -79,25 +83,53 @@ class FaqChatbotService {
 
     final normalized = _normalize(input);
 
-    if (_isHowAreYou(normalized)) return _howAreYou(lang);
-    if (_isWhoAreYou(normalized)) return _whoAreYou(lang);
-    if (_isGoodbye(normalized)) return _goodbye(lang);
-    if (_isGreeting(normalized)) return _greeting(lang);
-    if (_isThanks(normalized)) return _thanks(lang);
+    if (_isHowAreYou(normalized)) {
+      _awaitingAcknowledgement = false;
+      return _howAreYou(lang);
+    }
+    if (_isWhoAreYou(normalized)) {
+      _awaitingAcknowledgement = false;
+      return _whoAreYou(lang);
+    }
+    if (_isGoodbye(normalized)) {
+      _awaitingAcknowledgement = false;
+      return _goodbye(lang);
+    }
+    if (_isGreeting(normalized)) {
+      _awaitingAcknowledgement = false;
+      return _greeting(lang);
+    }
+    if (_isThanks(normalized) ||
+        (_awaitingAcknowledgement && _isSoftAcknowledgement(normalized))) {
+      _awaitingAcknowledgement = false;
+      return _thanks(lang);
+    }
 
-    if (_isOutOfScope(normalized)) return _outOfScope(lang);
+    if (_isOutOfScope(normalized)) {
+      _awaitingAcknowledgement = false;
+      return _outOfScope(lang);
+    }
 
-    final spotReply = ChatbotDestinationKnowledge.reply(normalized, _langCode(lang));
-    if (spotReply != null) return _limitWords(spotReply);
+    final spotReply =
+        ChatbotDestinationKnowledge.reply(normalized, _langCode(lang));
+    if (spotReply != null) {
+      _awaitingAcknowledgement = true;
+      return _limitWords(spotReply);
+    }
 
     final tourismReply = _tourismReply(normalized, lang);
-    if (tourismReply != null) return _limitWords(tourismReply);
+    if (tourismReply != null) {
+      _awaitingAcknowledgement = true;
+      return _limitWords(tourismReply);
+    }
 
     final best = _bestMatch(normalized);
     if (best != null) {
+      _awaitingAcknowledgement = true;
       return _limitWords(_answerFor(best, lang));
     }
 
+    _awaitingAcknowledgement = false;
     return _limitWords(_fallback(lang));
   }
 
@@ -372,14 +404,17 @@ class FaqChatbotService {
     return _localized(
       lang: lang,
       en:
-          'I\'m best at tourism and the ATMOS-TRS app 😊 — but I\'m happy to chat! '
-          'Try asking about destinations, registration, QR codes, or say "how are you?"',
+          'Sorry — I\'m only here to help with the ATMOS-TRS system and '
+          'Misamis Occidental tourism 😊 Ask me about registration, login, '
+          'QR check-in, Explore, VR Tour, destinations, fees, or hotels!',
       fil:
-          'Mas magaling ako sa tourism at ATMOS-TRS app 😊 — pero puwede tayong mag-usap! '
-          'Subukang magtanong tungkol sa destinations, registration, QR codes, o sabihin "kumusta ka?"',
+          'Pasensya na — nandito lang ako para tumulong sa ATMOS-TRS system at '
+          'tourism ng Misamis Occidental 😊 Magtanong ka tungkol sa registration, login, '
+          'QR check-in, Explore, VR Tour, destinations, fees, o hotels!',
       ceb:
-          'Mas maayo ko sa tourism ug ATMOS-TRS app 😊 — pero puwede ta mag-storya! '
-          'Sulayi pangutana bahin sa destinations, registration, QR codes, o ingon "kumusta ka?"',
+          'Pasayloa ko — ania lang ko aron motabang sa ATMOS-TRS system ug '
+          'tourism sa Misamis Occidental 😊 Pangutana bahin sa registration, login, '
+          'QR check-in, Explore, VR Tour, destinations, fees, o hotels!',
     );
   }
 
@@ -387,13 +422,13 @@ class FaqChatbotService {
     return _localized(
       lang: lang,
       en:
-          'Hey! 👋 Good to hear from you. I\'m ATMOS-TRS AI — your guide for the app '
+          'Hey! 👋 Good to hear from you. I\'m Tala AI — your guide for the app '
           'and Misamis Occidental tourism. What would you like to know?',
       fil:
-          'Kumusta! 👋 Masaya akong makipag-usap sa\'yo. Ako si ATMOS-TRS AI — guide mo '
+          'Kumusta! 👋 Masaya akong makipag-usap sa\'yo. Ako si Tala AI — guide mo '
           'sa app at tourism sa Misamis Occidental. Ano ang gusto mong malaman?',
       ceb:
-          'Kumusta! 👋 Nalipay ko nga naka-chat nimo. Ako si ATMOS-TRS AI — imong guide '
+          'Kumusta! 👋 Nalipay ko nga naka-chat nimo. Ako si Tala AI — imong guide '
           'sa app ug tourism sa Misamis Occidental. Unsa ang gusto nimong mahibaloan?',
     );
   }
@@ -417,15 +452,15 @@ class FaqChatbotService {
     return _localized(
       lang: lang,
       en:
-          'I\'m ATMOS-TRS AI — the official assistant inside the ATMOS-TRS app '
+          'I\'m Tala AI — the official assistant inside the ATMOS-TRS app '
           '(Asenso Tourismo Misamis Occidental Smart Tourist Registration System). '
           'I help with registration, QR check-in, Explore, and tourism questions. 😊',
       fil:
-          'Ako si ATMOS-TRS AI — ang opisyal na assistant sa ATMOS-TRS app '
+          'Ako si Tala AI — ang opisyal na assistant sa ATMOS-TRS app '
           '(Asenso Tourismo Misamis Occidental Smart Tourist Registration System). '
           'Tumutulong ako sa registration, QR check-in, Explore, at tourism questions. 😊',
       ceb:
-          'Ako si ATMOS-TRS AI — ang opisyal nga assistant sa ATMOS-TRS app '
+          'Ako si Tala AI — ang opisyal nga assistant sa ATMOS-TRS app '
           '(Asenso Tourismo Misamis Occidental Smart Tourist Registration System). '
           'Motabang ko sa registration, QR check-in, Explore, ug tourism questions. 😊',
     );
@@ -447,7 +482,7 @@ class FaqChatbotService {
     return _localized(
       lang: lang,
       en:
-          'You\'re welcome! 😊 Happy to help. Ask me anything else about ATMOS-TRS or your trip.',
+          'You\'re welcome! 😊 Happy to help. Ask me anything else about ATMOS-TRS or your trip anytime.',
       fil:
           'Walang anuman! 😊 Masaya akong tumulong. Magtanong ka lang ulit tungkol sa ATMOS-TRS o sa trip mo.',
       ceb:
@@ -455,18 +490,109 @@ class FaqChatbotService {
     );
   }
 
+  bool _isThanks(String input) {
+    final compacted = input.replaceAll(' ', '');
+    const phrases = [
+      'thanks',
+      'thank you',
+      'thankyou',
+      'thnkyou',
+      'thnk you',
+      'thank u',
+      'thankyu',
+      'thx',
+      'thnx',
+      'tnx',
+      'ty',
+      'tysm',
+      'tyvm',
+      'salamat',
+      'salamat kaayo',
+      'daghang salamat',
+      'salamat po',
+      'maraming salamat',
+      'much appreciated',
+      'appreciate it',
+      'appreciated',
+    ];
+    if (_containsAny(input, phrases)) return true;
+    if (_containsAny(compacted, [
+      'thankyou',
+      'thnkyou',
+      'thanku',
+      'thanks',
+      'salamat',
+    ])) {
+      return true;
+    }
+    // "ok thank you", "ok thnkyou", "okay thanks"
+    final withoutFiller = input
+        .replaceAll(RegExp(r'\b(ok|okay|alright|sure|yes|yeah|yup|sige)\b'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (withoutFiller.isNotEmpty && withoutFiller != input) {
+      return _isThanks(withoutFiller);
+    }
+    return false;
+  }
+
+  /// Short follow-ups after a helpful answer (conversation context).
+  bool _isSoftAcknowledgement(String input) {
+    const acks = [
+      'ok',
+      'okay',
+      'okk',
+      'oks',
+      'alright',
+      'all right',
+      'got it',
+      'gotcha',
+      'noted',
+      'cool',
+      'nice',
+      'great',
+      'perfect',
+      'awesome',
+      'awsome',
+      'copy',
+      'understood',
+      'sige',
+      'sige ok',
+      'okay ra',
+      'ok ra',
+      'ok lang',
+      'okay lang',
+      'ayos',
+      'ayos lang',
+      'good',
+      'fine',
+      'k',
+      'kk',
+    ];
+    if (acks.contains(input)) return true;
+    // Very short messages that are only acknowledgements + filler.
+    final tokens = _tokens(input);
+    if (tokens.isEmpty || tokens.length > 4) return false;
+    return tokens.every(
+      (t) => acks.contains(t) || t == 'po' || t == 'lang' || t == 'ra',
+    );
+  }
+
   String _fallback(AtmosLanguage lang) {
     return _localized(
       lang: lang,
       en:
-          'Hmm, I\'m not sure about that one yet. 😅 Try asking about registration, login, '
-          'QR code, check-in, Explore, VR Tour, or just say "how are you?" — I\'m here to chat!',
+          'Sorry — I only assist with the ATMOS-TRS system and tourism-related '
+          'questions 😊 Try asking about registration, login, QR check-in, Explore, '
+          'VR Tour, destinations, entrance fees, or nearby hotels.',
       fil:
-          'Hmm, hindi ko pa sigurado iyan. 😅 Subukang magtanong tungkol sa registration, login, '
-          'QR code, check-in, Explore, VR Tour, o sabihin "kumusta ka?" — nandito lang ako!',
+          'Pasensya na — tumutulong lang ako sa ATMOS-TRS system at mga tanong tungkol '
+          'sa tourism 😊 Subukang magtanong tungkol sa registration, login, QR check-in, '
+          'Explore, VR Tour, destinations, entrance fees, o nearby hotels.',
       ceb:
-          'Hmm, dili pa ko sigurado ana. 😅 Sulayi pangutana bahin sa registration, login, '
-          'QR code, check-in, Explore, VR Tour, o ingon "kumusta ka?" — ania lang ko!',
+          'Pasayloa ko — motabang lang ko sa ATMOS-TRS system ug mga pangutana bahin '
+          'sa tourism 😊 Sulayi pangutana bahin sa registration, login, QR check-in, '
+          'Explore, VR Tour, destinations, entrance fees, o nearby hotels.',
     );
   }
 
@@ -524,20 +650,45 @@ class FaqChatbotService {
 
   bool _isOutOfScope(String input) {
     const patterns = [
+      // Romance / personal
       'boyfriend',
       'girlfriend',
       'love me',
       'do you love',
+      'i love you',
+      'iloveyou',
+      'love you',
       'marry me',
       'date me',
       'crush',
+      'kiss me',
+      // School / random trivia
+      'classroom',
+      'class president',
+      'president of your class',
+      'who is the president',
+      'who s the president',
+      'homework',
       'solve this equation',
+      'math problem',
+      // Politics / finance / gambling
       'politics',
+      'election',
+      'senator',
       'president',
       'bitcoin',
       'crypto',
       'stock market',
       'gambling',
+      'casino',
+      // Unrelated lifestyle
+      'recipe',
+      'cook for me',
+      'tell me a joke',
+      'sing a song',
+      'write a poem',
+      'horoscope',
+      'astrology',
     ];
     return _containsAny(input, patterns);
   }
@@ -563,17 +714,6 @@ class FaqChatbotService {
     return greetings.any(
       (g) => input == g || input.startsWith('$g ') || input.endsWith(' $g'),
     );
-  }
-
-  bool _isThanks(String input) {
-    return _containsAny(input, [
-      'thanks',
-      'thank you',
-      'salamat',
-      'salamat kaayo',
-      'ty',
-      'thank u',
-    ]);
   }
 
   LanguageScores _scoreLanguage(String input) {

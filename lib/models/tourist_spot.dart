@@ -24,6 +24,7 @@ class TouristSpot {
     this.qrValue = '',
     this.qrPayload,
     this.createdAt,
+    this.dotAttractionCode = '',
   });
 
   final String id;
@@ -50,6 +51,9 @@ class TouristSpot {
   /// When this spot document was first created (from Firestore).
   final DateTime? createdAt;
 
+  /// Optional DOT attraction code for VAR 2 reports (e.g. 202, 108, 414).
+  final String dotAttractionCode;
+
   /// Alias for [vrLink] for compatibility with code that expects vrTourUrl.
   String? get vrTourUrl => vrLink;
 
@@ -67,6 +71,10 @@ class TouristSpot {
         (data['qrValue'] as String? ?? data['qr_value'] as String? ?? '')
             .trim();
     final qrPay = data['qr_payload'] as String? ?? data['qrPayload'] as String?;
+    final dotCode = (data['dotAttractionCode'] as String? ??
+            data['dot_attraction_code'] as String? ??
+            '')
+        .trim();
     final createdRaw = data['createdAt'] ?? data['created_at'];
     DateTime? created;
     if (createdRaw is Timestamp) {
@@ -92,6 +100,7 @@ class TouristSpot {
       qrValue: qrVal.isNotEmpty ? qrVal : docId,
       qrPayload: qrPay?.trim().isNotEmpty == true ? qrPay : null,
       createdAt: created,
+      dotAttractionCode: dotCode,
     );
   }
 
@@ -113,6 +122,8 @@ class TouristSpot {
       if (qrValue.isNotEmpty) 'qrValue': qrValue,
       if (qrPayload != null && qrPayload!.trim().isNotEmpty)
         'qr_payload': qrPayload,
+      if (dotAttractionCode.isNotEmpty)
+        'dotAttractionCode': dotAttractionCode,
     };
   }
 }

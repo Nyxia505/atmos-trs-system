@@ -34,12 +34,7 @@ class QrLaunchBootstrap {
           break;
         }
       }
-      final municipalityId = BetaTestingGuard.isActive
-          ? BetaTestingGuard.dashboardMunicipalityId
-          : lgu.municipalityId;
-      if (BetaTestingGuard.isActive) {
-        displayName = BetaTestingGuard.dashboardMunicipalityName;
-      }
+      final municipalityId = lgu.municipalityId;
       await PendingSpotCheckInStorage.clear();
       await PendingLguCheckInStorage.save(
         municipalityId: municipalityId,
@@ -63,19 +58,13 @@ class QrLaunchBootstrap {
         await PendingLguCheckInStorage.clear();
         return;
       }
-      final mid = BetaTestingGuard.isActive
-          ? BetaTestingGuard.dashboardMunicipalityId
-          : scannedMid;
+      final mid = scannedMid;
       await PendingLguCheckInStorage.clear();
       await PendingSpotCheckInStorage.save(
         municipalityId: mid,
         spotId: spot.spotId,
-        spotName: BetaTestingGuard.isActive
-            ? kBetaTestingDefaultSpotName
-            : null,
-        municipality: BetaTestingGuard.isActive
-            ? BetaTestingGuard.dashboardMunicipalityName
-            : null,
+        spotName: null,
+        municipality: null,
       );
       appliedFromLaunchUrl = true;
       debugPrint(
@@ -89,13 +78,9 @@ class QrLaunchBootstrap {
     if (spotIdOnly != null && spotIdOnly.isNotEmpty) {
       await PendingLguCheckInStorage.clear();
       await PendingSpotCheckInStorage.save(
-        municipalityId: BetaTestingGuard.isActive
-            ? BetaTestingGuard.dashboardMunicipalityId
-            : 'oroquieta',
+        municipalityId: 'oroquieta',
         spotId: spotIdOnly,
-        spotName: BetaTestingGuard.isActive
-            ? kBetaTestingDefaultSpotName
-            : null,
+        spotName: null,
       );
       appliedFromLaunchUrl = true;
       debugPrint('[QR launch] pending spot check-in (spot_id only): $spotIdOnly');

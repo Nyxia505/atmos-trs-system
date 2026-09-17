@@ -1,30 +1,53 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:async' show StreamSubscription, unawaited;
 import 'dart:io' show Platform;
 import 'dart:typed_data';
 import 'package:image_picker/image_picker.dart';
 import 'package:atmos_trs_system/widgets/ui_skeleton.dart';
+import 'package:atmos_trs_system/services/dashboard_stats_cache.dart';
 import 'package:atmos_trs_system/widgets/app_search_bar.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
-import 'package:atmos_trs_system/utils/spot_qr_helper.dart';
-import 'package:atmos_trs_system/utils/lgu_qr_export.dart';
-import 'package:atmos_trs_system/utils/logo_utils.dart';
+import 'package:atmos_trs_system/widgets/report_export_preview.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/tourist_id_helper.dart';
+import 'package:atmos_trs_system/navigation/post_logout_navigation.dart';
 import 'package:atmos_trs_system/widgets/app_logout_button.dart';
 import 'package:atmos_trs_system/services/announcement_push_service.dart';
+import 'package:atmos_trs_system/services/lgu_event_service.dart';
 import 'package:atmos_trs_system/services/governor_firestore_service.dart';
+import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
+import 'package:atmos_trs_system/services/auth_service.dart';
+import 'package:atmos_trs_system/services/tourist_account_admin_service.dart';
+import 'package:atmos_trs_system/utils/checkin_visitor_count.dart';
 import 'package:atmos_trs_system/utils/production_data_filters.dart';
+import 'package:atmos_trs_system/utils/provincial_report_builder.dart';
+import 'package:atmos_trs_system/utils/checkin_report_summary_csv.dart';
+import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
+import 'package:atmos_trs_system/utils/csv_file_download.dart';
+import 'package:atmos_trs_system/utils/xlsx_file_download.dart';
+import 'package:atmos_trs_system/widgets/dot_report_export_panel.dart';
+import 'package:atmos_trs_system/features/governor/theme/governor_dashboard_tokens.dart';
+import 'package:atmos_trs_system/features/governor/widgets/governor_sidebar.dart';
+import 'package:atmos_trs_system/features/governor/widgets/governor_glass_header.dart';
+import 'package:atmos_trs_system/features/governor/widgets/governor_kpi_card.dart';
+import 'package:atmos_trs_system/features/governor/widgets/governor_quick_actions.dart';
+import 'package:atmos_trs_system/features/governor/widgets/governor_chart_card.dart';
+import 'package:atmos_trs_system/features/governor/widgets/governor_city_ranking_list.dart';
+import 'package:atmos_trs_system/features/governor/widgets/charts/governor_arrivals_area_chart.dart';
+import 'package:atmos_trs_system/features/governor/widgets/charts/governor_donut_chart.dart';
+import 'package:atmos_trs_system/features/governor/widgets/charts/governor_age_bar_chart.dart';
 
 class GovernorDashboard extends StatefulWidget {
   const GovernorDashboard({super.key});
@@ -39,53 +62,60 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   bool _isSidebarExpanded = true;
   late AnimationController _animationController;
 
-  // Data states
-  bool _isLoading = true;
+  // Data states — staged loading for smooth post-login paint
+  bool _isBootstrapping = true;
+  bool _isLoadingDetails = true;
+  bool _hasCachedStats = false;
   String? _errorMessage;
   int _totalTourists = 0;
   int _totalCheckIns = 0;
 
   /// Unique tourists who checked in today (one person = 1 even if they checked in at multiple municipalities).
   int _uniqueTouristsToday = 0;
+  /// Unique tourists who checked in anywhere in Misamis Occidental (visit-based).
+  int _provinceUniqueVisitors = 0;
   int _activeSpots = 0;
   String _selectedTimeFilter = 'This Month';
+  /// Municipalities page chart: This Week / This Month / This Year.
+  String _muniChartTimeFilter = 'This Year';
   final _searchController = TextEditingController();
 
-  // Orange theme colors - FlexiMart style
-  static const Color _primaryOrange = Color(
-    0xFFEA580C,
-  ); // dark orange (sidebar)
-  static const Color _accentOrange = Color(
-    0xFFF97316,
-  ); // orange-500 (highlights)
-  static const Color _lightOrange = Color(
-    0xFFFED7AA,
-  ); // light orange (for icons bg)
-  static const Color _darkBg = Color(0xFFF4F4F5); // flat neutral background
-  static const Color _cardBg = Colors.white;
-  static const Color _sidebarBg = Color(0xFFEA580C); // dark orange sidebar
-  static const Color _sidebarHover = Color(
-    0xFFC2410C,
-  ); // darker orange for hover
-  static const Color _textDark = Color(0xFF1A1A1A);
-  static const Color _textMuted = Color(0xFF6B7280);
-  static const Color _cardBorder = Color(0xFFE4E4E7);
+  /// Registered Tourists page: All | Day | Month | Year (by registration date).
+  String _touristRegFilterMode = 'All';
+  DateTime _touristRegFilterAnchor = DateTime.now();
 
-  // Flat KPI card colors (minimal, easy on the eyes)
-  static const Color _kpiGreen = Color(0xFF9CCC65);
-  static const Color _kpiOrange = Color(0xFFFFB74D);
-  static const Color _kpiBlue = Color(0xFF64B5F6);
-  static const Color _kpiPurple = Color(0xFF9575CD);
+  // Premium analytics palette (concept match)
+  static const Color _primaryOrange = GovernorDashboardTokens.primaryDark;
+  static const Color _accentOrange = GovernorDashboardTokens.primary;
+  static const Color _lightOrange = Color(0xFFFED7AA);
+  static const Color _darkBg = GovernorDashboardTokens.background;
+  static const Color _cardBg = GovernorDashboardTokens.card;
+  static const Color _sidebarBg = GovernorDashboardTokens.card;
+  static const Color _sidebarHover = Color(0xFFF1F5F9);
+  static const Color _textDark = GovernorDashboardTokens.text;
+  static const Color _textMuted = GovernorDashboardTokens.subtitle;
+  static const Color _cardBorder = GovernorDashboardTokens.border;
+
+  static const Color _kpiOrange = GovernorDashboardTokens.primary;
+  static const Color _kpiPeach = Color(0xFFFB923C);
+  static const Color _kpiBlue = Color(0xFF3B82F6);
+  static const Color _kpiPurple = Color(0xFFA855F7);
 
   final List<_NavItem> _navItems = [
     _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
-    _NavItem(icon: Icons.people_alt_rounded, label: 'Tourists'),
-    _NavItem(icon: Icons.qr_code_2_rounded, label: 'LGU QR Codes'),
+    _NavItem(icon: Icons.people_alt_rounded, label: 'Registered Tourists'),
     _NavItem(icon: Icons.location_city_rounded, label: 'Municipalities'),
     _NavItem(icon: Icons.analytics_rounded, label: 'Analytics'),
-    _NavItem(icon: Icons.campaign_rounded, label: 'Announcements'),
     _NavItem(icon: Icons.settings_rounded, label: 'Settings'),
   ];
+
+  static const int _municipalitiesIndex = 2;
+  static const int _analyticsIndex = 3;
+  static const int _settingsIndex = 4;
+  /// Events are not in the sidebar — opened from the header notification bell.
+  static const int _eventsIndex = 5;
+  /// Bottom nav shows Dashboard → Settings (index 0–4).
+  static const int _bottomNavItemCount = 5;
 
   // All municipalities data
   final List<Map<String, dynamic>> _allMunicipalities = [
@@ -214,6 +244,12 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   List<Map<String, dynamic>> _tourists = [];
   List<Map<String, dynamic>> _checkIns = [];
   List<Map<String, dynamic>> _governorAllSpots = [];
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
+      _announcementsSubscription;
+  bool _announcementsStreamPrimed = false;
+  final Set<String> _seenGovernorEventIds = {};
+  final Set<String> _dismissedGovernorNotificationIds = {};
+  Set<String> _knownPublishedAnnouncementIds = {};
 
   // Settings states
   bool _emailNotifications = true;
@@ -227,6 +263,19 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   String? _lastSyncDate;
   bool _isExporting = false;
   double _exportProgress = 0.0;
+  String _reportType = 'All Data';
+  DateTime? _reportStartDate;
+  DateTime? _reportEndDate;
+
+  static const List<String> _reportTypes = [
+    'All Data',
+    'Visits only',
+    'Tourists Only',
+    'Tourist Spots Only',
+    'Summary by Municipality',
+    'DOT Visitor to Attraction Report',
+    'DOT Tourism Attraction Visitor Record (VAR 2)',
+  ];
 
   @override
   void initState() {
@@ -236,37 +285,343 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       duration: const Duration(milliseconds: 250),
     );
     _animationController.forward();
-    _loadData();
-    _loadSettings();
+    unawaited(_loadSettings());
+    unawaited(_restoreGovernorStatsCache().then((_) => _loadData()));
+    _startAnnouncementsListener();
+  }
+
+  /// Live LGU event publications → badge + snackbar (no approval queue).
+  void _startAnnouncementsListener() {
+    if (Firebase.apps.isEmpty) return;
+    _announcementsSubscription?.cancel();
+    _announcementsStreamPrimed = false;
+    _knownPublishedAnnouncementIds = {};
+    unawaited(_loadSeenGovernorEventIds());
+    _announcementsSubscription = FirebaseFirestore.instance
+        .collection(LguEventService.collection)
+        .snapshots()
+        .listen(
+      (snapshot) async {
+        if (!mounted) return;
+        final list = snapshot.docs
+            .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
+            .toList();
+        list.sort(_sortAnnouncementsForGovernor);
+
+        final wasPrimed = _announcementsStreamPrimed;
+        final previousPublished =
+            Set<String>.from(_knownPublishedAnnouncementIds);
+
+        final publishedIds = <String>{
+          for (final a in list)
+            if (LguEventService.isVisibleToTourists(a) &&
+                (a['id']?.toString() ?? '').isNotEmpty)
+              a['id'].toString(),
+        };
+
+        setState(() {
+          _announcements = list;
+          _knownPublishedAnnouncementIds = publishedIds;
+        });
+
+        if (!wasPrimed) {
+          _announcementsStreamPrimed = true;
+          // Do not mark existing live events as read — the bell should list them.
+          if (mounted) setState(() {});
+          return;
+        }
+
+        final newlyPublished = <Map<String, dynamic>>[];
+        for (final a in list) {
+          if (!LguEventService.isVisibleToTourists(a)) continue;
+          final id = a['id']?.toString() ?? '';
+          if (id.isEmpty || previousPublished.contains(id)) continue;
+          newlyPublished.add(a);
+        }
+
+        if (newlyPublished.isEmpty) return;
+
+        final first = newlyPublished.first;
+        final mun = LguEventService.sourceMunicipalityLabel(first);
+        final title = first['title']?.toString().trim() ?? 'event';
+        final count = newlyPublished.length;
+        final message = count == 1
+            ? '$mun published "$title"'
+            : '$count new LGU events published';
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: _primaryOrange,
+            behavior: SnackBarBehavior.floating,
+            action: SnackBarAction(
+              label: 'View',
+              textColor: Colors.white,
+              onPressed: () {
+                if (!mounted) return;
+                _openEventsPage(markSeen: false);
+              },
+            ),
+          ),
+        );
+      },
+      onError: (Object e) {
+        debugPrint('[GovernorDashboard] announcements stream: $e');
+      },
+    );
+  }
+
+  static int _sortAnnouncementsForGovernor(
+    Map<String, dynamic> a,
+    Map<String, dynamic> b,
+  ) {
+    final aTs = a['publishedAt'] ?? a['createdAt'];
+    final bTs = b['publishedAt'] ?? b['createdAt'];
+    if (aTs is Timestamp && bTs is Timestamp) {
+      return bTs.compareTo(aTs);
+    }
+    return (b['date']?.toString() ?? '').compareTo(a['date']?.toString() ?? '');
+  }
+
+  int get _pendingLguEventsCount {
+    var n = 0;
+    for (final a in _announcements) {
+      if (!LguEventService.isVisibleToTourists(a)) continue;
+      final id = a['id']?.toString() ?? '';
+      if (id.isEmpty) continue;
+      if (_dismissedGovernorNotificationIds.contains(id)) continue;
+      if (!_seenGovernorEventIds.contains(id)) n++;
+    }
+    return n > 99 ? 99 : n;
+  }
+
+  /// Live LGU events shown in the notification bell panel.
+  List<Map<String, dynamic>> get _notificationFeedAnnouncements {
+    final live = _announcements.where((a) {
+      if (!LguEventService.isVisibleToTourists(a)) return false;
+      final id = a['id']?.toString() ?? '';
+      if (id.isEmpty) return false;
+      return !_dismissedGovernorNotificationIds.contains(id);
+    }).toList()
+      ..sort(_sortAnnouncementsForGovernor);
+    if (live.length <= 40) return live;
+    return live.take(40).toList();
+  }
+
+  bool _isGovernorEventUnread(Map<String, dynamic> a) {
+    final id = a['id']?.toString() ?? '';
+    return id.isNotEmpty &&
+        !_dismissedGovernorNotificationIds.contains(id) &&
+        !_seenGovernorEventIds.contains(id);
+  }
+
+  Future<void> _loadSeenGovernorEventIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    // Old seed / auto-read cleared the unread badge even with live LGU events.
+    // Reset once so unread + Mark all as read work again.
+    if (!(prefs.getBool('governor_notif_seen_v3') ?? false)) {
+      await prefs.remove('governor_events_seen');
+      await prefs.remove('governor_events_seeded');
+      await prefs.setBool('governor_notif_seen_v3', true);
+    }
+    final stored = prefs.getStringList('governor_events_seen') ?? [];
+    final dismissed = prefs.getStringList('governor_events_dismissed') ?? [];
+    _seenGovernorEventIds
+      ..clear()
+      ..addAll(stored);
+    _dismissedGovernorNotificationIds
+      ..clear()
+      ..addAll(dismissed);
+  }
+
+  Future<void> _persistGovernorNotificationPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      'governor_events_seen',
+      _seenGovernorEventIds.toList(),
+    );
+    await prefs.setStringList(
+      'governor_events_dismissed',
+      _dismissedGovernorNotificationIds.toList(),
+    );
+  }
+
+  Future<void> _markGovernorEventRead(String eventId) async {
+    final id = eventId.trim();
+    if (id.isEmpty) return;
+    if (_seenGovernorEventIds.contains(id)) return;
+    _seenGovernorEventIds.add(id);
+    await _persistGovernorNotificationPrefs();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _markAllGovernorEventsSeen() async {
+    for (final a in _announcements) {
+      if (!LguEventService.isVisibleToTourists(a)) continue;
+      final id = a['id']?.toString() ?? '';
+      if (id.isEmpty) continue;
+      if (_dismissedGovernorNotificationIds.contains(id)) continue;
+      _seenGovernorEventIds.add(id);
+    }
+    await _persistGovernorNotificationPrefs();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _dismissGovernorNotification(String eventId) async {
+    final id = eventId.trim();
+    if (id.isEmpty) return;
+    _dismissedGovernorNotificationIds.add(id);
+    _seenGovernorEventIds.add(id);
+    await _persistGovernorNotificationPrefs();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _restoreGovernorStatsCache() async {
+    final cached = await DashboardStatsCache.loadGovernor();
+    if (cached == null || !mounted) return;
+    setState(() {
+      _totalTourists = cached.totalTourists;
+      _totalCheckIns = cached.totalCheckIns;
+      _uniqueTouristsToday = cached.uniqueTouristsToday;
+      _activeSpots = cached.activeSpots;
+      if (cached.profileName != null && cached.profileName!.isNotEmpty) {
+        _profileName = cached.profileName!;
+      }
+      _hasCachedStats = true;
+    });
+  }
+
+  Future<void> _saveGovernorStatsCache() async {
+    await DashboardStatsCache.saveGovernor(
+      GovernorDashboardStatsCache(
+        totalTourists: _totalTourists,
+        totalCheckIns: _totalCheckIns,
+        uniqueTouristsToday: _uniqueTouristsToday,
+        activeSpots: _activeSpots,
+        profileName: _profileName,
+      ),
+    );
+  }
+
+  void _applyGovernorSnapshotStats(GovernorFirestoreSnapshot snapshot) {
+    _tourists = _uniqueRegisteredTourists(
+      ProductionDataFilters.realTourists(snapshot.tourists),
+    );
+    _checkIns = ProductionDataFilters.realCheckIns(snapshot.checkIns);
+    _governorAllSpots = snapshot.touristSpots;
+    _announcements = List<Map<String, dynamic>>.from(snapshot.announcements)
+      ..sort(_sortAnnouncementsForGovernor);
+
+    // Unique registered people (one row per tourist), not visit/check-in counts.
+    _totalTourists = _tourists.length;
+    _totalCheckIns = sumCheckInVisitors(_checkIns);
+
+    final today = DateTime.now();
+    final todayUserIds = <String>{};
+    for (final c in _checkIns) {
+      final d = GovernorFirestoreService.parseCheckInTime(c);
+      if (d == null) continue;
+      if (d.year != today.year ||
+          d.month != today.month ||
+          d.day != today.day) {
+        continue;
+      }
+      final uid = GovernorFirestoreService.checkInUserId(c);
+      if (uid.isNotEmpty) todayUserIds.add(uid);
+    }
+    _uniqueTouristsToday = todayUserIds.length;
+    _activeSpots = _governorAllSpots.length;
+
+    _applyMunicipalityVisitStatsFromCheckIns();
+  }
+
+  /// Visit-based LGU stats from check-ins only (not registration home city).
+  /// Province unique ≠ sum of LGU uniques (multi-city visitors counted once province-wide).
+  void _applyMunicipalityVisitStatsFromCheckIns() {
+    _resetMunicipalityTouristCounts();
+
+    final provinceUsers = <String>{};
+    final byMuniUsers = <String, Set<String>>{
+      for (final m in getMisamisOccidentalMunicipalities())
+        normalizeMunicipalityId(m.id): <String>{},
+    };
+    final byMuniCheckIns = <String, int>{
+      for (final m in getMisamisOccidentalMunicipalities())
+        normalizeMunicipalityId(m.id): 0,
+    };
+    final idToCanonicalName = <String, String>{
+      for (final m in getMisamisOccidentalMunicipalities())
+        normalizeMunicipalityId(m.id): m.name,
+    };
+
+    for (final c in _checkIns) {
+      final id = _checkInMunicipalityId(c);
+      if (id.isEmpty || !byMuniUsers.containsKey(id)) continue;
+
+      byMuniCheckIns[id] =
+          (byMuniCheckIns[id] ?? 0) + checkInVisitorCount(c);
+      final uid = GovernorFirestoreService.checkInUserId(c);
+      if (uid.isNotEmpty) {
+        provinceUsers.add(uid);
+        byMuniUsers[id]!.add(uid);
+      }
+    }
+
+    _provinceUniqueVisitors = provinceUsers.length;
+
+    for (final muni in _allMunicipalities) {
+      final name = muni['name']?.toString() ?? '';
+      var mid = normalizeMunicipalityId(getMunicipalityIdFromName(name));
+      if (mid.isEmpty || !byMuniUsers.containsKey(mid)) {
+        // Fallback: match display name to canonical list.
+        for (final e in idToCanonicalName.entries) {
+          if (e.value.toLowerCase() == name.toLowerCase()) {
+            mid = e.key;
+            break;
+          }
+        }
+      }
+      if (mid.isEmpty || !byMuniUsers.containsKey(mid)) continue;
+
+      final unique = byMuniUsers[mid]!.length;
+      final checks = byMuniCheckIns[mid] ?? 0;
+      muni['id'] = mid;
+      muni['uniqueVisitors'] = unique;
+      muni['checkIns'] = checks;
+      // Kept for dashboard city ranking / legacy reads — means unique visitors.
+      muni['tourists'] = unique;
+    }
   }
 
   Widget _buildSidebarAvatar({required double size}) {
-    final borderColor = Colors.white.withOpacity(0.9);
+    if (_profilePhotoBytes != null) {
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white.withOpacity(0.9), width: 2),
+        ),
+        child: ClipOval(
+          child: Image.memory(_profilePhotoBytes!, fit: BoxFit.cover),
+        ),
+      );
+    }
+
+    // Profile chip only — ATMOS logo stays on the sidebar brand mark.
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        border: Border.all(color: borderColor, width: 2),
+        color: const Color(0xFFFFF7ED),
+        border: Border.all(color: _primaryOrange.withOpacity(0.35), width: 1.5),
       ),
-      child: ClipOval(
-        child: _profilePhotoBytes != null
-            ? Image.memory(_profilePhotoBytes!, fit: BoxFit.cover)
-            : Container(
-                color: const Color(0xFFFFF7ED),
-                child: Center(
-                  child: Text(
-                    _profileName.isNotEmpty
-                        ? _profileName[0].toUpperCase()
-                        : 'G',
-                    style: TextStyle(
-                      color: _primaryOrange,
-                      fontSize: size * 0.5,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
+      child: Icon(
+        Icons.person_rounded,
+        size: size * 0.55,
+        color: _primaryOrange,
       ),
     );
   }
@@ -308,6 +663,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
 
   @override
   void dispose() {
+    _announcementsSubscription?.cancel();
     _animationController.dispose();
     _searchController.dispose();
     super.dispose();
@@ -348,23 +704,39 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     return false;
   }
 
+  /// Canonical Misamis Occidental municipality id from a check-in row.
+  String _checkInMunicipalityId(Map<String, dynamic> c) {
+    final mid = normalizeMunicipalityId(c['municipalityId']?.toString());
+    if (mid.isNotEmpty && isMisamisOccidentalMunicipalityId(mid)) return mid;
+    return normalizeMunicipalityId(
+      getMunicipalityIdFromName(
+        c['municipality']?.toString() ?? c['city']?.toString(),
+      ),
+    );
+  }
+
   void _resetMunicipalityTouristCounts() {
     for (final muni in _allMunicipalities) {
       muni['tourists'] = 0;
+      muni['uniqueVisitors'] = 0;
+      muni['checkIns'] = 0;
     }
+    _provinceUniqueVisitors = 0;
   }
 
   Future<void> _loadData() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+    final isRefresh = !_isBootstrapping;
+    if (isRefresh) {
+      setState(() => _isLoadingDetails = true);
+    }
+    setState(() => _errorMessage = null);
 
     try {
       if (Firebase.apps.isEmpty) {
         setState(() {
           _errorMessage = 'Firebase is not initialized yet.';
-          _isLoading = false;
+          _isBootstrapping = false;
+          _isLoadingDetails = false;
         });
         return;
       }
@@ -374,12 +746,13 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         setState(() {
           _errorMessage =
               'Sign in required to load provincial data from the database.';
-          _isLoading = false;
+          _isBootstrapping = false;
+          _isLoadingDetails = false;
         });
         return;
       }
 
-      await authUser.getIdToken(true);
+      await authUser.getIdToken();
       final email = authUser.email ?? '';
       if (!UserDirectoryService.isProvincialStaffEmail(email)) {
         if (!mounted) return;
@@ -387,7 +760,8 @@ class _GovernorDashboardState extends State<GovernorDashboard>
           _errorMessage =
               'This page is for the provincial governor account only. '
               'Sign in with ${SessionStorage.governorEmail} or use the tourist app.';
-          _isLoading = false;
+          _isBootstrapping = false;
+          _isLoadingDetails = false;
         });
         return;
       }
@@ -409,39 +783,44 @@ class _GovernorDashboardState extends State<GovernorDashboard>
           _errorMessage =
               'Could not verify governor access in Firestore (users/${authUser.uid} '
               'needs role "governor"). Log out, sign in again, or check Firebase rules.';
-          _isLoading = false;
+          _isBootstrapping = false;
+          _isLoadingDetails = false;
         });
         return;
       }
 
-      final snapshot = await GovernorFirestoreService().loadProvincialSnapshot();
+      final service = GovernorFirestoreService();
 
-      _tourists = ProductionDataFilters.realTourists(snapshot.tourists);
-      _checkIns = ProductionDataFilters.realCheckIns(snapshot.checkIns);
-      _governorAllSpots = snapshot.touristSpots;
-      _announcements = snapshot.announcements;
-
-      _totalTourists = _tourists.length;
-      _totalCheckIns = _checkIns.length;
-
-      final today = DateTime.now();
-      final todayUserIds = <String>{};
-      for (final c in _checkIns) {
-        final d = GovernorFirestoreService.parseCheckInTime(c);
-        if (d == null) continue;
-        if (d.year != today.year ||
-            d.month != today.month ||
-            d.day != today.day) {
-          continue;
-        }
-        final uid = GovernorFirestoreService.checkInUserId(c);
-        if (uid.isNotEmpty) todayUserIds.add(uid);
+      // Phase 1: quick stats (spots + tourists, no heavy check-ins)
+      var quickSnapshot = await service.loadProvincialSnapshot(
+        getOptions: const GetOptions(source: Source.cache),
+        includeCheckIns: false,
+      );
+      if (quickSnapshot.tourists.isEmpty &&
+          quickSnapshot.touristSpots.isEmpty) {
+        quickSnapshot = await service.loadProvincialSnapshot(
+          getOptions: const GetOptions(source: Source.server),
+          includeCheckIns: false,
+        );
       }
-      _uniqueTouristsToday = todayUserIds.length;
+      _applyGovernorSnapshotStats(quickSnapshot);
 
-      _activeSpots = _governorAllSpots.length;
+      if (mounted) {
+        setState(() => _isBootstrapping = false);
+        unawaited(_saveGovernorStatsCache());
+      }
 
-      final profile = await UserDirectoryService.getProfileByUid(authUser.uid);
+      // Phase 2: full server snapshot with check-ins (charts / analytics)
+      final fullSnapshot = await service.loadProvincialSnapshot(
+        getOptions: const GetOptions(source: Source.server),
+        includeCheckIns: true,
+      );
+      _applyGovernorSnapshotStats(fullSnapshot);
+
+      final profile = await UserDirectoryService.getProfileByUid(
+        authUser.uid,
+        preferServer: false,
+      );
       if (profile != null) {
         final name = profile.fullName?.trim() ?? '';
         if (name.isNotEmpty) {
@@ -452,64 +831,19 @@ class _GovernorDashboardState extends State<GovernorDashboard>
             : (authUser.email ?? _profileEmail);
       }
 
-      // Calculate tourists per municipality from check-ins (qr_checkins has municipalityId)
-      _resetMunicipalityTouristCounts();
-      final checkInsByCity = <String, int>{};
-      for (var c in _checkIns) {
-        final muniId = c['municipalityId']?.toString() ?? '';
-        if (muniId.isNotEmpty) {
-          checkInsByCity[muniId] = (checkInsByCity[muniId] ?? 0) + 1;
-        }
-      }
-
-      // Also count by tourist registration city
-      for (var tourist in _tourists) {
-        final city = tourist['city']?.toString() ?? '';
-        if (city.isNotEmpty) {
-          // Find matching municipality and update count
-          for (var muni in _allMunicipalities) {
-            if (muni['name'].toString().toLowerCase().contains(
-                  city.toLowerCase(),
-                ) ||
-                city.toLowerCase().contains(
-                  muni['name'].toString().toLowerCase(),
-                )) {
-              muni['tourists'] = (muni['tourists'] as int) + 1;
-            }
-          }
-        }
-      }
-
-      // Update municipality tourist counts from check-ins (by municipalityId)
-      final muniIdToName = <String, String>{};
-      for (final m in getMisamisOccidentalMunicipalities()) {
-        muniIdToName[m.id] = m.name;
-      }
-      for (var entry in checkInsByCity.entries) {
-        final muniName = muniIdToName[entry.key];
-        if (muniName == null) continue;
-        for (var muni in _allMunicipalities) {
-          if (muni['name'].toString().toLowerCase() == muniName.toLowerCase() ||
-              muniName.toLowerCase().contains(
-                muni['name'].toString().toLowerCase(),
-              )) {
-            muni['tourists'] = (muni['tourists'] as int) + entry.value;
-            break;
-          }
-        }
-      }
-
       if (!mounted) return;
       setState(() {
-        _errorMessage = snapshot.loadWarnings.isNotEmpty
-            ? snapshot.loadWarnings.first
+        _errorMessage = fullSnapshot.loadWarnings.isNotEmpty
+            ? fullSnapshot.loadWarnings.first
             : null;
-        _isLoading = false;
+        _isLoadingDetails = false;
       });
-      if (snapshot.loadWarnings.length > 1 && mounted) {
+      unawaited(_saveGovernorStatsCache());
+
+      if (fullSnapshot.loadWarnings.length > 1 && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(snapshot.loadWarnings.join(' ')),
+            content: Text(fullSnapshot.loadWarnings.join(' ')),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -519,8 +853,16 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       if (!mounted) return;
       setState(() {
         _errorMessage = 'Could not load database: $e';
-        _isLoading = false;
+        _isBootstrapping = false;
+        _isLoadingDetails = false;
       });
+    } finally {
+      if (mounted && _isBootstrapping) {
+        setState(() {
+          _isBootstrapping = false;
+          _isLoadingDetails = false;
+        });
+      }
     }
   }
 
@@ -567,29 +909,41 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   Widget _buildDrawer() {
-    final bottomInset = MediaQuery.paddingOf(context).bottom;
-    return Drawer(
-      backgroundColor: _sidebarBg,
-      child: Column(
-        children: [
-          const SizedBox(height: 48),
-          _buildLogo(expanded: true),
-          const SizedBox(height: 24),
-          Expanded(child: _buildNavigation(expanded: true)),
-          const SizedBox(height: 10),
-          _buildLogoutButton(expanded: true),
-          SizedBox(height: 16 + bottomInset),
-        ],
-      ),
+    return GovernorSidebar(
+      asDrawer: true,
+      expanded: true,
+      selectedIndex:
+          _selectedIndex < _navItems.length ? _selectedIndex : -1,
+      items: _governorSidebarItems,
+      onSelect: (index) {
+        setState(() => _selectedIndex = index);
+        Navigator.of(context).maybePop();
+      },
+      onToggle: () => Navigator.of(context).maybePop(),
+      onLogout: _logout,
+      showBrandLogo: true,
+      profileName:
+          _profileName.trim().isNotEmpty ? _profileName.trim() : 'Governor',
+      avatar: _buildSidebarAvatar(size: 36),
     );
   }
+
+  List<GovernorNavItemData> get _governorSidebarItems => [
+        for (var i = 0; i < _navItems.length; i++)
+          GovernorNavItemData(
+            label: _navItems[i].label,
+            icon: _navItems[i].icon,
+            // Event alerts live on the header notification bell only.
+            badgeCount: 0,
+          ),
+      ];
 
   Widget _buildBottomNav() {
     const Color bottomNavSelectedBg = Color(0xFFFFF7ED);
     const Color bottomNavSelectedFg = Color(0xFFC2410C);
-    const Color bottomNavUnselected = Color(0xE6FFFFFF);
+    const Color bottomNavUnselected = Color(0xFF64748B);
     return Material(
-      color: _sidebarBg,
+      color: GovernorDashboardTokens.card,
       elevation: 8,
       shadowColor: Colors.black26,
       child: SafeArea(
@@ -607,7 +961,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: List.generate(_navItems.length.clamp(0, 5), (
+                    children: List.generate(_bottomNavItemCount, (
                       index,
                     ) {
                       final item = _navItems[index];
@@ -619,8 +973,6 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                           child: InkWell(
                             onTap: () => setState(() => _selectedIndex = index),
                             borderRadius: BorderRadius.circular(18),
-                            splashColor: Colors.white24,
-                            highlightColor: Colors.white12,
                             child: Container(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 10,
@@ -631,14 +983,11 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                                     ? bottomNavSelectedBg
                                     : Colors.transparent,
                                 borderRadius: BorderRadius.circular(18),
-                                boxShadow: isSelected
-                                    ? [
-                                        BoxShadow(
-                                          color: Colors.black.withOpacity(0.12),
-                                          blurRadius: 8,
-                                          offset: const Offset(0, 2),
-                                        ),
-                                      ]
+                                border: isSelected
+                                    ? Border.all(
+                                        color: bottomNavSelectedFg
+                                            .withValues(alpha: 0.2),
+                                      )
                                     : null,
                               ),
                               child: SizedBox(
@@ -646,12 +995,17 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(
-                                      item.icon,
-                                      color: isSelected
-                                          ? bottomNavSelectedFg
-                                          : bottomNavUnselected,
-                                      size: 24,
+                                    Stack(
+                                      clipBehavior: Clip.none,
+                                      children: [
+                                        Icon(
+                                          item.icon,
+                                          color: isSelected
+                                              ? bottomNavSelectedFg
+                                              : bottomNavUnselected,
+                                          size: 22,
+                                        ),
+                                      ],
                                     ),
                                     const SizedBox(height: 6),
                                     Text(
@@ -690,57 +1044,45 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   Widget _buildSidebar() {
-    final width = _isSidebarExpanded ? 260.0 : 80.0;
-    final bottomInset = MediaQuery.paddingOf(context).bottom;
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 250),
-      width: width,
-      color: _sidebarBg,
-      child: Column(
-        children: [
-          const SizedBox(height: 16),
-          _buildSidebarToggle(),
-          const SizedBox(height: 8),
-          _buildLogo(expanded: _isSidebarExpanded),
-          const SizedBox(height: 24),
-          Expanded(child: _buildNavigation(expanded: _isSidebarExpanded)),
-          const SizedBox(height: 10),
-          _buildLogoutButton(expanded: _isSidebarExpanded),
-          SizedBox(height: 16 + bottomInset),
-        ],
+    return GovernorSidebar(
+      expanded: _isSidebarExpanded,
+      selectedIndex:
+          _selectedIndex < _navItems.length ? _selectedIndex : -1,
+      items: _governorSidebarItems,
+      onSelect: (index) => setState(() => _selectedIndex = index),
+      onToggle: _toggleSidebar,
+      onLogout: _logout,
+      showBrandLogo: true,
+      profileName:
+          _profileName.trim().isNotEmpty ? _profileName.trim() : 'Governor',
+      avatar: _buildSidebarAvatar(size: 36),
+    );
+  }
+
+  Widget _buildSidebarCollapsedToggle() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 14, 12, 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [_buildSidebarToggleButton(expanded: false)],
       ),
     );
   }
 
-  Widget _buildSidebarToggle() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Align(
-        alignment: _isSidebarExpanded
-            ? Alignment.centerRight
-            : Alignment.center,
-        child: Tooltip(
-          message: _isSidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar',
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: _toggleSidebar,
-              borderRadius: BorderRadius.circular(10),
-              child: Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.white.withOpacity(0.1)),
-                ),
-                child: Icon(
-                  _isSidebarExpanded
-                      ? Icons.menu_open_rounded
-                      : Icons.menu_rounded,
-                  color: Colors.white,
-                  size: 20,
-                ),
-              ),
+  Widget _buildSidebarToggleButton({required bool expanded}) {
+    return Tooltip(
+      message: expanded ? 'Collapse sidebar' : 'Expand sidebar',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _toggleSidebar,
+          borderRadius: BorderRadius.circular(14),
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Icon(
+              expanded ? Icons.close_rounded : Icons.menu_rounded,
+              color: Colors.white,
+              size: 20,
             ),
           ),
         ),
@@ -748,77 +1090,51 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
-  Widget _buildLogo({required bool expanded}) {
-    final logoSize = expanded ? 46.0 : 32.0;
+  Widget _buildSidebarProfileStrip({bool showCollapseButton = false}) {
+    final displayName =
+        _profileName.trim().isNotEmpty ? _profileName.trim() : 'Governor';
+
     return Padding(
-      padding: EdgeInsets.symmetric(horizontal: expanded ? 16 : 12),
-      child: Container(
-        padding: EdgeInsets.all(expanded ? 12 : 8),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.06),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: _primaryOrange.withOpacity(0.9), width: 1),
-        ),
-        child: expanded
-            ? Row(
-                mainAxisAlignment: MainAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: logoSize,
-                    height: logoSize,
-                    child: TransparentLogo(
-                      width: logoSize,
-                      height: logoSize,
-                      fit: BoxFit.cover,
-                      alignment: Alignment.topCenter,
-                      errorIcon: Icons.public,
-                      errorIconSize: 26,
-                      errorIconColor: _primaryOrange,
-                    ),
+      padding: EdgeInsets.fromLTRB(16, _isMobile ? 10 : 14, 8, 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          _buildSidebarAvatar(size: _isMobile ? 36 : 40),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  displayName,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: _isMobile ? 13 : 14,
+                    fontWeight: FontWeight.w700,
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'ATMOS-TRS',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                        Text(
-                          'Governor Portal',
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.8),
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  _buildSidebarAvatar(size: 34),
-                ],
-              )
-            : Center(
-                child: SizedBox(
-                  width: logoSize,
-                  height: logoSize,
-                  child: TransparentLogo(
-                    width: logoSize,
-                    height: logoSize,
-                    fit: BoxFit.cover,
-                    alignment: Alignment.topCenter,
-                    errorIcon: Icons.public,
-                    errorIconSize: 22,
-                    errorIconColor: _primaryOrange,
-                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
+                const SizedBox(height: 2),
+                Text(
+                  'Misamis Occidental',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.82),
+                    fontSize: _isMobile ? 10 : 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          if (showCollapseButton) ...[
+            const SizedBox(width: 4),
+            _buildSidebarToggleButton(expanded: true),
+          ],
+        ],
       ),
     );
   }
@@ -881,34 +1197,41 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                     ? MainAxisAlignment.start
                     : MainAxisAlignment.center,
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? _primaryOrange.withOpacity(0.12)
-                          : Colors.transparent,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(
-                      item.icon,
-                      color: isSelected
-                          ? _primaryOrange
-                          : Colors.white.withOpacity(0.7),
-                      size: 22,
-                    ),
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? _primaryOrange.withOpacity(0.12)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(
+                          item.icon,
+                          color: isSelected
+                              ? _primaryOrange
+                              : Colors.white.withOpacity(0.7),
+                          size: 22,
+                        ),
+                      ),
+                    ],
                   ),
                   if (expanded) ...[
                     const SizedBox(width: 14),
-                    Text(
-                      item.label,
-                      style: TextStyle(
-                        color: isSelected
-                            ? _primaryOrange
-                            : Colors.white.withOpacity(0.8),
-                        fontSize: 15,
-                        fontWeight: isSelected
-                            ? FontWeight.w600
-                            : FontWeight.w500,
+                    Expanded(
+                      child: Text(
+                        item.label,
+                        style: TextStyle(
+                          color: isSelected
+                              ? _primaryOrange
+                              : Colors.white.withOpacity(0.8),
+                          fontSize: 15,
+                          fontWeight: isSelected
+                              ? FontWeight.w600
+                              : FontWeight.w500,
+                        ),
                       ),
                     ),
                   ],
@@ -954,14 +1277,20 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       ),
     );
     if (confirmed != true) return;
+    UserDirectoryService.clearStaffAccessCache();
     await SessionStorage.clearSession();
+    AuthConfig.currentUserUid = null;
+    try {
+      await FirebaseAuth.instance.signOut();
+    } catch (_) {}
     if (!mounted) return;
-    Navigator.pushReplacementNamed(context, '/login');
+    navigateAfterLogout(context);
   }
 
   Widget _buildMainContent() {
-    if (_isLoading) {
-      return DashboardContentSkeleton(accent: _primaryOrange);
+    // Events opens from the notification bell only (not in the sidebar).
+    if (_selectedIndex == _eventsIndex) {
+      return _buildAnnouncementsContent();
     }
 
     if (_errorMessage != null) {
@@ -983,24 +1312,32 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       );
     }
 
-    switch (_selectedIndex) {
-      case 0:
-        return _buildDashboardContent();
-      case 1:
-        return _buildTouristsContent();
-      case 2:
-        return _buildGovernorSpotQRCodesContent();
-      case 3:
-        return _buildMunicipalitiesContent();
-      case 4:
-        return _buildAnalyticsContent();
-      case 5:
-        return _buildAnnouncementsContent();
-      case 6:
-        return _buildSettingsContent();
-      default:
-        return _buildDashboardContent();
+    if (_isBootstrapping && !_hasCachedStats) {
+      return DashboardContentSkeleton(accent: _primaryOrange);
     }
+
+    final content = switch (_selectedIndex) {
+      0 => _buildDashboardContent(),
+      1 => _buildTouristsContent(),
+      _municipalitiesIndex => _buildMunicipalitiesContent(),
+      _analyticsIndex => _buildAnalyticsContent(),
+      _settingsIndex => _buildSettingsContent(),
+      _ => _buildDashboardContent(),
+    };
+
+    if (_selectedIndex == 0 && (!_isBootstrapping || _hasCachedStats)) {
+      return DashboardFadeIn(child: content);
+    }
+    return content;
+  }
+
+  /// Close the notifications dialog (if any), then open the full Events page.
+  void _openEventsPage({bool markSeen = true}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _selectedIndex = _eventsIndex);
+      if (markSeen) unawaited(_markAllGovernorEventsSeen());
+    });
   }
 
   Widget _buildHeader(
@@ -1009,71 +1346,45 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     List<Widget>? actions,
     bool compact = false,
   }) {
-    return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: _isMobile ? 16 : 24,
-        vertical: compact ? 10 : 16,
-      ),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [_accentOrange, _primaryOrange],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(24)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 18,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: compact ? 18 : (_isMobile ? 18 : 22),
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                if (subtitle != null)
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(0.8),
-                      fontSize: compact ? 11 : (_isMobile ? 12 : 14),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          if (actions != null) ...actions,
-          if (_isMobile) ...[_buildMobileHeaderProfileAction()],
-          if (!_isMobile) ...[
-            _buildHeaderAction(
-              Icons.notifications_outlined,
-              badge: _unreadNotificationCount > 0
-                  ? '$_unreadNotificationCount'
-                  : null,
-              onPressed: _showNotificationsPanel,
-            ),
-            const SizedBox(width: 12),
-            _buildHeaderProfile(),
-          ],
-        ],
-      ),
+    final greetingName =
+        _profileName.trim().isNotEmpty ? _profileName.trim() : 'Governor';
+    final isDashboard = _selectedIndex == 0;
+    final headerTitle = isDashboard ? greetingName : title;
+    final headerGreeting = isDashboard
+        ? '${GovernorDashboardTokens.greetingEmoji()} ${GovernorDashboardTokens.greetingForNow()},'
+        : null;
+    final headerSubtitle = isDashboard
+        ? (subtitle ??
+            'Misamis Occidental - Provincial Tourism Overview')
+        : subtitle;
+
+    return GovernorGlassHeader(
+      greeting: headerGreeting,
+      title: headerTitle,
+      subtitle: headerSubtitle,
+      compact: compact,
+      showConceptMeta: isDashboard,
+      searchController: _searchController,
+      notificationCount: _unreadNotificationCount,
+      onNotifications: _showNotificationsPanel,
+      leading: _isMobile
+          ? Builder(
+              builder: (ctx) => IconButton(
+                tooltip: 'Menu',
+                onPressed: () => Scaffold.of(ctx).openDrawer(),
+                icon: const Icon(Icons.menu_rounded, size: 20),
+                color: Colors.white,
+              ),
+            )
+          : null,
+      profile: _isMobile
+          ? _buildMobileHeaderProfileAction()
+          : _buildHeaderProfile(),
     );
   }
 
   int get _unreadNotificationCount {
-    final count = _announcements.length;
+    final count = _pendingLguEventsCount;
     return count > 99 ? 99 : count;
   }
 
@@ -1081,161 +1392,271 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     showDialog(
       context: context,
       barrierColor: Colors.black54,
-      builder: (context) => Center(
-        child: Material(
-          color: Colors.transparent,
-          child: Container(
-            width: MediaQuery.of(context).size.width > 600
-                ? 440
-                : MediaQuery.of(context).size.width * 0.9,
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * 0.75,
-            ),
-            decoration: BoxDecoration(
-              color: _cardBg,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
-                  blurRadius: 24,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Header
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 20, 12, 16),
-                  child: Row(
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final feed = _notificationFeedAnnouncements;
+            final unread = _pendingLguEventsCount;
+
+            Future<void> deleteOne(String id) async {
+              await _dismissGovernorNotification(id);
+              if (mounted) setDialogState(() {});
+            }
+
+            Future<void> markOneRead(String id) async {
+              await _markGovernorEventRead(id);
+              if (mounted) setDialogState(() {});
+            }
+
+            Future<void> markAllRead() async {
+              await _markAllGovernorEventsSeen();
+              if (mounted) setDialogState(() {});
+            }
+
+            return Center(
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  width: MediaQuery.of(context).size.width > 600
+                      ? 440
+                      : MediaQuery.of(context).size.width * 0.9,
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(context).size.height * 0.75,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _cardBg,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.2),
+                        blurRadius: 24,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Text(
-                        'Notifications',
-                        style: TextStyle(
-                          color: _textDark,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 20, 8, 16),
+                        child: Row(
+                          children: [
+                            const Expanded(
+                              child: Text(
+                                'Notifications',
+                                style: TextStyle(
+                                  color: _textDark,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            if (unread > 0)
+                              Container(
+                                margin: const EdgeInsets.only(right: 6),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFEF4444),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  '$unread',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            if (unread > 0)
+                              TextButton(
+                                onPressed: () => unawaited(markAllRead()),
+                                style: TextButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                  ),
+                                  minimumSize: Size.zero,
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                ),
+                                child: const Text(
+                                  'Mark all as read',
+                                  style: TextStyle(
+                                    color: _primaryOrange,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                            IconButton(
+                              icon: const Icon(
+                                Icons.close_rounded,
+                                color: _textMuted,
+                                size: 22,
+                              ),
+                              onPressed: () =>
+                                  Navigator.pop(dialogContext),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(
+                                minWidth: 36,
+                                minHeight: 36,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      const Spacer(),
-                      TextButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          setState(() => _selectedIndex = 5);
-                        },
-                        style: TextButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          minimumSize: Size.zero,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        child: const Text(
-                          'View all',
-                          style: TextStyle(
-                            color: _primaryOrange,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      IconButton(
-                        icon: const Icon(
-                          Icons.close_rounded,
-                          color: _textMuted,
-                          size: 22,
-                        ),
-                        onPressed: () => Navigator.pop(context),
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(
-                          minWidth: 36,
-                          minHeight: 36,
-                        ),
+                      const Divider(height: 1),
+                      Flexible(
+                        child: feed.isEmpty
+                            ? const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 48),
+                                child: Center(
+                                  child: Text(
+                                    'No notifications',
+                                    style: TextStyle(
+                                      color: _textMuted,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ),
+                              )
+                            : ListView.separated(
+                                shrinkWrap: true,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 8),
+                                itemCount: feed.length,
+                                separatorBuilder: (_, __) => Divider(
+                                  height: 1,
+                                  color: Colors.grey.shade200,
+                                ),
+                                itemBuilder: (context, i) {
+                                  final a = feed[i];
+                                  final id = a['id']?.toString() ?? '';
+                                  final type =
+                                      a['type']?.toString() ?? 'General';
+                                  final mun =
+                                      LguEventService.sourceMunicipalityLabel(
+                                    a,
+                                  );
+                                  final isUnread = _isGovernorEventUnread(a);
+                                  IconData icon = Icons.campaign_rounded;
+                                  if (type == 'Promo') {
+                                    icon = Icons.local_offer_rounded;
+                                  } else if (type == 'Event') {
+                                    icon = Icons.event_rounded;
+                                  } else if (type == 'Alert') {
+                                    icon = Icons.warning_amber_rounded;
+                                  }
+                                  return ListTile(
+                                    contentPadding:
+                                        const EdgeInsets.fromLTRB(
+                                      20,
+                                      4,
+                                      8,
+                                      4,
+                                    ),
+                                    leading: CircleAvatar(
+                                      radius: 20,
+                                      backgroundColor:
+                                          _primaryOrange.withOpacity(0.15),
+                                      child: Icon(
+                                        icon,
+                                        color: _primaryOrange,
+                                        size: 20,
+                                      ),
+                                    ),
+                                    title: Text(
+                                      a['title']?.toString() ?? 'Event',
+                                      style: TextStyle(
+                                        color: _textDark,
+                                        fontWeight: isUnread
+                                            ? FontWeight.w700
+                                            : FontWeight.w600,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                    subtitle: Padding(
+                                      padding: const EdgeInsets.only(top: 4),
+                                      child: Text(
+                                        [
+                                          if (mun.isNotEmpty) 'From $mun',
+                                          'Live',
+                                          a['content']
+                                                  ?.toString()
+                                                  .replaceAll('\n', ' ')
+                                                  .trim() ??
+                                              '',
+                                        ]
+                                            .where((s) => s.isNotEmpty)
+                                            .join(' · '),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: _textMuted,
+                                          fontSize: 12,
+                                          height: 1.35,
+                                        ),
+                                      ),
+                                    ),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (isUnread)
+                                          Container(
+                                            margin: const EdgeInsets.only(
+                                              right: 4,
+                                            ),
+                                            padding:
+                                                const EdgeInsets.symmetric(
+                                              horizontal: 8,
+                                              vertical: 4,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFFFFF7ED),
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                            ),
+                                            child: const Text(
+                                              'New',
+                                              style: TextStyle(
+                                                color: Color(0xFFD97706),
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ),
+                                        IconButton(
+                                          tooltip: 'Delete notification',
+                                          icon: const Icon(
+                                            Icons.delete_outline_rounded,
+                                            color: Color(0xFFEF4444),
+                                            size: 22,
+                                          ),
+                                          onPressed: id.isEmpty
+                                              ? null
+                                              : () =>
+                                                  unawaited(deleteOne(id)),
+                                        ),
+                                      ],
+                                    ),
+                                    onTap: id.isEmpty || !isUnread
+                                        ? null
+                                        : () => unawaited(markOneRead(id)),
+                                  );
+                                },
+                              ),
                       ),
                     ],
                   ),
                 ),
-                const Divider(height: 1),
-                // List
-                Flexible(
-                  child: _announcements.isEmpty
-                      ? const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 48),
-                          child: Center(
-                            child: Text(
-                              'No notifications yet.',
-                              style: TextStyle(color: _textMuted, fontSize: 14),
-                            ),
-                          ),
-                        )
-                      : ListView.separated(
-                          shrinkWrap: true,
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          itemCount: _announcements.length,
-                          separatorBuilder: (_, __) =>
-                              Divider(height: 1, color: Colors.grey.shade200),
-                          itemBuilder: (context, i) {
-                            final a = _announcements[i];
-                            final type = a['type']?.toString() ?? 'General';
-                            IconData icon = Icons.campaign_rounded;
-                            if (type == 'Promo')
-                              icon = Icons.local_offer_rounded;
-                            else if (type == 'Event')
-                              icon = Icons.event_rounded;
-                            else if (type == 'Alert')
-                              icon = Icons.warning_amber_rounded;
-                            return ListTile(
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 20,
-                                vertical: 4,
-                              ),
-                              leading: CircleAvatar(
-                                radius: 20,
-                                backgroundColor: _primaryOrange.withOpacity(
-                                  0.15,
-                                ),
-                                child: Icon(
-                                  icon,
-                                  color: _primaryOrange,
-                                  size: 20,
-                                ),
-                              ),
-                              title: Text(
-                                a['title']?.toString() ?? 'Announcement',
-                                style: const TextStyle(
-                                  color: _textDark,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14,
-                                ),
-                              ),
-                              subtitle: Padding(
-                                padding: const EdgeInsets.only(top: 4),
-                                child: Text(
-                                  a['content']
-                                          ?.toString()
-                                          .replaceAll('\n', ' ')
-                                          .trim() ??
-                                      '',
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: _textMuted,
-                                    fontSize: 12,
-                                    height: 1.35,
-                                  ),
-                                ),
-                              ),
-                              onTap: () {
-                                Navigator.pop(context);
-                                setState(() => _selectedIndex = 5);
-                              },
-                            );
-                          },
-                        ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -1276,7 +1697,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                 child: Container(
                   padding: const EdgeInsets.all(4),
                   decoration: const BoxDecoration(
-                    color: _primaryOrange,
+                    color: Color(0xFFEF4444),
                     shape: BoxShape.circle,
                   ),
                   child: Text(
@@ -1300,23 +1721,14 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     return Tooltip(
       message: _profileName,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(
-            color: _primaryOrange.withOpacity(0.25),
-            width: 1.5,
-          ),
+          borderRadius: BorderRadius.circular(18),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.06),
+              color: Colors.black.withValues(alpha: 0.06),
               blurRadius: 10,
-              offset: const Offset(0, 2),
-            ),
-            BoxShadow(
-              color: _primaryOrange.withOpacity(0.08),
-              blurRadius: 12,
               offset: const Offset(0, 2),
             ),
           ],
@@ -1324,26 +1736,26 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildSidebarAvatar(size: 36),
-            const SizedBox(width: 12),
+            _buildSidebarAvatar(size: 34),
+            const SizedBox(width: 10),
             Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _profileName,
+                  _profileName.trim().isNotEmpty ? _profileName.trim() : 'Governor',
                   style: const TextStyle(
                     color: _textDark,
-                    fontSize: 14,
+                    fontSize: 13.5,
                     fontWeight: FontWeight.w700,
-                    letterSpacing: 0.2,
+                    letterSpacing: 0.1,
                   ),
                   overflow: TextOverflow.ellipsis,
                   maxLines: 1,
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 1),
                 Text(
-                  'Governor',
+                  'Misamis Occidental',
                   style: TextStyle(
                     color: _textMuted,
                     fontSize: 11,
@@ -1351,6 +1763,12 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                   ),
                 ),
               ],
+            ),
+            const SizedBox(width: 4),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 20,
+              color: _textMuted,
             ),
           ],
         ),
@@ -1432,7 +1850,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                 title: const Text('Settings'),
                 onTap: () {
                   Navigator.pop(ctx);
-                  setState(() => _selectedIndex = 6);
+                  setState(() => _selectedIndex = _settingsIndex);
                 },
               ),
               ListTile(
@@ -1457,15 +1875,13 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   Widget _buildDashboardContent() {
     return RefreshIndicator(
       onRefresh: _loadData,
-      color: _primaryOrange,
+      color: _accentOrange,
       child: _buildDashboardCanvas(
         child: Column(
           children: [
             _buildHeader(
               'Welcome back, Governor',
-              subtitle: _dashboardOnePage
-                  ? 'Misamis Occidental · provincial tourism overview'
-                  : 'Here\'s what\'s happening in Misamis Occidental today',
+              subtitle: 'Misamis Occidental · Provincial Tourism Overview',
               compact: _dashboardOnePage,
             ),
             Expanded(
@@ -1475,13 +1891,34 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                       ? SizedBox(
                           height: viewport.maxHeight,
                           child: Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 _buildStatsGrid(),
-                                const SizedBox(height: 10),
-                                Expanded(child: _buildDashboardOnePageCharts()),
+                                const SizedBox(height: 12),
+                                GovernorQuickActions(
+                                  onAddMunicipality: () => setState(
+                                    () =>
+                                        _selectedIndex = _municipalitiesIndex,
+                                  ),
+                                  onExportReport: () => setState(
+                                    () => _selectedIndex = _analyticsIndex,
+                                  ),
+                                  onViewAnalytics: () => setState(
+                                    () => _selectedIndex = _analyticsIndex,
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                Expanded(
+                                  child: _isLoadingDetails
+                                      ? const DashboardChartsSkeleton(
+                                          height: double.infinity,
+                                        )
+                                      : DashboardFadeIn(
+                                          child: _buildDashboardOnePageCharts(),
+                                        ),
+                                ),
                               ],
                             ),
                           ),
@@ -1493,10 +1930,37 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               _buildStatsGrid(),
+                              const SizedBox(height: 16),
+                              GovernorQuickActions(
+                                onAddMunicipality: () => setState(
+                                  () => _selectedIndex = _municipalitiesIndex,
+                                ),
+                                onExportReport: () => setState(
+                                  () => _selectedIndex = _analyticsIndex,
+                                ),
+                                onViewAnalytics: () => setState(
+                                  () => _selectedIndex = _analyticsIndex,
+                                ),
+                              ),
                               const SizedBox(height: 20),
-                              _buildChartsSection(),
-                              const SizedBox(height: 20),
-                              _buildVisitorDemographicsSection(),
+                              if (_isLoadingDetails) ...[
+                                const DashboardChartsSkeleton(height: 220),
+                                const SizedBox(height: 20),
+                                const ShimmerScope(
+                                  child: SkeletonListTiles(count: 2),
+                                ),
+                              ] else
+                                DashboardFadeIn(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      _buildChartsSection(),
+                                      const SizedBox(height: 16),
+                                      _buildVisitorDemographicsSection(),
+                                    ],
+                                  ),
+                                ),
                             ],
                           ),
                         );
@@ -1529,22 +1993,22 @@ class _GovernorDashboardState extends State<GovernorDashboard>
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Expanded(flex: 3, child: _buildTouristArrivalsChart(dense: true)),
-              const SizedBox(width: 10),
+              const SizedBox(width: 12),
               Expanded(flex: 2, child: _buildTopCategoriesCard(dense: true)),
             ],
           ),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 12),
         Expanded(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Expanded(child: _buildGenderPieChart(dense: true)),
-              const SizedBox(width: 10),
+              const SizedBox(width: 12),
               Expanded(child: _buildAgeRangeBarChart(dense: true)),
-              const SizedBox(width: 10),
+              const SizedBox(width: 12),
               Expanded(child: _buildLocalForeignPieChart(dense: true)),
-              const SizedBox(width: 10),
+              const SizedBox(width: 12),
               Expanded(child: _buildCityRankingBarChart(dense: true)),
             ],
           ),
@@ -1554,61 +2018,158 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   Widget _buildStatsGrid() {
+    if (_isBootstrapping && !_hasCachedStats) {
+      if (_dashboardOnePage) {
+        return const SizedBox(
+          height: 96,
+          child: ShimmerScope(child: SkeletonStatCardsRow(count: 4)),
+        );
+      }
+      final crossCount = _gridCrossAxisCount;
+      if (crossCount == 2) {
+        return const ShimmerScope(
+          child: Column(
+            children: [
+              SkeletonStatCardsRow(count: 2),
+              SizedBox(height: 8),
+              SkeletonStatCardsRow(count: 2),
+            ],
+          ),
+        );
+      }
+      return const ShimmerScope(child: SkeletonStatCardsRow(count: 4));
+    }
+
     final checkInTrend = _checkInsTrendText;
-    final stats = [
+    final touristSpark = _statSparklineValues(
       _StatCard(
-        title: 'Total Tourists',
+        title: 'Registered Tourists',
         value: _formatNumber(_totalTourists),
         icon: Icons.people_alt_rounded,
-        color: _kpiGreen,
+        color: _kpiOrange,
       ),
+    );
+    final todaySpark = _statSparklineValues(
       _StatCard(
         title: 'Tourists Today',
         value: _formatNumber(_uniqueTouristsToday),
         icon: Icons.qr_code_scanner_rounded,
-        color: _kpiOrange,
+        color: _kpiPeach,
       ),
+    );
+    final checkInSpark = _statSparklineValues(
       _StatCard(
         title: 'Total Check-ins',
         value: _formatNumber(_totalCheckIns),
-        change: checkInTrend.text,
-        isPositive: checkInTrend.isPositive,
         icon: Icons.touch_app_rounded,
         color: _kpiBlue,
       ),
+    );
+    final spotsSpark = _statSparklineValues(
       _StatCard(
         title: 'Active Spots',
         value: '$_activeSpots',
         icon: Icons.location_on_rounded,
         color: _kpiPurple,
       ),
+    );
+
+    String growthFromSpark(List<double> values) {
+      if (values.length < 2) return '—';
+      final first = values.first;
+      final last = values.last;
+      if (first <= 0) return last > 0 ? '100%' : '0%';
+      final pct = ((last - first) / first) * 100;
+      if (pct.abs() < 0.05) return '0%';
+      return '${pct.abs().toStringAsFixed(0)}%';
+    }
+
+    bool positiveFromSpark(List<double> values) {
+      if (values.length < 2) return true;
+      return values.last >= values.first;
+    }
+
+    String stripTrendSign(String text) {
+      return text.replaceFirst(RegExp(r'^[+\-]'), '');
+    }
+
+    final kpiCards = [
+      GovernorKpiCard(
+        title: 'Registered Tourists',
+        value: _formatNumber(_totalTourists),
+        icon: Icons.people_alt_rounded,
+        accent: _kpiOrange,
+        changeText: growthFromSpark(touristSpark),
+        isPositive: positiveFromSpark(touristSpark),
+        trendHint: 'vs last month',
+        sparkline: touristSpark,
+        compact: _dashboardOnePage,
+      ),
+      GovernorKpiCard(
+        title: 'Tourists Today',
+        value: _formatNumber(_uniqueTouristsToday),
+        icon: Icons.qr_code_scanner_rounded,
+        accent: _kpiPeach,
+        changeText: growthFromSpark(todaySpark),
+        isPositive: positiveFromSpark(todaySpark),
+        trendHint: 'vs yesterday',
+        sparkline: todaySpark,
+        compact: _dashboardOnePage,
+      ),
+      GovernorKpiCard(
+        title: 'Total Check-ins',
+        value: _formatNumber(_totalCheckIns),
+        icon: Icons.touch_app_rounded,
+        accent: _kpiBlue,
+        changeText: stripTrendSign(checkInTrend.text),
+        isPositive: checkInTrend.isPositive,
+        trendHint: 'vs last week',
+        sparkline: checkInSpark,
+        compact: _dashboardOnePage,
+      ),
+      GovernorKpiCard(
+        title: 'Active Spots',
+        value: '$_activeSpots',
+        icon: Icons.location_on_rounded,
+        accent: _kpiPurple,
+        changeText: growthFromSpark(spotsSpark),
+        isPositive: positiveFromSpark(spotsSpark),
+        trendHint: 'vs last month',
+        sparkline: spotsSpark,
+        compact: _dashboardOnePage,
+      ),
     ];
 
     if (_dashboardOnePage) {
-      return SizedBox(
-        height: 96,
-        child: Row(
-          children: [
-            for (var i = 0; i < stats.length; i++) ...[
-              if (i > 0) const SizedBox(width: 10),
-              Expanded(child: _buildStatCard(stats[i], compact: true)),
+      return DashboardFadeIn(
+        child: SizedBox(
+          height: 108,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < kpiCards.length; i++) ...[
+                if (i > 0) const SizedBox(width: 12),
+                Expanded(child: kpiCards[i]),
+              ],
             ],
-          ],
+          ),
         ),
       );
     }
 
-    return GridView.builder(
+    return DashboardFadeIn(
+      child: GridView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: _gridCrossAxisCount,
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,
-        childAspectRatio: _isMobile ? 1.35 : 1.55,
+        childAspectRatio: _isMobile ? 2.2 : 2.6,
       ),
-      itemCount: stats.length,
-      itemBuilder: (context, index) => _buildStatCard(stats[index]),
+      itemCount: kpiCards.length,
+      itemBuilder: (context, index) => kpiCards[index],
+    ),
     );
   }
 
@@ -2184,42 +2745,29 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   Widget _buildGenderPieChart({bool dense = false}) {
     final counts = _genderCounts;
     final total = counts.values.fold<int>(0, (a, b) => a + b);
-    final segments = _segmentsFromCounts(counts, {
-      'Male': _genderMaleColor,
-      'Female': _genderFemaleColor,
-      'Others': _genderOtherColor,
-    });
-    final chart = _buildDemographicsChartShell(
+    final chart = GovernorChartCard(
       dense: dense,
-      accent: _genderMaleColor,
       title: 'Gender',
-      icon: Icons.wc_rounded,
-      child: _buildDonutChartContent(
+      icon: Icons.people_alt_rounded,
+      child: GovernorDonutChart(
         dense: dense,
-        segments: segments,
-        total: total,
+        centerLabel: total > 0 ? '$total' : null,
         emptyMessage: 'No gender data yet',
-        legendRows: [
-          _buildDemographicsLegendRow(
-            'Male',
-            _genderMaleColor,
-            counts['Male'] ?? 0,
-            total,
-            dense: dense,
+        segments: [
+          GovernorDonutSegment(
+            label: 'Male',
+            value: (counts['Male'] ?? 0).toDouble(),
+            color: GovernorDashboardTokens.genderMale,
           ),
-          _buildDemographicsLegendRow(
-            'Female',
-            _genderFemaleColor,
-            counts['Female'] ?? 0,
-            total,
-            dense: dense,
+          GovernorDonutSegment(
+            label: 'Female',
+            value: (counts['Female'] ?? 0).toDouble(),
+            color: GovernorDashboardTokens.genderFemale,
           ),
-          _buildDemographicsLegendRow(
-            'Others',
-            _genderOtherColor,
-            counts['Others'] ?? 0,
-            total,
-            dense: dense,
+          GovernorDonutSegment(
+            label: 'Others',
+            value: (counts['Others'] ?? 0).toDouble(),
+            color: GovernorDashboardTokens.genderOther,
           ),
         ],
       ),
@@ -2231,34 +2779,24 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   Widget _buildLocalForeignPieChart({bool dense = false}) {
     final counts = _localForeignCounts;
     final total = counts.values.fold<int>(0, (a, b) => a + b);
-    final segments = _segmentsFromCounts(counts, {
-      'Local': _localVisitorColor,
-      'Foreign': _foreignVisitorColor,
-    });
-    final chart = _buildDemographicsChartShell(
+    final chart = GovernorChartCard(
       dense: dense,
-      accent: _foreignVisitorColor,
       title: 'Local vs Foreign',
       icon: Icons.public_rounded,
-      child: _buildDonutChartContent(
+      child: GovernorDonutChart(
         dense: dense,
-        segments: segments,
-        total: total,
+        centerLabel: total > 0 ? '$total' : null,
         emptyMessage: 'No local/foreign data yet',
-        legendRows: [
-          _buildDemographicsLegendRow(
-            'Local',
-            _localVisitorColor,
-            counts['Local'] ?? 0,
-            total,
-            dense: dense,
+        segments: [
+          GovernorDonutSegment(
+            label: 'Local',
+            value: (counts['Local'] ?? 0).toDouble(),
+            color: GovernorDashboardTokens.localVisitor,
           ),
-          _buildDemographicsLegendRow(
-            'Foreign',
-            _foreignVisitorColor,
-            counts['Foreign'] ?? 0,
-            total,
-            dense: dense,
+          GovernorDonutSegment(
+            label: 'Foreign',
+            value: (counts['Foreign'] ?? 0).toDouble(),
+            color: GovernorDashboardTokens.foreignVisitor,
           ),
         ],
       ),
@@ -2269,45 +2807,11 @@ class _GovernorDashboardState extends State<GovernorDashboard>
 
   Widget _buildAgeRangeBarChart({bool dense = false}) {
     final series = _ageGenderSeries;
-    final total = series.fold<int>(
-      0,
-      (sum, row) => sum + row.male + row.female + row.others,
-    );
-    final chart = _buildDemographicsChartShell(
+    final chart = GovernorChartCard(
       dense: dense,
-      accent: const Color(0xFF7C3AED),
       title: 'Age Range',
       icon: Icons.calendar_view_month_rounded,
-      child: total == 0
-          ? _buildDemographicsEmptyState('Add date of birth on registration')
-          : Column(
-              children: [
-                Expanded(
-                  child: CustomPaint(
-                    painter: _GroupedAgeGenderBarPainter(
-                      series: series,
-                      maleColor: _genderMaleColor,
-                      femaleColor: _genderFemaleColor,
-                      otherColor: _genderOtherColor,
-                    ),
-                    child: Container(),
-                  ),
-                ),
-                SizedBox(
-                  height: dense ? 14 : 24,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      _buildAgeGenderLegendChip('Male', _genderMaleColor),
-                      SizedBox(width: dense ? 6 : 12),
-                      _buildAgeGenderLegendChip('Female', _genderFemaleColor),
-                      SizedBox(width: dense ? 6 : 12),
-                      _buildAgeGenderLegendChip('Others', _genderOtherColor),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+      child: GovernorAgeBarChart(series: series, dense: dense),
     );
     if (dense) return chart;
     return SizedBox(height: _isMobile ? 280 : 300, child: chart);
@@ -2326,9 +2830,9 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         Text(
           label,
           style: const TextStyle(
-            color: _textMuted,
+            color: _textDark,
             fontSize: 11,
-            fontWeight: FontWeight.w500,
+            fontWeight: FontWeight.bold,
           ),
         ),
       ],
@@ -2337,57 +2841,15 @@ class _GovernorDashboardState extends State<GovernorDashboard>
 
   Widget _buildCityRankingBarChart({bool dense = false}) {
     final cities = _cityRankingData;
-    final maxCount = cities.isEmpty
-        ? 1
-        : cities.map((e) => e.count).reduce((a, b) => a > b ? a : b);
-    const barColors = [
-      Color(0xFF66D2B3),
-      Color(0xFFFF8C32),
-      Color(0xFF8E44AD),
-      Color(0xFF29B6F6),
-      Color(0xFFFFC107),
-      Color(0xFF0D9488),
-    ];
-
-    final chart = _buildDemographicsChartShell(
+    final chart = GovernorChartCard(
       dense: dense,
-      accent: const Color(0xFF0D9488),
       title: 'City Ranking',
-      icon: Icons.location_city_rounded,
-      child: cities.isEmpty
-          ? _buildDemographicsEmptyState('Check-ins will rank cities here')
-          : Column(
-              children: [
-                Expanded(
-                  child: CustomPaint(
-                    painter: _CityRankingBarPainter(
-                      cities: cities,
-                      maxCount: maxCount,
-                      colors: barColors,
-                    ),
-                    child: Container(),
-                  ),
-                ),
-                if (!dense)
-                  Wrap(
-                    alignment: WrapAlignment.center,
-                    spacing: 8,
-                    runSpacing: 4,
-                    children: [
-                      for (var i = 0; i < cities.length && i < 4; i++)
-                        _buildAgeGenderLegendChip(
-                          _shortCityLabel(cities[i].name),
-                          barColors[i % barColors.length],
-                        ),
-                    ],
-                  ),
-              ],
-            ),
+      icon: Icons.emoji_events_rounded,
+      child: GovernorCityRankingList(cities: cities, dense: dense),
     );
     if (dense) return chart;
     return SizedBox(height: _isMobile ? 280 : 300, child: chart);
   }
-
   String _shortCityLabel(String name) {
     if (name.length <= 14) return name;
     return '${name.substring(0, 12)}…';
@@ -2455,63 +2917,32 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     if (_isMobile) {
       return Column(
         children: [
-          _buildTouristArrivalsChart(),
+          SizedBox(height: 280, child: _buildTouristArrivalsChart()),
           const SizedBox(height: 16),
-          _buildTopCategoriesCard(),
+          SizedBox(height: 280, child: _buildTopCategoriesCard()),
         ],
       );
     }
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(flex: 2, child: _buildTouristArrivalsChart()),
-        const SizedBox(width: 16),
-        Expanded(child: _buildTopCategoriesCard()),
-      ],
+    return SizedBox(
+      height: 320,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(flex: 2, child: _buildTouristArrivalsChart()),
+          const SizedBox(width: 16),
+          Expanded(child: _buildTopCategoriesCard()),
+        ],
+      ),
     );
   }
 
   Widget _buildTouristArrivalsChart({bool dense = false}) {
-    return _wrapDashboardRichPanel(
-      accent: _primaryOrange,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _dashboardSectionTitle(
-            title: 'Tourist Arrivals',
-            icon: Icons.show_chart_rounded,
-            trailing: _buildTimeFilterDropdown(dense: dense),
-            dense: dense,
-          ),
-          SizedBox(height: dense ? 6 : 12),
-          if (dense)
-            Expanded(
-              child: _buildChartPlotArea(
-                dense: true,
-                child: LayoutBuilder(
-                  builder: (context, constraints) => _buildArrivalsChartStack(
-                    width: constraints.maxWidth,
-                    height: constraints.maxHeight,
-                    dense: true,
-                  ),
-                ),
-              ),
-            )
-          else
-            _buildChartPlotArea(
-              child: SizedBox(
-                height: 200,
-                child: LayoutBuilder(
-                  builder: (context, constraints) => _buildArrivalsChartStack(
-                    width: constraints.maxWidth,
-                    height: 200,
-                    dense: false,
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
+    return GovernorChartCard(
+      dense: dense,
+      title: 'Tourist Arrivals',
+      icon: Icons.show_chart_rounded,
+      trailing: _buildTimeFilterDropdown(dense: dense),
+      child: GovernorArrivalsAreaChart(values: _dashboardTrendValues),
     );
   }
 
@@ -2605,92 +3036,48 @@ class _GovernorDashboardState extends State<GovernorDashboard>
 
   Widget _buildTopCategoriesCard({bool dense = false}) {
     final stats = _dashboardCategoryStats.take(5).toList();
-    final sumP = stats.fold<double>(
-      0,
-      (a, s) => a + (s['percentage'] as double),
-    );
     final totalCount = stats.fold<int>(
       0,
       (a, s) => a + ((s['count'] as num?)?.toInt() ?? 0),
     );
-    final segments = <({Color color, double fraction})>[];
-    for (final s in stats) {
-      final name = s['name'] as String;
-      final p = (s['percentage'] as double);
-      final frac = sumP > 0
-          ? p / sumP
-          : (stats.isEmpty ? 0.0 : 1.0 / stats.length);
-      segments.add((color: _categoryColor(name), fraction: frac));
-    }
-
-    return _wrapDashboardRichPanel(
-      accent: _accentOrange,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _dashboardSectionTitle(
-            title: 'Top Categories',
-            icon: Icons.donut_large_rounded,
-            dense: dense,
-            trailing: TextButton(
-              onPressed: () => setState(() => _selectedIndex = 4),
-              style: TextButton.styleFrom(
-                foregroundColor: _primaryOrange,
-                padding: EdgeInsets.symmetric(horizontal: dense ? 6 : 10),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: Text(
-                'View All',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: dense ? 11 : 13,
-                ),
-              ),
-            ),
+    final segments = <GovernorDonutSegment>[
+      for (var i = 0; i < stats.length; i++)
+        GovernorDonutSegment(
+          label: stats[i]['name'] as String,
+          value: ((stats[i]['count'] as num?)?.toDouble() ?? 0),
+          color: GovernorDashboardTokens.categoryPalette[
+              i % GovernorDashboardTokens.categoryPalette.length],
+        ),
+    ];
+    return GovernorChartCard(
+      dense: dense,
+      title: 'Top Categories',
+      icon: Icons.donut_large_rounded,
+      trailing: TextButton(
+        onPressed: () =>
+            setState(() => _selectedIndex = _analyticsIndex),
+        style: TextButton.styleFrom(
+          foregroundColor: GovernorDashboardTokens.primary,
+          padding: EdgeInsets.symmetric(horizontal: dense ? 6 : 10),
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        child: Text(
+          'View All',
+          style: TextStyle(
+            fontWeight: FontWeight.w600,
+            fontSize: dense ? 11 : 13,
           ),
-          SizedBox(height: dense ? 6 : 12),
-          if (dense)
-            Expanded(
-              child: _buildChartPlotArea(
-                dense: true,
-                tint: _accentOrange,
-                child: LayoutBuilder(
-                  builder: (context, constraints) =>
-                      _buildTopCategoriesChartBody(
-                        constraints: constraints,
-                        dense: true,
-                        stats: stats,
-                        segments: segments,
-                        totalCount: totalCount,
-                        sumP: sumP,
-                      ),
-                ),
-              ),
-            )
-          else
-            _buildChartPlotArea(
-              tint: _accentOrange,
-              child: SizedBox(
-                height: 220,
-                child: LayoutBuilder(
-                  builder: (context, constraints) =>
-                      _buildTopCategoriesChartBody(
-                        constraints: constraints,
-                        dense: false,
-                        stats: stats,
-                        segments: segments,
-                        totalCount: totalCount,
-                        sumP: sumP,
-                      ),
-                ),
-              ),
-            ),
-        ],
+        ),
+      ),
+      child: GovernorDonutChart(
+        dense: dense,
+        centerLabel: totalCount > 0 ? '100%\nTotal' : null,
+        emptyMessage: 'No category data yet',
+        segments: segments,
       ),
     );
   }
-
   Widget _buildTopCategoriesChartBody({
     required BoxConstraints constraints,
     required bool dense,
@@ -2838,6 +3225,11 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   void _showMunicipalityDetails(Map<String, dynamic> municipality) {
+    final unique =
+        (municipality['uniqueVisitors'] as num?)?.toInt() ??
+        (municipality['tourists'] as num?)?.toInt() ??
+        0;
+    final checkIns = (municipality['checkIns'] as num?)?.toInt() ?? 0;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -2850,8 +3242,9 @@ class _GovernorDashboardState extends State<GovernorDashboard>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _detailRow('Type', municipality['type']),
-            _detailRow('Total Tourists', '${municipality['tourists']}'),
+            _detailRow('Type', municipality['type']?.toString() ?? '—'),
+            _detailRow('Unique visitors', '$unique'),
+            _detailRow('Total check-ins', '$checkIns'),
             _detailRow('Latitude', '${municipality['lat']}'),
             _detailRow('Longitude', '${municipality['lng']}'),
           ],
@@ -2880,18 +3273,25 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   // ==================== TOURISTS SECTION ====================
-  String _getTouristDisplayName(Map<String, dynamic> t) {
-    final full = t['fullName']?.toString().trim();
-    if (full != null && full.isNotEmpty) return full;
-    final name = t['name']?.toString().trim();
-    if (name != null && name.isNotEmpty) return name;
-    final first = t['firstName']?.toString().trim() ?? '';
-    final last = t['lastName']?.toString().trim() ?? '';
-    final combined = '$first $last'.trim();
-    if (combined.isNotEmpty) return combined;
-    final email = t['email']?.toString().trim();
-    if (email != null && email.isNotEmpty) return email;
-    return 'Unknown';
+  /// One row per registered person (by Firebase uid / tourist id).
+  List<Map<String, dynamic>> _uniqueRegisteredTourists(
+    List<Map<String, dynamic>> rows,
+  ) {
+    final seen = <String>{};
+    final out = <Map<String, dynamic>>[];
+    for (final t in rows) {
+      final uid = TouristAccountAdminService.resolveTouristUid(t)?.trim() ?? '';
+      final touristId = TouristIdHelper.displayForTourist(t).trim();
+      final key = uid.isNotEmpty
+          ? 'uid:$uid'
+          : (touristId.isNotEmpty && touristId != 'MO-PENDING'
+                ? 'tid:$touristId'
+                : '');
+      if (key.isEmpty) continue;
+      if (!seen.add(key)) continue;
+      out.add(t);
+    }
+    return out;
   }
 
   String _getTouristOrigin(Map<String, dynamic> t) {
@@ -2934,17 +3334,156 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     return '$h12:$min:$sec $period';
   }
 
+  static const _monthNames = <String>[
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+
+  String get _touristRegFilterLabel {
+    final a = _touristRegFilterAnchor;
+    switch (_touristRegFilterMode) {
+      case 'Day':
+        return _formatRegisteredDateOnly(a);
+      case 'Month':
+        return '${_monthNames[a.month - 1]} ${a.year}';
+      case 'Year':
+        return '${a.year}';
+      default:
+        return 'All time';
+    }
+  }
+
+  bool _matchesTouristRegDateFilter(Map<String, dynamic> t) {
+    if (_touristRegFilterMode == 'All') return true;
+    final dt = _registeredDateTimeFromTourist(t);
+    if (dt == null) return false;
+    final a = _touristRegFilterAnchor;
+    switch (_touristRegFilterMode) {
+      case 'Day':
+        return dt.year == a.year && dt.month == a.month && dt.day == a.day;
+      case 'Month':
+        return dt.year == a.year && dt.month == a.month;
+      case 'Year':
+        return dt.year == a.year;
+      default:
+        return true;
+    }
+  }
+
+  bool _matchesTouristSearch(Map<String, dynamic> t, String query) {
+    if (query.isEmpty) return true;
+    final id = TouristIdHelper.displayForTourist(t).toLowerCase();
+    final touristIdField = t['touristId']?.toString().toLowerCase() ?? '';
+    final origin = _getTouristOrigin(t).toLowerCase();
+    final city = t['city']?.toString().toLowerCase() ?? '';
+    final country = t['country']?.toString().toLowerCase() ?? '';
+    final originField = t['origin']?.toString().toLowerCase() ?? '';
+    final dt = _registeredDateTimeFromTourist(t);
+    final dateStr = _formatRegisteredDateOnly(dt).toLowerCase();
+    final timeStr = _formatRegisteredTimeOnly(dt).toLowerCase();
+    return id.contains(query) ||
+        touristIdField.contains(query) ||
+        origin.contains(query) ||
+        city.contains(query) ||
+        country.contains(query) ||
+        originField.contains(query) ||
+        dateStr.contains(query) ||
+        timeStr.contains(query);
+  }
+
+  List<Map<String, dynamic>> _filteredRegisteredTourists() {
+    final query = _searchController.text.trim().toLowerCase();
+    return _tourists
+        .where(
+          (t) => _matchesTouristRegDateFilter(t) && _matchesTouristSearch(t, query),
+        )
+        .toList(growable: false);
+  }
+
+  Future<void> _pickTouristRegFilterDate() async {
+    final now = DateTime.now();
+    final firstDate = DateTime(2020);
+    final lastDate = DateTime(now.year + 1, 12, 31);
+
+    if (_touristRegFilterMode == 'Year') {
+      final years = <int>[
+        for (var y = now.year; y >= 2020; y--) y,
+      ];
+      final picked = await showDialog<int>(
+        context: context,
+        builder: (ctx) => SimpleDialog(
+          title: const Text('Select year'),
+          children: [
+            for (final y in years)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(ctx, y),
+                child: Text(
+                  '$y',
+                  style: TextStyle(
+                    fontWeight: y == _touristRegFilterAnchor.year
+                        ? FontWeight.w700
+                        : FontWeight.w500,
+                    color: y == _touristRegFilterAnchor.year
+                        ? _primaryOrange
+                        : _textDark,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
+      if (picked != null && mounted) {
+        setState(() {
+          _touristRegFilterAnchor = DateTime(picked);
+        });
+      }
+      return;
+    }
+
+    if (_touristRegFilterMode == 'Month') {
+      final picked = await showDatePicker(
+        context: context,
+        initialDate: _touristRegFilterAnchor,
+        firstDate: firstDate,
+        lastDate: lastDate,
+        helpText: 'Select month',
+        initialDatePickerMode: DatePickerMode.year,
+      );
+      if (picked != null && mounted) {
+        setState(() {
+          _touristRegFilterAnchor = DateTime(picked.year, picked.month);
+        });
+      }
+      return;
+    }
+
+    // Day
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _touristRegFilterAnchor,
+      firstDate: firstDate,
+      lastDate: lastDate,
+      helpText: 'Select registration day',
+    );
+    if (picked != null && mounted) {
+      setState(() {
+        _touristRegFilterAnchor = picked;
+      });
+    }
+  }
+
   Widget _buildTouristsContent() {
-    final filteredTourists = _tourists.where((t) {
-      final query = _searchController.text.toLowerCase();
-      if (query.isEmpty) return true;
-      final displayName = _getTouristDisplayName(t).toLowerCase();
-      return displayName.contains(query) ||
-          (t['id']?.toString().toLowerCase().contains(query) ?? false) ||
-          (t['email']?.toString().toLowerCase().contains(query) ?? false) ||
-          (t['city']?.toString().toLowerCase().contains(query) ?? false) ||
-          (t['country']?.toString().toLowerCase().contains(query) ?? false);
-    }).toList();
+    final filteredTourists = _filteredRegisteredTourists();
 
     return Container(
       color: _darkBg,
@@ -2953,7 +3492,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
           _buildHeader(
             'Registered Tourists',
             subtitle:
-                'Misamis Occidental — tourists registered in the province',
+                'Unique registrations — names hidden for data privacy',
           ),
           Expanded(
             child: Padding(
@@ -2967,6 +3506,8 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   _buildTouristsSummaryBar(filteredTourists.length),
+                  const SizedBox(height: 10),
+                  _buildTouristRegDateFilterBar(),
                   const SizedBox(height: 12),
                   Expanded(
                     child: Container(
@@ -2981,13 +3522,15 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                               _isMobile ? 12 : 16,
                               10,
                             ),
-                            child: _buildSearchBar('Search tourists...'),
+                            child: _buildSearchBar(
+                              'Search by Tourist ID, origin, or date...',
+                            ),
                           ),
                           const Divider(height: 1, color: _cardBorder),
                           Expanded(
                             child: filteredTourists.isEmpty
                                 ? _buildEmptyState(
-                                    'No tourists match your search',
+                                    'No registered tourists match your filters',
                                     Icons.people_outline_rounded,
                                   )
                                 : _isMobile
@@ -3007,7 +3550,84 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
+  Widget _buildTouristRegDateFilterBar() {
+    Widget modeChip(String mode) {
+      final selected = _touristRegFilterMode == mode;
+      return FilterChip(
+        label: Text(mode),
+        selected: selected,
+        onSelected: (_) {
+          setState(() {
+            _touristRegFilterMode = mode;
+            if (mode != 'All') {
+              _touristRegFilterAnchor = DateTime.now();
+            }
+          });
+        },
+        selectedColor: _primaryOrange.withOpacity(0.18),
+        checkmarkColor: _primaryOrange,
+        labelStyle: TextStyle(
+          color: selected ? _primaryOrange : _textDark,
+          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+          fontSize: 12,
+        ),
+        side: BorderSide(
+          color: selected ? _primaryOrange.withOpacity(0.45) : _cardBorder,
+        ),
+        backgroundColor: Colors.white,
+        visualDensity: VisualDensity.compact,
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _cardBorder),
+      ),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          const Text(
+            'Filter by registration:',
+            style: TextStyle(
+              color: _textMuted,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          modeChip('All'),
+          modeChip('Day'),
+          modeChip('Month'),
+          modeChip('Year'),
+          if (_touristRegFilterMode != 'All')
+            OutlinedButton.icon(
+              onPressed: _pickTouristRegFilterDate,
+              icon: const Icon(Icons.calendar_today_rounded, size: 14),
+              label: Text(_touristRegFilterLabel),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _primaryOrange,
+                side: BorderSide(color: _primaryOrange.withOpacity(0.4)),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                textStyle: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildTouristsSummaryBar(int visibleCount) {
+    final periodHint = _touristRegFilterMode == 'All'
+        ? 'all time'
+        : _touristRegFilterLabel;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
@@ -3031,23 +3651,32 @@ class _GovernorDashboardState extends State<GovernorDashboard>
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              '$visibleCount of ${_tourists.length} tourists',
-              style: const TextStyle(
-                color: _textDark,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$visibleCount of ${_tourists.length} registered tourists',
+                  style: const TextStyle(
+                    color: _textDark,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Text(
+                  'Unique people · $periodHint',
+                  style: const TextStyle(color: _textMuted, fontSize: 11),
+                ),
+              ],
             ),
           ),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
-              color: _kpiGreen.withOpacity(0.15),
+              color: _kpiOrange.withOpacity(0.15),
               borderRadius: BorderRadius.circular(20),
             ),
             child: const Text(
-              'Province scope',
+              'Privacy on',
               style: TextStyle(
                 color: Color(0xFF558B2F),
                 fontSize: 11,
@@ -3060,68 +3689,30 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
-  int _touristVisitCount(Map<String, dynamic> t) {
-    final v = t['totalVisits'] ?? t['visits'] ?? 0;
-    if (v is int) return v;
-    if (v is num) return v.toInt();
-    return int.tryParse(v.toString()) ?? 0;
-  }
-
-  List<Map<String, dynamic>> _sortedTouristsByVisits(
+  List<Map<String, dynamic>> _sortedTouristsByRegistrationDate(
     List<Map<String, dynamic>> tourists,
   ) {
     final sorted = List<Map<String, dynamic>>.from(tourists)
-      ..sort((a, b) => _touristVisitCount(b).compareTo(_touristVisitCount(a)));
+      ..sort((a, b) {
+        final aDt = _registeredDateTimeFromTourist(a);
+        final bDt = _registeredDateTimeFromTourist(b);
+        if (aDt == null && bDt == null) return 0;
+        if (aDt == null) return 1; // missing dates last
+        if (bDt == null) return -1;
+        return bDt.compareTo(aDt); // newest registration first
+      });
     return sorted;
   }
 
-  Widget _touristAvatar(Map<String, dynamic> t, {double radius = 18}) {
-    final name = _getTouristDisplayName(t);
-    final initial =
-        name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : '?';
-    final url = t['profilePhotoUrl']?.toString().trim() ?? '';
-    if (url.isNotEmpty) {
-      return CircleAvatar(
-        radius: radius,
-        backgroundColor: _primaryOrange.withOpacity(0.12),
-        child: ClipOval(
-          child: Image.network(
-            url,
-            width: radius * 2,
-            height: radius * 2,
-            fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => Text(
-              initial,
-              style: TextStyle(
-                color: _primaryOrange,
-                fontWeight: FontWeight.w700,
-                fontSize: radius * 0.85,
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-    final b64 = t['profileImageBase64']?.toString();
-    if (b64 != null && b64.isNotEmpty) {
-      try {
-        return CircleAvatar(
-          radius: radius,
-          backgroundColor: _primaryOrange.withOpacity(0.12),
-          backgroundImage: MemoryImage(base64Decode(b64)),
-        );
-      } catch (_) {}
-    }
+  /// Generic avatar — no photo / name initials (privacy).
+  Widget _touristPrivacyAvatar({double radius = 18}) {
     return CircleAvatar(
       radius: radius,
       backgroundColor: _primaryOrange.withOpacity(0.12),
-      child: Text(
-        initial,
-        style: TextStyle(
-          color: _primaryOrange,
-          fontWeight: FontWeight.w700,
-          fontSize: radius * 0.85,
-        ),
+      child: Icon(
+        Icons.person_outline_rounded,
+        color: _primaryOrange,
+        size: radius * 1.1,
       ),
     );
   }
@@ -3151,24 +3742,6 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     return ConstrainedBox(
       constraints: BoxConstraints(maxWidth: maxWidth),
       child: chip,
-    );
-  }
-
-  Widget _visitCountBadge(int count) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: count > 0 ? const Color(0xFFE3F2FD) : const Color(0xFFF4F4F5),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        '$count',
-        style: TextStyle(
-          color: count > 0 ? const Color(0xFF1565C0) : _textMuted,
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
     );
   }
 
@@ -3218,7 +3791,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   Widget _buildTouristsListMobile(List<Map<String, dynamic>> tourists) {
-    final sorted = _sortedTouristsByVisits(tourists);
+    final sorted = _sortedTouristsByRegistrationDate(tourists);
 
     return ListView.separated(
       padding: const EdgeInsets.all(12),
@@ -3226,8 +3799,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
         final t = sorted[index];
-        final name = _getTouristDisplayName(t);
-        final visits = _touristVisitCount(t);
+        final id = TouristIdHelper.displayForTourist(t);
         return Material(
           color: index.isEven ? const Color(0xFFFAFAFA) : Colors.white,
           borderRadius: BorderRadius.circular(10),
@@ -3238,23 +3810,20 @@ class _GovernorDashboardState extends State<GovernorDashboard>
               padding: const EdgeInsets.all(12),
               child: Row(
                 children: [
-                  _touristAvatar(t),
+                  _touristPrivacyAvatar(),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          name,
+                          id,
                           style: const TextStyle(
                             color: _textDark,
-                            fontWeight: FontWeight.w600,
+                            fontWeight: FontWeight.w700,
                             fontSize: 14,
+                            fontFamily: 'monospace',
                           ),
-                        ),
-                        const SizedBox(height: 4),
-                        _touristIdChip(
-                          TouristIdHelper.displayForTourist(t),
                         ),
                         const SizedBox(height: 6),
                         Text(
@@ -3277,14 +3846,8 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                       ],
                     ),
                   ),
-                  Column(
-                    children: [
-                      _visitCountBadge(visits),
-                      const SizedBox(height: 8),
-                      _touristViewButton(
-                        onPressed: () => _showTouristDetails(t),
-                      ),
-                    ],
+                  _touristViewButton(
+                    onPressed: () => _showTouristDetails(t),
                   ),
                 ],
               ),
@@ -3296,7 +3859,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   Widget _buildTouristsTableDesktop(List<Map<String, dynamic>> tourists) {
-    final sorted = _sortedTouristsByVisits(tourists);
+    final sorted = _sortedTouristsByRegistrationDate(tourists);
 
     const headStyle = TextStyle(
       color: _textMuted,
@@ -3326,20 +3889,14 @@ class _GovernorDashboardState extends State<GovernorDashboard>
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           child: Row(
             children: [
-              headerCell('Name', flex: 2.2),
-              headerCell(
-                'Tourist ID',
-                flex: 1.6,
-                padding: const EdgeInsets.only(right: 24),
-              ),
+              headerCell('Tourist ID', flex: 2.4),
               headerCell(
                 'Origin',
-                flex: 2.1,
+                flex: 2.4,
                 padding: const EdgeInsets.only(left: 4),
               ),
-              headerCell('Date', flex: 1),
-              headerCell('Time', flex: 1.1),
-              headerCell('Visits', flex: 0.6),
+              headerCell('Date', flex: 1.2),
+              headerCell('Time', flex: 1.2),
               const SizedBox(
                 width: 48,
                 child: Text(
@@ -3365,9 +3922,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
               ),
               itemBuilder: (context, index) {
                 final t = sorted[index];
-                final name = _getTouristDisplayName(t);
                 final id = TouristIdHelper.displayForTourist(t);
-                final visits = _touristVisitCount(t);
                 final bg = index.isEven
                     ? Colors.white
                     : const Color(0xFFFAFAFA);
@@ -3386,38 +3941,22 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           Expanded(
-                            flex: 22,
+                            flex: 24,
                             child: Row(
                               children: [
-                                _touristAvatar(t, radius: 16),
+                                _touristPrivacyAvatar(radius: 16),
                                 const SizedBox(width: 10),
                                 Expanded(
-                                  child: Text(
-                                    name,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      color: _textDark,
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 13,
-                                    ),
+                                  child: Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: _touristIdChip(id, maxWidth: 220),
                                   ),
                                 ),
                               ],
                             ),
                           ),
                           Expanded(
-                            flex: 16,
-                            child: Padding(
-                              padding: const EdgeInsets.only(right: 24),
-                              child: Align(
-                                alignment: Alignment.centerLeft,
-                                child: _touristIdChip(id, maxWidth: 200),
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            flex: 21,
+                            flex: 24,
                             child: Padding(
                               padding: const EdgeInsets.only(left: 4),
                               child: Text(
@@ -3432,7 +3971,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                             ),
                           ),
                           Expanded(
-                            flex: 10,
+                            flex: 12,
                             child: Text(
                               _formatRegisteredDateOnly(
                                 _registeredDateTimeFromTourist(t),
@@ -3444,7 +3983,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                             ),
                           ),
                           Expanded(
-                            flex: 11,
+                            flex: 12,
                             child: Text(
                               _formatRegisteredTimeOnly(
                                 _registeredDateTimeFromTourist(t),
@@ -3455,7 +3994,6 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                               ),
                             ),
                           ),
-                          Expanded(flex: 6, child: _visitCountBadge(visits)),
                           _touristViewButton(
                             onPressed: () => _showTouristDetails(t),
                           ),
@@ -3473,24 +4011,38 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   void _showTouristDetails(Map<String, dynamic> tourist) {
-    final name = _getTouristDisplayName(tourist);
+    final id = TouristIdHelper.displayForTourist(tourist);
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         backgroundColor: _cardBg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Row(
           children: [
-            _touristAvatar(tourist, radius: 22),
+            _touristPrivacyAvatar(radius: 22),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(
-                name,
-                style: const TextStyle(
-                  color: _textDark,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Registered tourist',
+                    style: TextStyle(
+                      color: _textMuted,
+                      fontWeight: FontWeight.w500,
+                      fontSize: 12,
+                    ),
+                  ),
+                  Text(
+                    id,
+                    style: const TextStyle(
+                      color: _textDark,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -3499,15 +4051,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _touristIdChip(
-              TouristIdHelper.displayForTourist(tourist),
-            ),
-            const SizedBox(height: 14),
-            _detailRow(
-              'Tourist ID',
-              TouristIdHelper.displayForTourist(tourist),
-            ),
-            _detailRow('Email', tourist['email'] ?? '-'),
+            _detailRow('Tourist ID', id),
             _detailRow('Origin', _getTouristOrigin(tourist)),
             _detailRow(
               'Date registered',
@@ -3521,34 +4065,24 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                 _registeredDateTimeFromTourist(tourist),
               ),
             ),
-            _detailRow('Total visits', '${_touristVisitCount(tourist)}'),
           ],
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close', style: TextStyle(color: _primaryOrange)),
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Close', style: TextStyle(color: _textMuted)),
           ),
-        ],
-      ),
-    );
-  }
-
-  // ==================== LGU QR CODES (GOVERNOR) — one QR per municipality only ====================
-  Widget _buildGovernorSpotQRCodesContent() {
-    return Container(
-      color: _darkBg,
-      child: Column(
-        children: [
-          _buildHeader(
-            'LGU QR Codes',
-            subtitle:
-                'One ATMOS QR per municipality (LGU). Download PNG or PDF for printing — no per-spot codes.',
-          ),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: EdgeInsets.all(_isMobile ? 16 : 24),
-              child: _buildGovernorLguQrSection(),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              _confirmDeleteTouristAccount(tourist);
+            },
+            child: const Text(
+              'Delete account',
+              style: TextStyle(
+                color: Color(0xFFDC2626),
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],
@@ -3556,146 +4090,363 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
-  /// One downloadable QR per LGU (same payload as on each tourism dashboard).
-  Widget _buildGovernorLguQrSection() {
-    final municipalities = getMisamisOccidentalMunicipalities();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'All LGUs (Misamis Occidental)',
-          style: TextStyle(
-            color: _textDark,
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
+  Future<void> _confirmDeleteTouristAccount(Map<String, dynamic> tourist) async {
+    final displayId = TouristIdHelper.displayForTourist(tourist);
+    final uid = TouristAccountAdminService.resolveTouristUid(tourist);
+    if (uid == null || uid.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Cannot delete: tourist id is missing.'),
+          backgroundColor: Color(0xFFDC2626),
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _cardBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Delete tourist account?',
+          style: TextStyle(color: _textDark, fontWeight: FontWeight.w700),
+        ),
+        content: Text(
+          'This permanently removes tourist $displayId from ATMOS-TRS '
+          '(profile, check-ins, and login). This cannot be undone.',
+          style: const TextStyle(color: _textMuted, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: _textMuted)),
           ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          'Each card is the only QR needed for that municipality (ATMOS-TRS-LGU).',
-          style: TextStyle(color: _textMuted, fontSize: 13),
-        ),
-        const SizedBox(height: 16),
-        Wrap(
-          spacing: 16,
-          runSpacing: 16,
-          children: municipalities.map((m) {
-            final qrData = lguQrData(m.id, anchorLat: m.lat, anchorLng: m.lng);
-            return Container(
-              width: _isMobile ? double.infinity : 240,
-              padding: EdgeInsets.all(_isMobile ? 12 : 16),
-              decoration: BoxDecoration(
-                color: _cardBg,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: _cardBorder),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    m.name,
-                    style: const TextStyle(
-                      color: _textDark,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                    ),
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 10),
-                  Container(
-                    padding: EdgeInsets.all(_isMobile ? 6 : 8),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: QrImageView(
-                      data: qrData,
-                      version: QrVersions.auto,
-                      size: _isMobile ? 160 : 180,
-                      backgroundColor: Colors.white,
-                      errorCorrectionLevel: QrErrorCorrectLevel.H,
-                    ),
-                  ),
-                  SizedBox(height: _isMobile ? 8 : 10),
-                  Wrap(
-                    alignment: WrapAlignment.center,
-                    spacing: _isMobile ? 6 : 10,
-                    runSpacing: 4,
-                    children: [
-                      TextButton(
-                        onPressed: () async {
-                          await downloadLguQrPng(
-                            m.id,
-                            anchorLat: m.lat,
-                            anchorLng: m.lng,
-                          );
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'PNG ready — check downloads or share sheet',
-                                ),
-                                backgroundColor: _primaryOrange,
-                              ),
-                            );
-                          }
-                        },
-                        child: Text(
-                          'PNG',
-                          style: TextStyle(
-                            color: _primaryOrange,
-                            fontSize: _isMobile ? 13 : 14,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: () async {
-                          await downloadLguQrPdf(
-                            m.id,
-                            m.name,
-                            anchorLat: m.lat,
-                            anchorLng: m.lng,
-                          );
-                        },
-                        child: Text(
-                          'PDF',
-                          style: TextStyle(
-                            color: _primaryOrange,
-                            fontSize: _isMobile ? 13 : 14,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            );
-          }).toList(),
-        ),
-      ],
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
     );
+    if (confirmed != true || !mounted) return;
+
+    BuildContext? loadingDialogContext;
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        useRootNavigator: true,
+        builder: (ctx) {
+          loadingDialogContext = ctx;
+          return const PopScope(
+            canPop: false,
+            child: Center(
+              child: Card(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: CircularProgressIndicator(color: _primaryOrange),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+
+    void closeLoadingDialog() {
+      final dialogCtx = loadingDialogContext;
+      if (dialogCtx != null && dialogCtx.mounted) {
+        Navigator.of(dialogCtx).pop();
+        return;
+      }
+    }
+
+    try {
+      final result =
+          await TouristAccountAdminService.deleteTouristAccount(uid);
+      if (!mounted) return;
+      closeLoadingDialog();
+      setState(() {
+        _tourists = _uniqueRegisteredTourists(
+          _tourists
+              .where((t) {
+                final id = TouristAccountAdminService.resolveTouristUid(t);
+                return id != uid &&
+                    !TouristAccountAdminService.isDeletedTouristRow(t);
+              })
+              .toList(growable: true),
+        );
+        _totalTourists = _tourists.length;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.authDeleted
+                ? 'Deleted account for $displayId'
+                : 'Removed $displayId from Registered Tourists.',
+          ),
+          backgroundColor: _primaryOrange,
+        ),
+      );
+      // Light refresh only — avoid full bootstrap that can confuse navigation.
+      unawaited(_loadData());
+    } catch (e) {
+      if (!mounted) return;
+      closeLoadingDialog();
+      final message = e is FirebaseFunctionsException
+          ? TouristAccountAdminService.userFacingError(e)
+          : e
+              .toString()
+              .replaceFirst('Bad state: ', '')
+              .replaceFirst('Exception: ', '');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: const Color(0xFFDC2626),
+        ),
+      );
+    }
   }
 
   // ==================== MUNICIPALITIES SECTION ====================
+
+  String _shortMunicipalityChartLabel(String name) {
+    var s = name.trim();
+    s = s.replaceFirst(RegExp(r'\s+City$', caseSensitive: false), '');
+    if (s.toLowerCase().startsWith('don victoriano')) return 'Don Vic.';
+    if (s.toLowerCase() == 'sapang dalaga') return 'S. Dalaga';
+    if (s.toLowerCase() == 'lopez jaena') return 'L. Jaena';
+    if (s.length > 9) return '${s.substring(0, 8)}…';
+    return s;
+  }
+
+  DateTime? get _muniChartPeriodStart {
+    final now = DateTime.now();
+    switch (_muniChartTimeFilter) {
+      case 'This Week':
+        final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
+        return DateTime(startOfWeek.year, startOfWeek.month, startOfWeek.day);
+      case 'This Month':
+        return DateTime(now.year, now.month, 1);
+      case 'This Year':
+        return DateTime(now.year, 1, 1);
+      default:
+        return null;
+    }
+  }
+
+  /// Unique visitors per municipality for the municipalities chart (highest first).
+  List<({String shortLabel, String fullName, double unique})>
+      get _municipalityVisitChartSeries {
+    final start = _muniChartPeriodStart;
+    final byMuni = <String, Set<String>>{
+      for (final m in getMisamisOccidentalMunicipalities())
+        normalizeMunicipalityId(m.id): <String>{},
+    };
+    final names = <String, String>{
+      for (final m in getMisamisOccidentalMunicipalities())
+        normalizeMunicipalityId(m.id): m.name,
+    };
+
+    for (final c in _checkIns) {
+      if (start != null) {
+        final t = GovernorFirestoreService.parseCheckInTime(c);
+        if (t == null || t.isBefore(start)) continue;
+      }
+      final id = _checkInMunicipalityId(c);
+      if (id.isEmpty || !byMuni.containsKey(id)) continue;
+      final uid = GovernorFirestoreService.checkInUserId(c);
+      if (uid.isNotEmpty) byMuni[id]!.add(uid);
+    }
+
+    final rows = byMuni.entries
+        .map((e) {
+          final full = names[e.key] ?? e.key;
+          return (
+            shortLabel: _shortMunicipalityChartLabel(full),
+            fullName: full,
+            unique: e.value.length.toDouble(),
+          );
+        })
+        .toList()
+      ..sort((a, b) {
+        final byUnique = b.unique.compareTo(a.unique);
+        if (byUnique != 0) return byUnique;
+        return a.fullName.compareTo(b.fullName);
+      });
+    return rows;
+  }
+
+  Widget _buildMuniChartTimeFilterDropdown({bool dense = false}) {
+    return PopupMenuButton<String>(
+      initialValue: _muniChartTimeFilter,
+      onSelected: (value) => setState(() => _muniChartTimeFilter = value),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      itemBuilder: (context) => ['This Week', 'This Month', 'This Year']
+          .map(
+            (filter) => PopupMenuItem(
+              value: filter,
+              child: Text(
+                filter,
+                style: TextStyle(
+                  fontWeight: filter == _muniChartTimeFilter
+                      ? FontWeight.w700
+                      : FontWeight.w500,
+                  color: filter == _muniChartTimeFilter
+                      ? _primaryOrange
+                      : _textDark,
+                ),
+              ),
+            ),
+          )
+          .toList(),
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: dense ? 8 : 12,
+          vertical: dense ? 4 : 8,
+        ),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(dense ? 8 : 10),
+          border: Border.all(color: _cardBorder),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              _muniChartTimeFilter,
+              style: TextStyle(
+                color: _primaryOrange,
+                fontSize: dense ? 10 : 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 2),
+            const Icon(
+              Icons.keyboard_arrow_down_rounded,
+              color: _primaryOrange,
+              size: 18,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMunicipalityVisitorsChart() {
+    final series = _municipalityVisitChartSeries;
+    final values = series.map((e) => e.unique).toList(growable: false);
+    final axisLabels =
+        series.map((e) => e.shortLabel).toList(growable: false);
+    final tooltipLabels =
+        series.map((e) => e.fullName).toList(growable: false);
+
+    final chartHeight = _isMobile ? 210.0 : 240.0;
+
+    return SizedBox(
+      height: chartHeight,
+      child: GovernorChartCard(
+        dense: _isMobile,
+        title: 'Visitors by Municipality',
+        icon: Icons.show_chart_rounded,
+        trailing: _buildMuniChartTimeFilterDropdown(dense: _isMobile),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final minWidth = series.isEmpty ? constraints.maxWidth : series.length * 52.0;
+            final chartWidth = constraints.maxWidth > minWidth
+                ? constraints.maxWidth
+                : minWidth;
+            final chart = GovernorArrivalsAreaChart(
+              values: values,
+              labels: axisLabels,
+              tooltipLabels: tooltipLabels,
+              emptyMessage: 'No unique visitors in this period',
+              valueNoun: 'unique visitors',
+              rotateBottomLabels: true,
+              showAllBottomLabels: true,
+            );
+            if (chartWidth <= constraints.maxWidth + 0.5) {
+              return chart;
+            }
+            return Scrollbar(
+              thumbVisibility: !_isMobile,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: chartWidth,
+                  height: constraints.maxHeight,
+                  child: chart,
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   Widget _buildMunicipalitiesContent() {
+    final sorted = List<Map<String, dynamic>>.from(_allMunicipalities)
+      ..sort((a, b) {
+        final av = (a['uniqueVisitors'] as num?)?.toInt() ??
+            (a['tourists'] as num?)?.toInt() ??
+            0;
+        final bv = (b['uniqueVisitors'] as num?)?.toInt() ??
+            (b['tourists'] as num?)?.toInt() ??
+            0;
+        final byVisitors = bv.compareTo(av);
+        if (byVisitors != 0) return byVisitors;
+        return (a['name']?.toString() ?? '')
+            .compareTo(b['name']?.toString() ?? '');
+      });
+
     return Container(
-      color: _darkBg,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color(0xFFFFF7ED),
+            Color(0xFFF8FAFC),
+            Color(0xFFF1F5F9),
+          ],
+        ),
+      ),
       child: Column(
         children: [
           _buildHeader(
             'Municipalities & Cities',
-            subtitle: 'All 17 locations in Misamis Occidental',
+            subtitle:
+                'Unique visitors by check-in location across Misamis Occidental',
           ),
           Expanded(
-            child: SingleChildScrollView(
-              padding: EdgeInsets.all(_isMobile ? 16 : 24),
-              child: _isMobile
-                  ? _buildMunicipalitiesGridMobile()
-                  : _buildMunicipalitiesGridDesktop(),
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                _isMobile ? 14 : 20,
+                _isMobile ? 8 : 12,
+                _isMobile ? 14 : 20,
+                _isMobile ? 14 : 20,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildMunicipalityProvinceVisitSummary(),
+                  SizedBox(height: _isMobile ? 10 : 12),
+                  _buildMunicipalityVisitorsChart(),
+                  SizedBox(height: _isMobile ? 10 : 12),
+                  Expanded(
+                    child: _isMobile
+                        ? _buildMunicipalitiesGridMobile(sorted)
+                        : _buildMunicipalitiesGridDesktop(sorted),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -3703,178 +4454,325 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
-  Widget _buildMunicipalitiesGridMobile() {
-    return Column(
-      children: _allMunicipalities
-          .map((m) => _buildMunicipalityCard(m))
-          .toList(),
-    );
-  }
-
-  Widget _buildMunicipalitiesGridDesktop() {
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: _isTablet ? 2 : 3,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-        childAspectRatio: 2,
+  Widget _buildMunicipalityProvinceVisitSummary() {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: _isMobile ? 14 : 18,
+        vertical: _isMobile ? 14 : 16,
       ),
-      itemCount: _allMunicipalities.length,
-      itemBuilder: (context, index) =>
-          _buildMunicipalityCard(_allMunicipalities[index]),
-    );
-  }
-
-  Widget _buildMunicipalityCard(Map<String, dynamic> municipality) {
-    final name = municipality['name']?.toString() ?? 'Unknown';
-    final type = municipality['type']?.toString() ?? 'Municipality';
-    final tourists = municipality['tourists'] ?? 0;
-    final accent = type == 'City' ? _primaryOrange : _accentOrange;
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        margin: _isMobile ? const EdgeInsets.only(bottom: 12) : null,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(18),
-          onTap: () => _showMunicipalityDetails(municipality),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _cardBorder),
+        boxShadow: [
+          BoxShadow(
+            color: _primaryOrange.withValues(alpha: 0.08),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: _isMobile ? 48 : 56,
+            height: _isMobile ? 48 : 56,
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
                 colors: [
-                  const Color(0xFFFFFFFF),
-                  Color.lerp(const Color(0xFFFFFFFF), accent, 0.06)!,
+                  _primaryOrange.withValues(alpha: 0.22),
+                  _accentOrange.withValues(alpha: 0.12),
                 ],
               ),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: accent.withOpacity(0.22), width: 1.0),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.08),
-                  blurRadius: 18,
-                  offset: const Offset(0, 8),
-                ),
-                BoxShadow(
-                  color: accent.withOpacity(0.12),
-                  blurRadius: 22,
-                  offset: const Offset(0, 10),
-                  spreadRadius: -10,
-                ),
-                BoxShadow(
-                  color: Colors.white.withOpacity(0.65),
-                  blurRadius: 1,
-                  offset: const Offset(0, -1),
-                ),
-              ],
+              borderRadius: BorderRadius.circular(14),
             ),
-            child: Row(
+            child: Icon(
+              Icons.map_rounded,
+              color: _primaryOrange,
+              size: _isMobile ? 24 : 28,
+            ),
+          ),
+          SizedBox(width: _isMobile ? 12 : 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 4,
-                  margin: const EdgeInsets.only(right: 10),
-                  decoration: BoxDecoration(
-                    color: accent.withOpacity(0.55),
-                    borderRadius: BorderRadius.circular(999),
+                Text(
+                  'Tourists who visited Misamis Occidental',
+                  style: TextStyle(
+                    color: _textMuted,
+                    fontSize: _isMobile ? 12 : 13,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.all(11),
-                  decoration: BoxDecoration(
-                    color: accent.withOpacity(0.14),
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: accent.withOpacity(0.18),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                        spreadRadius: -8,
-                      ),
-                    ],
-                  ),
-                  child: Icon(
-                    Icons.location_city_rounded,
-                    color: accent,
-                    size: 22,
+                const SizedBox(height: 4),
+                Text(
+                  _formatNumber(_provinceUniqueVisitors),
+                  style: TextStyle(
+                    color: _textDark,
+                    fontSize: _isMobile ? 28 : 34,
+                    fontWeight: FontWeight.w800,
+                    height: 1.1,
+                    letterSpacing: -0.5,
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        name,
-                        style: const TextStyle(
-                          color: _textDark,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          height: 1.15,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 3,
-                            ),
-                            decoration: BoxDecoration(
-                              color: accent.withOpacity(0.14),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              type,
-                              style: TextStyle(
-                                color: accent,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              '$tourists ${tourists == 1 ? 'tourist' : 'tourists'}',
-                              style: const TextStyle(
-                                color: _textMuted,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Container(
-                  width: 28,
-                  height: 28,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: accent.withOpacity(0.28)),
-                  ),
-                  child: Icon(
-                    Icons.chevron_right_rounded,
-                    color: accent.withOpacity(0.9),
-                    size: 18,
+                const SizedBox(height: 4),
+                Text(
+                  'Unique visitors (1 person = 1, even across cities)',
+                  style: TextStyle(
+                    color: _textMuted,
+                    fontSize: _isMobile ? 11 : 12,
                   ),
                 ),
               ],
             ),
+          ),
+          Container(
+            padding: EdgeInsets.symmetric(
+              horizontal: _isMobile ? 10 : 14,
+              vertical: _isMobile ? 8 : 10,
+            ),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF1F5F9),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _cardBorder),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  'Total check-ins',
+                  style: TextStyle(
+                    color: _textMuted,
+                    fontSize: _isMobile ? 10 : 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _formatNumber(_totalCheckIns),
+                  style: TextStyle(
+                    color: _primaryOrange,
+                    fontSize: _isMobile ? 18 : 22,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMunicipalitiesGridMobile(List<Map<String, dynamic>> municipalities) {
+    return ListView.separated(
+      itemCount: municipalities.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (context, index) =>
+          _buildMunicipalityCard(municipalities[index], compact: false),
+    );
+  }
+
+  Widget _buildMunicipalitiesGridDesktop(
+    List<Map<String, dynamic>> municipalities,
+  ) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final count = municipalities.length;
+        // Fewer columns → larger cards that fill the viewport.
+        final crossAxisCount = constraints.maxWidth >= 1400
+            ? 4
+            : constraints.maxWidth >= 1000
+                ? 3
+                : 2;
+        final rows = (count / crossAxisCount).ceil().clamp(1, 20);
+        const spacing = 14.0;
+        final usableHeight = constraints.maxHeight;
+        final usableWidth = constraints.maxWidth;
+        // Expand cards to fill height (old max 88 left a huge empty gap).
+        final itemHeight =
+            ((usableHeight - spacing * (rows - 1)) / rows).clamp(96.0, 220.0);
+        final itemWidth =
+            (usableWidth - spacing * (crossAxisCount - 1)) / crossAxisCount;
+        final aspectRatio = (itemWidth / itemHeight).clamp(1.6, 4.8);
+
+        return GridView.builder(
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxisCount,
+            crossAxisSpacing: spacing,
+            mainAxisSpacing: spacing,
+            childAspectRatio: aspectRatio,
+          ),
+          itemCount: count,
+          itemBuilder: (context, index) => _buildMunicipalityCard(
+            municipalities[index],
+            compact: false,
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildMunicipalityCard(
+    Map<String, dynamic> municipality, {
+    bool compact = false,
+  }) {
+    final name = municipality['name']?.toString() ?? 'Unknown';
+    final type = municipality['type']?.toString() ?? 'Municipality';
+    final uniqueVisitors = (municipality['uniqueVisitors'] as num?)?.toInt() ??
+        (municipality['tourists'] as num?)?.toInt() ??
+        0;
+    final checkIns = (municipality['checkIns'] as num?)?.toInt() ?? 0;
+    final isCity = type == 'City';
+    final accent = isCity ? _accentOrange : _primaryOrange;
+
+    return _MunicipalityHoverCard(
+      onTap: () => _showMunicipalityDetails(municipality),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(compact ? 14 : 18),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Colors.white,
+              accent.withValues(alpha: 0.04),
+            ],
+          ),
+          border: Border.all(
+            color: isCity
+                ? accent.withValues(alpha: 0.32)
+                : const Color(0xFFE2E8F0),
+            width: isCity ? 1.4 : 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: accent.withValues(alpha: 0.08),
+              blurRadius: 18,
+              offset: const Offset(0, 8),
+            ),
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 12 : 16,
+            vertical: compact ? 12 : 14,
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: compact ? 44 : 56,
+                height: compact ? 44 : 56,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      accent.withValues(alpha: 0.22),
+                      accent.withValues(alpha: 0.08),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(compact ? 12 : 14),
+                  border: Border.all(
+                    color: accent.withValues(alpha: 0.2),
+                  ),
+                ),
+                child: Icon(
+                  isCity
+                      ? Icons.apartment_rounded
+                      : Icons.location_city_rounded,
+                  color: accent,
+                  size: compact ? 22 : 28,
+                ),
+              ),
+              SizedBox(width: compact ? 10 : 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      name,
+                      style: TextStyle(
+                        color: _textDark,
+                        fontSize: compact ? 16 : 18,
+                        fontWeight: FontWeight.bold,
+                        height: 1.2,
+                        letterSpacing: -0.2,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    SizedBox(height: compact ? 6 : 8),
+                    Row(
+                      children: [
+                        Container(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: compact ? 8 : 10,
+                            vertical: compact ? 3 : 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: accent,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            type,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: compact ? 10.5 : 11.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: compact ? 8 : 10),
+                        Icon(
+                          Icons.people_alt_rounded,
+                          size: compact ? 14 : 16,
+                          color: _textMuted,
+                        ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            '$uniqueVisitors unique visitor${uniqueVisitors == 1 ? '' : 's'}'
+                            '${checkIns > 0 ? ' · $checkIns check-in${checkIns == 1 ? '' : 's'}' : ''}',
+                            style: TextStyle(
+                              color: _textMuted,
+                              fontSize: compact ? 12 : 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                width: compact ? 32 : 36,
+                height: compact ? 32 : 36,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.arrow_forward_rounded,
+                  color: accent,
+                  size: compact ? 16 : 18,
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -3895,7 +4793,9 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     final min = dates.reduce((a, b) => a.isBefore(b) ? a : b);
     final max = dates.reduce((a, b) => a.isAfter(b) ? a : b);
     final days = max.difference(min).inDays + 1;
-    return days > 0 ? (_checkIns.length / days).round() : _checkIns.length;
+    return days > 0
+        ? (sumCheckInVisitors(_checkIns) / days).round()
+        : sumCheckInVisitors(_checkIns);
   }
 
   String get _analyticsPeakHour {
@@ -3949,76 +4849,226 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   // ==================== ANALYTICS SECTION ====================
-  /// Insights not shown on the main Dashboard (no duplicate totals/trends/demographics).
+  /// Insights + provincial exports (moved from Reports).
   Widget _buildAnalyticsContent() {
-    return Container(
-      color: _darkBg,
-      child: Column(
-        children: [
-          _buildHeader(
-            'Analytics',
-            subtitle:
-                'Patterns & spot rankings — totals and charts are on Dashboard',
-          ),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: EdgeInsets.all(_isMobile ? 12 : 20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _buildAnalyticsCards(),
-                  const SizedBox(height: 16),
-                  _buildTopSpotsChart(),
-                ],
+    final pad = _isMobile ? 14.0 : 22.0;
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      color: _primaryOrange,
+      child: Container(
+        color: _darkBg,
+        child: Column(
+          children: [
+            _buildHeader(
+              'Analytics',
+              subtitle:
+                  'Insights and provincial exports for Misamis Occidental',
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: EdgeInsets.fromLTRB(pad, 16, pad, pad + 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildAnalyticsSectionLabel(
+                      'Key insights',
+                      'Quick patterns from check-ins and registrations',
+                      Icons.insights_rounded,
+                    ),
+                    const SizedBox(height: 12),
+                    _buildAnalyticsCards(),
+                    const SizedBox(height: 22),
+                    _buildAnalyticsSectionLabel(
+                      'Spot rankings',
+                      'Most visited tourist spots by check-in volume',
+                      Icons.emoji_events_outlined,
+                    ),
+                    const SizedBox(height: 12),
+                    _buildTopSpotsChart(),
+                    const SizedBox(height: 22),
+                    _buildAnalyticsSectionLabel(
+                      'Provincial exports',
+                      'Download province-wide reports for all LGUs',
+                      Icons.file_download_outlined,
+                    ),
+                    const SizedBox(height: 12),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final sideBySide = !_isMobile && constraints.maxWidth >= 980;
+                        if (!sideBySide) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _buildGovernorQuickReports(),
+                              const SizedBox(height: 14),
+                              _buildGovernorCustomReportGenerator(),
+                            ],
+                          );
+                        }
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(child: _buildGovernorQuickReports()),
+                            const SizedBox(width: 14),
+                            Expanded(child: _buildGovernorCustomReportGenerator()),
+                          ],
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 22),
+                    _buildAnalyticsSectionLabel(
+                      'DOT templates (provincial)',
+                      'Official forms from Supabase — filled for all LGUs',
+                      Icons.description_outlined,
+                    ),
+                    const SizedBox(height: 12),
+                    _buildGovernorDotReportExports(),
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
+    );
+  }
+
+  Widget _buildGovernorDotReportExports() {
+    final catalog = _governorAllSpots
+        .map(
+          (s) => DotVar2SpotCatalogEntry(
+            spotId: s['id']?.toString() ?? '',
+            name: s['name']?.toString() ?? 'Unknown',
+            dotAttractionCode: s['dotAttractionCode']?.toString() ?? '',
+          ),
+        )
+        .toList();
+
+    return DotReportExportPanel(
+      primaryColor: _primaryOrange,
+      textDark: _textDark,
+      textMuted: _textMuted,
+      borderColor: _cardBorder,
+      scopeLabel: 'Misamis Occidental (Provincial)',
+      scopeSlug: 'misamis_occidental_provincial',
+      isProvincial: true,
+      isMobile: _isMobile,
+      checkIns: _checkIns,
+      tourists: _tourists,
+      catalogSpots: catalog,
+      wrapPanel: (child) => _buildGovernorReportPanel(child: child),
+    );
+  }
+
+  Widget _buildAnalyticsSectionLabel(
+    String title,
+    String subtitle,
+    IconData icon,
+  ) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: _primaryOrange.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(11),
+          ),
+          child: Icon(icon, color: _primaryOrange, size: 18),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  color: _textDark,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.2,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  color: _textMuted,
+                  fontSize: 12.5,
+                  height: 1.35,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
   Widget _buildAnalyticsCards() {
     final topOrigin = _analyticsTopOrigin;
-    final originDisplay = topOrigin.length > 22
-        ? '${topOrigin.substring(0, 20)}…'
+    final originDisplay = topOrigin.length > 28
+        ? '${topOrigin.substring(0, 26)}…'
         : topOrigin;
 
-    return GridView.count(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisCount: _isMobile ? 1 : 3,
-      crossAxisSpacing: 12,
-      mainAxisSpacing: 12,
-      childAspectRatio: _isMobile ? 2.4 : 2.2,
+    final cards = [
+      (
+        title: 'Daily average',
+        subtitle: 'Check-ins per active day',
+        value: '$_analyticsDailyAvg',
+        icon: Icons.calendar_today_rounded,
+        accent: const Color(0xFF2563EB),
+      ),
+      (
+        title: 'Peak hour',
+        subtitle: 'Busiest QR scan window',
+        value: _analyticsPeakHour,
+        icon: Icons.access_time_rounded,
+        accent: _primaryOrange,
+      ),
+      (
+        title: 'Top origin',
+        subtitle: 'Most common registration source',
+        value: originDisplay,
+        icon: Icons.flight_takeoff_rounded,
+        accent: const Color(0xFF059669),
+      ),
+    ];
+
+    if (_isMobile) {
+      return Column(
+        children: [
+          for (var i = 0; i < cards.length; i++) ...[
+            if (i > 0) const SizedBox(height: 10),
+            _buildAnalyticsCard(
+              title: cards[i].title,
+              subtitle: cards[i].subtitle,
+              value: cards[i].value,
+              icon: cards[i].icon,
+              accent: cards[i].accent,
+            ),
+          ],
+        ],
+      );
+    }
+
+    return Row(
       children: [
-        _buildAnalyticsCard(
-          title: 'Daily Avg',
-          subtitle: 'Average check-ins per active day',
-          value: '$_analyticsDailyAvg',
-          icon: Icons.calendar_today_rounded,
-          background: const Color(0xFFE3F2FD),
-          iconBg: const Color(0xFFBBDEFB),
-          iconColor: const Color(0xFF1565C0),
-        ),
-        _buildAnalyticsCard(
-          title: 'Peak Hour',
-          subtitle: 'Busiest hour for QR scans',
-          value: _analyticsPeakHour,
-          icon: Icons.access_time_rounded,
-          background: const Color(0xFFFFF3E0),
-          iconBg: const Color(0xFFFFE0B2),
-          iconColor: const Color(0xFFE65100),
-        ),
-        _buildAnalyticsCard(
-          title: 'Top Origin',
-          subtitle: 'Where most tourists registered from',
-          value: originDisplay,
-          icon: Icons.flight_rounded,
-          background: const Color(0xFFE8F5E9),
-          iconBg: const Color(0xFFC8E6C9),
-          iconColor: const Color(0xFF2E7D32),
-        ),
+        for (var i = 0; i < cards.length; i++) ...[
+          if (i > 0) const SizedBox(width: 12),
+          Expanded(
+            child: _buildAnalyticsCard(
+              title: cards[i].title,
+              subtitle: cards[i].subtitle,
+              value: cards[i].value,
+              icon: cards[i].icon,
+              accent: cards[i].accent,
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -4028,53 +5078,73 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     required String subtitle,
     required String value,
     required IconData icon,
-    required Color background,
-    required Color iconBg,
-    required Color iconColor,
+    required Color accent,
   }) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 15),
       decoration: BoxDecoration(
-        color: background,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.black.withOpacity(0.04)),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _cardBorder),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x08000000),
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
+        ],
       ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            padding: const EdgeInsets.all(10),
+            width: 42,
+            height: 42,
             decoration: BoxDecoration(
-              color: iconBg,
+              color: accent.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Icon(icon, color: iconColor, size: 22),
+            child: Icon(icon, color: accent, size: 20),
           ),
-          const SizedBox(height: 10),
-          Text(
-            value,
-            textAlign: TextAlign.center,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: _textDark,
-              fontSize: 22,
-              fontWeight: FontWeight.w700,
-              height: 1.1,
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: _textMuted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: _textDark,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    height: 1.15,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _textMuted.withValues(alpha: 0.92),
+                    fontSize: 11.5,
+                    height: 1.3,
+                  ),
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            title,
-            style: const TextStyle(
-              color: _textDark,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          Text(
-            subtitle,
-            style: TextStyle(color: _textMuted.withOpacity(0.9), fontSize: 10),
           ),
         ],
       ),
@@ -4085,18 +5155,56 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     final spots = _analyticsTopSpots.take(8).toList();
     final maxVisits = spots.isEmpty ? 1 : (spots.first['visits'] as int);
 
-    return _wrapDashboardRichPanel(
+    return Container(
+      padding: EdgeInsets.all(_isMobile ? 14 : 18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _cardBorder),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x08000000),
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _dashboardSectionTitle(
-            title: 'Most Visited Spots',
-            icon: Icons.location_on_rounded,
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Most visited spots',
+                  style: TextStyle(
+                    color: _textDark,
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF7ED),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '${spots.length} listed',
+                  style: const TextStyle(
+                    color: Color(0xFFC2410C),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 14),
           if (spots.isEmpty)
             const Padding(
-              padding: EdgeInsets.symmetric(vertical: 32),
+              padding: EdgeInsets.symmetric(vertical: 36),
               child: Center(
                 child: Text(
                   'No spot check-ins yet',
@@ -4110,30 +5218,29 @@ class _GovernorDashboardState extends State<GovernorDashboard>
               final spot = entry.value;
               final visits = spot['visits'] as int;
               final name = spot['name'] as String;
+              final isTop = index == 0;
               return Padding(
-                padding: const EdgeInsets.only(bottom: 10),
+                padding: EdgeInsets.only(bottom: index == spots.length - 1 ? 0 : 12),
                 child: Row(
                   children: [
                     Container(
-                      width: 26,
-                      height: 26,
+                      width: 28,
+                      height: 28,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
-                        color: index == 0
-                            ? _primaryOrange
-                            : const Color(0xFFF4F4F5),
-                        borderRadius: BorderRadius.circular(8),
+                        color: isTop ? _primaryOrange : const Color(0xFFF1F5F9),
+                        borderRadius: BorderRadius.circular(9),
                       ),
                       child: Text(
                         '${index + 1}',
                         style: TextStyle(
-                          color: index == 0 ? Colors.white : _textMuted,
+                          color: isTop ? Colors.white : _textMuted,
                           fontSize: 12,
-                          fontWeight: FontWeight.w700,
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -4144,42 +5251,34 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               color: _textDark,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 7),
                           ClipRRect(
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(999),
                             child: LinearProgressIndicator(
                               value: maxVisits > 0 ? visits / maxVisits : 0,
-                              backgroundColor: const Color(0xFFE4E4E7),
-                              valueColor: const AlwaysStoppedAnimation<Color>(
-                                _primaryOrange,
+                              backgroundColor: const Color(0xFFF1F5F9),
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                isTop
+                                    ? _primaryOrange
+                                    : _primaryOrange.withValues(alpha: 0.55),
                               ),
-                              minHeight: 6,
+                              minHeight: 7,
                             ),
                           ),
                         ],
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFF3E0),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        '$visits',
-                        style: const TextStyle(
-                          color: _primaryOrange,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12,
-                        ),
+                    const SizedBox(width: 12),
+                    Text(
+                      '$visits',
+                      style: TextStyle(
+                        color: isTop ? _primaryOrange : _textDark,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
                       ),
                     ),
                   ],
@@ -4191,113 +5290,67 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
-  // ==================== ANNOUNCEMENTS SECTION ====================
+  // ==================== EVENTS (LGU publications — auto-published) ====================
   Widget _buildAnnouncementsContent() {
+    final unreadCount = _pendingLguEventsCount;
     final publishedCount = _announcements
-        .where((a) => a['published'] == true)
+        .where((a) => LguEventService.isVisibleToTourists(a))
         .length;
-    final draftCount = _announcements.length - publishedCount;
+    final unpublishedCount = _announcements
+        .where(
+          (a) =>
+              LguEventService.statusOf(a) == 'approved' &&
+              a['published'] != true,
+        )
+        .length;
+    final sorted = List<Map<String, dynamic>>.from(_announcements)
+      ..sort(_sortAnnouncementsForGovernor);
 
     return Container(
       color: _darkBg,
       child: Column(
         children: [
           _buildHeader(
-            'Announcements',
-            subtitle: 'Create and publish notices for tourists',
-            actions: [
-              if (!_isMobile)
-                OutlinedButton.icon(
-                  onPressed: _sendTestPushAnnouncement,
-                  icon: const Icon(
-                    Icons.notifications_active_rounded,
-                    size: 18,
-                  ),
-                  label: const Text(
-                    'Test push',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    side: const BorderSide(color: Colors.white, width: 1.5),
-                    backgroundColor: Colors.white.withOpacity(0.12),
-                  ),
-                ),
-              if (!_isMobile) const SizedBox(width: 8),
-              ElevatedButton.icon(
-                onPressed: _showCreateAnnouncementDialog,
-                icon: Icon(
-                  Icons.add_rounded,
-                  size: 18,
-                  color: _isMobile ? Colors.white : _primaryOrange,
-                ),
-                label: Text(
-                  _isMobile ? 'New' : 'New announcement',
-                  style: TextStyle(
-                    color: _isMobile ? Colors.white : _primaryOrange,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _isMobile
-                      ? Colors.white.withOpacity(0.2)
-                      : Colors.white,
-                  foregroundColor: _isMobile ? Colors.white : _primaryOrange,
-                  elevation: 0,
-                  side: _isMobile
-                      ? const BorderSide(color: Colors.white, width: 1.5)
-                      : null,
-                ),
-              ),
-            ],
+            'Events',
+            subtitle: unreadCount > 0
+                ? '$unreadCount new LGU event${unreadCount == 1 ? '' : 's'}'
+                : 'Province-wide LGU events (auto-published)',
           ),
           Expanded(
             child: Padding(
               padding: EdgeInsets.fromLTRB(
                 _isMobile ? 12 : 20,
-                0,
+                _isMobile ? 14 : 18,
                 _isMobile ? 12 : 20,
                 16,
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (_isMobile)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: OutlinedButton.icon(
-                        onPressed: _sendTestPushAnnouncement,
-                        icon: const Icon(Icons.notifications_active_rounded),
-                        label: const Text('Send test push'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: _primaryOrange,
-                          side: const BorderSide(color: _cardBorder),
-                        ),
-                      ),
-                    ),
                   if (_announcements.isNotEmpty)
-                    _buildAnnouncementsSummaryBar(publishedCount, draftCount),
-                  if (_announcements.isNotEmpty) const SizedBox(height: 12),
+                    _buildEventsSummaryBar(
+                      unreadCount,
+                      publishedCount,
+                      unpublishedCount,
+                    ),
+                  if (_announcements.isNotEmpty) const SizedBox(height: 14),
                   Expanded(
                     child: _announcements.isEmpty
                         ? Center(
                             child: _buildEmptyState(
-                              'No announcements yet — tap New announcement',
-                              Icons.campaign_outlined,
+                              'No LGU events yet — municipalities publish events from their dashboard',
+                              Icons.event_outlined,
                             ),
                           )
                         : Container(
                             decoration: _dashboardPanelDecoration(),
                             child: ListView.separated(
                               padding: const EdgeInsets.all(12),
-                              itemCount: _announcements.length,
+                              itemCount: sorted.length,
                               separatorBuilder: (_, __) =>
                                   const SizedBox(height: 10),
                               itemBuilder: (context, index) =>
-                                  _buildAnnouncementCard(_announcements[index]),
+                                  _buildAnnouncementCard(sorted[index]),
                             ),
                           ),
                   ),
@@ -4307,6 +5360,152 @@ class _GovernorDashboardState extends State<GovernorDashboard>
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildEventsSummaryBar(
+    int unread,
+    int published,
+    int unpublished,
+  ) {
+    Widget statCard({
+      required String label,
+      required String value,
+      required Color color,
+      required IconData icon,
+    }) {
+      return Expanded(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.04),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: color, size: 18),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      value,
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        height: 1.1,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      label,
+                      style: const TextStyle(
+                        color: _textMuted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_isMobile) {
+      return Column(
+        children: [
+          Row(
+            children: [
+              statCard(
+                label: 'New',
+                value: '$unread',
+                color: const Color(0xFFEF4444),
+                icon: Icons.fiber_new_rounded,
+              ),
+              const SizedBox(width: 8),
+              statCard(
+                label: 'Live',
+                value: '$published',
+                color: const Color(0xFF16A34A),
+                icon: Icons.check_circle_rounded,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              statCard(
+                label: 'Unpublished',
+                value: '$unpublished',
+                color: _textMuted,
+                icon: Icons.visibility_off_outlined,
+              ),
+              const SizedBox(width: 8),
+              statCard(
+                label: 'Total',
+                value: '${_announcements.length}',
+                color: _primaryOrange,
+                icon: Icons.event_note_rounded,
+              ),
+            ],
+          ),
+        ],
+      );
+    }
+
+    return Row(
+      children: [
+        statCard(
+          label: 'New',
+          value: '$unread',
+          color: const Color(0xFFEF4444),
+          icon: Icons.fiber_new_rounded,
+        ),
+        const SizedBox(width: 10),
+        statCard(
+          label: 'Live',
+          value: '$published',
+          color: const Color(0xFF16A34A),
+          icon: Icons.check_circle_rounded,
+        ),
+        const SizedBox(width: 10),
+        statCard(
+          label: 'Unpublished',
+          value: '$unpublished',
+          color: _textMuted,
+          icon: Icons.visibility_off_outlined,
+        ),
+        const SizedBox(width: 10),
+        statCard(
+          label: 'Total',
+          value: '${_announcements.length}',
+          color: _primaryOrange,
+          icon: Icons.event_note_rounded,
+        ),
+      ],
     );
   }
 
@@ -4474,156 +5673,203 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   Widget _buildAnnouncementCard(Map<String, dynamic> announcement) {
-    final isPublished = announcement['published'] == true;
-    final type = announcement['type']?.toString() ?? 'General';
+    final status = LguEventService.statusOf(announcement);
+    final isPublished = LguEventService.isVisibleToTourists(announcement);
+    final type = announcement['type']?.toString() ?? LguEventService.typeEvent;
     final typeColor = _announcementTypeColor(type);
     final title = announcement['title']?.toString().trim() ?? 'Untitled';
     final content = announcement['content']?.toString().trim() ?? '';
     final date = announcement['date']?.toString() ?? '—';
+    final municipality =
+        announcement['municipalityName']?.toString().trim() ?? '';
+    final imageUrl = LguEventService.resolveDisplayImage(announcement);
+    final isPending = status == 'pending';
 
-    final body = Padding(
-      padding: const EdgeInsets.all(14),
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isPending
+              ? const Color(0xFFFBBF24).withValues(alpha: 0.65)
+              : const Color(0xFFE5E7EB),
+          width: isPending ? 1.4 : 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: typeColor.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(
-                  _announcementTypeIcon(type),
-                  color: typeColor,
-                  size: 20,
+          if (imageUrl != null && imageUrl.isNotEmpty)
+            SizedBox(
+              height: _isMobile ? 148 : 168,
+              width: double.infinity,
+              child: ColoredBox(
+                color: const Color(0xFF1E2530),
+                child: SpotImage(
+                  imageUrl: imageUrl,
+                  fit: BoxFit.cover,
+                  width: double.infinity,
+                  height: double.infinity,
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: typeColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        _announcementTypeIcon(type),
+                        color: typeColor,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
                             title,
                             style: const TextStyle(
                               color: _textDark,
                               fontSize: 15,
                               fontWeight: FontWeight.w700,
+                              height: 1.25,
                             ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                        ),
-                        _announcementStatusBadge(isPublished),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      content.isEmpty ? 'No message body' : content,
-                      style: TextStyle(
-                        color: content.isEmpty
-                            ? _textMuted.withOpacity(0.7)
-                            : _textMuted,
-                        fontSize: 13,
-                        height: 1.35,
+                          if (municipality.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              'From $municipality',
+                              style: const TextStyle(
+                                color: _textMuted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ],
                       ),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(width: 8),
+                    _announcementStatusBadge(status, isPublished),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  content.isEmpty ? 'No details' : content,
+                  style: TextStyle(
+                    color: content.isEmpty
+                        ? _textMuted.withValues(alpha: 0.7)
+                        : _textMuted,
+                    fontSize: 13,
+                    height: 1.4,
+                  ),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.calendar_today_outlined,
+                      size: 14,
+                      color: _textMuted,
+                    ),
+                    Text(
+                      date,
+                      style: const TextStyle(color: _textMuted, fontSize: 11),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: typeColor.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        type,
+                        style: TextStyle(
+                          color: typeColor,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
                   ],
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              Icon(Icons.calendar_today_outlined, size: 14, color: _textMuted),
-              Text(
-                date,
-                style: const TextStyle(color: _textMuted, fontSize: 11),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: typeColor.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  type,
-                  style: TextStyle(
-                    color: typeColor,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          if (_isMobile) ...[
-            const SizedBox(height: 12),
-            _buildAnnouncementActionsRow(announcement, isPublished),
-          ],
-        ],
-      ),
-    );
-
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFFFAFAFA),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _cardBorder),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: IntrinsicHeight(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              width: 4,
-              color: isPublished ? _primaryOrange : const Color(0xFF9CA3AF),
+                const SizedBox(height: 12),
+                const Divider(height: 1, color: Color(0xFFE5E7EB)),
+                const SizedBox(height: 10),
+                _buildAnnouncementActionsRow(announcement, status, isPublished),
+              ],
             ),
-            Expanded(child: body),
-            if (!_isMobile) ...[
-              const VerticalDivider(width: 1, color: _cardBorder),
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 10,
-                ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    _buildAnnouncementActionsRow(announcement, isPublished),
-                  ],
-                ),
-              ),
-            ],
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _announcementStatusBadge(bool isPublished) {
+  Widget _announcementStatusBadge(String status, bool isPublished) {
+    Color bg;
+    Color fg;
+    String label;
+    switch (status) {
+      case 'approved':
+        label = isPublished ? 'Live' : 'Unpublished';
+        bg = const Color(0xFFECFDF5);
+        fg = const Color(0xFF16A34A);
+        break;
+      case 'rejected':
+        label = 'Rejected (legacy)';
+        bg = const Color(0xFFFEF2F2);
+        fg = const Color(0xFFDC2626);
+        break;
+      default:
+        label = 'Pending (legacy)';
+        bg = const Color(0xFFFFF7ED);
+        fg = const Color(0xFFD97706);
+    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: isPublished ? const Color(0xFFFFF3E0) : const Color(0xFFF4F4F5),
+        color: bg,
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(
-        isPublished ? 'Published' : 'Draft',
+        label,
         style: TextStyle(
-          color: isPublished ? _primaryOrange : _textMuted,
+          color: fg,
           fontSize: 10,
           fontWeight: FontWeight.w700,
         ),
@@ -4633,70 +5879,163 @@ class _GovernorDashboardState extends State<GovernorDashboard>
 
   Widget _buildAnnouncementActionsRow(
     Map<String, dynamic> announcement,
+    String status,
     bool isPublished,
   ) {
-    if (_isMobile) {
-      return Row(
-        children: [
-          Expanded(
-            child: _announcementActionButton(
-              label: isPublished ? 'Unpublish' : 'Publish',
-              icon: isPublished
-                  ? Icons.visibility_off_outlined
-                  : Icons.publish_outlined,
-              color: isPublished ? _textMuted : const Color(0xFF2E7D32),
-              onPressed: () => _togglePublishAnnouncement(announcement),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _announcementActionButton(
-              label: 'Edit',
-              icon: Icons.edit_outlined,
-              color: _primaryOrange,
-              onPressed: () => _editAnnouncement(announcement),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _announcementActionButton(
-              label: 'Delete',
-              icon: Icons.delete_outline,
-              color: const Color(0xFFC62828),
-              onPressed: () => _deleteAnnouncement(announcement),
-            ),
-          ),
-        ],
+    final buttons = <Widget>[];
+
+    // Legacy pending items only — new posts auto-publish.
+    if (status == 'pending') {
+      buttons.add(
+        _announcementActionButton(
+          label: 'Publish',
+          icon: Icons.check_circle_outline,
+          color: const Color(0xFF2E7D32),
+          onPressed: () => _approveLguEvent(announcement),
+        ),
+      );
+    }
+    if (status == 'approved' && isPublished) {
+      buttons.add(
+        _announcementActionButton(
+          label: 'Unpublish',
+          icon: Icons.visibility_off_outlined,
+          color: _textMuted,
+          onPressed: () => _unpublishLguEvent(announcement),
+        ),
       );
     }
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _announcementActionButton(
-          label: isPublished ? 'Unpublish' : 'Publish',
-          icon: isPublished
-              ? Icons.visibility_off_outlined
-              : Icons.publish_outlined,
-          color: isPublished ? _textMuted : const Color(0xFF2E7D32),
-          onPressed: () => _togglePublishAnnouncement(announcement),
-        ),
-        const SizedBox(height: 6),
-        _announcementActionButton(
-          label: 'Edit',
-          icon: Icons.edit_outlined,
-          color: _primaryOrange,
-          onPressed: () => _editAnnouncement(announcement),
-        ),
-        const SizedBox(height: 6),
-        _announcementActionButton(
-          label: 'Delete',
-          icon: Icons.delete_outline,
-          color: const Color(0xFFC62828),
-          onPressed: () => _deleteAnnouncement(announcement),
-        ),
-      ],
+    if (buttons.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: buttons,
     );
+  }
+
+  Future<void> _approveLguEvent(Map<String, dynamic> announcement) async {
+    final id = announcement['id']?.toString() ?? '';
+    if (id.isEmpty) return;
+    try {
+      await LguEventService().approveEvent(
+        eventId: id,
+        approvedBy: FirebaseAuth.instance.currentUser?.email ?? 'Governor',
+      );
+      final pushSent = await _broadcastPublishedAnnouncement(
+        title: announcement['title']?.toString() ?? '',
+        content: announcement['content']?.toString() ?? '',
+        type: LguEventService.typeEvent,
+        announcementId: id,
+      );
+      setState(() {
+        final index = _announcements.indexWhere((a) => a['id'] == id);
+        if (index != -1) {
+          _announcements[index]['status'] = 'approved';
+          _announcements[index]['published'] = true;
+        }
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_publishedAnnouncementSnackMessage(pushSent)),
+          backgroundColor: _primaryOrange,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not approve event: $e')),
+      );
+    }
+  }
+
+  Future<void> _rejectLguEvent(Map<String, dynamic> announcement) async {
+    final id = announcement['id']?.toString() ?? '';
+    if (id.isEmpty) return;
+    final reasonController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Reject event?'),
+        content: TextField(
+          controller: reasonController,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            labelText: 'Reason (optional)',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Reject'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      reasonController.dispose();
+      return;
+    }
+    try {
+      await LguEventService().rejectEvent(
+        eventId: id,
+        reason: reasonController.text,
+        rejectedBy: FirebaseAuth.instance.currentUser?.email ?? 'Governor',
+      );
+      setState(() {
+        final index = _announcements.indexWhere((a) => a['id'] == id);
+        if (index != -1) {
+          _announcements[index]['status'] = 'rejected';
+          _announcements[index]['published'] = false;
+          if (reasonController.text.trim().isNotEmpty) {
+            _announcements[index]['rejectedReason'] = reasonController.text.trim();
+          }
+        }
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Event rejected')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not reject event: $e')),
+      );
+    } finally {
+      reasonController.dispose();
+    }
+  }
+
+  Future<void> _unpublishLguEvent(Map<String, dynamic> announcement) async {
+    final id = announcement['id']?.toString() ?? '';
+    if (id.isEmpty) return;
+    try {
+      await LguEventService().unpublishEvent(id);
+      setState(() {
+        final index = _announcements.indexWhere((a) => a['id'] == id);
+        if (index != -1) {
+          _announcements[index]['published'] = false;
+        }
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Event unpublished')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not unpublish event: $e')),
+      );
+    }
   }
 
   Widget _announcementActionButton({
@@ -5118,6 +6457,679 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
+  // ==================== PROVINCIAL EXPORTS (on Analytics) ====================
+  Widget _buildGovernorReportPanel({required Widget child}) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(_isMobile ? 14 : 18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _cardBorder),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x08000000),
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
+
+  Widget _buildGovernorQuickReports() {
+    final items = <({
+      String title,
+      String subtitle,
+      IconData icon,
+      Color accent,
+      String type,
+    })>[
+      (
+        title: 'Daily',
+        subtitle: "Today's check-ins",
+        icon: Icons.today_rounded,
+        accent: const Color(0xFF2563EB),
+        type: 'daily',
+      ),
+      (
+        title: 'Weekly',
+        subtitle: 'Last 7 days',
+        icon: Icons.date_range_rounded,
+        accent: const Color(0xFFEA580C),
+        type: 'weekly',
+      ),
+      (
+        title: 'Monthly',
+        subtitle: 'This month to date',
+        icon: Icons.calendar_month_rounded,
+        accent: _primaryOrange,
+        type: 'monthly',
+      ),
+      (
+        title: 'Annual',
+        subtitle: 'Year to date',
+        icon: Icons.calendar_today_rounded,
+        accent: const Color(0xFF0F766E),
+        type: 'annual',
+      ),
+    ];
+
+    return _buildGovernorReportPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Quick exports',
+            style: TextStyle(
+              color: _textDark,
+              fontSize: 14.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'One-tap province-wide downloads by time window.',
+            style: TextStyle(color: _textMuted, fontSize: 12, height: 1.35),
+          ),
+          const SizedBox(height: 14),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final twoCol = constraints.maxWidth >= 360;
+              if (!twoCol) {
+                return Column(
+                  children: [
+                    for (var i = 0; i < items.length; i++) ...[
+                      if (i > 0) const SizedBox(height: 10),
+                      _buildGovernorQuickReportRow(
+                        title: items[i].title,
+                        subtitle: items[i].subtitle,
+                        icon: items[i].icon,
+                        accent: items[i].accent,
+                        type: items[i].type,
+                      ),
+                    ],
+                  ],
+                );
+              }
+              return Column(
+                children: [
+                  for (var row = 0; row < 2; row++) ...[
+                    if (row > 0) const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        for (var col = 0; col < 2; col++) ...[
+                          if (col > 0) const SizedBox(width: 10),
+                          Expanded(
+                            child: _buildGovernorQuickReportRow(
+                              title: items[row * 2 + col].title,
+                              subtitle: items[row * 2 + col].subtitle,
+                              icon: items[row * 2 + col].icon,
+                              accent: items[row * 2 + col].accent,
+                              type: items[row * 2 + col].type,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGovernorQuickReportRow({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color accent,
+    required String type,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _generateGovernorQuickReport(type),
+        borderRadius: BorderRadius.circular(14),
+        child: Ink(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8FAFC),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: _cardBorder),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: accent.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(icon, color: accent, size: 17),
+                  ),
+                  const Spacer(),
+                  Icon(Icons.download_rounded, size: 16, color: accent),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: _textDark,
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  color: _textMuted,
+                  fontSize: 11.5,
+                  height: 1.3,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGovernorCustomReportGenerator() {
+    return _buildGovernorReportPanel(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final stacked = _isMobile || constraints.maxWidth < 720;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Custom report',
+                style: TextStyle(
+                  color: _textDark,
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Pick a date range and report type, then export province-wide.',
+                style: TextStyle(color: _textMuted, fontSize: 12, height: 1.35),
+              ),
+              const SizedBox(height: 16),
+              if (stacked) ...[
+                _buildGovernorDatePicker(
+                  'Start Date',
+                  _reportStartDate,
+                  (d) => setState(() => _reportStartDate = d),
+                ),
+                const SizedBox(height: 12),
+                _buildGovernorDatePicker(
+                  'End Date',
+                  _reportEndDate,
+                  (d) => setState(() => _reportEndDate = d),
+                ),
+                const SizedBox(height: 12),
+                _buildGovernorReportTypeDropdown(),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _generateGovernorCustomReport,
+                    icon: _isExporting
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(Icons.download),
+                    label: Text(_isExporting ? 'Generating...' : 'Generate'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _primaryOrange,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+              ] else
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  crossAxisAlignment: WrapCrossAlignment.end,
+                  children: [
+                    SizedBox(
+                      width: 190,
+                      child: _buildGovernorDatePicker(
+                        'Start Date',
+                        _reportStartDate,
+                        (d) => setState(() => _reportStartDate = d),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 190,
+                      child: _buildGovernorDatePicker(
+                        'End Date',
+                        _reportEndDate,
+                        (d) => setState(() => _reportEndDate = d),
+                      ),
+                    ),
+                    SizedBox(
+                      width: math.min(280.0, constraints.maxWidth - 24),
+                      child: _buildGovernorReportTypeDropdown(),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed: _generateGovernorCustomReport,
+                      icon: _isExporting
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.download_rounded, size: 17),
+                      label: Text(_isExporting ? 'Generating...' : 'Generate'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _primaryOrange,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 11,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildGovernorDatePicker(
+    String label,
+    DateTime? selected,
+    ValueChanged<DateTime> onSelect,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(color: _textMuted, fontSize: 11)),
+        const SizedBox(height: 4),
+        InkWell(
+          onTap: () async {
+            final date = await showDatePicker(
+              context: context,
+              initialDate: selected ?? DateTime.now(),
+              firstDate: DateTime(2020),
+              lastDate: DateTime.now().add(const Duration(days: 365)),
+            );
+            if (date != null) onSelect(date);
+          },
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              border: Border.all(color: _cardBorder),
+              borderRadius: BorderRadius.circular(10),
+              color: Colors.white,
+            ),
+            child: Text(
+              selected != null
+                  ? formatReportDate(selected)
+                  : 'Select date',
+              style: TextStyle(
+                color: selected != null ? _textDark : _textMuted,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildGovernorReportTypeDropdown() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text(
+          'Report Type',
+          style: TextStyle(color: _textMuted, fontSize: 11),
+        ),
+        const SizedBox(height: 4),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: _cardBorder),
+          ),
+          child: DropdownButton<String>(
+            value: _reportType,
+            isExpanded: true,
+            isDense: true,
+            dropdownColor: Colors.white,
+            underline: const SizedBox.shrink(),
+            icon: Icon(Icons.keyboard_arrow_down, color: _textMuted, size: 20),
+            style: const TextStyle(color: _textDark, fontSize: 13),
+            items: _reportTypes
+                .map(
+                  (t) => DropdownMenuItem(
+                    value: t,
+                    child: Text(
+                      t,
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                )
+                .toList(),
+            onChanged: (v) {
+              if (v != null) setState(() => _reportType = v);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _generateGovernorQuickReport(String type) async {
+    final now = DateTime.now();
+    late DateTime startDate;
+    late DateTime endDate;
+
+    switch (type) {
+      case 'daily':
+        startDate = DateTime(now.year, now.month, now.day);
+        endDate = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
+        break;
+      case 'weekly':
+        final todayStart = DateTime(now.year, now.month, now.day);
+        startDate = todayStart.subtract(const Duration(days: 6));
+        endDate = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
+        break;
+      case 'monthly':
+        startDate = DateTime(now.year, now.month, 1);
+        endDate = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
+        break;
+      case 'annual':
+        startDate = DateTime(now.year, 1, 1);
+        endDate = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
+        break;
+      default:
+        startDate = DateTime(now.year, now.month, now.day);
+        endDate = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
+    }
+
+    await _generateGovernorReport(
+      startDate,
+      endDate,
+      'All Data',
+      type,
+    );
+  }
+
+  Future<void> _generateGovernorCustomReport() async {
+    if (_reportStartDate == null || _reportEndDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please select both start and end dates'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final start = DateTime(
+      _reportStartDate!.year,
+      _reportStartDate!.month,
+      _reportStartDate!.day,
+    );
+    final end = DateTime(
+      _reportEndDate!.year,
+      _reportEndDate!.month,
+      _reportEndDate!.day,
+      23,
+      59,
+      59,
+      999,
+    );
+    if (end.isBefore(start)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('End date must be on or after start date'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    if (_reportType == 'DOT Tourism Attraction Visitor Record (VAR 2)') {
+      await _generateGovernorVar2Report(start, end, 'custom');
+      return;
+    }
+
+    await _generateGovernorReport(start, end, _reportType, 'custom');
+  }
+
+  Future<void> _generateGovernorVar2Report(
+    DateTime startDate,
+    DateTime endDate,
+    String period,
+  ) async {
+    setState(() {
+      _isExporting = true;
+      _exportProgress = 0.0;
+    });
+
+    for (var i = 1; i <= 8; i++) {
+      await Future.delayed(const Duration(milliseconds: 80));
+      if (mounted) setState(() => _exportProgress = i / 8);
+    }
+
+    final filtered = filterCheckInsInDateRange(_checkIns, startDate, endDate);
+    final catalog = _governorAllSpots
+        .map(
+          (s) => DotVar2SpotCatalogEntry(
+            spotId: s['id']?.toString() ?? '',
+            name: s['name']?.toString() ?? 'Unknown',
+            dotAttractionCode: s['dotAttractionCode']?.toString() ?? '',
+          ),
+        )
+        .toList();
+
+    const provinceLabel = 'Misamis Occidental (Provincial)';
+    final var2 = buildDotVar2VisitorRecordReport(
+      checkIns: filtered,
+      catalogSpots: catalog,
+      municipalityName: provinceLabel,
+      startDate: startDate,
+      endDate: endDate,
+    );
+
+    final csvName = var2CsvFilename(
+      municipalitySlug: 'misamis_occidental_provincial',
+      startDate: startDate,
+      endDate: endDate,
+    );
+    final xlsxName = var2XlsxFilename(
+      municipalitySlug: 'misamis_occidental_provincial',
+      startDate: startDate,
+      endDate: endDate,
+    );
+
+    final report = StringBuffer()
+      ..writeln('=== DOT VAR 2 — PROVINCIAL (MISAMIS OCCIDENTAL) ===')
+      ..writeln('Generated: ${DateTime.now()}')
+      ..writeln('Month/Year: ${var2.monthYearLabel}')
+      ..writeln('Scope: $provinceLabel')
+      ..writeln('Check-ins in period: ${var2.checkInsProcessed}')
+      ..writeln()
+      ..writeln(var2.note)
+      ..writeln()
+      ..writeln('--- ATTRACTION SUMMARY (province-wide) ---');
+
+    for (final row in var2.rows) {
+      report.writeln(
+        '${row.name} [${row.attractionCode.isEmpty ? 'no code' : row.attractionCode}] '
+        '→ Grand Total: ${row.grandTotal.total}',
+      );
+    }
+    report
+      ..writeln()
+      ..writeln(
+        'Total of this Month ****: ${var2.footerTotals.grandTotal.total}',
+      );
+
+    if (mounted) setState(() => _isExporting = false);
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Provincial VAR 2 generated (${var2.checkInsProcessed} check-ins)',
+        ),
+        backgroundColor: _primaryOrange,
+        action: SnackBarAction(
+          label: 'Preview',
+          textColor: Colors.white,
+          onPressed: () => _showGovernorExportPreview(
+            'Provincial VAR 2 Report',
+            report.toString(),
+            csvData: var2.csv,
+            csvFilename: csvName,
+            xlsxBytes: var2.xlsxBytes,
+            xlsxFilename: xlsxName,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _generateGovernorReport(
+    DateTime startDate,
+    DateTime endDate,
+    String type,
+    String period,
+  ) async {
+    setState(() {
+      _isExporting = true;
+      _exportProgress = 0.0;
+    });
+
+    for (var i = 1; i <= 8; i++) {
+      await Future.delayed(const Duration(milliseconds: 80));
+      if (mounted) setState(() => _exportProgress = i / 8);
+    }
+
+    final built = buildProvincialAtmosReport(
+      allCheckIns: _checkIns,
+      tourists: _tourists,
+      spots: _governorAllSpots,
+      activeSpots: _activeSpots,
+      startDate: startDate,
+      endDate: endDate,
+      reportType: type,
+      period: period,
+    );
+
+    if (mounted) setState(() => _isExporting = false);
+    if (!mounted) return;
+
+    final summaryCsvName = built.summaryCsv != null
+        ? checkInSummaryCsvFilename(
+            period: period,
+            startDate: startDate,
+            endDate: endDate,
+          ).replaceFirst('checkin_summary', 'provincial_checkin_summary')
+        : null;
+    final muniCsvName = built.municipalityCsv != null
+        ? provincialReportCsvFilename(
+            period: period,
+            startDate: startDate,
+            endDate: endDate,
+            suffix: 'by_municipality',
+          )
+        : null;
+    final detailCsvName = built.detailCsv != null
+        ? provincialReportCsvFilename(
+            period: period,
+            startDate: startDate,
+            endDate: endDate,
+            suffix: 'checkins_detail',
+          )
+        : null;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Provincial $period report generated (${built.checkInsInPeriod} check-ins)',
+        ),
+        backgroundColor: _primaryOrange,
+        action: SnackBarAction(
+          label: 'Preview',
+          textColor: Colors.white,
+          onPressed: () => _showGovernorExportPreview(
+            'Provincial ${_capitalizeLabel(period)} Report',
+            built.reportText,
+            csvData: built.summaryCsv,
+            csvFilename: summaryCsvName,
+            detailCsvData: built.municipalityCsv ?? built.detailCsv,
+            detailCsvFilename: muniCsvName ?? detailCsvName,
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showGovernorExportPreview(
+    String title,
+    String content, {
+    String? csvData,
+    String? csvFilename,
+    String? detailCsvData,
+    String? detailCsvFilename,
+    List<int>? xlsxBytes,
+    String? xlsxFilename,
+  }) {
+    showReportExportPreviewDialog(
+      context,
+      title: title,
+      subtitle: 'ATMOS-TRS · Governor Portal · Provincial export',
+      content: content,
+      csvData: csvData,
+      csvFilename: csvFilename,
+      detailCsvData: detailCsvData,
+      detailCsvFilename: detailCsvFilename,
+      detailCsvLabel: detailCsvFilename != null &&
+              detailCsvFilename.contains('municipality')
+          ? 'Download by municipality CSV'
+          : 'Download detail CSV',
+      xlsxBytes: xlsxBytes,
+      xlsxFilename: xlsxFilename,
+      accentColor: _primaryOrange,
+    );
+  }
+
   // ==================== SETTINGS SECTION ====================
   Widget _buildSettingsContent() {
     return Container(
@@ -5182,8 +7194,8 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                       Icons.download_outlined,
                       _isExporting
                           ? 'Exporting... ${(_exportProgress * 100).toInt()}%'
-                          : 'Export tourists and check-ins data',
-                      _showExportDataDialog,
+                          : 'Provincial exports on Analytics (all LGUs)',
+                      () => setState(() => _selectedIndex = _analyticsIndex),
                     ),
                     _buildSettingsTileWithSubtitle(
                       'Backup Settings',
@@ -5266,7 +7278,11 @@ class _GovernorDashboardState extends State<GovernorDashboard>
               Expanded(
                 child: Text(
                   title,
-                  style: const TextStyle(color: _textDark, fontSize: 14),
+                  style: const TextStyle(
+                    color: _textDark,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
               const Icon(Icons.chevron_right, color: _textMuted),
@@ -5307,12 +7323,20 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                   children: [
                     Text(
                       title,
-                      style: const TextStyle(color: _textDark, fontSize: 14),
+                      style: const TextStyle(
+                        color: _textDark,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                     const SizedBox(height: 2),
                     Text(
                       subtitle,
-                      style: TextStyle(color: _textMuted, fontSize: 12),
+                      style: const TextStyle(
+                        color: _textMuted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
                   ],
                 ),
@@ -5439,6 +7463,85 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   // ==================== CHANGE PASSWORD DIALOG ====================
+  InputDecoration _changePasswordFieldDecoration({
+    required String hint,
+    required bool obscure,
+    required VoidCallback onToggleObscure,
+  }) {
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: const TextStyle(
+        color: _textMuted,
+        fontSize: 14,
+        fontWeight: FontWeight.w500,
+      ),
+      filled: true,
+      fillColor: const Color(0xFFF8FAFC),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: _cardBorder, width: 1.2),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: _primaryOrange, width: 2),
+      ),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: _cardBorder),
+      ),
+      suffixIcon: IconButton(
+        tooltip: obscure ? 'Show password' : 'Hide password',
+        icon: Icon(
+          obscure ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+          color: _textMuted,
+        ),
+        onPressed: onToggleObscure,
+      ),
+    );
+  }
+
+  Widget _changePasswordFieldLabel(String label) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: _textDark,
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Widget _passwordRequirementRow(String text, bool met) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          Icon(
+            met ? Icons.check_circle_rounded : Icons.radio_button_unchecked,
+            size: 18,
+            color: met ? const Color(0xFF16A34A) : _textMuted,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                color: met ? const Color(0xFF166534) : _textDark,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                height: 1.25,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showChangePasswordDialog() {
     final currentPasswordController = TextEditingController();
     final newPasswordController = TextEditingController();
@@ -5448,151 +7551,203 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     bool obscureCurrent = true;
     bool obscureNew = true;
     bool obscureConfirm = true;
+    var newPassword = '';
 
-    showDialog(
+    showDialog<void>(
       context: context,
-      builder: (context) => StatefulBuilder(
+      builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) {
           bool validatePassword(String password) {
             if (password.length < 8) return false;
             if (!password.contains(RegExp(r'[A-Z]'))) return false;
             if (!password.contains(RegExp(r'[a-z]'))) return false;
             if (!password.contains(RegExp(r'[0-9]'))) return false;
-            if (!password.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]')))
+            if (!password.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]'))) {
               return false;
+            }
             return true;
           }
 
+          final hasLen = newPassword.length >= 8;
+          final hasUpper = newPassword.contains(RegExp(r'[A-Z]'));
+          final hasLower = newPassword.contains(RegExp(r'[a-z]'));
+          final hasNumber = newPassword.contains(RegExp(r'[0-9]'));
+          final hasSpecial =
+              newPassword.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]'));
+
           return AlertDialog(
             backgroundColor: _cardBg,
-            title: const Text(
-              'Change Password',
-              style: TextStyle(color: Colors.white),
+            surfaceTintColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
             ),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (errorMessage != null)
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      margin: const EdgeInsets.only(bottom: 16),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.error_outline,
-                            color: Colors.redAccent,
-                            size: 18,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              errorMessage!,
-                              style: const TextStyle(
-                                color: Colors.redAccent,
-                                fontSize: 12,
+            insetPadding: EdgeInsets.symmetric(
+              horizontal: _isMobile ? 16 : 40,
+              vertical: 24,
+            ),
+            titlePadding: const EdgeInsets.fromLTRB(24, 22, 24, 0),
+            contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+            actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            title: const Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Change Password',
+                  style: TextStyle(
+                    color: _textDark,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                SizedBox(height: 6),
+                Text(
+                  'Update your Governor account password. Use a strong password you have not used before.',
+                  style: TextStyle(
+                    color: _textMuted,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 420,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (errorMessage != null)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        margin: const EdgeInsets.only(bottom: 14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEE2E2),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFFECACA)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.error_outline_rounded,
+                              color: Color(0xFFDC2626),
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                errorMessage!,
+                                style: const TextStyle(
+                                  color: Color(0xFFB91C1C),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  TextField(
-                    controller: currentPasswordController,
-                    obscureText: obscureCurrent,
-                    decoration: InputDecoration(
-                      hintText: 'Current Password',
-                      hintStyle: TextStyle(color: _textMuted),
-                      filled: true,
-                      fillColor: Colors.white.withOpacity(0.05),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide.none,
-                      ),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          obscureCurrent
-                              ? Icons.visibility_off
-                              : Icons.visibility,
-                          color: _textMuted,
+                          ],
                         ),
-                        onPressed: () => setDialogState(
+                      ),
+                    _changePasswordFieldLabel('Current password'),
+                    TextField(
+                      controller: currentPasswordController,
+                      obscureText: obscureCurrent,
+                      style: const TextStyle(
+                        color: _textDark,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      decoration: _changePasswordFieldDecoration(
+                        hint: 'Enter your current password',
+                        obscure: obscureCurrent,
+                        onToggleObscure: () => setDialogState(
                           () => obscureCurrent = !obscureCurrent,
                         ),
                       ),
                     ),
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: newPasswordController,
-                    obscureText: obscureNew,
-                    decoration: InputDecoration(
-                      hintText: 'New Password',
-                      hintStyle: TextStyle(color: _textMuted),
-                      filled: true,
-                      fillColor: Colors.white.withOpacity(0.05),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide.none,
+                    const SizedBox(height: 16),
+                    _changePasswordFieldLabel('New password'),
+                    TextField(
+                      controller: newPasswordController,
+                      obscureText: obscureNew,
+                      onChanged: (v) => setDialogState(() => newPassword = v),
+                      style: const TextStyle(
+                        color: _textDark,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
                       ),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          obscureNew ? Icons.visibility_off : Icons.visibility,
-                          color: _textMuted,
-                        ),
-                        onPressed: () =>
+                      decoration: _changePasswordFieldDecoration(
+                        hint: 'Create a new password',
+                        obscure: obscureNew,
+                        onToggleObscure: () =>
                             setDialogState(() => obscureNew = !obscureNew),
                       ),
                     ),
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Password must contain: 8+ chars, uppercase, lowercase, number, special char',
-                    style: TextStyle(color: _textMuted, fontSize: 11),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: confirmPasswordController,
-                    obscureText: obscureConfirm,
-                    decoration: InputDecoration(
-                      hintText: 'Confirm New Password',
-                      hintStyle: TextStyle(color: _textMuted),
-                      filled: true,
-                      fillColor: Colors.white.withOpacity(0.05),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide.none,
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF7ED),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFFED7AA)),
                       ),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          obscureConfirm
-                              ? Icons.visibility_off
-                              : Icons.visibility,
-                          color: _textMuted,
-                        ),
-                        onPressed: () => setDialogState(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Password must include:',
+                            style: TextStyle(
+                              color: _textDark,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          _passwordRequirementRow('At least 8 characters', hasLen),
+                          _passwordRequirementRow('One uppercase letter (A–Z)', hasUpper),
+                          _passwordRequirementRow('One lowercase letter (a–z)', hasLower),
+                          _passwordRequirementRow('One number (0–9)', hasNumber),
+                          _passwordRequirementRow(
+                            'One special character (!@#\$%…)',
+                            hasSpecial,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _changePasswordFieldLabel('Confirm new password'),
+                    TextField(
+                      controller: confirmPasswordController,
+                      obscureText: obscureConfirm,
+                      style: const TextStyle(
+                        color: _textDark,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      decoration: _changePasswordFieldDecoration(
+                        hint: 'Re-enter new password',
+                        obscure: obscureConfirm,
+                        onToggleObscure: () => setDialogState(
                           () => obscureConfirm = !obscureConfirm,
                         ),
                       ),
                     ),
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
             actions: [
               TextButton(
-                onPressed: isLoading ? null : () => Navigator.pop(context),
+                onPressed: isLoading ? null : () => Navigator.pop(dialogContext),
                 child: const Text(
                   'Cancel',
-                  style: TextStyle(color: _textMuted),
+                  style: TextStyle(
+                    color: _textMuted,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                  ),
                 ),
               ),
               ElevatedButton(
@@ -5604,7 +7759,6 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                           isLoading = true;
                         });
 
-                        // Validate current password (no plaintext compare in widget code)
                         if (!await SessionStorage.matchesStoredGovernorPassword(
                           currentPasswordController.text,
                         )) {
@@ -5615,39 +7769,82 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                           return;
                         }
 
-                        // Validate new password
                         if (!validatePassword(newPasswordController.text)) {
                           setDialogState(() {
                             errorMessage =
-                                'New password does not meet requirements';
+                                'New password does not meet all requirements below';
                             isLoading = false;
                           });
                           return;
                         }
 
-                        // Check passwords match
                         if (newPasswordController.text !=
                             confirmPasswordController.text) {
                           setDialogState(() {
-                            errorMessage = 'Passwords do not match';
+                            errorMessage =
+                                'New password and confirmation do not match';
                             isLoading = false;
                           });
                           return;
                         }
 
-                        // Simulate save (in real app, save to Firebase Auth)
-                        await Future.delayed(const Duration(seconds: 1));
+                        final newPassword = newPasswordController.text;
+                        final typedCurrent = currentPasswordController.text;
+                        try {
+                          await AuthService.reauthenticateAndUpdatePassword(
+                            email: SessionStorage.governorEmail,
+                            currentPassword: typedCurrent,
+                            newPassword: newPassword,
+                          );
+                        } on FirebaseAuthException catch (authErr) {
+                          // Prefs may already be ahead of Auth after a prior local-only change.
+                          final code = authErr.code;
+                          final canRetryDefault = code == 'wrong-password' ||
+                              code == 'invalid-credential' ||
+                              code == 'invalid-login-credentials';
+                          if (!canRetryDefault ||
+                              typedCurrent ==
+                                  SessionStorage.governorPasswordLegacy) {
+                            setDialogState(() {
+                              errorMessage = authErr.message?.trim().isNotEmpty ==
+                                      true
+                                  ? authErr.message!
+                                  : 'Could not update Firebase password. Try logging in again.';
+                              isLoading = false;
+                            });
+                            return;
+                          }
+                          try {
+                            await AuthService.reauthenticateAndUpdatePassword(
+                              email: SessionStorage.governorEmail,
+                              currentPassword:
+                                  SessionStorage.governorPasswordLegacy,
+                              newPassword: newPassword,
+                            );
+                          } on FirebaseAuthException catch (authErr2) {
+                            setDialogState(() {
+                              errorMessage = authErr2.message?.trim().isNotEmpty ==
+                                      true
+                                  ? authErr2.message!
+                                  : 'Could not update Firebase password. Try logging in again.';
+                              isLoading = false;
+                            });
+                            return;
+                          }
+                        } catch (e) {
+                          setDialogState(() {
+                            errorMessage = 'Could not update password: $e';
+                            isLoading = false;
+                          });
+                          return;
+                        }
 
-                        // Save to SharedPreferences for demo
-                        final prefs = await SharedPreferences.getInstance();
-                        await prefs.setString(
-                          'governor_password',
-                          newPasswordController.text,
-                        );
+                        await SessionStorage.persistGovernorPassword(newPassword);
 
-                        if (!context.mounted) return;
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
+                        if (!dialogContext.mounted) return;
+                        Navigator.pop(dialogContext);
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(this.context).showSnackBar(
                           const SnackBar(
                             content: Text('Password updated successfully'),
                             backgroundColor: _primaryOrange,
@@ -5656,6 +7853,14 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                       },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _primaryOrange,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 12,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
                 child: isLoading
                     ? const SizedBox(
@@ -5666,7 +7871,14 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                           color: Colors.white,
                         ),
                       )
-                    : const Text('Update'),
+                    : const Text(
+                        'Update Password',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                        ),
+                      ),
               ),
             ],
           );
@@ -5870,7 +8082,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
           mainAxisSize: MainAxisSize.min,
           children: [
             _buildExportOption(
-              'Tourists Data (CSV)',
+              'Registered Tourists Data (CSV)',
               Icons.people_alt_rounded,
               () => _exportData('tourists'),
             ),
@@ -5999,10 +8211,14 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     String filename;
     switch (type) {
       case 'tourists':
-        content = 'ID,Name,Email,Origin,Visits\n';
-        for (var t in _tourists) {
+        // Privacy: no name/email; unique registrations only (not visit counts).
+        content = 'Tourist ID,Origin,Date Registered,Time Registered\n';
+        for (final t in _uniqueRegisteredTourists(_tourists)) {
+          final id = TouristIdHelper.displayForTourist(t).replaceAll(',', ' ');
+          final origin = _getTouristOrigin(t).replaceAll(',', ' ');
+          final dt = _registeredDateTimeFromTourist(t);
           content +=
-              '${t['id']},${_getTouristDisplayName(t)},${t['email'] ?? ''},${t['origin'] ?? t['city'] ?? t['country'] ?? ''},${t['visits'] ?? t['totalVisits'] ?? 0}\n';
+              '$id,$origin,${_formatRegisteredDateOnly(dt)},${_formatRegisteredTimeOnly(dt)}\n';
         }
         filename =
             'tourists_export_${DateTime.now().millisecondsSinceEpoch}.csv';
@@ -6530,7 +8746,8 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       },
       {
         'q': 'How do I export data?',
-        'a': 'Go to Settings > Data > Export Data and choose the format.',
+        'a':
+            'Open Analytics in the sidebar for provincial exports (quick + custom reports for all LGUs). LGU staff export their municipality only.',
       },
       {
         'q': 'How do I change my password?',
@@ -6538,11 +8755,13 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       },
       {
         'q': 'How do I view analytics?',
-        'a': 'Click on Analytics in the sidebar to view detailed statistics.',
+        'a':
+            'Click Analytics in the sidebar for insights (daily avg, peak hour, top origin, top spots) and provincial export tools.',
       },
       {
-        'q': 'How do I create announcements?',
-        'a': 'Go to Announcements section and click "New" button.',
+        'q': 'How do LGU events get published?',
+        'a':
+            'LGUs publish events from their dashboard. Posts go live immediately. New events notify you on the header bell (with a count badge) — open Notifications to review them.',
       },
     ];
 
@@ -6792,6 +9011,11 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         ],
       ),
     );
+  }
+
+  String _capitalizeLabel(String value) {
+    if (value.isEmpty) return value;
+    return '${value[0].toUpperCase()}${value.substring(1)}';
   }
 }
 
@@ -7127,9 +9351,9 @@ class _CityRankingBarPainter extends CustomPainter {
         text: TextSpan(
           text: label,
           style: const TextStyle(
-            color: Color(0xFF6B7280),
-            fontSize: 9,
-            fontWeight: FontWeight.w500,
+            color: Color(0xFF1A1A1A),
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
           ),
         ),
         textDirection: TextDirection.ltr,
@@ -7184,4 +9408,44 @@ class _MiniSparklinePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _MiniSparklinePainter oldDelegate) =>
       oldDelegate.values != values;
+}
+
+/// Soft scale-up on hover for municipality cards (desktop / web).
+class _MunicipalityHoverCard extends StatefulWidget {
+  const _MunicipalityHoverCard({
+    required this.child,
+    required this.onTap,
+  });
+
+  final Widget child;
+  final VoidCallback onTap;
+
+  @override
+  State<_MunicipalityHoverCard> createState() => _MunicipalityHoverCardState();
+}
+
+class _MunicipalityHoverCardState extends State<_MunicipalityHoverCard> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedScale(
+          scale: _hovered ? 1.02 : 1.0,
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOut,
+          child: AnimatedOpacity(
+            opacity: _hovered ? 1 : 0.98,
+            duration: const Duration(milliseconds: 160),
+            child: widget.child,
+          ),
+        ),
+      ),
+    );
+  }
 }

@@ -1,3 +1,4 @@
+import 'package:atmos_trs_system/config/supabase_storage_config.dart';
 import 'package:atmos_trs_system/data/tourist_spot_image_catalog.dart';
 import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart';
@@ -19,15 +20,15 @@ class VisitRecordImageResolver {
   static String? _assetForKey(String key) {
     if (key.isEmpty) return null;
     final direct = TouristSpotImageCatalog.bundledAssetFor(spotId: key);
-    if (direct != null) return direct;
+    if (direct != null) return SupabaseStorageConfig.resolve(direct);
 
     final normalized = _normalizeKey(key);
     final normHit = TouristSpotImageCatalog.bundledAssetFor(spotId: normalized);
-    if (normHit != null) return normHit;
+    if (normHit != null) return SupabaseStorageConfig.resolve(normHit);
 
     for (final e in kMisOccAttractionAssetImages.entries) {
       if (normalized.contains(e.key) || e.key.contains(normalized)) {
-        return e.value;
+        return SupabaseStorageConfig.resolve(e.value);
       }
     }
     return null;
@@ -95,7 +96,7 @@ class VisitRecordImageResolver {
     if (stored != null &&
         stored.isNotEmpty &&
         TouristSpotImageCatalog.isValidDisplayUrl(stored)) {
-      return stored;
+      return SupabaseStorageConfig.resolve(stored);
     }
 
     final fromList = _imageFromSpotList(entry, spots);
@@ -123,7 +124,9 @@ class VisitRecordImageResolver {
       final hit = _assetForKey(q);
       if (hit != null) return hit;
     }
-    return TouristSpotImageCatalog.bundledAssetFor(municipalityId: mid);
+    final bundled =
+        TouristSpotImageCatalog.bundledAssetFor(municipalityId: mid);
+    return bundled == null ? null : SupabaseStorageConfig.resolve(bundled);
   }
 
   /// Thumbnail when saving a new QR check-in visit.

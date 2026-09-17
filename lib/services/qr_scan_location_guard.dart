@@ -34,13 +34,14 @@ class QrScanLocationGuard {
     }
 
     if (anchorLat.abs() < 1e-6 && anchorLng.abs() < 1e-6) {
-      return 'This QR code has no valid location. Ask the tourism office to update coordinates.';
+      return 'This QR is missing location details. Please ask the tourism office to '
+          'add coordinates for this spot, then scan again on site. 😊';
     }
 
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      return 'Please turn on Location (GPS) in your device settings, then try scanning again. '
-          'We use your location only to confirm you are at the site — printed QR codes work when you are there.';
+      return 'Please turn on Location so we can confirm you are at the tourist spot. '
+          'We only use GPS for check-in — digital or printed QR codes work when you are there. 😊';
     }
 
     var permission = await Geolocator.checkPermission();
@@ -48,11 +49,12 @@ class QrScanLocationGuard {
       permission = await Geolocator.requestPermission();
     }
     if (permission == LocationPermission.denied) {
-      return 'We need location permission to confirm you are at the tourist spot. '
-          'Allow location when prompted, then scan again.';
+      return 'Please allow Location so we can confirm you are at the tourist spot. '
+          'Then scan the official QR on site. 😊';
     }
     if (permission == LocationPermission.deniedForever) {
-      return 'Location is turned off for ATMOS-TRS. Open your device settings and allow Location for this app or browser, then try again.';
+      return 'Location is off for ATMOS-TRS. Open your device settings, allow Location, '
+          'then scan again when you are at the tourist spot. 😊';
     }
 
     Position pos;
@@ -65,12 +67,14 @@ class QrScanLocationGuard {
         ),
       );
     } catch (_) {
-      return 'We could not get your GPS position. Step outside for a clearer signal, wait a few seconds, and scan again.';
+      return 'We could not get your location yet. Step outdoors for a clearer signal, '
+          'wait a few seconds, then scan again. 😊';
     }
 
     final accuracy = pos.accuracy;
     if (accuracy > kQrScanRejectIfAccuracyWorseThanMeters) {
-      return 'Your GPS signal is still settling. Wait a moment outdoors, then scan again.';
+      return 'Your location signal is still settling. Wait a moment outdoors, '
+          'then scan again. 😊';
     }
 
     final double distance = distanceMeters(
@@ -91,12 +95,13 @@ class QrScanLocationGuard {
       final place = label.isNotEmpty ? label : 'this tourist spot';
       final int shownTarget = maxDistanceMeters.round();
       if (distance > 500) {
-        return 'Sorry — you need to be at $place to check in (within about $shownTarget meters of the site). '
-            'This code is registered for that location; scanning a photo or print from somewhere else will not work. '
-            'Visit the spot and try again.';
+        return 'Sorry — digital or printed QR codes only work when you\'re actually '
+            'at the tourist spot. Please visit $place, turn on Location, then scan '
+            'the official QR there. We\'re glad you\'re exploring Misamis Occidental! 😊';
       }
-      return 'Sorry — you need to be within about $shownTarget meters of $place to scan this QR. '
-          'Printed codes work when you are on site. Move closer and try again.';
+      return 'Almost there! Move a little closer to $place (within about '
+          '$shownTarget meters of the site QR), then scan again. '
+          'Printed or digital codes work — you just need to be on site. 😊';
     }
 
     return null;

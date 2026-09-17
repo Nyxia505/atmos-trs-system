@@ -76,5 +76,54 @@ void main() {
       expect(result.columnHeaders.length, 3);
       expect(result.grandTotalCheckIns, 1);
     });
+
+    test('excludes Google Forms / URL spot labels from summary rows', () {
+      final result = buildCheckInSummaryReport(
+        checkIns: [
+          ...sampleCheckIns(),
+          {
+            'spotId': 'bad_form',
+            'spot_name':
+                'https://docs.google.com/forms/d/1I3Al-cwgGMzewe0s728Wdq3oDesc7pHz93euYH7Ts/edit',
+            'municipality': 'Oroquieta City',
+            'userId': 'user_x',
+            'timestamp': DateTime(2026, 9, 1, 12),
+          },
+        ],
+        startDate: DateTime(2026, 1, 1),
+        endDate: DateTime(2026, 12, 31),
+        period: 'annual',
+        parseTimestamp: (c) => c['timestamp'] as DateTime?,
+      );
+
+      expect(result.grandTotalCheckIns, 3);
+      expect(result.csv, isNot(contains('docs.google.com')));
+      expect(result.csv, isNot(contains('1I3Al-cwgGMzewe0')));
+    });
+  });
+
+  group('isExcludedFromOfficialReports', () {
+    test('flags Google Form edit URLs', () {
+      expect(
+        isExcludedReportSpotLabel(
+          'https://docs.google.com/forms/d/1I3Al-cwgGMzewe0s728Wdq3oDesc7pHz93euYH7Ts/edit',
+        ),
+        isTrue,
+      );
+      expect(
+        isExcludedFromOfficialReports({
+          'spot_name':
+              'https://docs.google.com/forms/d/1I3Al-cwgGMzewe0s728Wdq3oDesc7pHz93euYH7Ts/edit',
+        }),
+        isTrue,
+      );
+      expect(
+        isExcludedFromOfficialReports({
+          'spot_name': 'LGU visit — Oroquieta City',
+          'spotId': 'lgu_oroquieta',
+        }),
+        isFalse,
+      );
+    });
   });
 }

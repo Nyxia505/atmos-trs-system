@@ -11,6 +11,8 @@ class NotificationItem {
     this.isRead = false,
     this.userId,
     this.isAnnouncement = false,
+    this.imageUrl,
+    this.municipalityName,
   });
 
   final String id;
@@ -21,6 +23,8 @@ class NotificationItem {
   final bool isRead;
   final String? userId;
   final bool isAnnouncement;
+  final String? imageUrl;
+  final String? municipalityName;
 
   /// Unread for both user notifications and announcements (read/dismiss tracked per user).
   bool get isUnread => !isRead;
@@ -35,6 +39,8 @@ class NotificationItem {
       isRead: isRead ?? this.isRead,
       userId: userId,
       isAnnouncement: isAnnouncement,
+      imageUrl: imageUrl,
+      municipalityName: municipalityName,
     );
   }
 }

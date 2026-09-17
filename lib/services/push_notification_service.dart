@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:atmos_trs_system/services/announcement_notification_sync.dart';
 import 'package:atmos_trs_system/services/notification_badge_notifier.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart' as activity;
+import 'package:atmos_trs_system/screens/event_detail_screen.dart';
 
 /// FCM topic all tourist apps subscribe to — must match [functions/index.js].
 const String kGovernorAnnouncementsTopic = 'governor_announcements';
@@ -45,6 +46,15 @@ const AndroidNotificationChannel _androidOtpChannel = AndroidNotificationChannel
 /// Stable id so a new code replaces the previous OTP notification.
 const int kAtmosOtpNotificationId = 919001;
 const int kAtmosPasswordResetNotificationId = 919002;
+
+/// Heads-up channel for QR check-in confirmations on the device.
+const AndroidNotificationChannel _androidCheckInChannel =
+    AndroidNotificationChannel(
+  'atmos_checkin',
+  'ATMOS Check-ins',
+  description: 'Check-in confirmations after QR scans',
+  importance: Importance.max,
+);
 
 StreamSubscription<RemoteMessage>? _passwordResetForegroundSubscription;
 
@@ -134,6 +144,7 @@ Future<void> _ensureLocalNotificationsCore() async {
     await androidPlugin?.createNotificationChannel(_androidChannel);
     await androidPlugin?.createNotificationChannel(_androidAnnouncementHeadsUpChannel);
     await androidPlugin?.createNotificationChannel(_androidOtpChannel);
+    await androidPlugin?.createNotificationChannel(_androidCheckInChannel);
     await androidPlugin?.requestNotificationsPermission();
   }
 
@@ -150,7 +161,14 @@ Future<void> _ensureLocalNotificationsCore() async {
     );
     await _localNotifications.initialize(
       settings: initSettings,
-      onDidReceiveNotificationResponse: (_) {},
+      onDidReceiveNotificationResponse: (response) {
+        final payload = response.payload?.trim() ?? '';
+        if (payload.startsWith('ann_')) {
+          PendingEventOpen.set(id: payload.substring(4));
+        } else if (payload.isNotEmpty) {
+          PendingEventOpen.set(id: payload);
+        }
+      },
     );
     _localNotificationsReady = true;
   }
@@ -225,6 +243,58 @@ Future<void> ensureEmailOtpNotificationSupport() async {
     _wireFcmTokenRefreshToFirestore();
   } catch (e, st) {
     debugPrint('[Push] ensureEmailOtpNotificationSupport: $e\n$st');
+  }
+}
+
+/// Shows a device push when a QR check-in is saved successfully.
+Future<void> showCheckInLocalNotification(String spotName) async {
+  if (kIsWeb || Firebase.apps.isEmpty) return;
+  final place = spotName.trim();
+  final title = 'Check-in recorded';
+  final body = place.isNotEmpty
+      ? 'Check-in successful! You checked in at $place.'
+      : 'Check-in successful! Your visit has been recorded.';
+
+  try {
+    await _ensureLocalNotificationsCore();
+    if (!_localNotificationsReady) return;
+
+    final android = AndroidNotificationDetails(
+      _androidCheckInChannel.id,
+      _androidCheckInChannel.name,
+      channelDescription: _androidCheckInChannel.description,
+      importance: Importance.max,
+      priority: Priority.max,
+      visibility: NotificationVisibility.public,
+      category: AndroidNotificationCategory.status,
+      ticker: title,
+      styleInformation: BigTextStyleInformation(
+        body,
+        contentTitle: title,
+        summaryText: 'ATMOS-TRS',
+      ),
+      icon: '@mipmap/ic_launcher',
+    );
+    const ios = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+      presentBanner: true,
+      presentList: true,
+      interruptionLevel: InterruptionLevel.active,
+    );
+    final details = NotificationDetails(android: android, iOS: ios);
+    final nid = 919020 + (place.hashCode.abs() % 989979);
+
+    await _localNotifications.show(
+      id: nid,
+      title: title,
+      body: body,
+      notificationDetails: details,
+    );
+    await NotificationBadgeNotifier.instance.refresh();
+  } catch (e, st) {
+    debugPrint('[Push] showCheckInLocalNotification: $e\n$st');
   }
 }
 
@@ -433,6 +503,7 @@ Future<void> _showAnnouncementHeadsUpLocal({
     title: trimmedTitle,
     body: collapsed.isEmpty ? 'New announcement' : collapsed,
     notificationDetails: details,
+    payload: 'ann_$announcementId',
   );
 }
 
@@ -546,6 +617,7 @@ Future<void> registerTouristPushNotifications() async {
 
     _touristPushRegistered = true;
     _startAnnouncementFallbackListener();
+    _wireAnnouncementOpenHandlers();
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid != null && uid.isNotEmpty) {
       await AnnouncementNotificationSync.syncPublishedAnnouncementsToLocal(
@@ -557,10 +629,38 @@ Future<void> registerTouristPushNotifications() async {
   }
 }
 
+void _wireAnnouncementOpenHandlers() {
+  if (kIsWeb) return;
+  FirebaseMessaging.onMessageOpenedApp.listen((message) {
+    final aid = message.data['announcementId']?.toString().trim() ?? '';
+    if (aid.isEmpty) return;
+    PendingEventOpen.set(
+      id: aid,
+      eventTitle: message.notification?.title ?? message.data['title']?.toString(),
+      eventContent:
+          message.notification?.body ?? message.data['body']?.toString(),
+      eventType: message.data['type']?.toString(),
+    );
+  });
+  unawaited(() async {
+    final initial = await FirebaseMessaging.instance.getInitialMessage();
+    if (initial == null) return;
+    final aid = initial.data['announcementId']?.toString().trim() ?? '';
+    if (aid.isEmpty) return;
+    PendingEventOpen.set(
+      id: aid,
+      eventTitle:
+          initial.notification?.title ?? initial.data['title']?.toString(),
+      eventContent:
+          initial.notification?.body ?? initial.data['body']?.toString(),
+      eventType: initial.data['type']?.toString(),
+    );
+  }());
+}
+
 /// Fallback while app is open (and when Cloud Functions / FCM are unavailable):
 /// shows a local heads-up for newly published announcements. Deduped against FCM.
 void _startAnnouncementFallbackListener() {
-  if (kIsWeb) return;
   if (_announcementFallbackSubscription != null) return;
   if (Firebase.apps.isEmpty) return;
   unawaited(() async {

@@ -5,6 +5,8 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:atmos_trs_system/services/otp_service.dart';
 import 'package:atmos_trs_system/services/pending_registration_cache.dart';
+import 'package:atmos_trs_system/services/pending_establishment_registration_cache.dart';
+import 'package:atmos_trs_system/services/pending_lgu_registration_cache.dart';
 
 /// Removes partial signup data when OTP verification fails or is abandoned.
 class RegistrationRollbackService {
@@ -13,6 +15,8 @@ class RegistrationRollbackService {
   static Future<void> rollback(String uid) async {
     debugPrint('[REG] rollback registration uid=$uid');
     await PendingRegistrationCache.clear();
+    await PendingEstablishmentRegistrationCache.clear();
+    await PendingLguRegistrationCache.clear();
     if (Firebase.apps.isNotEmpty) {
       try {
         await OtpService.refreshAuthTokenForUid(uid);
@@ -27,6 +31,7 @@ class RegistrationRollbackService {
         final batch = db.batch();
         batch.delete(db.collection('tourists').doc(uid));
         batch.delete(db.collection('users').doc(uid));
+        batch.delete(db.collection('accommodation_establishments').doc(uid));
         await batch.commit();
       } catch (e) {
         debugPrint('[REG] rollback Firestore: $e');

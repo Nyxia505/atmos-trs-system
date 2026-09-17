@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/app_theme_controller.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
+import 'package:atmos_trs_system/data/tourist_spot_image_catalog.dart';
 import 'package:atmos_trs_system/data/tourist_spots_by_municipality.dart';
+import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/models/municipality.dart';
 import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
 import 'package:atmos_trs_system/features/explore/explore_data.dart' show TouristSpot;
@@ -35,42 +37,10 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
   static const double _kMapZoom = 13.5;
 
   static String? _previewImageForMunicipality(String id) {
-    switch (id) {
-      case 'oroquieta':
-        return 'assets/images/oroquieta City plaza.jpeg';
-      case 'ozamiz':
-        return "assets/images/Cotta Fort & Shrine.jpg";
-      case 'tangub':
-        return 'assets/images/Asenso Global Garden 1.png';
-      case 'aloran':
-        return 'assets/images/aloran.jpg';
-      case 'baliangao':
-        return 'assets/images/Baliangao - Cabgan Island.jpg';
-      case 'calamba':
-        return 'assets/images/Calamba.jpg';
-      case 'clarin':
-        return 'assets/images/clarin.jpg';
-      case 'concepcion':
-        return 'assets/images/conception.png';
-      case 'dvc':
-        return 'assets/images/Piduan Falls Donvic.jpg';
-      case 'jimenez':
-        return 'assets/images/Jimenez - St. John the Baptist Church.jpg';
-      case 'lopezjaena':
-        return 'assets/images/Lopez Jaena.jpg';
-      case 'panaon':
-        return 'assets/images/Panaon.png';
-      case 'plaridel':
-        return 'assets/images/PLARIDEL.jpg';
-      case 'sapangdalaga':
-        return 'assets/images/Sapang Dalaga.png';
-      case 'sinacaban':
-        return 'assets/images/AMORAP.jpg';
-      case 'tudela':
-        return 'assets/images/Tudela Village.webp';
-      default:
-        return null;
-    }
+    final mid = normalizeMunicipalityId(id);
+    if (mid.isEmpty) return null;
+    return TouristSpotImageCatalog.byMunicipalityId[mid] ??
+        TouristSpotImageCatalog.bundledAssetFor(municipalityId: mid);
   }
 
   List<TouristSpotFirestore> _mapSpots(Municipality m) {

@@ -18,7 +18,7 @@ class AppFaqItem {
   final List<String> keywords;
 }
 
-/// Knowledge base for ATMOS-TRS AI — app help and tourism guidance.
+/// Knowledge base for Tala AI — app help and tourism guidance.
 const List<AppFaqItem> kAppFaqItems = [
   AppFaqItem(
     icon: Icons.travel_explore_rounded,
@@ -169,15 +169,15 @@ const List<AppFaqItem> kAppFaqItems = [
     answer:
         'Home is your dashboard. Browse featured destinations, search places, view stats '
         '(Visited, Badges, Days), open saved spots, see recent visits, and chat with '
-        'ATMOS-TRS AI for help.',
+        'Tala AI for help.',
     answerFil:
         'Ang Home ay dashboard mo. Puwede mong i-browse ang featured destinations, mag-search, '
         'tingnan ang stats (Visited, Badges, Days), buksan ang saved spots, at makipag-chat '
-        'sa ATMOS-TRS AI para sa tulong.',
+        'sa Tala AI para sa tulong.',
     answerCeb:
         'Ang Home mao ang imong dashboard. Puwede nimong i-browse ang featured destinations, '
         'mag-search, tan-awon ang stats (Visited, Badges, Days), ablihan ang saved spots, '
-        'ug makig-chat sa ATMOS-TRS AI para sa tabang.',
+        'ug makig-chat sa Tala AI para sa tabang.',
   ),
   AppFaqItem(
     icon: Icons.view_in_ar_rounded,

@@ -6,15 +6,27 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 import 'package:atmos_trs_system/features/navigation/placeholder_pages.dart'
     show ScanTabPage;
+import 'package:atmos_trs_system/navigation/landing_intent_navigation.dart';
 import 'package:atmos_trs_system/navigation/login_route_args.dart';
 import 'package:atmos_trs_system/navigation/tripplan_entry_screen.dart';
+import 'package:atmos_trs_system/data/landing_lgu_destinations.dart';
 import 'package:atmos_trs_system/screens/municipality_map_and_spots_screen.dart';
-import 'package:atmos_trs_system/utils/logo_utils.dart';
+import 'package:atmos_trs_system/widgets/atmos_brand_title.dart';
+import 'package:atmos_trs_system/widgets/atmos_square_logo.dart';
 import 'package:atmos_trs_system/widgets/hero_video_branding_overlay.dart';
 import 'package:atmos_trs_system/widgets/hero_video_mute_control.dart';
 import 'package:atmos_trs_system/widgets/onboarding_hero_video.dart';
 import 'package:atmos_trs_system/config/atmos_brand_typography.dart';
+import 'package:atmos_trs_system/config/session_storage.dart';
+import 'package:atmos_trs_system/config/supabase_storage_config.dart';
+import 'package:atmos_trs_system/services/landing_intent_service.dart';
+import 'package:atmos_trs_system/services/login_flow_service.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
+import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
+import 'package:atmos_trs_system/utils/logo_utils.dart';
+import 'package:atmos_trs_system/widgets/spot_image.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'dart:ui' show ImageFilter;
 
 class LandingPage extends StatefulWidget {
   const LandingPage({super.key});
@@ -23,21 +35,15 @@ class LandingPage extends StatefulWidget {
   State<LandingPage> createState() => _LandingPageState();
 }
 
-class _LandingPageState extends State<LandingPage>
-    with TickerProviderStateMixin {
-  late AnimationController _heroAnimationController;
-  late AnimationController _fadeController;
-  late Animation<double> _heroFadeAnimation;
-  late Animation<Offset> _heroSlideAnimation;
-
+class _LandingPageState extends State<LandingPage> {
   bool _isScrolled = false;
   int? _hoveredExperienceIndex;
   int? _hoveredFeatureIndex;
+  int? _hoveredHeroGlassIndex;
   String? _hoveredDestinationName;
 
-  String? _activeSection;
+  String? _activeSection = 'home';
   bool _signupSuccessPromptShown = false;
-  bool _fromQrRegistration = false;
   String? _qrWelcomeMessage;
   bool _highlightExperienceSection = false;
 
@@ -47,6 +53,12 @@ class _LandingPageState extends State<LandingPage>
   bool _isNavScrollAnimating = false;
 
   Timer? _scrollUiThrottle;
+  Timer? _heavyImageWarmTimer;
+
+  /// Municipality / About photos wait until the hero has painted (or user scrolls).
+  bool _heavyImagesEnabled = false;
+  /// First batch of destination cards (above the fold once Destinations is near).
+  int _destinationImageBudget = 0;
 
   final TextEditingController _heroSearchController = TextEditingController();
   final FocusNode _heroSearchFocusNode = FocusNode();
@@ -89,7 +101,7 @@ class _LandingPageState extends State<LandingPage>
   static const Color _primaryOrange = Color(0xFFF97316);
   static const Color _brandLight = Color(0xFFFB923C);
   static const Color _brandDark = Color(0xFFEA580C);
-  static const Color _darkBg = Color(0xFF0F172A);
+  static const Color _darkBg = Color(0xFF192334);
   static const Color _accentOrange = Color(0xFFFB923C);
 
   /// Page shell: crisp white with optional muted strips (avoids cream/peach page fills).
@@ -97,24 +109,65 @@ class _LandingPageState extends State<LandingPage>
   static const Color _pageSurfaceMuted = Color(0xFFF8FAFC);
   static const Color _pageDivider = Color(0xFFE5E7EB);
   static const Color _bodyText = Color(0xFF334155);
-  static const double _cardRadius = 16.0;
+  static const double _cardRadius = 18.0;
 
   static const String _kAppFullName =
       'ATMOS-TRS - Asenso Tourismo Misamis Occidental Smart Tourist Registration System';
 
-  static const String _kTourismLogoAsset = 'assets/images/tourism logo.png';
-  static const String _kLandingHeroBackground =
-      'assets/images/landing_page_bg.jpg';
+  static const String _kAppMeaning =
+      'Asenso Tourismo Misamis Occidental Smart Tourist Registration System';
 
-  /// Soft tinted card backgrounds + accents (Asenso orange / cream family).
+  static const String _kTourismLogoAsset = 'assets/images/tourism logo.png';
+  static const String _kLandingHeroBackgroundAsset =
+      'assets/images/landing page.png';
+  static const String _kCapitolAsset = 'assets/images/capitol.webp';
+
+  String get _landingHeroBackgroundUrl =>
+      SupabaseStorageConfig.resolve(_kLandingHeroBackgroundAsset);
+
+  ImageProvider get _landingHeroBackgroundImage {
+    final url = _landingHeroBackgroundUrl;
+    final size = MediaQuery.sizeOf(context);
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final cacheW = (size.width * dpr).round().clamp(720, 1600);
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return ResizeImage(NetworkImage(url), width: cacheW);
+    }
+    return ResizeImage(AssetImage(url), width: cacheW);
+  }
+
+  void _enableHeavyImages({int budget = 8}) {
+    if (!mounted) return;
+    final nextBudget = budget > _destinationImageBudget
+        ? budget
+        : _destinationImageBudget;
+    if (_heavyImagesEnabled && nextBudget == _destinationImageBudget) return;
+    setState(() {
+      _heavyImagesEnabled = true;
+      _destinationImageBudget = nextBudget;
+    });
+  }
+
+  void _scheduleHeavyImageWarmup() {
+    _heavyImageWarmTimer?.cancel();
+    // Let the hero paint first, then warm a few cards, then the rest.
+    _heavyImageWarmTimer = Timer(const Duration(milliseconds: 450), () {
+      if (!mounted) return;
+      _enableHeavyImages(budget: 6);
+      Future<void>.delayed(const Duration(milliseconds: 900), () {
+        if (!mounted) return;
+        _enableHeavyImages(budget: _destinations.length);
+      });
+    });
+  }
+
+  /// Soft tinted card backgrounds + accents (Asenso orange family).
   final List<Map<String, dynamic>> _features = [
     {
       'icon': Icons.qr_code_rounded,
       'title': 'QR Code Registration',
       'description':
           'Quick and easy tourist registration with unique QR code identification',
-      'bgStart': const Color(0xFFFFF7ED),
-      'bgEnd': const Color(0xFFFFEDD5),
       'accent': _primaryOrange,
     },
     {
@@ -122,170 +175,34 @@ class _LandingPageState extends State<LandingPage>
       'title': 'Virtual Reality Tours',
       'description':
           'Explore destinations in immersive 360° VR before you visit',
-      'bgStart': const Color(0xFFFEF3C7),
-      'bgEnd': const Color(0xFFFDE68A),
-      'accent': _brandDark,
+      'accent': _primaryOrange,
     },
     {
       'icon': Icons.qr_code_scanner_rounded,
       'title': 'Smart Check-ins',
       'description':
           'Scan your QR at tourist spots for seamless check-in experience',
-      'bgStart': const Color(0xFFFFFBEB),
-      'bgEnd': const Color(0xFFFEF3C7),
-      'accent': const Color(0xFFD97706),
+      'accent': _primaryOrange,
     },
     {
       'icon': Icons.badge_rounded,
       'title': 'Digital Tourist ID',
       'description':
           'Your unique digital identification for all tourist activities',
-      'bgStart': const Color(0xFFFFF7ED),
-      'bgEnd': const Color(0xFFFFEDD5),
-      'accent': _brandDark,
+      'accent': _primaryOrange,
     },
     {
       'icon': Icons.map_rounded,
       'title': 'Itinerary Planner',
       'description': 'Plan and organize your travel itinerary',
-      'bgStart': const Color(0xFFFFF7ED),
-      'bgEnd': const Color(0xFFFFEDD5),
-      'accent': const Color(0xFFEA580C),
+      'accent': _primaryOrange,
       'route': 'itinerary',
     },
   ];
 
-  final List<Map<String, String>> _destinations = [
-    {
-      'name': 'Oroquieta City',
-      'category': 'Capital City',
-      'description':
-          'The provincial capital and seat of the capitol building, known as the "City of Good Life"',
-      'image': 'assets/images/oroquieta City plaza.jpeg',
-      'isAsset': 'true',
-    },
-    {
-      'name': 'Ozamis City',
-      'category': 'City',
-      'description': 'Rich in history and culture with beautiful coastal views',
-      'image': 'assets/images/ozamis city.webp',
-      'isAsset': 'true',
-    },
-    {
-      'name': 'Tangub City',
-      'category': 'City',
-      'description':
-          'Home to Asenso Global Gardens and gateway to pristine coasts',
-      'image': 'assets/images/Asenso Global Garden 1.png',
-      'isAsset': 'true',
-    },
-    {
-      'name': 'Aloran',
-      'category': 'Municipality',
-      'description': 'Scenic landscapes and welcoming communities',
-      'image': 'assets/images/aloran.jpg',
-      'isAsset': 'true',
-    },
-    {
-      'name': 'Baliangao',
-      'category': 'Municipality',
-      'description':
-          'Bless Amare Sunrise Beach and pristine coastal views in Barangay Tugas',
-      'image': 'assets/images/Baliangao - Cabgan Island.jpg',
-      'isAsset': 'true',
-    },
-    {
-      'name': 'Bonifacio',
-      'category': 'Municipality',
-      'description': 'Mountain views and rural charm',
-      'image': 'assets/images/Piduan Falls Donvic.jpg',
-      'isAsset': 'true',
-    },
-    {
-      'name': 'Calamba',
-      'category': 'Municipality',
-      'description':
-          'Lush green town amid rolling forested hills, palm trees, and serene community',
-      'image': 'assets/images/Calamba.jpg',
-      'isAsset': 'true',
-    },
-    {
-      'name': 'Clarin',
-      'category': 'Municipality',
-      'description': 'Green landscapes and local hospitality',
-      'image': 'assets/images/clarin.jpg',
-      'isAsset': 'true',
-    },
-    {
-      'name': 'Concepcion',
-      'category': 'Municipality',
-      'description':
-          'Stunning multi-tiered waterfalls, rocky rivers, and lush tropical jungle',
-      'image': 'assets/images/conception.png',
-      'isAsset': 'true',
-    },
-    {
-      'name': 'Don Victoriano Chiongbian',
-      'category': 'Municipality',
-      'description':
-          'Piduan Falls (Curtain Falls) — majestic waterfall at Mount Malindang, Barangay Napangan',
-      'image': 'assets/images/Piduan Falls Donvic.jpg',
-      'isAsset': 'true',
-    },
-    {
-      'name': 'Jimenez',
-      'category': 'Municipality',
-      'description': 'St. John the Baptist Church and heritage sites',
-      'image': 'assets/images/Jimenez - St. John the Baptist Church.jpg',
-      'isAsset': 'true',
-    },
-    {
-      'name': 'Lopez Jaena',
-      'category': 'Municipality',
-      'description': 'Beaches and coastal living',
-      'image': 'assets/images/Lopez Jaena.jpg',
-      'isAsset': 'true',
-    },
-    {
-      'name': 'Panaon',
-      'category': 'Municipality',
-      'description': 'Seaside towns and natural attractions',
-      'image': 'assets/images/Panaon.png',
-      'isAsset': 'true',
-    },
-    {
-      'name': 'Plaridel',
-      'category': 'Municipality',
-      'description':
-          'Tropical pool resort with thatched bridges, palm trees, and clear blue waters',
-      'image': 'assets/images/PLARIDEL.jpg',
-      'isAsset': 'true',
-    },
-    {
-      'name': 'Sapang Dalaga',
-      'category': 'Municipality',
-      'description':
-          'Caluya Bay with floating playground and Cristo Redentor views',
-      'image': 'assets/images/Sapang Dalaga.png',
-      'isAsset': 'true',
-    },
-    {
-      'name': 'Sinacaban',
-      'category': 'Municipality',
-      'description':
-          'Home to AMORAP — Maldives-inspired eco-luxury park with overwater villas, lagoons, and coastal adventure',
-      'image': 'assets/images/AMORAP.jpg',
-      'isAsset': 'true',
-    },
-    {
-      'name': 'Tudela',
-      'category': 'Municipality',
-      'description':
-          'Swimming pools, resort amenities, and festivals in a lush tropical setting',
-      'image': 'assets/images/Tudela Village.webp',
-      'isAsset': 'true',
-    },
-  ];
+  /// Images resolved from [TouristSpotImageCatalog] — same as the mobile app.
+  late final List<Map<String, String>> _destinations =
+      buildLandingLguDestinations();
 
   final List<Map<String, dynamic>> _steps = [
     {
@@ -326,36 +243,28 @@ class _LandingPageState extends State<LandingPage>
     super.initState();
     _pageScrollController = ScrollController();
 
-    _heroAnimationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1200),
-    );
-    _fadeController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 800),
-    );
-
-    _heroFadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _heroAnimationController, curve: Curves.easeOut),
-    );
-
-    _heroSlideAnimation =
-        Tween<Offset>(begin: const Offset(0, 0.3), end: Offset.zero).animate(
-          CurvedAnimation(
-            parent: _heroAnimationController,
-            curve: Curves.easeOutCubic,
-          ),
-        );
-
-    _heroAnimationController.forward();
-    _fadeController.forward();
-
     _heroSearchController.addListener(_onHeroSearchTextChanged);
     _heroSearchFocusNode.addListener(_onHeroSearchFocusChanged);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _handleLandingRouteArguments();
+      unawaited(logoWithoutWhiteFuture);
+      final size = MediaQuery.sizeOf(context);
+      final dpr = MediaQuery.devicePixelRatioOf(context);
+      final cacheW = (size.width * dpr).round().clamp(720, 1600);
+      precacheImage(
+        ResizeImage(
+          NetworkImage(
+            SupabaseStorageConfig.resolve(
+              'assets/images/landing page.png',
+            ),
+          ),
+          width: cacheW,
+        ),
+        context,
+      );
+      _scheduleHeavyImageWarmup();
     });
   }
 
@@ -366,13 +275,13 @@ class _LandingPageState extends State<LandingPage>
     if (mapArgs == null) return;
 
     final fromQr = mapArgs['fromQrRegistration'] == true;
+    final fromQrGuest = mapArgs['fromQrWelcomeGuest'] == true;
     final welcome = mapArgs['welcomeMessage'];
     final welcomeText =
         welcome is String && welcome.trim().isNotEmpty ? welcome.trim() : null;
 
-    if (fromQr && welcomeText != null) {
+    if ((fromQr || fromQrGuest) && welcomeText != null) {
       setState(() {
-        _fromQrRegistration = true;
         _qrWelcomeMessage = welcomeText;
         _highlightExperienceSection = true;
       });
@@ -408,30 +317,51 @@ class _LandingPageState extends State<LandingPage>
     super.didChangeDependencies();
   }
 
-  void _muteHeroVideoForAuthNavigation() {
+  void _pauseHeroVideoForAuthNavigation() {
+    unawaited(OnboardingHeroVideo.of(context).pauseForAuthOverlay());
     unawaited(OnboardingHeroVideo.of(context).setHeroVideoMuted(true));
   }
 
+  void _resumeHeroVideoAfterAuthNavigation() {
+    unawaited(OnboardingHeroVideo.of(context).resumeAfterAuthOverlay());
+  }
+
+  Future<T?> _pushAuthRoute<T>(String route, {Object? arguments}) {
+    _pauseHeroVideoForAuthNavigation();
+    return Navigator.of(context)
+        .pushNamed<T>(route, arguments: arguments)
+        .then((result) {
+      if (mounted) _resumeHeroVideoAfterAuthNavigation();
+      return result;
+    });
+  }
+
   void _navigateToLogin() {
-    _muteHeroVideoForAuthNavigation();
-    Navigator.of(context).pushNamed('/login');
+    _pushAuthRoute('/login');
+  }
+
+  void _navigateToSignup() {
+    _pushAuthRoute('/signup');
   }
 
   void _navigateToLoginForFeature({
     required String returnFeature,
     String? municipalityName,
   }) {
-    _muteHeroVideoForAuthNavigation();
     final name = municipalityName?.trim();
-    Navigator.of(context)
-        .pushNamed(
-          '/login',
-          arguments: LoginRouteArgs.forFeature(
-            returnFeature: returnFeature,
-            municipalityName: name,
-          ),
-        )
-        .then((result) {
+    unawaited(
+      LandingIntentService.setPending(
+        feature: returnFeature,
+        municipalityName: name,
+      ),
+    );
+    _pushAuthRoute(
+      '/login',
+      arguments: LoginRouteArgs.forFeature(
+        returnFeature: returnFeature,
+        municipalityName: name,
+      ),
+    ).then((result) {
       if (!mounted || result is! String) return;
       _continueLandingFeatureAfterLogin(
         returnFeature: result,
@@ -440,20 +370,19 @@ class _LandingPageState extends State<LandingPage>
     });
   }
 
-  void _continueLandingFeatureAfterLogin({
+  Future<void> _continueLandingFeatureAfterLogin({
     required String returnFeature,
     String? municipalityName,
-  }) {
-    if (returnFeature == LoginRouteArgs.featureVr) {
-      final title = municipalityName != null && municipalityName.isNotEmpty
-          ? 'VR Tour — $municipalityName'
-          : 'VR Tour';
-      unawaited(openVrTour(context, title: title));
-      return;
-    }
-    if (returnFeature == LoginRouteArgs.featureItinerary) {
-      _pushTripPlanEntry();
-    }
+  }) async {
+    await LandingIntentService.clear();
+    if (!mounted) return;
+    await LandingIntentNavigation.executeIntent(
+      context,
+      LandingIntent(
+        feature: returnFeature,
+        municipalityName: municipalityName,
+      ),
+    );
   }
 
   void _pushTripPlanEntry() {
@@ -467,8 +396,12 @@ class _LandingPageState extends State<LandingPage>
     );
   }
 
-  void _openPlanItinerary({String? municipalityName}) {
-    _muteHeroVideoForAuthNavigation();
+  Future<void> _openPlanItinerary({String? municipalityName}) async {
+    _pauseHeroVideoForAuthNavigation();
+    await LandingIntentService.setPending(
+      feature: LoginRouteArgs.featureItinerary,
+      municipalityName: municipalityName,
+    );
     if (!_isLoggedIn) {
       _navigateToLoginForFeature(
         returnFeature: LoginRouteArgs.featureItinerary,
@@ -476,11 +409,20 @@ class _LandingPageState extends State<LandingPage>
       );
       return;
     }
+    await LandingIntentService.clear();
     _pushTripPlanEntry();
   }
 
-  void _openVrTourFromLanding({String? municipalityName}) {
-    _muteHeroVideoForAuthNavigation();
+  Future<void> _openVrTourFromLanding({String? municipalityName}) async {
+    _pauseHeroVideoForAuthNavigation();
+    if (VrDownloadAppPrompt.blocksVrOnWeb) {
+      await VrDownloadAppPrompt.show(context);
+      return;
+    }
+    await LandingIntentService.setPending(
+      feature: LoginRouteArgs.featureVr,
+      municipalityName: municipalityName,
+    );
     if (!_isLoggedIn) {
       _navigateToLoginForFeature(
         returnFeature: LoginRouteArgs.featureVr,
@@ -488,10 +430,22 @@ class _LandingPageState extends State<LandingPage>
       );
       return;
     }
+    await LandingIntentService.clear();
+    if (!mounted) return;
     final title = municipalityName != null && municipalityName.isNotEmpty
         ? 'VR Tour — $municipalityName'
         : 'VR Tour';
     unawaited(openVrTour(context, title: title));
+  }
+
+  String get _landingVrButtonLabel {
+    if (VrDownloadAppPrompt.blocksVrOnWeb) return 'Get the ATMOS app';
+    return _isMobile ? 'VR Tour' : 'Start VR Tour';
+  }
+
+  String get _landingVrQuickActionLabel {
+    if (VrDownloadAppPrompt.blocksVrOnWeb) return 'Get ATMOS app';
+    return 'VR Tour';
   }
 
   static const List<String> _sectionOrder = [
@@ -539,6 +493,14 @@ class _LandingPageState extends State<LandingPage>
 
     final newIsScrolled = offset > 50;
     final newActive = _detectActiveSection(offset);
+    final screenH = MediaQuery.sizeOf(context).height;
+
+    // Start loading destination photos once the user is near that section.
+    if (!_heavyImagesEnabled || _destinationImageBudget < _destinations.length) {
+      if (offset > screenH * 0.55) {
+        _enableHeavyImages(budget: _destinations.length);
+      }
+    }
 
     if (newIsScrolled != _isScrolled || newActive != _activeSection) {
       setState(() {
@@ -559,7 +521,11 @@ class _LandingPageState extends State<LandingPage>
   }
 
   void _onHeroSearchTextChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    if (_heroSearchController.text.trim().isNotEmpty) {
+      _enableHeavyImages(budget: _destinations.length);
+    }
+    setState(() {});
   }
 
   void _onHeroSearchFocusChanged() {
@@ -621,18 +587,20 @@ class _LandingPageState extends State<LandingPage>
   @override
   void dispose() {
     _scrollUiThrottle?.cancel();
+    _heavyImageWarmTimer?.cancel();
     _heroSearchController.removeListener(_onHeroSearchTextChanged);
     _heroSearchFocusNode.removeListener(_onHeroSearchFocusChanged);
     _heroSearchController.dispose();
     _heroSearchFocusNode.dispose();
     OnboardingHeroVideo.read(context)?.releaseLandingHeroVideo();
     _pageScrollController.dispose();
-    _heroAnimationController.dispose();
-    _fadeController.dispose();
     super.dispose();
   }
 
   bool get _isMobile => MediaQuery.of(context).size.width < 768;
+
+  /// Hero image height on municipality / city destination cards.
+  double get _destinationCardImageHeight => _isMobile ? 176.0 : 200.0;
 
   bool get _isLoggedIn => FirebaseAuth.instance.currentUser != null;
   bool get _isTablet =>
@@ -651,12 +619,8 @@ class _LandingPageState extends State<LandingPage>
   /// Shorter nav labels so all items fit on the right without clipping.
   bool get _navTight => MediaQuery.of(context).size.width < 1200;
 
-  /// Full tagline beside logo on wide desktops only.
-  bool get _showAppBarTagline =>
-      !_useDrawerNav && MediaQuery.of(context).size.width >= 1280;
-
   double get _landingAppBarHeight =>
-      _useDrawerNav ? (_isMobile ? 100.0 : 88.0) : 72.0;
+      _useDrawerNav ? (_isMobile ? 96.0 : 88.0) : 72.0;
 
   /// One full-screen panel per nav item (area below the app bar).
   double get _sectionViewportHeight {
@@ -721,14 +685,17 @@ class _LandingPageState extends State<LandingPage>
       borderRadius: BorderRadius.circular(_cardRadius),
       border: Border.all(
         color: hovered
-            ? accent.withValues(alpha: 0.32)
-            : _pageDivider,
+            ? accent.withValues(alpha: 0.40)
+            : const Color(0xFFE8ECF1),
+        width: hovered ? 1.5 : 1,
       ),
       boxShadow: [
         BoxShadow(
-          color: Colors.black.withValues(alpha: hovered ? 0.08 : 0.04),
-          blurRadius: hovered ? 18 : 10,
-          offset: Offset(0, hovered ? 6 : 3),
+          color: hovered
+              ? accent.withValues(alpha: 0.12)
+              : Colors.black.withValues(alpha: 0.05),
+          blurRadius: hovered ? 20 : 12,
+          offset: Offset(0, hovered ? 8 : 4),
         ),
       ],
     );
@@ -743,10 +710,22 @@ class _LandingPageState extends State<LandingPage>
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: accent.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(12),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [accent, _brandDark],
+        ),
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: accent.withValues(alpha: 0.32),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
-      child: Icon(icon, color: accent, size: size * 0.5),
+      alignment: Alignment.center,
+      child: Icon(icon, color: Colors.white, size: size * 0.45),
     );
   }
 
@@ -814,6 +793,11 @@ class _LandingPageState extends State<LandingPage>
   }
 
   Future<void> _scrollToSection(String section) async {
+    if (section == 'destinations' ||
+        section == 'about' ||
+        section == 'howItWorks') {
+      _enableHeavyImages(budget: _destinations.length);
+    }
     final targetContext = _sectionKey(section)?.currentContext;
     if (targetContext == null ||
         !targetContext.mounted ||
@@ -908,7 +892,7 @@ class _LandingPageState extends State<LandingPage>
                 ),
                 _buildViewportNavSection(
                   key: _keyHowItWorks,
-                  color: _pageBackground,
+                  color: _pageSurfaceMuted,
                   child: _buildHowItWorksSection(viewport: true),
                 ),
                 _buildViewportNavSection(
@@ -931,121 +915,147 @@ class _LandingPageState extends State<LandingPage>
     );
   }
 
+  Widget _buildAppBarBrandText() {
+    final width = MediaQuery.sizeOf(context).width;
+    final narrow = width < 520;
+    final titleSize =
+        _isMobile ? (narrow ? 18.0 : 20.0) : (_useDrawerNav ? 20.0 : 22.0);
+    final meaningSize = narrow ? 8.5 : (_isMobile ? 9.0 : 9.5);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisAlignment: MainAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AtmosBrandTitle(
+          fontSize: titleSize,
+          letterSpacing: narrow ? 0.85 : 1.0,
+          textAlign: TextAlign.start,
+        ),
+        const SizedBox(height: 2),
+        Text(
+          _kAppMeaning,
+          maxLines: narrow ? 3 : 2,
+          overflow: TextOverflow.ellipsis,
+          style: AtmosBrandTypography.meaningTagline(
+            color: const Color(0xFF6B7280),
+            fontSize: meaningSize,
+            letterSpacing: 0.15,
+            fontWeight: FontWeight.w500,
+            height: 1.2,
+          ),
+        ),
+      ],
+    );
+  }
+
   PreferredSizeWidget _buildAppBar() {
-    final barHeight = _useDrawerNav ? (_isMobile ? 100.0 : 88.0) : 72.0;
+    final barHeight = _landingAppBarHeight;
     return PreferredSize(
       preferredSize: Size.fromHeight(barHeight),
-      child: AnimatedContainer(
-        duration: _motionDuration,
-        curve: Curves.easeOutCubic,
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: _isScrolled
-                ? [_primaryOrange, _brandLight]
-                : [
-                    _primaryOrange.withValues(alpha: 0.88),
-                    _brandLight.withValues(alpha: 0.82),
-                  ],
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: _primaryOrange.withValues(
-                alpha: _isScrolled ? 0.28 : 0.16,
-              ),
-              blurRadius: _isScrolled ? 12 : 8,
-              offset: Offset(0, _isScrolled ? 3 : 2),
-            ),
-          ],
+      child: ClipRRect(
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(28),
+          bottomRight: Radius.circular(28),
         ),
-        child: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          toolbarHeight: barHeight,
-          leadingWidth: 0,
-          leading: const SizedBox.shrink(),
-          titleSpacing: 0,
-          title: Padding(
-            padding: EdgeInsets.only(
-              left: _useDrawerNav ? 4 : 16,
-              right: _useDrawerNav ? 8 : 20,
-            ),
-            child: Row(
-              children: [
-                if (_useDrawerNav)
-                  Builder(
-                    builder: (context) => IconButton(
-                      padding: EdgeInsets.zero,
-                      visualDensity: VisualDensity.compact,
-                      constraints: const BoxConstraints(
-                        minWidth: 44,
-                        minHeight: 44,
-                      ),
-                      icon: const Icon(Icons.menu_rounded, color: Colors.white),
-                      onPressed: () => Scaffold.of(context).openDrawer(),
-                    ),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: AnimatedContainer(
+            duration: _motionDuration,
+            curve: Curves.easeOutCubic,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(
+                alpha: _isScrolled ? 0.97 : 0.92,
+              ),
+              borderRadius: const BorderRadius.only(
+                bottomLeft: Radius.circular(28),
+                bottomRight: Radius.circular(28),
+              ),
+              border: Border(
+                bottom: BorderSide(
+                  color: Colors.white.withValues(alpha: 0.7),
+                ),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(
+                    alpha: _isScrolled ? 0.10 : 0.06,
                   ),
-                if (_useDrawerNav) const SizedBox(width: 2),
-                _buildAppBarLogoMark(size: _useDrawerNav ? 40 : 36),
-                SizedBox(width: _useDrawerNav ? 12 : 10),
-                if (_useDrawerNav)
-                  Expanded(
-                    child: _buildAppBarBrandText(
-                      titleSize: 22,
-                      showTagline: true,
-                    ),
-                  )
-                else if (_showAppBarTagline)
-                  Flexible(
-                    fit: FlexFit.loose,
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: MediaQuery.sizeOf(context).width * 0.34,
+                  blurRadius: _isScrolled ? 16 : 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: AppBar(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              scrolledUnderElevation: 0,
+              toolbarHeight: barHeight,
+              leadingWidth: 0,
+              leading: const SizedBox.shrink(),
+              titleSpacing: 0,
+              title: Padding(
+                padding: EdgeInsets.only(
+                  left: _useDrawerNav ? 4 : 16,
+                  right: _useDrawerNav ? 8 : 8,
+                ),
+                child: Row(
+                  children: [
+                    if (_useDrawerNav)
+                      Builder(
+                        builder: (context) => IconButton(
+                          padding: EdgeInsets.zero,
+                          visualDensity: VisualDensity.compact,
+                          constraints: const BoxConstraints(
+                            minWidth: 44,
+                            minHeight: 44,
+                          ),
+                          icon: const Icon(
+                            Icons.menu_rounded,
+                            color: Color(0xFF192334),
+                          ),
+                          onPressed: () => Scaffold.of(context).openDrawer(),
+                        ),
                       ),
-                      child: _buildAppBarBrandText(
-                        titleSize: 24,
-                        showTagline: true,
-                      ),
+                    AtmosSquareLogo(
+                      height: _useDrawerNav ? (_isMobile ? 44.0 : 40.0) : 40.0,
+                      padding: const EdgeInsets.all(3),
+                      borderRadius: 20,
+                      elevation: 0,
                     ),
-                  )
-                else
-                  Text(
-                    'ATMOS-TRS',
-                    style: AtmosBrandTypography.displayTitle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      letterSpacing: 0.5,
+                    const SizedBox(width: 8),
+                    Flexible(
+                      flex: _useDrawerNav ? 1 : 2,
+                      child: _buildAppBarBrandText(),
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    ListenableBuilder(
+                      listenable: OnboardingHeroVideo.of(context),
+                      builder: (context, _) {
+                        final hero = OnboardingHeroVideo.of(context);
+                        if (!hero.showVideoOnLandingHero) {
+                          return const SizedBox.shrink();
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.only(left: 4),
+                          child: HeroVideoMuteControl(
+                            forAppBar: true,
+                            iconSize: _isMobile ? 20 : 22,
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                if (!_useDrawerNav)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: Center(child: _buildInlineNavBar()),
                   ),
               ],
             ),
           ),
-          actions: [
-            ListenableBuilder(
-              listenable: OnboardingHeroVideo.of(context),
-              builder: (context, _) {
-                final hero = OnboardingHeroVideo.of(context);
-                if (!hero.showVideoOnLandingHero) {
-                  return const SizedBox.shrink();
-                }
-                return Padding(
-                  padding: const EdgeInsets.only(right: 4),
-                  child: HeroVideoMuteControl(
-                    forAppBar: true,
-                    iconSize: _isMobile ? 20 : 22,
-                  ),
-                );
-              },
-            ),
-            if (!_useDrawerNav)
-              Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: _buildInlineNavBar(),
-              ),
-          ],
         ),
       ),
     );
@@ -1082,94 +1092,37 @@ class _LandingPageState extends State<LandingPage>
     );
   }
 
-  Widget _buildAppBarLogoMark({required double size}) {
-    return Container(
-      padding: const EdgeInsets.all(5),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.22),
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.08),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: SizedBox(
-        height: size,
-        width: size,
-        child: TransparentLogo(
-          height: size,
-          width: size,
-          fit: BoxFit.cover,
-          alignment: Alignment.topCenter,
-          errorIcon: Icons.travel_explore_rounded,
-          errorIconSize: size * 0.65,
-          errorIconColor: Colors.white,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAppBarBrandText({
-    required double titleSize,
-    required bool showTagline,
-  }) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          'ATMOS-TRS',
-          style: AtmosBrandTypography.displayTitle(
-            color: Colors.white,
-            fontSize: titleSize,
-            letterSpacing: 0.6,
-          ),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        if (showTagline)
-          Text(
-            _kAppFullName,
-            style: AtmosBrandTypography.meaningTagline(
-              color: Colors.white.withValues(alpha: 0.92),
-              fontSize: _useDrawerNav ? 9.5 : 10.5,
-              letterSpacing: 0.15,
-              height: 1.25,
-            ),
-            maxLines: _useDrawerNav ? 3 : 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-      ],
-    );
-  }
-
   Widget _buildInlineNavBar() {
     final compact = _navCompact;
-    final screenWidth = MediaQuery.sizeOf(context).width;
-    final maxNavWidth = screenWidth * 0.58;
 
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: maxNavWidth),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        physics: const BouncingScrollPhysics(),
-        reverse: false,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final item in _landingNavItems)
-              _buildNavChip(
-                label: _navChipLabel(item),
-                onTap: () => _onNavTap(item.sectionId),
-                isActive: _activeSection == item.sectionId,
-                compact: compact,
-              ),
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
+      reverse: false,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final item in _landingNavItems)
+            _buildNavChip(
+              label: _navChipLabel(item),
+              onTap: () => _onNavTap(item.sectionId),
+              isActive: _activeSection == item.sectionId,
+              compact: compact,
+            ),
+          if (!_isLoggedIn) ...[
+            _buildHeaderAuthChip(
+              label: 'Log In',
+              onTap: _navigateToLogin,
+              compact: compact,
+            ),
+            _buildHeaderAuthChip(
+              label: 'Sign Up',
+              onTap: _navigateToSignup,
+              compact: compact,
+              emphasized: true,
+            ),
           ],
-        ),
+        ],
       ),
     );
   }
@@ -1190,47 +1143,78 @@ class _LandingPageState extends State<LandingPage>
     bool compact = false,
   }) {
     return Padding(
-      padding: EdgeInsets.symmetric(horizontal: compact ? 3 : 4),
+      padding: EdgeInsets.symmetric(horizontal: compact ? 2 : 3),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(24),
-          hoverColor: Colors.white.withValues(alpha: 0.14),
-          splashColor: Colors.white.withValues(alpha: 0.2),
+          hoverColor: _primaryOrange.withValues(alpha: 0.08),
+          child: AnimatedContainer(
+            duration: _motionDuration,
+            curve: Curves.easeOut,
+            padding: EdgeInsets.symmetric(
+              horizontal: compact ? 8 : 11,
+              vertical: compact ? 6 : 7,
+            ),
+            decoration: BoxDecoration(
+              color: isActive ? _primaryOrange : Colors.transparent,
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                color: isActive ? Colors.white : const Color(0xFF192334),
+                fontSize: compact ? 12 : 13,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.05,
+                height: 1.15,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeaderAuthChip({
+    required String label,
+    required VoidCallback onTap,
+    bool compact = false,
+    bool emphasized = false,
+  }) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: compact ? 3 : 5,
+        right: compact ? 3 : 4,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(24),
           child: AnimatedContainer(
             duration: _motionDuration,
             curve: Curves.easeOut,
             padding: EdgeInsets.symmetric(
               horizontal: compact ? 10 : 14,
-              vertical: compact ? 7 : 8,
+              vertical: compact ? 6 : 7,
             ),
             decoration: BoxDecoration(
-              color: isActive
-                  ? Colors.white
-                  : Colors.white.withValues(alpha: 0.14),
+              color: emphasized ? _primaryOrange : Colors.transparent,
               borderRadius: BorderRadius.circular(24),
               border: Border.all(
-                color: Colors.white.withValues(alpha: isActive ? 0.95 : 0.28),
-                width: isActive ? 1.5 : 1,
+                color: _primaryOrange,
+                width: emphasized ? 0 : 1.5,
               ),
-              boxShadow: isActive
-                  ? [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.12),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ]
-                  : null,
             ),
             child: Text(
               label,
               style: TextStyle(
-                color: isActive ? _primaryOrange : Colors.white,
-                fontSize: compact ? 12.5 : 14,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.15,
+                color: emphasized ? Colors.white : _primaryOrange,
+                fontSize: compact ? 12 : 13,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.1,
                 height: 1.15,
               ),
             ),
@@ -1248,50 +1232,20 @@ class _LandingPageState extends State<LandingPage>
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Container(
-              padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
-              decoration: BoxDecoration(
-                color: _primaryOrange,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+              color: _pageBackground,
+              child: Center(
+                child: AtmosSquareLogo(
+                  height: 72,
+                  maxWidth: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
                   ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.travel_explore_rounded,
-                        color: Colors.white,
-                        size: 28,
-                      ),
-                      const SizedBox(width: 12),
-                      Text(
-                        'ATMOS-TRS',
-                        style: AtmosBrandTypography.displayTitle(
-                          color: Colors.white,
-                          fontSize: 22,
-                          letterSpacing: 0.6,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    _kAppFullName,
-                    style: AtmosBrandTypography.meaningTagline(
-                      color: Colors.white.withValues(alpha: 0.92),
-                      fontSize: 11,
-                      letterSpacing: 0.15,
-                      height: 1.35,
-                    ),
-                  ),
-                ],
+                  borderRadius: 14,
+                  elevation: 2,
+                ),
               ),
             ),
             const SizedBox(height: 8),
@@ -1363,21 +1317,55 @@ class _LandingPageState extends State<LandingPage>
             if (!_isLoggedIn)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: () {
-                      _muteHeroVideoForAuthNavigation();
-                      Navigator.pop(context);
-                      Navigator.pushNamed(context, '/login');
-                    },
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: _primaryOrange,
-                      side: BorderSide(color: _primaryOrange),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Column(
+                  children: [
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          _navigateToLogin();
+                        },
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _primaryOrange,
+                          side: const BorderSide(
+                            color: _primaryOrange,
+                            width: 1.5,
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                        ),
+                        child: const Text(
+                          'Log In',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
                     ),
-                    child: const Text('Sign In'),
-                  ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          _navigateToSignup();
+                        },
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _primaryOrange,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                        ),
+                        child: const Text(
+                          'Sign Up',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               )
             else
@@ -1388,12 +1376,15 @@ class _LandingPageState extends State<LandingPage>
                   child: FilledButton(
                     onPressed: () {
                       Navigator.pop(context);
-                      Navigator.pushNamed(context, '/dashboard');
+                      unawaited(_openUserApp());
                     },
                     style: FilledButton.styleFrom(
                       backgroundColor: _primaryOrange,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(24),
+                      ),
                     ),
                     child: const Text('Go to dashboard'),
                   ),
@@ -1407,12 +1398,15 @@ class _LandingPageState extends State<LandingPage>
 
   /// Keeps hero copy readable on bright capitol photography.
   static const List<Shadow> _heroTextShadow = [
-    Shadow(offset: Offset(0, 1), blurRadius: 4, color: Color(0xE6000000)),
-    Shadow(offset: Offset(0, 2), blurRadius: 12, color: Color(0x99000000)),
+    Shadow(offset: Offset(0, 1), blurRadius: 4, color: Color(0x99000000)),
+    Shadow(offset: Offset(0, 2), blurRadius: 10, color: Color(0x66000000)),
   ];
 
   Widget _buildHeroSection() {
     final h = MediaQuery.sizeOf(context).height;
+    final topInset = MediaQuery.paddingOf(context).top +
+        _landingAppBarHeight +
+        (_isMobile ? 8 : 12);
 
     return SizedBox(
       height: h,
@@ -1423,131 +1417,168 @@ class _LandingPageState extends State<LandingPage>
           DecoratedBox(
             decoration: BoxDecoration(
               image: DecorationImage(
-                image: AssetImage(_kLandingHeroBackground),
+                image: _landingHeroBackgroundImage,
                 fit: BoxFit.cover,
-                alignment: const Alignment(0, -0.1),
+                alignment: const Alignment(0.15, -0.08),
                 filterQuality: FilterQuality.high,
                 onError: (exception, stackTrace) {
                   debugPrint('[Landing] hero bg failed: $exception');
                 },
               ),
-              color: const Color(0xFF0F172A),
+              color: const Color(0xFF192334),
             ),
           ),
-          // Subtle scrim for text readability only.
-          Container(
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: [
+                  Colors.black.withValues(alpha: _isMobile ? 0.55 : 0.48),
+                  Colors.black.withValues(alpha: 0.28),
+                  Colors.black.withValues(alpha: 0.08),
+                  Colors.transparent,
+                ],
+                stops: const [0.0, 0.32, 0.58, 0.82],
+              ),
+            ),
+          ),
+          DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  Colors.black.withValues(alpha: 0.12),
-                  Colors.black.withValues(alpha: 0.28),
+                  Colors.black.withValues(alpha: 0.10),
+                  Colors.transparent,
                   Colors.black.withValues(alpha: 0.42),
                 ],
-                stops: const [0.0, 0.55, 1.0],
+                stops: const [0.0, 0.45, 1.0],
               ),
             ),
           ),
-          Center(
-            child: FadeTransition(
-              opacity: _heroFadeAnimation,
-              child: SlideTransition(
-                position: _heroSlideAnimation,
-                child: SingleChildScrollView(
-                  clipBehavior: Clip.none,
-                  padding: EdgeInsets.symmetric(
-                    horizontal: _isMobile ? 22 : 56,
-                  ),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(minHeight: h),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        SizedBox(height: _isMobile ? 88 : 96),
-                        _buildHeroHeadline(),
-                        const SizedBox(height: 20),
-                        _buildHeroQuickStats(),
-                        const SizedBox(height: 22),
-                        Center(child: _buildHeroSearchBarLight()),
-                        if (!_heroSearchSuggestionsOpen) ...[
-                          const SizedBox(height: 18),
-                          ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxWidth: _isMobile ? 360 : 640,
-                            ),
-                            child: Text(
-                              'Walk destinations in immersive 360°, map your dream itinerary, '
-                              'and discover all 17 LGUs — before you even pack your bags.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: _isMobile ? 15 : 17,
-                                height: 1.55,
-                                fontWeight: FontWeight.w500,
-                                shadows: _heroTextShadow,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 18),
-                          Wrap(
-                            spacing: 10,
-                            runSpacing: 10,
-                            alignment: WrapAlignment.center,
-                            children: [
-                              _buildHeroChip(
-                                Icons.vrpano_rounded,
-                                '360° previews',
-                              ),
-                              _buildHeroChip(
-                                Icons.route_rounded,
-                                'Trip planner',
-                              ),
-                              _buildHeroChip(
-                                Icons.location_city_rounded,
-                                '17 LGUs',
-                              ),
-                              _buildHeroChip(
-                                Icons.qr_code_scanner_rounded,
-                                'QR check-in',
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 20),
-                          if (!_isLoggedIn) _buildHeroPrimaryActions(),
-                          if (_isLoggedIn) _buildLoggedInHeroActions(),
-                          const SizedBox(height: 20),
-                          GestureDetector(
-                            onTap: () => _scrollToSection('chooseExperience'),
-                            child: Column(
-                              children: [
-                                Text(
-                                  'Scroll to explore',
-                                  style: TextStyle(
-                                    color: Colors.white.withValues(alpha: 0.55),
-                                    fontSize: 13,
-                                  ),
-                                ),
-                                const SizedBox(height: 6),
-                                Icon(
-                                  Icons.keyboard_arrow_down_rounded,
-                                  color: Colors.white.withValues(alpha: 0.55),
-                                  size: 28,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                        SizedBox(
-                          height: MediaQuery.paddingOf(context).bottom + 28,
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              _isMobile ? 20 : 56,
+              topInset + (_isMobile ? 20 : 28),
+              _isMobile ? 20 : 56,
+              20,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: SingleChildScrollView(
+                    clipBehavior: Clip.none,
+                    child: Align(
+                      alignment: _isMobile
+                          ? Alignment.topCenter
+                          : Alignment.topLeft,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: _isMobile ? 520 : 640,
                         ),
-                      ],
+                        child: Column(
+                          crossAxisAlignment: _isMobile
+                              ? CrossAxisAlignment.center
+                              : CrossAxisAlignment.start,
+                          children: [
+                            _buildHeroHeadline(),
+                            SizedBox(height: _isMobile ? 18 : 22),
+                            _buildHeroSearchBarLight(),
+                            if (!_heroSearchSuggestionsOpen) ...[
+                              SizedBox(height: _isMobile ? 20 : 28),
+                              _buildHeroGlassFeatureCards(),
+                              if (_isLoggedIn) ...[
+                                const SizedBox(height: 18),
+                                _buildLoggedInHeroActions(),
+                              ],
+                            ],
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
+                if (!_heroSearchSuggestionsOpen)
+                  Padding(
+                    padding: EdgeInsets.only(
+                      bottom: MediaQuery.paddingOf(context).bottom + 6,
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.location_on_rounded,
+                                color: Colors.white,
+                                size: 18,
+                              ),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text(
+                                      'MISAMIS OCCIDENTAL',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w800,
+                                        letterSpacing: 0.6,
+                                      ),
+                                    ),
+                                    Text(
+                                      'A PROVINCE OF ENDLESS POSSIBILITIES',
+                                      style: TextStyle(
+                                        color: Colors.white.withValues(
+                                          alpha: 0.85,
+                                        ),
+                                        fontSize: 8.5,
+                                        fontWeight: FontWeight.w600,
+                                        letterSpacing: 0.4,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () => _scrollToSection('chooseExperience'),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.mouse_outlined,
+                                color: Colors.white.withValues(alpha: 0.75),
+                                size: 22,
+                              ),
+                              Icon(
+                                Icons.keyboard_arrow_down_rounded,
+                                color: Colors.white.withValues(alpha: 0.75),
+                                size: 20,
+                              ),
+                              Text(
+                                'Scroll to explore',
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.7),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Expanded(child: SizedBox.shrink()),
+                      ],
+                    ),
+                  ),
+              ],
             ),
           ),
         ],
@@ -1555,12 +1586,337 @@ class _LandingPageState extends State<LandingPage>
     );
   }
 
-  void _openUserApp({int initialIndex = 0}) {
-    _muteHeroVideoForAuthNavigation();
+  Widget _buildHeroGlassFeatureCards() {
+    final cards = const [
+      (
+        icon: Icons.vrpano_rounded,
+        title: '360Â° Previews',
+        subtitle: 'See before you go',
+      ),
+      (
+        icon: Icons.map_rounded,
+        title: 'Trip Planner',
+        subtitle: 'Plan your adventure',
+      ),
+      (
+        icon: Icons.groups_rounded,
+        title: '17 LGUs',
+        subtitle: 'Explore all municipalities',
+      ),
+      (
+        icon: Icons.qr_code_scanner_rounded,
+        title: 'QR Check-in',
+        subtitle: 'Travel made easy',
+      ),
+    ];
+
+    Widget buildCard(
+      int index,
+      ({IconData icon, String title, String subtitle}) c,
+    ) {
+      final hovered = _hoveredHeroGlassIndex == index;
+      return MouseRegion(
+        onEnter: (_) => setState(() => _hoveredHeroGlassIndex = index),
+        onExit: (_) => setState(() => _hoveredHeroGlassIndex = null),
+        child: AnimatedContainer(
+          duration: _motionDuration,
+          curve: Curves.easeOutCubic,
+          transform: Matrix4.identity()
+            ..translateByDouble(0, hovered ? -4.0 : 0.0, 0, 1),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+              child: AnimatedContainer(
+                duration: _motionDuration,
+                padding: EdgeInsets.symmetric(
+                  horizontal: _isMobile ? 12 : 12,
+                  vertical: _isMobile ? 10 : 10,
+                ),
+                decoration: BoxDecoration(
+                  color: Color(hovered ? 0x660F172A : 0x4D0F172A),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: Colors.white.withValues(
+                      alpha: hovered ? 0.28 : 0.16,
+                    ),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(
+                        alpha: hovered ? 0.10 : 0.05,
+                      ),
+                      blurRadius: hovered ? 12 : 6,
+                      offset: Offset(0, hovered ? 4 : 2),
+                    ),
+                  ],
+                ),
+                child: _isMobile
+                    ? Row(
+                        children: [
+                          _heroGlassIconBadge(c.icon),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  c.title,
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13.5,
+                                    fontWeight: FontWeight.w800,
+                                    shadows: const [
+                                      Shadow(
+                                        offset: Offset(0, 1),
+                                        blurRadius: 4,
+                                        color: Color(0x99000000),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  c.subtitle,
+                                  style: TextStyle(
+                                    color: Colors.white.withValues(alpha: 0.92),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w500,
+                                    shadows: const [
+                                      Shadow(
+                                        offset: Offset(0, 1),
+                                        blurRadius: 3,
+                                        color: Color(0x88000000),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      )
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _heroGlassIconBadge(c.icon),
+                          const SizedBox(height: 8),
+                          Text(
+                            c.title,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w800,
+                              height: 1.15,
+                              shadows: const [
+                                Shadow(
+                                  offset: Offset(0, 1),
+                                  blurRadius: 4,
+                                  color: Color(0x99000000),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            c.subtitle,
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.92),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                              height: 1.25,
+                              shadows: const [
+                                Shadow(
+                                  offset: Offset(0, 1),
+                                  blurRadius: 3,
+                                  color: Color(0x88000000),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (_isMobile) {
+      return Column(
+        children: [
+          for (var i = 0; i < cards.length; i++) ...[
+            if (i > 0) const SizedBox(height: 8),
+            buildCard(i, cards[i]),
+          ],
+        ],
+      );
+    }
+
+    // Keep the row compact on the left so the ASENSO sign on the hero photo
+    // stays visible on the right.
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 640),
+        child: Row(
+          children: [
+            for (var i = 0; i < cards.length; i++) ...[
+              if (i > 0) const SizedBox(width: 8),
+              Expanded(child: buildCard(i, cards[i])),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _heroGlassIconBadge(IconData icon) {
+    return Container(
+      width: 30,
+      height: 30,
+      decoration: BoxDecoration(
+        color: _primaryOrange,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: _primaryOrange.withValues(alpha: 0.35),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      alignment: Alignment.center,
+      child: Icon(icon, color: Colors.white, size: 16),
+    );
+  }
+
+  Widget _buildHeroHeadline() {
+    final align = _isMobile ? TextAlign.center : TextAlign.left;
+    return Column(
+      crossAxisAlignment:
+          _isMobile ? CrossAxisAlignment.center : CrossAxisAlignment.start,
+      children: [
+        Text(
+          'EXPLORE  â€¢  EXPERIENCE  â€¢  BELONG',
+          textAlign: align,
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.92),
+            fontSize: _isMobile ? 11 : 12.5,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 2.6,
+            shadows: _heroTextShadow,
+          ),
+        ),
+        SizedBox(height: _isMobile ? 10 : 14),
+        Text(
+          'Discover',
+          textAlign: align,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: _isMobile ? 40 : 58,
+            fontWeight: FontWeight.w800,
+            height: 0.95,
+            letterSpacing: -0.8,
+            shadows: _heroTextShadow,
+            fontFamily: 'Georgia',
+          ),
+        ),
+        Transform.translate(
+          offset: Offset(_isMobile ? 0 : -2, _isMobile ? -4 : -8),
+          child: Text(
+            'Misamis Occidental',
+            textAlign: align,
+            style: GoogleFonts.greatVibes(
+              color: _primaryOrange,
+              fontSize: _isMobile ? 44 : 72,
+              height: 0.95,
+              shadows: _heroTextShadow,
+            ),
+          ),
+        ),
+        SizedBox(height: _isMobile ? 10 : 14),
+        Text(
+          'Your journey starts here.',
+          textAlign: align,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: _isMobile ? 17 : 21,
+            fontWeight: FontWeight.w700,
+            shadows: _heroTextShadow,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Walk destinations in immersive 360Â°, map your dream itinerary, '
+          'and discover all 17 LGUs â€” before you even pack your bags.',
+          textAlign: align,
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.92),
+            fontSize: _isMobile ? 14 : 15.5,
+            height: 1.5,
+            fontWeight: FontWeight.w500,
+            shadows: _heroTextShadow,
+          ),
+        ),
+      ],
+    );
+  }
+  Future<void> _openUserApp({int initialIndex = 0}) async {
+    _pauseHeroVideoForAuthNavigation();
     if (!_isLoggedIn) {
       _navigateToLogin();
       return;
     }
+
+    final user = FirebaseAuth.instance.currentUser;
+    final email = (user?.email ?? '').trim();
+    final uid = user?.uid ?? '';
+
+    // Staff must open their own dashboards — never the tourist /dashboard.
+    final emailRole = SessionStorage.getRoleFromEmail(email);
+    if (emailRole == UserRole.governor) {
+      if (!mounted) return;
+      Navigator.of(context).pushNamed('/governor-dashboard');
+      return;
+    }
+    if (emailRole == UserRole.tourism) {
+      if (!mounted) return;
+      Navigator.of(context).pushNamed('/lgu-dashboard');
+      return;
+    }
+
+    if (uid.isNotEmpty && email.isNotEmpty) {
+      final route = await LoginFlowService.resolveRouteFast(
+        uid: uid,
+        email: email,
+      );
+      if (!mounted) return;
+      if (route == '/governor-dashboard' ||
+          route == '/lgu-dashboard' ||
+          route == '/tourism-dashboard') {
+        Navigator.of(context).pushNamed(route);
+        return;
+      }
+      if (route == '/verify-otp') {
+        Navigator.of(context).pushNamed(route);
+        return;
+      }
+    } else {
+      final storedRole = await SessionStorage.getStoredRole();
+      if (!mounted) return;
+      if (storedRole == UserRole.governor) {
+        Navigator.of(context).pushNamed('/governor-dashboard');
+        return;
+      }
+      if (storedRole == UserRole.tourism) {
+        Navigator.of(context).pushNamed('/lgu-dashboard');
+        return;
+      }
+    }
+
+    if (!mounted) return;
     Navigator.of(context).pushNamed(
       '/dashboard',
       arguments: <String, dynamic>{'initialIndex': initialIndex},
@@ -1568,6 +1924,18 @@ class _LandingPageState extends State<LandingPage>
   }
 
   void _onExperienceCardTap(int index) {
+    if (_qrWelcomeMessage != null) {
+      // Post-signup from QR: VR Tour | Trip Planner | Continue on website
+      switch (index) {
+        case 0:
+          _openVrTourFromLanding();
+        case 1:
+          _openPlanItinerary();
+        case 2:
+          _openUserApp();
+      }
+      return;
+    }
     switch (index) {
       case 0:
         _openVrTourFromLanding();
@@ -1578,123 +1946,11 @@ class _LandingPageState extends State<LandingPage>
     }
   }
 
-  Widget _buildHeroHeadline() {
-    final provinceSize = _isMobile ? 42.0 : 62.0;
-
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: _isMobile ? 340 : 720),
-      child: Column(
-        children: [
-          Text(
-            'Discover',
-            textAlign: TextAlign.center,
-            style: AtmosBrandTypography.heroHeadline(
-              color: Colors.white,
-              fontSize: _isMobile ? 28 : 40,
-              letterSpacing: 1.2,
-              shadows: _heroTextShadow,
-            ),
-          ),
-          const SizedBox(height: 4),
-          ShaderMask(
-            shaderCallback: (bounds) => const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Color(0xFFFFF7ED),
-                Color(0xFFF97316),
-                Color(0xFFFB923C),
-              ],
-            ).createShader(bounds),
-            child: Text(
-              'Misamis Occidental',
-              textAlign: TextAlign.center,
-              style: AtmosBrandTypography.heroHeadline(
-                color: Colors.white,
-                fontSize: provinceSize,
-                height: 1.05,
-                shadows: _heroTextShadow,
-              ),
-            ),
-          ),
-          SizedBox(height: _isMobile ? 12 : 16),
-          Text(
-            'Your journey starts here',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: _isMobile ? 16 : 20,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.4,
-              height: 1.35,
-              shadows: _heroTextShadow,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHeroQuickStats() {
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      alignment: WrapAlignment.center,
-      children: [
-        _buildHeroStatTile('17', 'LGUs'),
-        _buildHeroStatTile('360°', 'VR tours'),
-        _buildHeroStatTile('Free', 'Tourist ID'),
-      ],
-    );
-  }
-
-  Widget _buildHeroStatTile(String value, String label) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xCC0F172A),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.22)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.35),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            value,
-            style: TextStyle(
-              color: _accentOrange,
-              fontSize: _isMobile ? 18 : 20,
-              fontWeight: FontWeight.w900,
-              height: 1,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.3,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildLoggedInHeroActions() {
     return Wrap(
       spacing: 12,
       runSpacing: 12,
-      alignment: WrapAlignment.center,
+      alignment: _isMobile ? WrapAlignment.center : WrapAlignment.start,
       children: [
         FilledButton.icon(
           onPressed: _openVrTourFromLanding,
@@ -1713,7 +1969,7 @@ class _LandingPageState extends State<LandingPage>
           ),
           icon: const Icon(Icons.vrpano_rounded, size: 20),
           label: Text(
-            _isMobile ? 'VR Tour' : 'Start VR Tour',
+            _landingVrButtonLabel,
             style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
           ),
         ),
@@ -1759,99 +2015,6 @@ class _LandingPageState extends State<LandingPage>
     );
   }
 
-  Widget _buildHeroPrimaryActions() {
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      alignment: WrapAlignment.center,
-      children: [
-        FilledButton.icon(
-          onPressed: () {
-            _muteHeroVideoForAuthNavigation();
-            Navigator.pushNamed(context, '/signup');
-          },
-          style: FilledButton.styleFrom(
-            backgroundColor: _primaryOrange,
-            foregroundColor: Colors.white,
-            padding: EdgeInsets.symmetric(
-              horizontal: _isMobile ? 20 : 28,
-              vertical: _isMobile ? 14 : 16,
-            ),
-            elevation: 6,
-            shadowColor: _primaryOrange.withValues(alpha: 0.5),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-          ),
-          icon: const Icon(Icons.badge_outlined, size: 22),
-          label: Text(
-            _isMobile ? 'Get free tourist ID' : 'Create your free tourist ID',
-            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
-          ),
-        ),
-        OutlinedButton.icon(
-          onPressed: () => _scrollToSection('destinations'),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: Colors.white,
-            side: BorderSide(color: Colors.white.withValues(alpha: 0.45)),
-            padding: EdgeInsets.symmetric(
-              horizontal: _isMobile ? 18 : 24,
-              vertical: _isMobile ? 14 : 16,
-            ),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-          ),
-          icon: const Icon(Icons.explore_rounded, size: 20),
-          label: const Text(
-            'Browse destinations',
-            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildHeroChip(IconData icon, String label) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-      decoration: BoxDecoration(
-        color: const Color(0xCC0F172A),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.3),
-            blurRadius: 8,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(4),
-            decoration: BoxDecoration(
-              color: _primaryOrange.withValues(alpha: 0.35),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(icon, size: 14, color: Colors.white),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.94),
-              fontSize: 12.5,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildHeroSearchBarLight() {
     final query = _heroSearchController.text.trim();
     final showSuggestions = _heroSearchSuggestionsOpen;
@@ -1859,10 +2022,10 @@ class _LandingPageState extends State<LandingPage>
         ? _filteredDestinations.take(6).toList()
         : const <Map<String, String>>[];
 
-    const searchBarHeight = 48.0;
+    const searchBarHeight = 54.0;
     final screenWidth = MediaQuery.sizeOf(context).width;
     final barWidth = _isMobile
-        ? (screenWidth - 48).clamp(280.0, 380.0)
+        ? (screenWidth - 40).clamp(280.0, double.infinity)
         : 520.0;
 
     return SizedBox(
@@ -1872,21 +2035,15 @@ class _LandingPageState extends State<LandingPage>
         children: [
           Container(
             height: searchBarHeight,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            padding: const EdgeInsets.fromLTRB(18, 4, 6, 4),
             decoration: BoxDecoration(
-              color: const Color(0xD91E293B),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(
-                color: _heroSearchFocusNode.hasFocus
-                    ? _primaryOrange.withValues(alpha: 0.85)
-                    : Colors.white.withValues(alpha: 0.35),
-                width: _heroSearchFocusNode.hasFocus ? 1.5 : 1,
-              ),
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(32),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.45),
-                  blurRadius: _heroSearchFocusNode.hasFocus ? 20 : 14,
-                  offset: const Offset(0, 6),
+                  color: Colors.black.withValues(alpha: 0.18),
+                  blurRadius: 22,
+                  offset: const Offset(0, 8),
                 ),
               ],
             ),
@@ -1894,7 +2051,8 @@ class _LandingPageState extends State<LandingPage>
               children: [
                 Icon(
                   Icons.search_rounded,
-                  color: Colors.white.withOpacity(0.7),
+                  color: Colors.grey.shade500,
+                  size: 22,
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -1919,18 +2077,19 @@ class _LandingPageState extends State<LandingPage>
                       child: TextField(
                         controller: _heroSearchController,
                         focusNode: _heroSearchFocusNode,
-                        cursorColor: Colors.white,
+                        cursorColor: _primaryOrange,
                         style: const TextStyle(
-                          color: Colors.white,
+                          color: Color(0xFF1F2937),
                           fontSize: 15,
+                          fontWeight: FontWeight.w500,
                         ),
                         textInputAction: TextInputAction.search,
                         decoration: InputDecoration(
                           filled: true,
                           fillColor: Colors.transparent,
-                          hintText: 'Search municipalities & destinations…',
+                          hintText: 'Search municipalities & destinations...',
                           hintStyle: TextStyle(
-                            color: Colors.white.withOpacity(0.45),
+                            color: Colors.grey.shade500,
                             fontSize: 14,
                           ),
                           border: InputBorder.none,
@@ -1939,7 +2098,7 @@ class _LandingPageState extends State<LandingPage>
                           disabledBorder: InputBorder.none,
                           isDense: true,
                           contentPadding: const EdgeInsets.symmetric(
-                            vertical: 12,
+                            vertical: 14,
                           ),
                         ),
                         onSubmitted: _submitHeroSearch,
@@ -1947,14 +2106,13 @@ class _LandingPageState extends State<LandingPage>
                     ),
                   ),
                 ),
-                if (query.isNotEmpty) ...[
-                  const SizedBox(width: 4),
+                if (query.isNotEmpty)
                   IconButton(
                     onPressed: _clearHeroSearch,
                     icon: Icon(
                       Icons.close_rounded,
                       size: 20,
-                      color: Colors.white.withOpacity(0.75),
+                      color: Colors.grey.shade600,
                     ),
                     tooltip: 'Clear search',
                     padding: EdgeInsets.zero,
@@ -1963,7 +2121,23 @@ class _LandingPageState extends State<LandingPage>
                       minHeight: 32,
                     ),
                   ),
-                ],
+                Material(
+                  color: _primaryOrange,
+                  shape: const CircleBorder(),
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: () => _submitHeroSearch(_heroSearchController.text),
+                    child: const SizedBox(
+                      width: 42,
+                      height: 42,
+                      child: Icon(
+                        Icons.search_rounded,
+                        color: Colors.white,
+                        size: 22,
+                      ),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -2097,9 +2271,24 @@ class _LandingPageState extends State<LandingPage>
         Container(
           padding: EdgeInsets.all(_isMobile ? 20 : 28),
           decoration: BoxDecoration(
-            color: _pageSurfaceMuted,
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color(0xFFFFF7ED),
+                Color(0xFFFFFFFF),
+                Color(0xFFFFF7ED),
+              ],
+            ),
             borderRadius: BorderRadius.circular(_cardRadius),
-            border: Border.all(color: _pageDivider),
+            border: Border.all(color: _primaryOrange.withValues(alpha: 0.28)),
+            boxShadow: [
+              BoxShadow(
+                color: _primaryOrange.withValues(alpha: 0.08),
+                blurRadius: 18,
+                offset: const Offset(0, 6),
+              ),
+            ],
           ),
           child: _isMobile
               ? Column(
@@ -2156,10 +2345,7 @@ class _LandingPageState extends State<LandingPage>
 
   Widget _registerCalloutButton({bool compact = true}) {
     return FilledButton.icon(
-      onPressed: () {
-        _muteHeroVideoForAuthNavigation();
-        Navigator.of(context).pushNamed('/signup');
-      },
+      onPressed: _navigateToSignup,
       style: FilledButton.styleFrom(
         backgroundColor: _primaryOrange,
         foregroundColor: Colors.white,
@@ -2170,7 +2356,7 @@ class _LandingPageState extends State<LandingPage>
         ),
         minimumSize: Size(compact ? 0 : 180, 48),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(999),
         ),
       ),
       icon: const Icon(Icons.person_add_alt_1_rounded, size: 20),
@@ -2182,23 +2368,49 @@ class _LandingPageState extends State<LandingPage>
   }
 
   Widget _buildChooseYourExperienceSection({bool viewport = false}) {
-    final List<Map<String, dynamic>> experienceCards = [
-      {
-        'title': 'VR Tour',
-        'subtitle': 'Explore destinations in immersive 360° preview',
-        'icon': Icons.vrpano_rounded,
-      },
-      {
-        'title': 'Itinerary Planner',
-        'subtitle': 'Plan and organize your travel itinerary',
-        'icon': Icons.map_rounded,
-      },
-      {
-        'title': 'QR Check-in',
-        'subtitle': 'Scan QR codes and record visits',
-        'icon': Icons.qr_code_scanner_rounded,
-      },
-    ];
+    final fromQrSignup = _qrWelcomeMessage != null;
+    final List<Map<String, dynamic>> experienceCards = fromQrSignup
+        ? [
+            {
+              'title': 'VR Tour',
+              'subtitle': VrDownloadAppPrompt.blocksVrOnWeb
+                  ? 'Unlocks on phone — get the ATMOS app'
+                  : 'Explore destinations in immersive 360° preview',
+              'icon': Icons.vrpano_rounded,
+            },
+            {
+              'title': 'Trip Planner',
+              'subtitle': 'Build and organize your travel itinerary',
+              'icon': Icons.map_rounded,
+            },
+            {
+              'title': kIsWeb ? 'Continue on website' : 'Continue in the app',
+              'subtitle': kIsWeb
+                  ? 'Browse destinations in your browser'
+                  : 'Open your tourist dashboard and Digital Tourist ID',
+              'icon':
+                  kIsWeb ? Icons.language_rounded : Icons.dashboard_rounded,
+            },
+          ]
+        : [
+            {
+              'title': 'VR Tour',
+              'subtitle': VrDownloadAppPrompt.blocksVrOnWeb
+                  ? 'Get the ATMOS app to explore in immersive 360°'
+                  : 'Explore destinations in immersive 360° preview',
+              'icon': Icons.vrpano_rounded,
+            },
+            {
+              'title': 'Trip Planner',
+              'subtitle': 'Plan and organize your travel itinerary',
+              'icon': Icons.map_rounded,
+            },
+            {
+              'title': 'QR Check-in',
+              'subtitle': 'Scan QR codes and record visits',
+              'icon': Icons.qr_code_scanner_rounded,
+            },
+          ];
 
     return Container(
       padding: EdgeInsets.symmetric(
@@ -2209,12 +2421,16 @@ class _LandingPageState extends State<LandingPage>
         mainAxisSize: MainAxisSize.min,
         children: [
           _buildSectionHeader(
-            'Choose Your Experience',
-            'One platform — explore, plan, and check in across Misamis Occidental',
+            fromQrSignup ? 'What would you like to do?' : 'Choose Your Experience',
+            fromQrSignup
+                ? 'VR Tour and Trip Planner — continue on the website or get the ATMOS app'
+                : 'One platform — explore, plan, and check in across Misamis Occidental',
             icon: Icons.explore_rounded,
-            badge: 'VR · Itinerary · Check-in',
+            badge: fromQrSignup
+                ? 'VR · Trip Planner · Website / App'
+                : 'VR · Itinerary · Check-in',
           ),
-          if (_fromQrRegistration && _qrWelcomeMessage != null) ...[
+          if (_qrWelcomeMessage != null) ...[
             SizedBox(height: viewport ? 16 : (_isMobile ? 20 : 24)),
             _buildQrRegistrationWelcomeBanner(),
           ],
@@ -2261,19 +2477,28 @@ class _LandingPageState extends State<LandingPage>
       width: double.infinity,
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
           colors: [
-            _primaryOrange.withValues(alpha: 0.12),
-            const Color(0xFFFFEDD5).withValues(alpha: 0.9),
+            Color(0xFFFFF7ED),
+            Color(0xFFFFFFFF),
           ],
         ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _primaryOrange.withValues(alpha: 0.45)),
+        borderRadius: BorderRadius.circular(_cardRadius),
+        border: Border.all(color: _primaryOrange.withValues(alpha: 0.35)),
+        boxShadow: [
+          BoxShadow(
+            color: _primaryOrange.withValues(alpha: 0.08),
+            blurRadius: 14,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.celebration_rounded, color: _brandDark, size: 28),
+          _landingIconTile(Icons.celebration_rounded, size: 44),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
@@ -2281,12 +2506,12 @@ class _LandingPageState extends State<LandingPage>
               children: [
                 Text(
                   'You\'re all set!',
-                  style: _cardTitleStyle.copyWith(color: _brandDark),
+                  style: _cardTitleStyle.copyWith(color: _darkBg),
                 ),
                 const SizedBox(height: 6),
                 Text(
                   _qrWelcomeMessage!,
-                  style: _cardSubtitleStyle.copyWith(color: _bodyText),
+                  style: _cardSubtitleStyle,
                 ),
               ],
             ),
@@ -2313,56 +2538,99 @@ class _LandingPageState extends State<LandingPage>
       child: GestureDetector(
         onTap: () => _onExperienceCardTap(index),
         child: AnimatedContainer(
-        duration: _motionDuration,
-        curve: Curves.easeOutCubic,
-        transform: Matrix4.identity()
-          ..translate(0.0, isHovered ? -3.0 : 0.0),
-        constraints: expanded
-            ? const BoxConstraints(minHeight: 140)
-            : const BoxConstraints(),
-        width: expanded ? double.infinity : null,
-        padding: EdgeInsets.all(expanded ? 24 : 20),
-        decoration: _surfaceCardDecoration(hovered: isHovered).copyWith(
-          border: isHighlighted
-              ? Border.all(color: _primaryOrange.withValues(alpha: 0.55), width: 1.5)
-              : null,
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _landingIconTile(icon, size: expanded ? 52 : 48),
-            SizedBox(width: expanded ? 16 : 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: _cardTitleStyle.copyWith(
-                      fontSize: expanded ? 17 : null,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    subtitle,
-                    maxLines: expanded ? 4 : 3,
-                    overflow: TextOverflow.ellipsis,
-                    style: _cardSubtitleStyle.copyWith(fontSize: 14),
-                  ),
-                ],
+          duration: _motionDuration,
+          curve: Curves.easeOutCubic,
+          transform: Matrix4.identity()
+            ..translateByDouble(0, isHovered ? -4.0 : 0.0, 0, 1),
+          constraints: expanded
+              ? const BoxConstraints(minHeight: 168)
+              : const BoxConstraints(),
+          width: expanded ? double.infinity : null,
+          padding: EdgeInsets.all(expanded ? 22 : 18),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(_cardRadius),
+            border: Border.all(
+              color: isHighlighted || isHovered
+                  ? _primaryOrange.withValues(alpha: 0.45)
+                  : const Color(0xFFE8ECF1),
+              width: isHighlighted || isHovered ? 1.5 : 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: isHovered
+                    ? _primaryOrange.withValues(alpha: 0.14)
+                    : Colors.black.withValues(alpha: 0.05),
+                blurRadius: isHovered ? 22 : 12,
+                offset: Offset(0, isHovered ? 8 : 4),
               ),
-            ),
-            Icon(
-              Icons.arrow_forward_rounded,
-              color: _primaryOrange.withValues(alpha: 0.85),
-              size: 20,
-            ),
-          ],
+            ],
+          ),
+          child: expanded
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        _landingIconTile(icon, size: 52),
+                        const Spacer(),
+                        Icon(
+                          Icons.arrow_forward_rounded,
+                          color: _primaryOrange.withValues(alpha: 0.9),
+                          size: 22,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    Text(
+                      title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: _cardTitleStyle.copyWith(fontSize: 18),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      subtitle,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: _cardSubtitleStyle.copyWith(fontSize: 14),
+                    ),
+                  ],
+                )
+              : Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _landingIconTile(icon, size: 48),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: _cardTitleStyle,
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            subtitle,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: _cardSubtitleStyle.copyWith(fontSize: 14),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(
+                      Icons.arrow_forward_rounded,
+                      color: _primaryOrange.withValues(alpha: 0.85),
+                      size: 20,
+                    ),
+                  ],
+                ),
         ),
-      ),
       ),
     );
   }
@@ -2387,7 +2655,7 @@ class _LandingPageState extends State<LandingPage>
             builder: (context, constraints) {
               final columns = _isMobile
                   ? 1
-                  : constraints.maxWidth >= 1320
+                  : constraints.maxWidth >= 1100
                   ? 3
                   : 2;
               const spacing = 16.0;
@@ -2405,7 +2673,7 @@ class _LandingPageState extends State<LandingPage>
                       child: _buildFeatureCard(
                         i,
                         _features[i],
-                        compact: true,
+                        compact: _isMobile,
                       ),
                     ),
                 ],
@@ -2425,38 +2693,61 @@ class _LandingPageState extends State<LandingPage>
   }) {
     return Column(
       children: [
+        Container(
+          width: 44,
+          height: 4,
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [_primaryOrange, _brandDark],
+            ),
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ),
+        const SizedBox(height: 16),
         if (badge != null) ...[
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (icon != null) ...[
-                Icon(icon, size: 16, color: _primaryOrange),
-                const SizedBox(width: 8),
-              ],
-              Text(
-                badge,
-                style: TextStyle(
-                  color: _primaryOrange,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.8,
-                ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: _primaryOrange.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: _primaryOrange.withValues(alpha: 0.22),
               ),
-            ],
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (icon != null) ...[
+                  Icon(icon, size: 14, color: _primaryOrange),
+                  const SizedBox(width: 6),
+                ],
+                Text(
+                  badge.toUpperCase(),
+                  style: const TextStyle(
+                    color: _primaryOrange,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.1,
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 12),
         ],
         Text(
           title,
           textAlign: TextAlign.center,
-          style: AtmosBrandTypography.displayTitle(
+          style: TextStyle(
             color: _darkBg,
             fontSize: _sectionTitleFontSize,
-            letterSpacing: 0.4,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.4,
+            height: 1.15,
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         ConstrainedBox(
           constraints: BoxConstraints(maxWidth: _sectionSubtitleMaxWidth),
           child: Text(
@@ -2465,6 +2756,7 @@ class _LandingPageState extends State<LandingPage>
             style: _sectionBodyStyle.copyWith(
               fontSize: _sectionSubtitleFontSize,
               fontWeight: FontWeight.w500,
+              color: const Color(0xFF64748B),
             ),
           ),
         ),
@@ -2490,7 +2782,7 @@ class _LandingPageState extends State<LandingPage>
           duration: _motionDuration,
           curve: Curves.easeOutCubic,
           transform: Matrix4.identity()
-            ..translate(0.0, isHovered ? -3.0 : 0.0),
+            ..translateByDouble(0, isHovered ? -3.0 : 0.0, 0, 1),
           padding: const EdgeInsets.all(20),
           decoration: _surfaceCardDecoration(
             hovered: isHovered,
@@ -2502,8 +2794,9 @@ class _LandingPageState extends State<LandingPage>
               _landingIconTile(
                 feature['icon'] as IconData,
                 accent: accent,
+                size: 44,
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2546,21 +2839,25 @@ class _LandingPageState extends State<LandingPage>
         duration: _motionDuration,
         curve: Curves.easeOutCubic,
         transform: Matrix4.identity()
-          ..translate(0.0, isHovered ? -4.0 : 0.0),
-        padding: const EdgeInsets.all(24),
+          ..translateByDouble(0, isHovered ? -4.0 : 0.0, 0, 1),
+        padding: const EdgeInsets.fromLTRB(20, 22, 20, 20),
         decoration: _surfaceCardDecoration(
           hovered: isHovered,
           accent: accent,
         ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            _landingIconTile(feature['icon'] as IconData, accent: accent),
+            _landingIconTile(
+              feature['icon'] as IconData,
+              accent: accent,
+              size: 48,
+            ),
             const SizedBox(height: 16),
             Text(
               feature['title'] as String,
-              textAlign: TextAlign.center,
+              textAlign: TextAlign.left,
               style: _cardTitleStyle,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
@@ -2568,7 +2865,7 @@ class _LandingPageState extends State<LandingPage>
             const SizedBox(height: 8),
             Text(
               feature['description'] as String,
-              textAlign: TextAlign.center,
+              textAlign: TextAlign.left,
               style: _cardSubtitleStyle.copyWith(fontSize: 14),
               maxLines: 3,
               overflow: TextOverflow.ellipsis,
@@ -2630,7 +2927,11 @@ class _LandingPageState extends State<LandingPage>
                 for (var i = 0; i < filtered.length; i++)
                   Padding(
                     padding: EdgeInsets.only(top: i == 0 ? 0 : 12),
-                    child: _buildDestinationCard(filtered[i], compact: true),
+                    child: _buildDestinationCard(
+                      filtered[i],
+                      compact: true,
+                      cardIndex: i,
+                    ),
                   ),
               ],
             )
@@ -2650,12 +2951,13 @@ class _LandingPageState extends State<LandingPage>
                   spacing: spacing,
                   runSpacing: spacing,
                   children: [
-                    for (final destination in filtered)
+                    for (var i = 0; i < filtered.length; i++)
                       SizedBox(
                         width: cardWidth,
                         child: _buildDestinationCard(
-                          destination,
+                          filtered[i],
                           compact: true,
+                          cardIndex: i,
                         ),
                       ),
                   ],
@@ -2671,11 +2973,7 @@ class _LandingPageState extends State<LandingPage>
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(_cardRadius),
-        border: Border.all(color: _pageDivider),
-      ),
+      decoration: _surfaceCardDecoration(),
       child: Column(
         children: [
           _landingIconTile(Icons.search_off_rounded, size: 56),
@@ -2698,10 +2996,10 @@ class _LandingPageState extends State<LandingPage>
             label: const Text('Show all 17 locations'),
             style: OutlinedButton.styleFrom(
               foregroundColor: _primaryOrange,
-              side: BorderSide(color: _primaryOrange.withValues(alpha: 0.4)),
+              side: const BorderSide(color: _primaryOrange, width: 1.5),
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(999),
               ),
             ),
           ),
@@ -2922,7 +3220,7 @@ class _LandingPageState extends State<LandingPage>
                             _openVrTourFromLanding(municipalityName: name);
                           },
                           icon: const Icon(Icons.vrpano_rounded, size: 20),
-                          label: const Text('Start VR Tour'),
+                          label: Text(_landingVrButtonLabel),
                           style: FilledButton.styleFrom(
                             backgroundColor: _primaryOrange,
                             foregroundColor: Colors.white,
@@ -3024,23 +3322,9 @@ class _LandingPageState extends State<LandingPage>
     required bool isAsset,
     BoxFit fit = BoxFit.cover,
   }) {
-    const fallback =
-        'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=800';
-    if (isAsset) {
-      return Image.asset(
-        imageUrl,
-        fit: fit,
-        errorBuilder: (_, __, ___) => Image.network(
-          fallback,
-          fit: fit,
-          errorBuilder: (_, __, ___) => _buildPlaceholderImage(),
-        ),
-      );
-    }
-    return Image.network(
-      imageUrl,
+    return SpotImage(
+      imageUrl: imageUrl,
       fit: fit,
-      errorBuilder: (_, __, ___) => _buildPlaceholderImage(),
     );
   }
 
@@ -3050,13 +3334,16 @@ class _LandingPageState extends State<LandingPage>
       decoration: BoxDecoration(
         color: onImage
             ? Colors.black.withValues(alpha: 0.55)
-            : _primaryOrange.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(8),
+            : _primaryOrange.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: onImage
+            ? null
+            : Border.all(color: _primaryOrange.withValues(alpha: 0.22)),
       ),
       child: Text(
         category,
         style: TextStyle(
-          color: onImage ? Colors.white : _brandDark,
+          color: onImage ? Colors.white : _primaryOrange,
           fontSize: 11,
           fontWeight: FontWeight.w700,
           letterSpacing: 0.2,
@@ -3068,47 +3355,40 @@ class _LandingPageState extends State<LandingPage>
   Widget _buildDestinationCard(
     Map<String, String> destination, {
     bool compact = false,
+    int cardIndex = 0,
   }) {
-    final isAsset = destination['isAsset'] == 'true';
     final imageUrl = destination['image']!;
     final name = destination['name'] ?? '';
     final category = destination['category'] ?? 'Municipality';
     final description = destination['description'] ?? '';
     final isHovered = _hoveredDestinationName == name;
+    final municipalityId = destination['municipalityId'];
+    final showPhoto =
+        _heavyImagesEnabled && cardIndex < _destinationImageBudget;
 
-    const fallbackNetworkImage =
-        'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=800';
-
-    Widget spotImage({required double width, required double height}) {
-      if (isAsset) {
-        return Image.asset(
-          imageUrl,
-          width: width,
-          height: height,
-          fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => Image.network(
-            fallbackNetworkImage,
-            width: width,
-            height: height,
-            fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => SizedBox(
-              width: width,
-              height: height,
-              child: _buildPlaceholderImage(),
+    Widget spotImage({required double height}) {
+      if (!showPhoto) {
+        return ColoredBox(
+          color: const Color(0xFFE2E8F0),
+          child: Center(
+            child: SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.2,
+                color: _primaryOrange.withValues(alpha: 0.7),
+              ),
             ),
           ),
         );
       }
-      return Image.network(
-        imageUrl,
-        width: width,
+      return SpotImage(
+        imageUrl: imageUrl,
+        municipalityId: municipalityId,
+        spotName: name,
+        category: category,
         height: height,
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => SizedBox(
-          width: width,
-          height: height,
-          child: _buildPlaceholderImage(),
-        ),
       );
     }
 
@@ -3120,28 +3400,28 @@ class _LandingPageState extends State<LandingPage>
         child: Material(
           color: Colors.transparent,
           child: InkWell(
-            onTap: () => _showDestinationExploreSheet(destination),
+            onTap: () {
+              _enableHeavyImages(budget: _destinations.length);
+              _showDestinationExploreSheet(destination);
+            },
             borderRadius: BorderRadius.circular(_cardRadius),
             child: AnimatedContainer(
               duration: _motionDuration,
               curve: Curves.easeOutCubic,
               transform: Matrix4.identity()
-                ..translate(0.0, isHovered ? -3.0 : 0.0),
+                ..translateByDouble(0, isHovered ? -3.0 : 0.0, 0, 1),
               decoration: _surfaceCardDecoration(hovered: isHovered),
               clipBehavior: Clip.antiAlias,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   SizedBox(
-                    height: _isMobile ? 140 : 132,
+                    height: _destinationCardImageHeight,
                     width: double.infinity,
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        spotImage(
-                          width: double.infinity,
-                          height: _isMobile ? 140 : 132,
-                        ),
+                        spotImage(height: _destinationCardImageHeight),
                         Positioned(
                           left: 0,
                           right: 0,
@@ -3194,7 +3474,7 @@ class _LandingPageState extends State<LandingPage>
                           children: [
                             Expanded(
                               child: _buildDestinationQuickAction(
-                                label: 'VR Tour',
+                                label: _landingVrQuickActionLabel,
                                 icon: Icons.vrpano_rounded,
                                 color: _primaryOrange,
                                 onTap: () =>
@@ -3224,132 +3504,6 @@ class _LandingPageState extends State<LandingPage>
       );
     }
 
-    final gridCard = Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withValues(alpha: isHovered ? 0.35 : 0.2),
-            blurRadius: isHovered ? 24 : 20,
-            offset: Offset(0, isHovered ? 14 : 10),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            isAsset
-                ? Image.asset(
-                    imageUrl,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Image.network(
-                      fallbackNetworkImage,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => _buildPlaceholderImage(),
-                    ),
-                  )
-                : Image.network(
-                    imageUrl,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => _buildPlaceholderImage(),
-                  ),
-            Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: isHovered ? 0.15 : 0.05),
-                    Colors.black.withValues(alpha: isHovered ? 0.88 : 0.78),
-                  ],
-                ),
-              ),
-            ),
-            if (isHovered)
-              Positioned.fill(
-                child: Container(
-                  alignment: Alignment.center,
-                  padding: const EdgeInsets.all(12),
-                  child: Text(
-                    'Tap for VR & itinerary',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.95),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-            Positioned(
-              top: 10,
-              left: 10,
-              right: 10,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _destinationCategoryBadge(category, onImage: true),
-                  const SizedBox(height: 4),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 7,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.5),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      'Tourist spot',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.95),
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Positioned(
-              bottom: 12,
-              left: 12,
-              right: 12,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    name,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Text(
-                    'Tap for VR & itinerary',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.82),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-
     return MouseRegion(
       onEnter: (_) => setState(() => _hoveredDestinationName = name),
       onExit: (_) => setState(() => _hoveredDestinationName = null),
@@ -3358,8 +3512,104 @@ class _LandingPageState extends State<LandingPage>
         color: Colors.transparent,
         child: InkWell(
           onTap: () => _showDestinationExploreSheet(destination),
-          borderRadius: BorderRadius.circular(20),
-          child: gridCard,
+          borderRadius: BorderRadius.circular(_cardRadius),
+          child: AnimatedContainer(
+            duration: _motionDuration,
+            curve: Curves.easeOutCubic,
+            transform: Matrix4.identity()
+              ..translateByDouble(0, isHovered ? -4.0 : 0.0, 0, 1),
+            decoration: _surfaceCardDecoration(hovered: isHovered),
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SizedBox(
+                  height: 180,
+                  width: double.infinity,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      spotImage(height: 180),
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        child: Container(
+                          height: 56,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.transparent,
+                                Colors.black.withValues(alpha: 0.45),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        top: 10,
+                        left: 10,
+                        child: _destinationCategoryBadge(
+                          category,
+                          onImage: true,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: _cardTitleStyle,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        description.isEmpty
+                            ? 'Tap for VR & itinerary'
+                            : description,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: _cardSubtitleStyle.copyWith(fontSize: 14),
+                      ),
+                      const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _buildDestinationQuickAction(
+                              label: _landingVrQuickActionLabel,
+                              icon: Icons.vrpano_rounded,
+                              color: _primaryOrange,
+                              onTap: () => _openVrTourFromLanding(
+                                municipalityName: name,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _buildDestinationQuickAction(
+                              label: 'Itinerary',
+                              icon: Icons.map_rounded,
+                              color: _primaryOrange,
+                              onTap: () =>
+                                  _openPlanItinerary(municipalityName: name),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -3372,27 +3622,38 @@ class _LandingPageState extends State<LandingPage>
     required VoidCallback onTap,
   }) {
     return Material(
-      color: _pageSurfaceMuted,
-      borderRadius: BorderRadius.circular(10),
+      color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 16, color: color),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: TextStyle(
-                  color: color,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
+        borderRadius: BorderRadius.circular(999),
+        child: Ink(
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: color.withValues(alpha: 0.35)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 6),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 15, color: color),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -3416,7 +3677,7 @@ class _LandingPageState extends State<LandingPage>
       padding: EdgeInsets.symmetric(
         vertical: _sectionInnerVertical(viewport: viewport),
       ),
-      color: viewport ? Colors.transparent : _pageBackground,
+      color: viewport ? Colors.transparent : _pageSurfaceMuted,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -3458,7 +3719,7 @@ class _LandingPageState extends State<LandingPage>
                             width: cardWidth.clamp(200.0, 260.0),
                             child: _buildStepCard(
                               step.value,
-                              compact: true,
+                              compact: false,
                             ),
                           ),
                       ],
@@ -3498,8 +3759,8 @@ class _LandingPageState extends State<LandingPage>
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: [
-                  _primaryOrange.withOpacity(0.26),
-                  _primaryOrange.withOpacity(0.08),
+                  _primaryOrange.withValues(alpha: 0.26),
+                  _primaryOrange.withValues(alpha: 0.08),
                 ],
               ),
             ),
@@ -3507,7 +3768,7 @@ class _LandingPageState extends State<LandingPage>
           const SizedBox(width: 2),
           Icon(
             Icons.chevron_right_rounded,
-            color: _primaryOrange.withOpacity(0.5),
+            color: _primaryOrange.withValues(alpha: 0.5),
             size: 14,
           ),
         ],
@@ -3533,24 +3794,33 @@ class _LandingPageState extends State<LandingPage>
           children: [
             Column(
               children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: _primaryOrange,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  alignment: Alignment.center,
-                  child: Icon(icon, color: Colors.white, size: 20),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  number,
-                  style: TextStyle(
-                    color: _primaryOrange,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                  ),
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    _landingIconTile(icon, size: 48),
+                    Positioned(
+                      right: -4,
+                      top: -4,
+                      child: Container(
+                        width: 22,
+                        height: 22,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: _primaryOrange, width: 1.5),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          number,
+                          style: const TextStyle(
+                            color: _primaryOrange,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -3582,23 +3852,49 @@ class _LandingPageState extends State<LandingPage>
     }
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 22),
       decoration: _surfaceCardDecoration(),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            number,
-            style: TextStyle(
-              color: _primaryOrange,
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0.3,
-            ),
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              _landingIconTile(icon, size: 52),
+              Positioned(
+                right: -6,
+                top: -6,
+                child: Container(
+                  width: 24,
+                  height: 24,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [_primaryOrange, _brandDark],
+                    ),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: _primaryOrange.withValues(alpha: 0.35),
+                        blurRadius: 6,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    number,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 12),
-          _landingIconTile(icon, size: 44),
-          const SizedBox(height: 12),
+          const SizedBox(height: 16),
           Text(
             title,
             textAlign: TextAlign.center,
@@ -3751,29 +4047,101 @@ class _LandingPageState extends State<LandingPage>
 
   Widget _buildProvincialTourismOfficeCard({required double height}) {
     return Container(
-      height: height,
-      padding: const EdgeInsets.all(32),
       decoration: BoxDecoration(
-        color: _pageSurfaceMuted,
         borderRadius: BorderRadius.circular(_cardRadius),
-        border: Border.all(color: _pageDivider),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _landingIconTile(Icons.travel_explore, size: 72),
-            const SizedBox(height: 20),
-            Text(
-              'Provincial Tourism Office',
-              style: _cardTitleStyle.copyWith(fontSize: 18),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Misamis Occidental',
-              style: _cardSubtitleStyle.copyWith(fontSize: 15),
-            ),
-          ],
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(_cardRadius),
+        child: Container(
+          height: height,
+          decoration: BoxDecoration(
+            border: Border.all(color: const Color(0xFFE8ECF1)),
+          ),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (_heavyImagesEnabled)
+                SpotImage(
+                  imageUrl: _kCapitolAsset,
+                  fit: BoxFit.cover,
+                  height: height,
+                )
+              else
+                ColoredBox(
+                  color: const Color(0xFFE2E8F0),
+                  child: Center(
+                    child: Icon(
+                      Icons.account_balance_rounded,
+                      size: 48,
+                      color: _primaryOrange.withValues(alpha: 0.45),
+                    ),
+                  ),
+                ),
+              Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0.08),
+                      Colors.black.withValues(alpha: 0.78),
+                    ],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _primaryOrange.withValues(alpha: 0.92),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: const Text(
+                        'OFFICIAL PARTNER',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Provincial Tourism Office',
+                      style: _cardTitleStyle.copyWith(
+                        fontSize: 18,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Misamis Occidental',
+                      style: _cardSubtitleStyle.copyWith(
+                        fontSize: 15,
+                        color: Colors.white.withValues(alpha: 0.88),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -3811,13 +4179,34 @@ class _LandingPageState extends State<LandingPage>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'About ATMOS-TRS',
-          style: TextStyle(
-            color: _primaryOrange,
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.8,
+        Container(
+          width: 44,
+          height: 4,
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [_primaryOrange, _brandDark],
+            ),
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ),
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: _primaryOrange.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: _primaryOrange.withValues(alpha: 0.22),
+            ),
+          ),
+          child: const Text(
+            'ABOUT ATMOS-TRS',
+            style: TextStyle(
+              color: _primaryOrange,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.1,
+            ),
           ),
         ),
         const SizedBox(height: 12),
@@ -3839,7 +4228,7 @@ class _LandingPageState extends State<LandingPage>
         ),
         const SizedBox(height: 28),
         Wrap(
-          spacing: 20,
+          spacing: 12,
           runSpacing: 12,
           children: [
             _buildAboutFeature(Icons.verified_rounded, 'Official Partner'),
@@ -3855,9 +4244,9 @@ class _LandingPageState extends State<LandingPage>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: _pageSurfaceMuted,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _pageDivider),
+        color: _primaryOrange.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: _primaryOrange.withValues(alpha: 0.22)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -3867,9 +4256,9 @@ class _LandingPageState extends State<LandingPage>
           Text(
             label,
             style: TextStyle(
-              color: _bodyText,
+              color: _darkBg,
               fontSize: 14,
-              fontWeight: FontWeight.w500,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ],
@@ -3884,9 +4273,11 @@ class _LandingPageState extends State<LandingPage>
         horizontal: _sectionOuterPadding,
         vertical: 48,
       ),
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         color: _darkBg,
-        border: Border(top: BorderSide(color: _pageDivider.withValues(alpha: 0.15))),
+        border: Border(
+          top: BorderSide(color: _primaryOrange, width: 3),
+        ),
       ),
       child: _wrapSectionContent(
         Column(
@@ -3895,8 +4286,6 @@ class _LandingPageState extends State<LandingPage>
                 ? Column(
                     children: [
                       _buildFooterMissionVision(),
-                      const SizedBox(height: 32),
-                      _buildFooterBrand(),
                       const SizedBox(height: 32),
                       _buildFooterLinks(),
                       const SizedBox(height: 32),
@@ -3907,8 +4296,6 @@ class _LandingPageState extends State<LandingPage>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Expanded(flex: 2, child: _buildFooterMissionVision()),
-                      const SizedBox(width: 40),
-                      Expanded(flex: 2, child: _buildFooterBrand()),
                       const SizedBox(width: 40),
                       Expanded(child: _buildFooterLinks()),
                       const SizedBox(width: 40),
@@ -3994,6 +4381,18 @@ class _LandingPageState extends State<LandingPage>
             letterSpacing: 0.4,
           ),
         ),
+        const SizedBox(height: 8),
+        Align(
+          alignment: _isMobile ? Alignment.center : Alignment.centerLeft,
+          child: Container(
+            width: 28,
+            height: 3,
+            decoration: BoxDecoration(
+              color: _primaryOrange,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ),
         const SizedBox(height: 10),
         Text(
           'To inspire and connect travelers by showcasing the wonders of every destination, '
@@ -4017,6 +4416,18 @@ class _LandingPageState extends State<LandingPage>
             letterSpacing: 0.4,
           ),
         ),
+        const SizedBox(height: 8),
+        Align(
+          alignment: _isMobile ? Alignment.center : Alignment.centerLeft,
+          child: Container(
+            width: 28,
+            height: 3,
+            decoration: BoxDecoration(
+              color: _primaryOrange,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ),
         const SizedBox(height: 10),
         Text(
           'To become a leading platform for tourism, empowering travelers to explore the world '
@@ -4028,42 +4439,6 @@ class _LandingPageState extends State<LandingPage>
             fontSize: 14,
             height: 1.65,
             fontWeight: FontWeight.w400,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildFooterBrand() {
-    return Column(
-      crossAxisAlignment: _isMobile
-          ? CrossAxisAlignment.center
-          : CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _landingIconTile(Icons.travel_explore, size: 44),
-            const SizedBox(width: 12),
-            Text(
-              'ATMOS-TRS',
-              style: AtmosBrandTypography.displayTitle(
-                color: Colors.white,
-                fontSize: 22,
-                letterSpacing: 0.6,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Text(
-          _kAppFullName,
-          textAlign: _isMobile ? TextAlign.center : TextAlign.start,
-          style: AtmosBrandTypography.meaningTagline(
-            color: Colors.white.withValues(alpha: 0.72),
-            fontSize: 13,
-            letterSpacing: 0.15,
-            height: 1.5,
           ),
         ),
       ],
@@ -4083,6 +4458,15 @@ class _LandingPageState extends State<LandingPage>
             color: Colors.white.withValues(alpha: 0.95),
             fontSize: 15,
             fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          width: 28,
+          height: 3,
+          decoration: BoxDecoration(
+            color: _primaryOrange,
+            borderRadius: BorderRadius.circular(2),
           ),
         ),
         const SizedBox(height: 16),
@@ -4115,6 +4499,15 @@ class _LandingPageState extends State<LandingPage>
             color: Colors.white.withValues(alpha: 0.95),
             fontSize: 15,
             fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          width: 28,
+          height: 3,
+          decoration: BoxDecoration(
+            color: _primaryOrange,
+            borderRadius: BorderRadius.circular(2),
           ),
         ),
         const SizedBox(height: 16),
@@ -4174,12 +4567,12 @@ class _LandingPageState extends State<LandingPage>
       width: 40,
       height: 40,
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+        color: _primaryOrange.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _primaryOrange.withValues(alpha: 0.35)),
       ),
       alignment: Alignment.center,
-      child: Icon(icon, color: Colors.white.withValues(alpha: 0.85), size: 20),
+      child: Icon(icon, color: _primaryOrange, size: 20),
     );
   }
 }
@@ -4196,24 +4589,10 @@ class _DestinationImageFullscreenPage extends StatelessWidget {
   final bool isAsset;
   final String title;
 
-  static const _fallback =
-      'https://images.unsplash.com/photo-1480714378408-67cf0d13bc1b?w=1200';
-
   Widget _buildImage() {
-    if (isAsset) {
-      return Image.asset(
-        imageUrl,
-        fit: BoxFit.contain,
-        errorBuilder: (_, __, ___) => Image.network(
-          _fallback,
-          fit: BoxFit.contain,
-        ),
-      );
-    }
-    return Image.network(
-      imageUrl,
+    return SpotImage(
+      imageUrl: imageUrl,
       fit: BoxFit.contain,
-      errorBuilder: (_, __, ___) => Image.network(_fallback, fit: BoxFit.contain),
     );
   }
 

@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'dart:async' show StreamSubscription, Timer, unawaited;
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -6,9 +6,12 @@ import 'package:flutter/services.dart';
 
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
+import 'package:atmos_trs_system/navigation/post_logout_navigation.dart';
 
-/// Signs the user out after a period without pointer, scroll, or keyboard activity.
-/// Intended for shared/public terminals and kiosk-style deployments.
+/// Signs tourists out after a period without pointer, scroll, or keyboard activity.
+///
+/// Governor and LGU (tourism) staff dashboards are excluded — only end-user/tourist
+/// sessions auto-logout for security on shared devices.
 class SessionInactivityGuard extends StatefulWidget {
   const SessionInactivityGuard({
     super.key,
@@ -40,13 +43,44 @@ class _SessionInactivityGuardState extends State<SessionInactivityGuard> {
       return;
     }
     _cancelTimer();
-    _timer = Timer(widget.idleLimit, _onTimeout);
+    _timer = Timer(widget.idleLimit, () => unawaited(_onTimeout()));
+  }
+
+  /// Staff dashboards stay signed in; tourists get idle timeout.
+  Future<bool> _isStaffAccount() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return false;
+
+    final storedUid = await SessionStorage.getStoredUser();
+    if (storedUid == user.uid) {
+      final role = await SessionStorage.getStoredRole();
+      if (role == UserRole.governor ||
+          role == UserRole.tourism ||
+          role == UserRole.provincialTourism) {
+        return true;
+      }
+    }
+
+    final emailRole = SessionStorage.getRoleFromEmail(user.email ?? '');
+    return SessionStorage.isStaffRole(emailRole);
+  }
+
+  Future<void> _evaluateInactivityPolicy() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      _cancelTimer();
+      return;
+    }
+    if (await _isStaffAccount()) {
+      _cancelTimer();
+      return;
+    }
+    _scheduleTimer();
   }
 
   void _onActivity() {
-    if (FirebaseAuth.instance.currentUser != null) {
-      _scheduleTimer();
-    }
+    if (FirebaseAuth.instance.currentUser == null) return;
+    unawaited(_evaluateInactivityPolicy());
   }
 
   bool _onKey(KeyEvent event) {
@@ -56,12 +90,13 @@ class _SessionInactivityGuardState extends State<SessionInactivityGuard> {
 
   Future<void> _onTimeout() async {
     if (FirebaseAuth.instance.currentUser == null) return;
+    if (await _isStaffAccount()) return;
     await FirebaseAuth.instance.signOut();
     await SessionStorage.clearSession();
     AuthConfig.currentUserUid = null;
     final nav = widget.navigatorKey.currentState;
     if (nav == null || !nav.mounted) return;
-    nav.pushNamedAndRemoveUntil('/login', (route) => false);
+    nav.pushNamedAndRemoveUntil(postLogoutRoute, (route) => false);
   }
 
   @override
@@ -69,15 +104,9 @@ class _SessionInactivityGuardState extends State<SessionInactivityGuard> {
     super.initState();
     HardwareKeyboard.instance.addHandler(_onKey);
     _authSub = FirebaseAuth.instance.authStateChanges().listen((user) {
-      if (user != null) {
-        _scheduleTimer();
-      } else {
-        _cancelTimer();
-      }
+      unawaited(_evaluateInactivityPolicy());
     });
-    if (FirebaseAuth.instance.currentUser != null) {
-      _scheduleTimer();
-    }
+    unawaited(_evaluateInactivityPolicy());
   }
 
   @override

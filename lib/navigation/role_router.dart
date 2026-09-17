@@ -32,26 +32,60 @@ class RoleRouter {
       return '/governor-dashboard';
     }
 
-    if (profile.isTourismOffice) {
+    if (profile.isProvincialTourism) {
       await UserDirectoryService.ensureStaffUserDoc(
         uid: firebaseUid,
         email: profile.email,
-        roleRaw: profile.roleRaw,
+        roleRaw: profile.roleRaw.isNotEmpty
+            ? profile.roleRaw
+            : 'provincial_tourism',
         fullName: profile.fullName,
       );
-      String municipalityId = getMunicipalityIdFromName(profile.municipality);
+      await SessionStorage.saveSession(
+        firebaseUid,
+        role: UserRole.provincialTourism,
+        email: profile.email,
+      );
+      return '/provincial-tourism-dashboard';
+    }
+
+    if (profile.isTourismOffice) {
+      String municipalityId = profile.municipalityId.trim();
+      if (municipalityId.isEmpty) {
+        municipalityId = getMunicipalityIdFromName(profile.municipality);
+      }
       if (municipalityId.isEmpty) {
         municipalityId =
             SessionStorage.getMunicipalityIdFromTourismEmail(profile.email) ??
             '';
       }
+      await UserDirectoryService.ensureStaffUserDoc(
+        uid: firebaseUid,
+        email: profile.email,
+        roleRaw: profile.roleRaw,
+        fullName: profile.fullName,
+        municipalityId: municipalityId.isNotEmpty ? municipalityId : null,
+      );
       await SessionStorage.saveSession(
         firebaseUid,
         role: UserRole.tourism,
         email: profile.email,
         municipalityId: municipalityId.isNotEmpty ? municipalityId : null,
       );
+      if (!profile.isVerified) return '/verify-otp';
       return '/lgu-dashboard';
+    }
+
+    if (profile.isTourismEstablishment) {
+      final municipalityId = getMunicipalityIdFromName(profile.municipality);
+      await SessionStorage.saveSession(
+        firebaseUid,
+        role: UserRole.tourismEstablishment,
+        email: profile.email,
+        municipalityId: municipalityId.isNotEmpty ? municipalityId : null,
+      );
+      if (!profile.isVerified) return '/verify-otp';
+      return '/establishment-dashboard';
     }
 
     if (profile.isTourist) {
@@ -65,6 +99,7 @@ class RoleRouter {
         firebaseUid,
       );
       if (!verified) return '/verify-otp';
+      await SessionStorage.setTouristEmailVerified(firebaseUid, verified: true);
       return '/dashboard';
     }
 
@@ -80,7 +115,15 @@ class RoleRouter {
   /// Cold start: when profile is already loaded (e.g. from [getProfileByUid]).
   static String routeForProfile(AppUserProfile profile) {
     if (profile.isGovernor) return '/governor-dashboard';
-    if (profile.isTourismOffice) return '/lgu-dashboard';
+    if (profile.isProvincialTourism) return '/provincial-tourism-dashboard';
+    if (profile.isTourismOffice) {
+      if (!profile.isVerified) return '/verify-otp';
+      return '/lgu-dashboard';
+    }
+    if (profile.isTourismEstablishment) {
+      if (!profile.isVerified) return '/verify-otp';
+      return '/establishment-dashboard';
+    }
     if (profile.isTourist && !profile.isVerified) {
       return '/verify-otp';
     }

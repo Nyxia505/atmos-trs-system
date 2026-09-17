@@ -137,7 +137,7 @@ const List<DefaultTouristSpotSeed> kDefaultTouristSpotSeeds = [
         'Cottages: small (4–6 pax) ₱450, medium (10 pax) ₱600, large (12 pax) ₱800. '
         'Overnight accommodations accessible 24 hours.',
     rating: 4.8,
-    imageUrl: 'assets/images/Baliangao - Cabgan Island.jpg',
+    imageUrl: 'assets/images/Baliangao.png',
   ),
   DefaultTouristSpotSeed(
     docId: 'baliangao_protected_landscape',
@@ -150,7 +150,7 @@ const List<DefaultTouristSpotSeed> kDefaultTouristSpotSeeds = [
     description:
         'Protected marine sanctuary with white sand beaches and rich marine life.',
     rating: 4.8,
-    imageUrl: 'assets/images/Baliangao - Cabgan Island.jpg',
+    imageUrl: 'assets/images/Baliangao.png',
   ),
   DefaultTouristSpotSeed(
     docId: 'bonifacio_mountain_overlook',
@@ -162,7 +162,7 @@ const List<DefaultTouristSpotSeed> kDefaultTouristSpotSeeds = [
     longitude: 123.7222,
     description: 'Highland views and cool breezes overlooking Bonifacio town.',
     rating: 4.4,
-    imageUrl: MisamisOccidentalImages.calamba,
+    imageUrl: MisamisOccidentalImages.bonifacio,
   ),
   DefaultTouristSpotSeed(
     docId: 'calamba_green_hills',
@@ -187,7 +187,7 @@ const List<DefaultTouristSpotSeed> kDefaultTouristSpotSeeds = [
     description:
         'Serene crater lake in the mountains — hiking and nature appreciation.',
     rating: 4.3,
-    imageUrl: 'assets/images/clarin.jpg',
+    imageUrl: MisamisOccidentalImages.lakeDuminagat,
   ),
   DefaultTouristSpotSeed(
     docId: 'concepcion_falls',
@@ -199,7 +199,7 @@ const List<DefaultTouristSpotSeed> kDefaultTouristSpotSeeds = [
     longitude: 123.6842,
     description: 'Multi-tiered waterfalls and rocky rivers surrounded by jungle.',
     rating: 4.6,
-    imageUrl: 'assets/images/conception.png',
+    imageUrl: 'assets/images/conception_v2.png',
   ),
   DefaultTouristSpotSeed(
     docId: 'piduan_falls',
@@ -213,7 +213,7 @@ const List<DefaultTouristSpotSeed> kDefaultTouristSpotSeeds = [
         'Also known as Curtain Falls. Sitio Piduan, Barangay Napangan. '
         'Entrance ₱100/person (shuttle + pool). Cottages ~₱300. Daily daytime visits.',
     rating: 4.7,
-    imageUrl: 'assets/images/Piduan Falls Donvic.jpg',
+    imageUrl: 'assets/images/DonVic_v2.png',
   ),
   DefaultTouristSpotSeed(
     docId: 'dvc_mount_malindang_natural_park',
@@ -226,7 +226,7 @@ const List<DefaultTouristSpotSeed> kDefaultTouristSpotSeeds = [
     description:
         'Highest peak in Misamis Occidental with diverse wildlife and endemic species.',
     rating: 4.6,
-    imageUrl: 'assets/images/Piduan Falls Donvic.jpg',
+    imageUrl: 'assets/images/DonVic_v2.png',
   ),
   DefaultTouristSpotSeed(
     docId: 'jimenez_st_john_the_baptist_church',
@@ -239,7 +239,7 @@ const List<DefaultTouristSpotSeed> kDefaultTouristSpotSeeds = [
     description:
         'Church of St. John the Baptist (Jimenez Church) in Barangay Poblacion. National Cultural Treasure (2001) with 19th-century painted wooden ceilings and coral stone facade. Free admission; typically open daily 6:00 AM–5:00 PM for prayer.',
     rating: 4.4,
-    imageUrl: 'assets/images/Jimenez - St. John the Baptist Church.jpg',
+    imageUrl: 'assets/images/Jimenez.png',
   ),
   DefaultTouristSpotSeed(
     docId: 'lopez_jaena_beachfront',
@@ -276,7 +276,7 @@ const List<DefaultTouristSpotSeed> kDefaultTouristSpotSeeds = [
     description:
         'Tropical pool resort with thatched bridges and clear blue waters.',
     rating: 4.4,
-    imageUrl: 'assets/images/PLARIDEL.jpg',
+    imageUrl: 'assets/images/Plaridel.png',
   ),
   DefaultTouristSpotSeed(
     docId: 'sapang_dalaga_floating_cottages',
@@ -289,7 +289,7 @@ const List<DefaultTouristSpotSeed> kDefaultTouristSpotSeeds = [
     description:
         'Floating cottages, Cristo Redentor overlook, and sunset views on the bay.',
     rating: 4.9,
-    imageUrl: 'assets/images/Sapang Dalaga.png',
+    imageUrl: 'assets/images/Sapang_Dalaga_v2.png',
   ),
   DefaultTouristSpotSeed(
     docId: 'sinacaban_asenso_aquamarine_park',
@@ -302,7 +302,7 @@ const List<DefaultTouristSpotSeed> kDefaultTouristSpotSeeds = [
     description:
         'Resort and aquamarine park in Barangay Libertad Bajo. Grounds and all-day dining generally open daily; entrance fees vary by activity — check AMORAP Official Page.',
     rating: 4.7,
-    imageUrl: 'assets/images/AMORAP.jpg',
+    imageUrl: 'assets/images/Amorap.png',
   ),
   DefaultTouristSpotSeed(
     docId: 'tudela_highland_resort_eco_park',

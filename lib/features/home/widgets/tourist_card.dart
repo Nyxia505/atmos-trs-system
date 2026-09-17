@@ -118,17 +118,6 @@ class TouristCard extends StatelessWidget {
                           distanceLabel,
                           style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 12),
                         ),
-                        const Spacer(),
-                        Icon(Icons.star, size: 14, color: Colors.amber.shade400),
-                        const SizedBox(width: 2),
-                        Text(
-                          spot.rating > 0 ? spot.rating.toStringAsFixed(1) : '—',
-                          style: TextStyle(
-                            color: Colors.amber.shade400,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
                       ],
                     ),
                   ],

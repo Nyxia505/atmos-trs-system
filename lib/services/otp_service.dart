@@ -67,7 +67,7 @@ class OtpService {
       'createdAt': FieldValue.serverTimestamp(),
     };
 
-    for (var attempt = 0; attempt < 3; attempt++) {
+    for (var attempt = 0; attempt < 2; attempt++) {
       try {
         await refreshAuthTokenForUid(uid);
         await _writeOtpDoc(uid: uid, payload: payload);
@@ -75,8 +75,8 @@ class OtpService {
         debugPrint('[OTP] saved to Firestore email_otps/$uid');
         return;
       } on FirebaseException catch (e) {
-        if (e.code == 'permission-denied' && attempt < 2) {
-          await Future<void>.delayed(Duration(milliseconds: 400 * (attempt + 1)));
+        if (e.code == 'permission-denied' && attempt < 1) {
+          await Future<void>.delayed(const Duration(milliseconds: 200));
           continue;
         }
         if (e.code != 'permission-denied') rethrow;

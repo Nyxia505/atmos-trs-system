@@ -11,18 +11,22 @@
 // -----------------------------------------------------------------------------
 // ENABLE (demo — debug build only, e.g. laptop `flutter run -d chrome`):
 //   kQrScanBypassGeofenceInDebug = true;
-//   kDemoOnlyMunicipalityId = 'oroquieta';
-//   → Scan works without traveling; only Oroquieta LGU/spot QRs accepted.
+//   kDemoOnlyMunicipalityId = null;  // all LGUs; or 'oroquieta' to limit
+//   → Scan works without traveling.
+//
+// Also prefer betaTestingMode = true in beta_testing_config.dart for full bypass.
 //
 // REVERT (production — must scan on site with GPS):
 //   kQrScanBypassGeofenceInDebug = false;
 //   kDemoOnlyMunicipalityId = null;
+//   betaTestingMode = false;
 //   → Release/profile builds always enforce GPS; bypass flags are ignored when
-//     kDebugMode is false.
+//     kDebugMode is false (except betaTestingMode which applies when true).
 // =============================================================================
 
 /// Skip GPS proximity in **debug** only (office / laptop demo). Ignored in release.
-const bool kQrScanBypassGeofenceInDebug = false;
+/// DEMO ONLY — set false before production.
+const bool kQrScanBypassGeofenceInDebug = true;
 
 /// When non-null and [kDebugMode], only this municipality id may check in via QR.
 /// Set to `null` to allow all LGUs during debug.

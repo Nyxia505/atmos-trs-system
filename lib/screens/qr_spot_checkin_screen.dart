@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:atmos_trs_system/config/supabase_storage_config.dart';
 import 'package:atmos_trs_system/models/qr_tourist_spot.dart';
 import 'package:atmos_trs_system/services/qr_checkin_ui.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
@@ -14,6 +15,10 @@ class QrSpotCheckInScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final imageUrl = SupabaseStorageConfig.resolve(spot.image);
+    final isNetwork =
+        imageUrl.startsWith('http://') || imageUrl.startsWith('https://');
+
     return Scaffold(
       appBar: AppBar(
         title: Text(spot.name),
@@ -23,16 +28,27 @@ class QrSpotCheckInScreen extends StatelessWidget {
         children: [
           AspectRatio(
             aspectRatio: 16 / 9,
-            child: Image.asset(
-              spot.image,
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => const ColoredBox(
-                color: Colors.grey,
-                child: Center(
-                  child: Icon(Icons.photo, size: 48, color: Colors.white70),
-                ),
-              ),
-            ),
+            child: isNetwork
+                ? Image.network(
+                    imageUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const ColoredBox(
+                      color: Colors.grey,
+                      child: Center(
+                        child: Icon(Icons.photo, size: 48, color: Colors.white70),
+                      ),
+                    ),
+                  )
+                : Image.asset(
+                    imageUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const ColoredBox(
+                      color: Colors.grey,
+                      child: Center(
+                        child: Icon(Icons.photo, size: 48, color: Colors.white70),
+                      ),
+                    ),
+                  ),
           ),
           Padding(
             padding: const EdgeInsets.all(16),

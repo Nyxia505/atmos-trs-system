@@ -1,3 +1,4 @@
+import 'package:atmos_trs_system/features/navigation/tourist_web_layout.dart';
 import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/features/scan/scan_practice_page.dart';
@@ -47,7 +48,7 @@ void openQrHelp(BuildContext context) {
       ),
     );
   } else {
-    showDialog<void>(
+    showTouristDialog<void>(
       context: context,
       builder: (ctx) => Dialog(
         backgroundColor: Colors.transparent,

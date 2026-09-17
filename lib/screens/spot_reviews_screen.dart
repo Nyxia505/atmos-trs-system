@@ -1,6 +1,8 @@
+import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/models/spot_review.dart';
 import 'package:atmos_trs_system/services/spot_review_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 /// Full list of reviews for a tourist spot.
@@ -22,6 +24,8 @@ class SpotReviewsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = AppTheme.primary;
+    final currentUid =
+        AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
@@ -108,7 +112,11 @@ class SpotReviewsScreen extends StatelessWidget {
               ...reviews.map(
                 (r) => Padding(
                   padding: const EdgeInsets.only(bottom: 12),
-                  child: _ReviewCard(review: r, accent: accent),
+                  child: _ReviewCard(
+                    review: r,
+                    accent: accent,
+                    isOwnReview: currentUid != null && r.userId == currentUid,
+                  ),
                 ),
               ),
             ],
@@ -120,10 +128,15 @@ class SpotReviewsScreen extends StatelessWidget {
 }
 
 class _ReviewCard extends StatelessWidget {
-  const _ReviewCard({required this.review, required this.accent});
+  const _ReviewCard({
+    required this.review,
+    required this.accent,
+    this.isOwnReview = false,
+  });
 
   final SpotReview review;
   final Color accent;
+  final bool isOwnReview;
 
   @override
   Widget build(BuildContext context) {
@@ -132,7 +145,12 @@ class _ReviewCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(
+          color: isOwnReview
+              ? accent.withValues(alpha: 0.45)
+              : Colors.grey.shade200,
+          width: isOwnReview ? 1.5 : 1,
+        ),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -163,6 +181,27 @@ class _ReviewCard extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (isOwnReview) ...[
+                      Container(
+                        margin: const EdgeInsets.only(right: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: accent.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          'Your review',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: accent,
+                          ),
+                        ),
+                      ),
+                    ],
                     Icon(Icons.star_rounded, size: 14, color: accent),
                     Text(
                       review.rating.toStringAsFixed(1),

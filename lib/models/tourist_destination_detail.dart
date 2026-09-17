@@ -1,3 +1,4 @@
+import 'package:atmos_trs_system/config/supabase_storage_config.dart';
 import 'package:atmos_trs_system/config/vr_tour_config.dart';
 import 'package:atmos_trs_system/data/tourist_spot_image_catalog.dart';
 import 'package:atmos_trs_system/features/explore/explore_data.dart' show TouristSpot;
@@ -10,13 +11,14 @@ class NearbyPlaceCard {
   const NearbyPlaceCard({
     required this.name,
     required this.category,
-    this.rating = 4.5,
+    this.rating = 0,
     this.distanceKm = 1.2,
     this.driveMinutes,
-    this.priceRange = '₱₱',
+    this.contact,
     this.imageUrl,
     this.address,
     this.description,
+    this.gallery = const [],
   });
 
   final String name;
@@ -24,10 +26,13 @@ class NearbyPlaceCard {
   final double rating;
   final double distanceKm;
   final double? driveMinutes;
-  final String priceRange;
+  /// Phone / contact number shown on nearby tiles (replaces estimated pricing).
+  final String? contact;
   final String? imageUrl;
   final String? address;
   final String? description;
+  /// Extra photos shown in a carousel when the tile is tapped.
+  final List<String> gallery;
 
   String get directionsLabel => MapsDirectionsLauncher.placeLabel(
         name: name,
@@ -115,8 +120,12 @@ class TouristDestinationDetail {
       resolveVrTourUrl(vrLink: vrLink, spotId: spotId, spotName: name) ??
       vrLink?.trim();
 
-  String get primaryImage =>
-      imageUrls.isNotEmpty ? imageUrls.first : TouristSpotImageCatalog.kDefaultAsset;
+  String get primaryImage {
+    if (imageUrls.isEmpty) {
+      return SupabaseStorageConfig.resolve(TouristSpotImageCatalog.kDefaultAsset);
+    }
+    return SupabaseStorageConfig.resolve(imageUrls.first);
+  }
 
   factory TouristDestinationDetail.fromFeaturedMap(
     Map<String, dynamic> data, {
@@ -142,30 +151,32 @@ class TouristDestinationDetail {
               ));
 
     final images = <String>{
-      TouristSpotImageCatalog.normalizeAssetPath(hero),
+      SupabaseStorageConfig.resolve(
+        TouristSpotImageCatalog.normalizeAssetPath(hero),
+      ),
       if (data['gallery'] is List)
-        ...((data['gallery'] as List).map((e) => e.toString())),
+        ...((data['gallery'] as List).map(
+          (e) => SupabaseStorageConfig.resolve(
+            TouristSpotImageCatalog.normalizeAssetPath(e.toString()),
+          ),
+        )),
     }.where((u) => u.isNotEmpty).toList();
 
     final restaurants = _nearbyFromNames(
       data['nearbyRestaurants'],
       category: 'Restaurant',
-      baseRating: rating,
     );
     final hotels = _nearbyFromNames(
       data['nearbyHotels'],
       category: 'Hotel',
-      baseRating: rating - 0.1,
     );
     final cafes = _nearbyFromNames(
       data['nearbyCafes'] ?? _cafeNamesFromRestaurants(restaurants),
       category: 'Café',
-      baseRating: 4.4,
     );
     final attractions = _nearbyFromNames(
       data['nearbyAttractions'] ?? [name, '$municipality Viewpoint'],
       category: 'Attraction',
-      baseRating: rating,
     );
 
     return TouristDestinationDetail(
@@ -303,7 +314,6 @@ class TouristDestinationDetail {
   static List<NearbyPlaceCard> _nearbyFromNames(
     dynamic raw, {
     required String category,
-    required double baseRating,
   }) {
     final entries = <({String name, String? imageUrl})>[];
     if (raw is List) {
@@ -316,7 +326,9 @@ class TouristDestinationDetail {
           entries.add((
             name: name,
             imageUrl: image != null && image.isNotEmpty
-                ? TouristSpotImageCatalog.normalizeAssetPath(image)
+                ? SupabaseStorageConfig.resolve(
+                    TouristSpotImageCatalog.normalizeAssetPath(image),
+                  )
                 : null,
           ));
         } else {
@@ -330,20 +342,35 @@ class TouristDestinationDetail {
       final rawItem = raw is List && i < raw.length && raw[i] is Map
           ? raw[i] as Map
           : null;
+      final galleryRaw = rawItem?['gallery'];
+      final galleryList = galleryRaw is List
+          ? galleryRaw
+              .map(
+                (e) => SupabaseStorageConfig.resolve(
+                  TouristSpotImageCatalog.normalizeAssetPath(e.toString()),
+                ),
+              )
+              .where((u) => u.isNotEmpty)
+              .toList()
+          : <String>[];
       return NearbyPlaceCard(
         name: entry.name,
         category: rawItem?['category']?.toString() ?? category,
-        rating: (rawItem?['rating'] as num?)?.toDouble() ??
-            (baseRating - 0.1 * i).clamp(3.8, 5.0),
+        rating: (rawItem?['rating'] as num?)?.toDouble() ?? 0,
         distanceKm: (rawItem?['distanceKm'] as num?)?.toDouble() ??
             (0.4 + (i * 0.35)),
         driveMinutes: (rawItem?['driveMinutes'] as num?)?.toDouble(),
-        priceRange: rawItem?['priceRange']?.toString() ??
-            (i.isEven ? '₱₱' : '₱₱₱'),
-        imageUrl: entry.imageUrl ?? TouristSpotImageCatalog.kDefaultAsset,
+        contact: () {
+          final c = rawItem?['contact']?.toString().trim() ??
+              rawItem?['contactNumber']?.toString().trim();
+          return (c != null && c.isNotEmpty) ? c : null;
+        }(),
+        imageUrl: entry.imageUrl ??
+            SupabaseStorageConfig.resolve(TouristSpotImageCatalog.kDefaultAsset),
         address: rawItem?['location']?.toString().trim() ??
             rawItem?['address']?.toString().trim(),
         description: rawItem?['description']?.toString().trim(),
+        gallery: galleryList,
       );
     });
   }

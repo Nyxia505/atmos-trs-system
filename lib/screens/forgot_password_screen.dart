@@ -416,14 +416,11 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                 ],
               ),
               const SizedBox(height: 8),
-              Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 72),
-                  child: TransparentLogo(
-                    height: 72,
-                    fit: BoxFit.cover,
-                    alignment: Alignment.topCenter,
-                  ),
+              const Center(
+                child: TransparentLogo(
+                  width: 72,
+                  height: 72,
+                  fit: BoxFit.contain,
                 ),
               ),
               const SizedBox(height: 12),

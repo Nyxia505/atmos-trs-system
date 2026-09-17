@@ -45,10 +45,10 @@ service cloud.firestore {
                                           && request.auth.uid == otpUid;
     }
 
-    // Public read announcements, but lock writes.
+    // Public read; LGU/Governor staff write events (approve flow).
     match /announcements/{announcementId} {
       allow read: if true;
-      allow create, update, delete: if false;
+      allow create, update, delete: if isSignedIn();
     }
 
     // Lock dashboard collections by default until role-based rules are added.

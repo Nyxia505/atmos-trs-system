@@ -225,17 +225,6 @@ class _SpotModalSheet extends StatelessWidget {
                 '— km',
                 style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 13),
               ),
-              const SizedBox(width: 16),
-              Icon(Icons.star, size: 16, color: Colors.amber.shade400),
-              const SizedBox(width: 4),
-              Text(
-                spot.rating > 0 ? spot.rating.toStringAsFixed(1) : '—',
-                style: TextStyle(
-                  color: Colors.amber.shade400,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
             ],
           ),
           const SizedBox(height: 20),

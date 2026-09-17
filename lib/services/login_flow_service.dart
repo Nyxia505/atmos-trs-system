@@ -1,7 +1,6 @@
 import 'dart:async' show unawaited;
 
 import 'package:flutter/foundation.dart' show debugPrint;
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/navigation/role_router.dart';
 import 'package:atmos_trs_system/services/dashboard_user_service.dart';
@@ -10,26 +9,25 @@ import 'package:atmos_trs_system/services/tourist_activity_firestore_sync.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/services/welcome_notification_service.dart';
+import 'package:atmos_trs_system/services/pending_lgu_registration_cache.dart';
+import 'package:atmos_trs_system/services/pending_establishment_registration_cache.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 
 /// Resolves post-login navigation quickly (cache-first), then finishes setup in background.
 class LoginFlowService {
   LoginFlowService._();
-  static const String _touristVerifiedKeyPrefix = 'tourist_is_verified_';
 
   static Future<bool?> _getCachedTouristVerified(String uid) async {
     if (uid.isEmpty) return null;
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool('$_touristVerifiedKeyPrefix$uid');
+    final cached = await SessionStorage.isTouristEmailVerifiedCached(uid);
+    return cached ? true : null;
   }
 
   static Future<void> _setCachedTouristVerified(
     String uid,
     bool isVerified,
   ) async {
-    if (uid.isEmpty) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('$_touristVerifiedKeyPrefix$uid', isVerified);
+    await SessionStorage.setTouristEmailVerified(uid, verified: isVerified);
   }
 
   /// Cache-first route; falls back to email heuristics for staff demo accounts.
@@ -40,16 +38,33 @@ class LoginFlowService {
     // 1) Fast staff routing by email pattern (no Firestore/network).
     final roleFromEmail = SessionStorage.getRoleFromEmail(email);
     if (roleFromEmail == UserRole.governor) return '/governor-dashboard';
+    if (roleFromEmail == UserRole.provincialTourism) {
+      return '/provincial-tourism-dashboard';
+    }
     if (roleFromEmail == UserRole.tourism) return '/lgu-dashboard';
 
-    // 2) If this same tourist already logged in before, use cached verification.
+    // 2) If this same user already logged in before, use cached role/verification.
     final storedUid = await SessionStorage.getStoredUser();
     final storedRole = await SessionStorage.getStoredRole();
+    if (storedUid == uid && storedRole == UserRole.tourismEstablishment) {
+      return '/establishment-dashboard';
+    }
+    if (storedUid == uid && storedRole == UserRole.tourism) {
+      return '/lgu-dashboard';
+    }
     if (storedUid == uid && storedRole == UserRole.tourist) {
       final cachedVerified = await _getCachedTouristVerified(uid);
       if (cachedVerified == true) {
         return '/dashboard';
       }
+    }
+
+    // 2b) Pending LGU / establishment signup — finish OTP first.
+    await PendingLguRegistrationCache.hydrate();
+    await PendingEstablishmentRegistrationCache.hydrate();
+    if (PendingLguRegistrationCache.forUid(uid) != null ||
+        PendingEstablishmentRegistrationCache.forUid(uid) != null) {
+      return '/verify-otp';
     }
 
     // 3) Cached profile lookup (doc by uid only; cheaper than extra email query).
@@ -71,6 +86,41 @@ class LoginFlowService {
     return verified ? '/dashboard' : '/verify-otp';
   }
 
+  /// Persists staff session from email heuristics only (no Firestore).
+  /// Used so dashboards can load immediately while finalize runs in background.
+  static Future<void> persistStaffSessionQuick({
+    required String uid,
+    required String email,
+  }) async {
+    final role = SessionStorage.getRoleFromEmail(email);
+    if (role == UserRole.governor) {
+      await SessionStorage.saveSession(
+        uid,
+        role: UserRole.governor,
+        email: email,
+      );
+      return;
+    }
+    if (role == UserRole.provincialTourism) {
+      await SessionStorage.saveSession(
+        uid,
+        role: UserRole.provincialTourism,
+        email: email,
+      );
+      return;
+    }
+    if (role == UserRole.tourism) {
+      final municipalityId =
+          SessionStorage.getMunicipalityIdFromTourismEmail(email);
+      await SessionStorage.saveSession(
+        uid,
+        role: UserRole.tourism,
+        email: email,
+        municipalityId: municipalityId,
+      );
+    }
+  }
+
   /// Firestore session persist, staff docs, profile hydrate (non-blocking for UI).
   static Future<void> finalizeLoginInBackground({
     required String uid,
@@ -86,13 +136,16 @@ class LoginFlowService {
           await UserDirectoryService.getProfileByEmail(email);
 
       if (profile != null) {
-        if (profile.isGovernor || profile.isTourismOffice) {
+        if (profile.isGovernor ||
+            profile.isProvincialTourism ||
+            profile.isTourismOffice) {
           await UserDirectoryService.ensureStaffUserDoc(
             uid: uid,
             email: profile.email,
             roleRaw: profile.roleRaw,
             fullName: profile.fullName,
           );
+          UserDirectoryService.markStaffFirestoreAccessReady(uid);
         }
         if (profile.isTourist) {
           await UserActivityService.bindToUser(uid);
@@ -187,6 +240,21 @@ class LoginFlowService {
           uid: uid,
           email: email,
           roleRaw: 'tourism',
+          isVerified: true,
+        );
+        await RoleRouter.persistSessionAndGetRoute(
+          profile: synthetic,
+          firebaseUid: uid,
+        );
+        return;
+      }
+
+      if (SessionStorage.isProvincialTourismEmail(email) &&
+          await SessionStorage.validateCredentialsAsync(email, password)) {
+        final synthetic = AppUserProfile(
+          uid: uid,
+          email: email,
+          roleRaw: 'provincial_tourism',
           isVerified: true,
         );
         await RoleRouter.persistSessionAndGetRoute(

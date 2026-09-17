@@ -5,6 +5,7 @@ import 'package:atmos_trs_system/config/app_theme_controller.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/config/user_profile_storage.dart';
+import 'package:atmos_trs_system/features/profile/widgets/my_reviews_section.dart';
 import 'package:atmos_trs_system/features/profile/widgets/profile_avatar.dart';
 import 'package:atmos_trs_system/features/profile/widgets/profile_info_row.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -13,6 +14,9 @@ import 'package:atmos_trs_system/services/tourist_profile_hydration.dart';
 import 'package:atmos_trs_system/services/tourist_activity_firestore_sync.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
+import 'package:atmos_trs_system/features/navigation/tourist_web_layout.dart';
+import 'package:atmos_trs_system/screens/forgot_password_screen.dart';
+import 'package:atmos_trs_system/navigation/post_logout_navigation.dart';
 import 'package:atmos_trs_system/widgets/app_logout_button.dart';
 import 'package:atmos_trs_system/features/profile/widgets/theme_color_picker_sheet.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -35,8 +39,8 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
   bool _addressExpanded = false;
   bool _otpVerified = false;
 
-  static const _textPrimary = Color(0xFF111827);
-  static const _textMuted = Color(0xFF6B7280);
+  Color get _textPrimary => AppTheme.textPrimary;
+  Color get _textMuted => AppTheme.unselectedMuted;
   static const _border = Color(0xFFE5E7EB);
 
   @override
@@ -82,7 +86,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
   }
 
   Future<bool> _confirmLogout(BuildContext context) async {
-    final result = await showDialog<bool>(
+    final result = await showTouristDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -112,18 +116,127 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
     TouristActivityFirestoreSync.resetMergeCache();
     AuthConfig.currentUserUid = null;
     if (!context.mounted) return;
-    Navigator.pushReplacementNamed(context, '/login');
+    navigateAfterLogout(context);
   }
 
   void _openResetPassword(BuildContext context) {
     final email =
         FirebaseAuth.instance.currentUser?.email?.trim() ??
         _userProfile?.email.trim();
-    Navigator.pushNamed(context, '/forgot-password', arguments: email ?? '');
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ForgotPasswordScreen(initialEmail: email ?? ''),
+      ),
+    );
+  }
+
+  Future<void> _openEmailVerification({bool forceResend = false}) async {
+    final email =
+        FirebaseAuth.instance.currentUser?.email?.trim() ??
+        _userProfile?.email.trim() ??
+        '';
+    await Navigator.of(context).pushNamed(
+      '/verify-otp',
+      arguments: <String, dynamic>{
+        if (email.isNotEmpty) 'contactEmail': email,
+        if (forceResend) 'forceResend': true,
+      },
+    );
+    if (!mounted) return;
+    await _loadProfile();
+  }
+
+  Widget _buildEmailNotVerifiedBanner() {
+    final accent = AppTheme.primary;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: accent.withValues(alpha: 0.45)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.mark_email_unread_outlined, color: accent, size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Email is not verified',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                        color: _textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Verify your email with a 6-digit code to keep your tourist account secure.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        height: 1.35,
+                        color: _textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => _openEmailVerification(forceResend: true),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: accent,
+                    side: BorderSide(color: accent.withValues(alpha: 0.55)),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text(
+                    'Resend verification',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton(
+                  onPressed: () => _openEmailVerification(),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: accent,
+                    foregroundColor: AppTheme.onPrimary,
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text(
+                    'Verify email',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   void _showAboutDialog(BuildContext context) {
-    showDialog<void>(
+    showTouristDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -154,7 +267,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
   }
 
   void _showPrivacyInfo(BuildContext context) {
-    showDialog<void>(
+    showTouristDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -197,7 +310,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
       listenable: AppThemeController.instance,
       builder: (context, _) {
         return Scaffold(
-          backgroundColor: Colors.white,
+          backgroundColor: AppTheme.pageBackground,
           body: SafeArea(
             child: Column(
               children: [
@@ -214,6 +327,10 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
                       padding: EdgeInsets.fromLTRB(pad, 12, pad, 24),
                       child: Column(
                         children: [
+                          if (!_otpVerified) ...[
+                            _buildEmailNotVerifiedBanner(),
+                            const SizedBox(height: 16),
+                          ],
                           _buildTouristIdentityCard(
                             profile,
                             touristId,
@@ -238,6 +355,8 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
                               ),
                             ],
                           ),
+                          const SizedBox(height: 20),
+                          const MyReviewsSection(),
                           const SizedBox(height: 20),
                           _buildExpandableSection(
                             icon: Icons.badge_outlined,
@@ -368,7 +487,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
           child: Icon(Icons.person_rounded, color: accent, size: 26),
         ),
         const SizedBox(width: 12),
-        const Expanded(
+        Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -382,7 +501,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
                   height: 1.15,
                 ),
               ),
-              SizedBox(height: 2),
+              const SizedBox(height: 2),
               Text(
                 'Profile & tourist ID',
                 style: TextStyle(color: _textMuted, fontSize: 13, height: 1.35),
@@ -430,8 +549,8 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
               _settingsMenuRow(
                 value: 'theme',
                 icon: Icons.palette_outlined,
-                title: 'Theme color',
-                subtitle: 'Change app accent color',
+                title: 'Color',
+                subtitle: 'Accent color & dark mode',
                 accent: menuAccent,
               ),
               const PopupMenuDivider(),
@@ -488,14 +607,14 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
             children: [
               Text(
                 title,
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w700,
                   color: _textPrimary,
                 ),
               ),
               Text(
                 subtitle,
-                style: const TextStyle(fontSize: 12, color: _textMuted),
+                style: TextStyle(fontSize: 12, color: _textMuted),
               ),
             ],
           ),
@@ -515,7 +634,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
 
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.cardBackground,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: accent.withValues(alpha: 0.35)),
         boxShadow: [
@@ -634,7 +753,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
         Container(
           padding: const EdgeInsets.all(4),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: AppTheme.cardBackground,
             borderRadius: BorderRadius.circular(10),
             border: Border.all(color: const Color(0xFFE5E7EB)),
           ),
@@ -642,7 +761,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
             data: payload,
             version: QrVersions.auto,
             size: 96,
-            backgroundColor: Colors.white,
+            backgroundColor: AppTheme.cardBackground,
             errorCorrectionLevel: QrErrorCorrectLevel.H,
           ),
         ),
@@ -794,7 +913,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Material(
-          color: Colors.white,
+          color: AppTheme.cardBackground,
           borderRadius: BorderRadius.circular(18),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
@@ -840,7 +959,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
                       children: [
                         Text(
                           title,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w700,
                             color: _textPrimary,
@@ -850,7 +969,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
                           const SizedBox(height: 2),
                           Text(
                             subtitle,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 12,
                               color: _textMuted,
                             ),
@@ -879,7 +998,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
             padding: const EdgeInsets.only(top: 8),
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: AppTheme.cardBackground,
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(color: _border),
               ),

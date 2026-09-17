@@ -8,6 +8,61 @@ abstract final class AtmosBrandTypography {
   /// Body / UI font used across the tourist (user) side — matches ATMOS-TRS logo meaning.
   static const FontWeight mediumWeight = FontWeight.w500;
 
+  /// Wordmark ink (ATMOS + hyphen) on light surfaces.
+  static const Color wordmarkInk = Color(0xFF1F1F1F);
+
+  /// TRS gradient stops — high-contrast brand orange.
+  static const Color wordmarkTrsStart = Color(0xFFF97316);
+  static const Color wordmarkTrsEnd = Color(0xFFFB923C);
+
+  /// Custom ATMOS-TRS wordmark: geometric rounded sans (Plus Jakarta Sans).
+  /// Inspired by clean minimalist branding — not a copy of any proprietary face.
+  static TextStyle wordmarkAtmos({
+    required Color color,
+    double fontSize = 30,
+    double letterSpacing = 1.05,
+    double height = 1.0,
+  }) {
+    return GoogleFonts.plusJakartaSans(
+      color: color,
+      fontSize: fontSize,
+      fontWeight: FontWeight.w700,
+      letterSpacing: letterSpacing,
+      height: height,
+    );
+  }
+
+  /// TRS segment — one step heavier than ATMOS for clear hierarchy.
+  static TextStyle wordmarkTrs({
+    required Color color,
+    double fontSize = 30,
+    double letterSpacing = 1.15,
+    double height = 1.0,
+  }) {
+    return GoogleFonts.plusJakartaSans(
+      color: color,
+      fontSize: fontSize,
+      fontWeight: FontWeight.w800,
+      letterSpacing: letterSpacing,
+      height: height,
+    );
+  }
+
+  /// Hyphen between ATMOS and TRS (same family, balanced weight).
+  static TextStyle wordmarkHyphen({
+    required Color color,
+    double fontSize = 30,
+    double height = 1.0,
+  }) {
+    return GoogleFonts.plusJakartaSans(
+      color: color,
+      fontSize: fontSize,
+      fontWeight: FontWeight.w700,
+      letterSpacing: 0,
+      height: height,
+    );
+  }
+
   /// Short app mark on auth screens (`ATMOS-TRS`): Montserrat bold for legibility.
   static TextStyle authAppMark({
     required Color color,
@@ -19,6 +74,22 @@ abstract final class AtmosBrandTypography {
       color: color,
       fontSize: fontSize,
       fontWeight: FontWeight.w800,
+      letterSpacing: letterSpacing,
+      height: height,
+    );
+  }
+
+  /// Landing header app mark (`ATMOS-TRS`): Quicksand — rounded geometric sans.
+  static TextStyle landingAppMark({
+    required Color color,
+    double fontSize = 34,
+    double letterSpacing = 1.4,
+    double height = 1.05,
+  }) {
+    return GoogleFonts.quicksand(
+      color: color,
+      fontSize: fontSize,
+      fontWeight: FontWeight.w700,
       letterSpacing: letterSpacing,
       height: height,
     );

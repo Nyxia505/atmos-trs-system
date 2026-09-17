@@ -16,12 +16,13 @@ class AppThemePreset {
   final String description;
 }
 
-/// Loads / saves user accent color and notifies [MaterialApp] to rebuild.
+/// Loads / saves user accent color, light/dark mode, and notifies [MaterialApp] to rebuild.
 class AppThemeController extends ChangeNotifier {
   AppThemeController._();
   static final AppThemeController instance = AppThemeController._();
 
   static const String _prefKey = 'app_theme_preset_id';
+  static const String _prefKeyDark = 'app_theme_dark_mode';
 
   /// Default accent for new installs (Asenso orange). User choice is saved in Settings.
   static const String defaultPresetId = 'asenso_orange';
@@ -72,10 +73,15 @@ class AppThemeController extends ChangeNotifier {
   ];
 
   String _presetId = defaultPresetId;
+  bool _isDarkMode = false;
   bool _loaded = false;
 
   bool get isLoaded => _loaded;
   String get presetId => _presetId;
+  bool get isDarkMode => _isDarkMode;
+
+  /// Key for [ThemeReactiveScope] — changes when color or dark mode changes.
+  String get appearanceKey => '${_presetId}_${_isDarkMode ? 'dark' : 'light'}';
 
   AppThemePreset get currentPreset {
     for (final p in presets) {
@@ -101,6 +107,7 @@ class AppThemeController extends ChangeNotifier {
       if (saved != null && presets.any((p) => p.id == saved)) {
         _presetId = saved;
       }
+      _isDarkMode = prefs.getBool(_prefKeyDark) ?? false;
     } catch (_) {}
     _loaded = true;
     notifyListeners();
@@ -114,6 +121,16 @@ class AppThemeController extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_prefKey, id);
+    } catch (_) {}
+  }
+
+  Future<void> setDarkMode(bool value) async {
+    if (_isDarkMode == value) return;
+    _isDarkMode = value;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_prefKeyDark, value);
     } catch (_) {}
   }
 }

@@ -5,7 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
+import 'package:gal/gal.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
@@ -130,17 +130,14 @@ class _QrProfileScreenState extends State<QrProfileScreen> {
           ),
         );
       } else {
-        final result = await ImageGallerySaverPlus.saveImage(
-          pngBytes,
-          quality: 100,
-          name: fileName,
-        );
-        final ok =
-            result is Map &&
-            (result['isSuccess'] == true || result['success'] == true);
-        if (!ok) {
-          throw Exception('Gallery save failed');
+        final hasAccess = await Gal.hasAccess();
+        if (!hasAccess) {
+          final granted = await Gal.requestAccess();
+          if (!granted) {
+            throw Exception('Gallery permission denied');
+          }
         }
+        await Gal.putImageBytes(pngBytes, name: '$fileName.png');
       }
 
       if (!mounted) return;

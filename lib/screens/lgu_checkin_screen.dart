@@ -1,6 +1,7 @@
 import 'dart:async' show unawaited;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/app_theme_controller.dart';
 import 'package:atmos_trs_system/config/atmos_brand_typography.dart';
@@ -27,6 +28,40 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
   static const Color _textDark = Color(0xFF111827);
   static const Color _textMuted = Color(0xFF6B7280);
   bool _submitting = false;
+  final TextEditingController _partyController =
+      TextEditingController(text: '1');
+  final TextEditingController _femaleController =
+      TextEditingController(text: '0');
+  final TextEditingController _maleController =
+      TextEditingController(text: '0');
+
+  int _parseCount(TextEditingController c, {int fallback = 0}) {
+    final n = int.tryParse(c.text.trim());
+    if (n == null || n < 0) return fallback;
+    return n > 99 ? 99 : n;
+  }
+
+  int get _partySize {
+    final n = _parseCount(_partyController, fallback: 1);
+    return n < 1 ? 1 : n;
+  }
+
+  int get _femaleCount => _parseCount(_femaleController);
+  int get _maleCount => _parseCount(_maleController);
+
+  void _clearSubmitting() {
+    if (mounted && _submitting) {
+      setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _partyController.dispose();
+    _femaleController.dispose();
+    _maleController.dispose();
+    super.dispose();
+  }
 
   Future<void> _leaveForDashboard({bool clearPending = true}) async {
     if (clearPending) {
@@ -46,6 +81,20 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
 
   Future<void> _checkIn() async {
     if (_submitting) return;
+    if (_femaleCount + _maleCount != _partySize) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Female + male must equal total party ($_partySize).',
+            ),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: Colors.red.shade700,
+          ),
+        );
+      }
+      return;
+    }
     setState(() => _submitting = true);
     try {
       final mid = normalizeMunicipalityId(widget.municipalityId);
@@ -69,12 +118,16 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
         spotId: spotId,
         spotName: spotName,
         municipality: widget.displayName,
+        partySize: _partySize,
+        femaleCount: _femaleCount,
+        maleCount: _maleCount,
+        onBeforeDialog: _clearSubmitting,
       );
       if (ok && mounted) {
         await _leaveForDashboard(clearPending: true);
       }
     } finally {
-      if (mounted) setState(() => _submitting = false);
+      _clearSubmitting();
     }
   }
 
@@ -115,9 +168,7 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
                         children: [
                           _buildHeroCard(accent, accentLight, accentDark),
                           const SizedBox(height: 16),
-                          _buildInfoTip(accent),
-                          const SizedBox(height: 20),
-                          _buildStepsCard(accent),
+                          _buildPartySizeCard(accent),
                         ],
                       ),
                     ),
@@ -265,8 +316,7 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
             ),
             const SizedBox(height: 14),
             Text(
-              'You scanned this LGU QR. Tap Register visit to save your visit in '
-              '${widget.displayName} and sync it to the tourism dashboard.',
+              'Tap Register visit to save your check-in in ${widget.displayName}.',
               style: const TextStyle(
                 color: _textMuted,
                 fontSize: 14,
@@ -280,122 +330,98 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
     );
   }
 
-  Widget _buildInfoTip(Color accent) {
+  Widget _buildPartySizeCard(Color accent) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: accent.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: accent.withValues(alpha: 0.18)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: accent.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(Icons.info_outline_rounded, color: accent, size: 20),
-          ),
-          const SizedBox(width: 12),
-          const Expanded(
-            child: Text(
-              'A successful check-in appears in your profile activity and Tourism Dashboard.',
-              style: TextStyle(
-                color: _textMuted,
-                fontSize: 13,
-                height: 1.45,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStepsCard(Color accent) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'What happens next',
+          const Text(
+            'Party size',
             style: TextStyle(
               color: _textDark,
-              fontSize: 15,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.2,
-            ),
-          ),
-          const SizedBox(height: 14),
-          _stepRow(
-            accent,
-            '1',
-            'Your visit is saved to Misamis Occidental tourism records.',
-          ),
-          const SizedBox(height: 10),
-          _stepRow(
-            accent,
-            '2',
-            '${widget.displayName} LGU dashboard receives your check-in.',
-          ),
-          const SizedBox(height: 10),
-          _stepRow(
-            accent,
-            '3',
-            'You can view this visit in your profile activity.',
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _stepRow(Color accent, String number, String text) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 26,
-          height: 26,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: accent.withValues(alpha: 0.12),
-            shape: BoxShape.circle,
-          ),
-          child: Text(
-            number,
-            style: TextStyle(
-              color: accent,
-              fontSize: 12,
+              fontSize: 16,
               fontWeight: FontWeight.w800,
             ),
           ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(
-              text,
-              style: const TextStyle(
-                color: _textMuted,
-                fontSize: 13,
-                height: 1.4,
-                fontWeight: FontWeight.w500,
+          const SizedBox(height: 4),
+          const Text(
+            'Enter total guests, then female and male. Include yourself.',
+            style: TextStyle(color: _textMuted, fontSize: 13, height: 1.4),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _partyController,
+            keyboardType: TextInputType.number,
+            onChanged: (_) => setState(() {}),
+            inputFormatters: [
+              FilteringTextInputFormatter.digitsOnly,
+              LengthLimitingTextInputFormatter(2),
+            ],
+            decoration: InputDecoration(
+              labelText: 'Total party',
+              hintText: 'e.g. 5',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
               ),
             ),
           ),
-        ),
-      ],
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _femaleController,
+                  keyboardType: TextInputType.number,
+                  onChanged: (_) => setState(() {}),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(2),
+                  ],
+                  decoration: InputDecoration(
+                    labelText: 'Female',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: TextField(
+                  controller: _maleController,
+                  keyboardType: TextInputType.number,
+                  onChanged: (_) => setState(() {}),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(2),
+                  ],
+                  decoration: InputDecoration(
+                    labelText: 'Male',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Total: $_partySize ($_femaleCount female · $_maleCount male)',
+            style: TextStyle(
+              color: accent,
+              fontWeight: FontWeight.w700,
+              fontSize: 13,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -422,7 +448,8 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           TextButton(
-            onPressed: _submitting ? null : () => unawaited(_leaveForDashboard()),
+            onPressed:
+                _submitting ? null : () => unawaited(_leaveForDashboard()),
             child: const Text(
               'Skip for now — go to dashboard',
               style: TextStyle(
@@ -433,59 +460,60 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
           ),
           const SizedBox(height: 4),
           Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(16),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: _submitting ? null : _checkIn,
-          borderRadius: BorderRadius.circular(16),
-          child: Ink(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [accentLight, accent, accentDark],
-              ),
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(16),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: _submitting ? null : _checkIn,
               borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: accent.withValues(alpha: 0.35),
-                  blurRadius: 14,
-                  offset: const Offset(0, 5),
-                ),
-              ],
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (_submitting)
-                    SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        color: onAccent,
-                      ),
-                    )
-                  else
-                    Icon(Icons.check_circle_rounded, color: onAccent, size: 22),
-                  const SizedBox(width: 10),
-                  Text(
-                    _submitting ? 'Saving visit…' : 'Register visit',
-                    style: TextStyle(
-                      color: onAccent,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.2,
-                    ),
+              child: Ink(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [accentLight, accent, accentDark],
                   ),
-                ],
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: accent.withValues(alpha: 0.35),
+                      blurRadius: 14,
+                      offset: const Offset(0, 5),
+                    ),
+                  ],
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (_submitting)
+                        SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: onAccent,
+                          ),
+                        )
+                      else
+                        Icon(Icons.check_circle_rounded,
+                            color: onAccent, size: 22),
+                      const SizedBox(width: 10),
+                      Text(
+                        _submitting ? 'Saving visit…' : 'Register visit',
+                        style: TextStyle(
+                          color: onAccent,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
           ),
         ],
       ),

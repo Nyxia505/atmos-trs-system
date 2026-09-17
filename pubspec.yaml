@@ -6,7 +6,7 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.9.2
+  sdk: ^3.11.0
 
 dependencies:
   flutter:
@@ -15,7 +15,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   form_validator: ^2.1.1
   step_progress_indicator: ^1.0.2
-  shared_preferences: ^2.2.2
+  shared_preferences: ^2.5.5
 
   flutter_map: ^6.1.0
   latlong2: ^0.9.0
@@ -41,21 +41,22 @@ dependencies:
 
   image_picker: ^1.0.7
   image: ^4.1.3
-  image_gallery_saver_plus: ^4.0.1
+  gal: ^2.3.3
   cached_network_image: ^3.4.1
 
-  panorama_viewer: ^2.0.7
-  mobile_scanner: ^7.2.0
+  mobile_scanner: ^7.4.2
 
   printing: ^5.13.0
   pdf: ^3.10.7
 
   http: ^1.2.2
-  share_plus: ^12.0.1
+  share_plus: ^13.3.0
   path_provider: ^2.1.5
   cross_file: ^0.3.5+2
+  excel: ^4.0.6
+  archive: ^3.6.1
 
-  video_player: ^2.9.2
+  video_player: ^2.14.0
   geolocator: ^13.0.2
 
   smooth_page_indicator: ^1.1.0
@@ -64,7 +65,7 @@ dependencies:
   trip_plan:
     path: lib/tripplan/main
   google_fonts: ^8.2.1
-
+  pointer_interceptor: ^0.10.1+2
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -75,25 +76,37 @@ dev_dependencies:
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "assets/images/logo.png"
+  image_path: "assets/images/final logo.png"
   remove_alpha_ios: true
   web:
     generate: true
-    image_path: "assets/images/logo.png"
+    image_path: "assets/images/final logo.png"
     background_color: "#ffffff"
     theme_color: "#1565C0"
 
 dependency_overrides:
   google_maps_flutter_web: 0.5.14+2
+  # 2.4.24+ migrated off Kotlin Gradle Plugin (Built-in Kotlin).
+  shared_preferences_android: 2.4.28
 
 flutter:
   uses-material-design: true
 
+  # Large tourist/nearby photos load from Supabase Storage (see SupabaseStorageConfig).
+  # Only logos, seals, VR shell, and onboarding chrome stay bundled.
   assets:
-    - assets/images/
-    - assets/vr_tour/
+    - assets/images/final logo.png
+    - assets/images/atmos_trs_brand_logo.png
+    - assets/images/atmostrs logo.png
+    - assets/images/tourism logo.png
+    - assets/images/logo.png
+    - assets/images/asenso_misamis_occidental_circular_logo.png
+    - assets/images/asenso_misamis_occidental_wordmark.png
+    - assets/images/misamis_occidental_official_seal.png
+    - assets/images/login_hero_bg.png
+    - assets/images/landing page.png
     - assets/Onboarding_screen/
-    - assets/Nearby Hotel's in Sunrise Beach/
+    - assets/vr_tour/
 
   fonts:
     - family: Sacrifice

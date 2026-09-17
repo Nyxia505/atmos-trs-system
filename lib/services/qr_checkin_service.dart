@@ -357,7 +357,14 @@ class QRCheckInService {
     String? municipality,
     /// True after QR registration (pending scan) — no on-site GPS required.
     bool skipProximityForRegistration = false,
+    /// Total visitors for this scan (pila kabook). Clamped to ≥ 1.
+    int partySize = 1,
+    int femaleCount = 0,
+    int maleCount = 0,
   }) async {
+    final resolvedPartySize = partySize < 1 ? 1 : partySize;
+    final resolvedFemales = femaleCount < 0 ? 0 : femaleCount;
+    final resolvedMales = maleCount < 0 ? 0 : maleCount;
     if (!_isFirebaseInitialized) {
       return const QRCheckInFailure(
         'Firebase is not configured. Check-in saved locally.',
@@ -498,6 +505,7 @@ class QRCheckInService {
       final checkinRef = _firestore.collection(_checkinsCollectionId).doc();
 
       // Tourism dashboards read qr_checkins filtered by municipalityId / lguId.
+      // partySize / visitorCount = companions + 1 (one scan session → one party visit).
       await qrRef.set({
         'userId': uid,
         'user_id': uid,
@@ -515,6 +523,10 @@ class QRCheckInService {
         'municipality': resolvedMunicipality,
         'status': 'Verified',
         'source': 'qr_scan',
+        'partySize': resolvedPartySize,
+        'visitorCount': resolvedPartySize,
+        'femaleCount': resolvedFemales,
+        'maleCount': resolvedMales,
         'timestamp': FieldValue.serverTimestamp(),
         'createdAt': FieldValue.serverTimestamp(),
         'checkins_ref': checkinRef.id,
@@ -535,6 +547,10 @@ class QRCheckInService {
           'location_id': routedLocationId,
           'touristSpotId': routedLocationId,
           'lguId': normalizedMunicipalityId,
+          'partySize': resolvedPartySize,
+          'visitorCount': resolvedPartySize,
+          'femaleCount': resolvedFemales,
+          'maleCount': resolvedMales,
           'checkin_time': FieldValue.serverTimestamp(),
         });
       } catch (e) {
@@ -606,9 +622,9 @@ class QRCheckInService {
     if (BetaTestingGuard.bypassValidation) return null;
 
     if (latitude.abs() < 1e-6 && longitude.abs() < 1e-6) {
-      return 'You must be at $spotLabel to check in. '
-          'This destination has no GPS coordinates on file — scan the on-site QR code '
-          'or ask the tourism office to add latitude and longitude for this spot.';
+      return 'Sorry — we need you at $spotLabel to check in, but this destination '
+          'has no GPS coordinates yet. Please scan the official on-site QR, or ask '
+          'the tourism office to add latitude and longitude. 😊';
     }
     return QrScanLocationGuard.verifyNearAnchor(
       anchorLat: latitude,
@@ -636,8 +652,8 @@ class QRCheckInService {
       firestoreLng,
     );
     if (mismatch > kQrScanQrVsFirestoreMaxMismatchMeters) {
-      return 'This QR code does not match our records for this tourist spot. '
-          'Please use the official poster from the tourism office or scan the code on site.';
+      return 'This QR does not match our records for this tourist spot. '
+          'Please use the official poster from the tourism office and scan it on site. 😊';
     }
     return null;
   }

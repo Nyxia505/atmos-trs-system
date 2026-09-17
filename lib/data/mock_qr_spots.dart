@@ -21,7 +21,7 @@ final List<QrTouristSpot> mockQrTouristSpots = [
     municipality: 'Sinacaban',
     qrCodeValue: _deepLinkFor('SPOT002'),
     deepLink: _deepLinkFor('SPOT002'),
-    image: 'assets/images/AMORAP.jpg',
+    image: 'assets/images/Amorap.png',
     description:
         'Barangay Libertad Bajo, Sinacaban. Resort grounds and all-day dining generally open daily; entrance fees vary by activity or accommodation.',
   ),
@@ -71,7 +71,7 @@ final List<QrTouristSpot> mockQrTouristSpots = [
     municipality: 'Jimenez',
     qrCodeValue: _deepLinkFor('SPOT006'),
     deepLink: _deepLinkFor('SPOT006'),
-    image: 'assets/images/Jimenez - St. John the Baptist Church.jpg',
+    image: 'assets/images/Jimenez.png',
     description:
         'Church of St. John the Baptist (Jimenez Church), Barangay Poblacion. National Cultural Treasure with painted wooden ceilings and coral stone facade. Free; typically open daily 6:00 AM–5:00 PM.',
   ),
@@ -81,7 +81,7 @@ final List<QrTouristSpot> mockQrTouristSpots = [
     municipality: 'Baliangao',
     qrCodeValue: _deepLinkFor('SPOT007'),
     deepLink: _deepLinkFor('SPOT007'),
-    image: 'assets/images/Baliangao - Cabgan Island.jpg',
+    image: 'assets/images/Baliangao.png',
     description:
         'Baliangao Beach, Barangay Tugas. Day use 6 AM–5 PM. Cottages and tables for rent. Overnight accommodations 24 hours.',
   ),
