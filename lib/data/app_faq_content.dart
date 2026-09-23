@@ -25,20 +25,29 @@ const List<AppFaqItem> kAppFaqItems = [
     question: 'What is ATMOS-TRS?',
     keywords: ['atmos', 'atmos-trs', 'atmos trs', 'meaning', 'purpose', 'app', 'system'],
     answer:
-        'ATMOS-TRS (Asenso Tourismo Misamis Occidental Smart Tourist Registration System) is the '
-        'official tourism mobile app for Misamis Occidental. It helps you register as a '
-        'tourist, explore destinations, check in with QR codes, and track your travel '
-        'experience.',
+        'ATMOS-TRS (Asenso Tourismo Misamis Occidental Smart Tourist Registration System) '
+        'is the official tourism mobile app for Misamis Occidental.\n\n'
+        'What you can do:\n'
+        '• Register as a tourist\n'
+        '• Explore destinations\n'
+        '• Check in with QR codes\n'
+        '• Track your travel experience',
     answerFil:
-        'Ang ATMOS-TRS (Asenso Tourismo Misamis Occidental Smart Tourist Registration System) ay '
-        'ang opisyal na tourism app para sa Misamis Occidental. Makakatulong ito sa '
-        'pagre-register, pag-explore ng destinations, QR check-in, at pag-track ng '
-        'iyong travel experience.',
+        'Ang ATMOS-TRS (Asenso Tourismo Misamis Occidental Smart Tourist Registration System) '
+        'ay ang opisyal na tourism app para sa Misamis Occidental.\n\n'
+        'Pwede mong:\n'
+        '• Mag-register bilang tourist\n'
+        '• Mag-explore ng destinations\n'
+        '• Mag-check in gamit ang QR codes\n'
+        '• I-track ang travel experience mo',
     answerCeb:
         'Ang ATMOS-TRS (Asenso Tourismo Misamis Occidental Smart Tourist Registration System) '
-        'mao ang opisyal nga tourism app sa Misamis Occidental. Makatabang kini sa '
-        'pagparehistro, pag-explore sa destinations, QR check-in, ug pag-track sa imong '
-        'travel experience.',
+        'mao ang opisyal nga tourism app sa Misamis Occidental.\n\n'
+        'Pwede nimo:\n'
+        '• Magparehistro isip tourist\n'
+        '• Mag-explore og destinations\n'
+        '• Mag-check in gamit ang QR codes\n'
+        '• I-track ang imong travel experience',
   ),
   AppFaqItem(
     icon: Icons.person_add_alt_1_rounded,
@@ -49,21 +58,27 @@ const List<AppFaqItem> kAppFaqItems = [
         '1. Open the app and tap Sign Up\n'
         '2. Enter your email or phone number\n'
         '3. Complete your tourist profile\n'
-        '4. Verify your account if prompted\n'
+        '4. Verify your account if prompted\n\n'
+        '────\n'
+        'Next steps:\n'
         'Your digital tourist ID and QR code are created after registration.',
     answerFil:
         'Para mag-register:\n'
         '1. Buksan ang app at pindutin ang Sign Up\n'
         '2. Ilagay ang email o phone number\n'
         '3. Kumpletuhin ang tourist profile\n'
-        '4. I-verify ang account kung hihingin\n'
+        '4. I-verify ang account kung hihingin\n\n'
+        '────\n'
+        'Next steps:\n'
         'Gagawa ang digital tourist ID at QR code pagkatapos mag-register.',
     answerCeb:
         'Para magparehistro:\n'
         '1. Ablihi ang app ug i-tap ang Sign Up\n'
         '2. Ibutang ang email o phone number\n'
         '3. Kompletoha ang tourist profile\n'
-        '4. I-verify ang account kung gikinahanglan\n'
+        '4. I-verify ang account kung gikinahanglan\n\n'
+        '────\n'
+        'Next steps:\n'
         'Maghimo ang digital tourist ID ug QR code human sa pagparehistro.',
   ),
   AppFaqItem(

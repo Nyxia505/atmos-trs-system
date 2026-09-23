@@ -347,4 +347,67 @@ class UserDirectoryService {
       return null;
     }
   }
+
+  /// True when Firestore has a **completed** tourist account (verified).
+  /// FCM-only stubs (token without `role` / without profile fields) do not count.
+  static Future<bool> hasCompletedTouristAccount(String uid) async {
+    if (!_ready || uid.isEmpty) return false;
+    final profile = await getProfileByUid(uid, preferServer: true);
+    if (profile != null && profile.isTourist && profile.isVerified) {
+      return true;
+    }
+    try {
+      final doc = await _db.collection('tourists').doc(uid).get(
+            const GetOptions(source: Source.server),
+          );
+      if (!doc.exists || doc.data() == null) return false;
+      final data = doc.data()!;
+      final email = data['email']?.toString().trim() ?? '';
+      return data['isVerified'] == true && email.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// True when a durable users/tourists registration exists (not an FCM stub).
+  static Future<bool> hasDurableRegistrationRecord(String uid) async {
+    if (!_ready || uid.isEmpty) return false;
+    final profile = await getProfileByUid(uid, preferServer: true);
+    if (profile != null) return true;
+    try {
+      final doc = await _db.collection('tourists').doc(uid).get(
+            const GetOptions(source: Source.server),
+          );
+      if (!doc.exists || doc.data() == null) return false;
+      final data = doc.data()!;
+      final email = data['email']?.toString().trim() ?? '';
+      final touristId = data['touristId']?.toString().trim() ?? '';
+      final fullName = data['fullName']?.toString().trim() ?? '';
+      return email.isNotEmpty || touristId.isNotEmpty || fullName.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// True when [email] already has a durable `users` / verified tourist record.
+  static Future<bool> emailHasDurableRegistration(String email) async {
+    final normalized = email.trim().toLowerCase();
+    if (normalized.isEmpty) return false;
+    final byUsers = await getProfileByEmail(normalized);
+    if (byUsers != null) return true;
+    if (!_ready) return false;
+    try {
+      final snap = await _db
+          .collection('tourists')
+          .where('email', isEqualTo: normalized)
+          .limit(1)
+          .get(const GetOptions(source: Source.server));
+      if (snap.docs.isEmpty) return false;
+      final data = snap.docs.first.data();
+      return data['isVerified'] == true ||
+          (data['touristId']?.toString().trim().isNotEmpty ?? false);
+    } catch (_) {
+      return false;
+    }
+  }
 }

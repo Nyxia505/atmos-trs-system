@@ -1,9 +1,12 @@
 import 'dart:async' show unawaited;
+import 'dart:typed_data';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_barangays.dart';
@@ -15,8 +18,12 @@ import 'package:atmos_trs_system/services/push_notification_service.dart';
 import 'package:atmos_trs_system/services/registration_rollback_service.dart';
 import 'package:atmos_trs_system/services/username_registry_service.dart';
 import 'package:atmos_trs_system/utils/email_utils.dart';
+import 'package:atmos_trs_system/utils/establishment_capability.dart';
+import 'package:atmos_trs_system/utils/establishment_lodging_hours.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/signup_field_validation.dart';
+import 'package:atmos_trs_system/widgets/dial_code_mobile_field.dart';
+import 'package:atmos_trs_system/widgets/establishment_location_capture.dart';
 import 'package:atmos_trs_system/widgets/web_glass_auth_scaffold.dart';
 
 /// Self-registration for tourism establishments (hotels, resorts, etc.).
@@ -32,22 +39,33 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
   final _formKey = GlobalKey<FormState>();
   final _businessNameController = TextEditingController();
   final _ownerNameController = TextEditingController();
+  final _businessPermitNoController = TextEditingController();
   final _contactController = TextEditingController();
   final _emailController = TextEditingController();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
 
+  String _contactDialCode = '+63';
   String? _category;
   String? _municipality;
   String? _barangay;
   int? _yearEstablished;
+  TimeOfDay _checkInTime = const TimeOfDay(hour: 14, minute: 0);
+  TimeOfDay _checkOutTime = const TimeOfDay(hour: 12, minute: 0);
+  double? _latitude;
+  double? _longitude;
+  bool _locating = false;
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
   bool _agreeToTerms = false;
   bool _privacyOpened = false;
   bool _termsOpened = false;
   bool _submitting = false;
+
+  /// Optional business permit photo (bytes held until Auth uid exists).
+  Uint8List? _permitImageBytes;
+  String? _permitImageName;
 
   bool get _isDesktopGlass =>
       kIsWeb && MediaQuery.sizeOf(context).width >= kWebGlassAuthBreakpoint;
@@ -67,16 +85,82 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
   List<String> get _barangayOptions =>
       barangaysForMisamisOccidentalCity(_municipality);
 
+  bool get _isLodgingCategory =>
+      EstablishmentCapability.isLodging(_category);
+
+  Future<void> _pickCheckInTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _checkInTime,
+    );
+    if (picked != null && mounted) setState(() => _checkInTime = picked);
+  }
+
+  Future<void> _pickCheckOutTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _checkOutTime,
+    );
+    if (picked != null && mounted) setState(() => _checkOutTime = picked);
+  }
+
   @override
   void dispose() {
     _businessNameController.dispose();
     _ownerNameController.dispose();
+    _businessPermitNoController.dispose();
     _contactController.dispose();
     _emailController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickBusinessPermitPhoto() async {
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+        maxWidth: 2000,
+      );
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      if (!mounted) return;
+      setState(() {
+        _permitImageBytes = bytes;
+        _permitImageName = picked.name;
+      });
+    } catch (e) {
+      debugPrint('[EST-SIGNUP] permit pick failed: $e');
+      if (mounted) _snack('Could not attach permit photo. Try again.');
+    }
+  }
+
+  Future<String?> _uploadPermitIfAny(String uid) async {
+    final bytes = _permitImageBytes;
+    if (bytes == null || bytes.isEmpty) return null;
+    try {
+      final name = (_permitImageName ?? 'permit.jpg').toLowerCase();
+      final ext = name.endsWith('.png')
+          ? 'png'
+          : name.endsWith('.webp')
+              ? 'webp'
+              : 'jpg';
+      final contentType = ext == 'png'
+          ? 'image/png'
+          : ext == 'webp'
+              ? 'image/webp'
+              : 'image/jpeg';
+      final ref = FirebaseStorage.instance
+          .ref()
+          .child('establishment_permits/$uid/business_permit.$ext');
+      await ref.putData(bytes, SettableMetadata(contentType: contentType));
+      return await ref.getDownloadURL();
+    } catch (e) {
+      debugPrint('[EST-SIGNUP] permit upload failed (non-fatal): $e');
+      return null;
+    }
   }
 
   TextStyle get _fieldTextStyle => TextStyle(
@@ -95,13 +179,13 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
   Color get _fieldIconColor =>
       _isDesktopGlass ? Colors.white : const Color(0xFF78716C);
 
-  TextStyle get _hintTextStyle => TextStyle(
-        color: _isDesktopGlass
-            ? Colors.white.withValues(alpha: 0.95)
-            : const Color(0xFF57534E),
+  TextStyle get _hintTextStyle => const TextStyle(
+        // Match tourist signup muted grey placeholders.
+        color: Color(0xFF9CA3AF),
         fontSize: 15,
-        fontWeight: FontWeight.w600,
+        fontWeight: FontWeight.w400,
         letterSpacing: 0.1,
+        height: 1.25,
       );
 
   Widget _dropdownHint(String text) {
@@ -124,8 +208,8 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
         prefixIcon: icon,
         suffixIcon: suffix,
       ).copyWith(
+        fillColor: Colors.black.withValues(alpha: 0.58),
         // Keep decoration hint empty for dropdowns; they use the [hint] widget.
-        // Text fields still show this hintText with a bright style.
         hintStyle: _hintTextStyle,
         errorStyle: TextStyle(
           color: Colors.orange.shade100,
@@ -189,7 +273,7 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
       // ignore: deprecated_member_use
       value: value,
       isExpanded: true,
-      // Explicit white hint — decoration hintStyle alone is ignored by dropdowns.
+      // Explicit grey hint — decoration hintStyle alone is ignored by dropdowns.
       hint: _dropdownHint(hint),
       disabledHint: _dropdownHint(hint),
       decoration: _dec(hint: hint, icon: icon).copyWith(
@@ -648,13 +732,30 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
       _snack('Please complete all required fields.');
       return;
     }
+    final lat = _latitude;
+    final lng = _longitude;
+    if (lat == null ||
+        lng == null ||
+        (lat.abs() < 1e-6 && lng.abs() < 1e-6)) {
+      _snack('Tap Get location so tourists can find you on the map.');
+      return;
+    }
+    if (_isLodgingCategory &&
+        EstablishmentLodgingHours.minutesSinceMidnight(_checkInTime) ==
+            EstablishmentLodgingHours.minutesSinceMidnight(_checkOutTime)) {
+      _snack('Check-in and check-out times must be different.');
+      return;
+    }
 
     final email = normalizeEmail(_emailController.text);
     final username = _usernameController.text.trim();
     final password = _passwordController.text;
     final businessName = _businessNameController.text.trim();
     final ownerName = _ownerNameController.text.trim();
-    final contact = _contactController.text.trim();
+    final contact = composeE164Mobile(
+      _contactDialCode,
+      _contactController.text,
+    );
 
     setState(() => _submitting = true);
     String? createdUid;
@@ -723,7 +824,7 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
         displayName: businessName,
         otp: otp,
         mobile: contact,
-        notifyOnThisDevice: !kIsWeb,
+        notifyOnThisDevice: false,
         trySms: false,
         otpAlreadyInFirestore: true,
       );
@@ -741,6 +842,12 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
       }
 
       final municipalityId = getMunicipalityIdFromName(_municipality);
+      final permitNo = _businessPermitNoController.text.trim();
+      final permitUrl = await _uploadPermitIfAny(uid);
+      final lodging = EstablishmentCapability.isLodging(_category);
+      final checkInStr = EstablishmentLodgingHours.format(_checkInTime);
+      final checkOutStr = EstablishmentLodgingHours.format(_checkOutTime);
+
       final userData = PendingEstablishmentRegistrationCache.jsonSafeMap({
         'firebaseUid': uid,
         'email': email,
@@ -753,7 +860,15 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
         'username': username,
         'contactNumber': contact,
         'category': _category,
+        'latitude': lat,
+        'longitude': lng,
         'yearEstablished': _yearEstablished,
+        if (permitNo.isNotEmpty) 'businessPermitNo': permitNo,
+        if (permitUrl != null) 'businessPermitUrl': permitUrl,
+        if (lodging) ...{
+          'checkInTime': checkInStr,
+          'checkOutTime': checkOutStr,
+        },
         'isVerified': false,
         'status': 'pending',
       });
@@ -772,7 +887,15 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
         'municipalityId': municipalityId,
         'barangay': _barangay,
         'location': '$_barangay, $_municipality, Misamis Occidental',
+        'latitude': lat,
+        'longitude': lng,
         'yearEstablished': _yearEstablished,
+        if (permitNo.isNotEmpty) 'businessPermitNo': permitNo,
+        if (permitUrl != null) 'businessPermitUrl': permitUrl,
+        if (lodging) ...{
+          'checkInTime': checkInStr,
+          'checkOutTime': checkOutStr,
+        },
         'status': 'pending',
         'ownerUid': uid,
         'authUid': uid,
@@ -934,17 +1057,17 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             textCapitalization: TextCapitalization.words,
             decoration: _dec(
-              hint: 'Business name',
+              hint: 'Enter your business name',
               icon: Icons.storefront_rounded,
             ),
             validator: (v) =>
                 (v == null || v.trim().isEmpty) ? 'Required' : null,
           ),
           const SizedBox(height: 12),
-          _sectionLabel('Category Type'),
+          _sectionLabel('Category type'),
           _glassDropdown<String>(
             value: _category,
-            hint: 'Select category',
+            hint: 'Select your category',
             icon: Icons.category,
             items: EstablishmentRegistrationService.categoryTypes
                 .map(
@@ -956,6 +1079,65 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
                 : (v) => setState(() => _category = v),
             validator: (v) => v == null ? 'Required' : null,
           ),
+          if (_isLodgingCategory) ...[
+            const SizedBox(height: 12),
+            _sectionLabel('Standard check-in / check-out times'),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _submitting ? null : _pickCheckInTime,
+                    icon: const Icon(Icons.login_rounded, size: 18),
+                    label: Text(
+                      'In ${EstablishmentLodgingHours.displayLabel(_checkInTime)}',
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppTheme.brandOrange,
+                      side: BorderSide(
+                        color: AppTheme.brandOrange.withValues(alpha: 0.55),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 14,
+                        horizontal: 8,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _submitting ? null : _pickCheckOutTime,
+                    icon: const Icon(Icons.logout_rounded, size: 18),
+                    label: Text(
+                      'Out ${EstablishmentLodgingHours.displayLabel(_checkOutTime)}',
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppTheme.brandOrange,
+                      side: BorderSide(
+                        color: AppTheme.brandOrange.withValues(alpha: 0.55),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 14,
+                        horizontal: 8,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Guests arriving before check-in may be charged an extra night. '
+              'You can edit these later under QR & profile.',
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: _isDesktopGlass
+                    ? Colors.white70
+                    : const Color(0xFF64748B),
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           _sectionLabel('Name of Owner (from Business Permit)'),
           TextFormField(
@@ -964,24 +1146,94 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             textCapitalization: TextCapitalization.words,
             decoration: _dec(
-              hint: 'Owner full name',
+              hint: 'Enter owner full name',
               icon: Icons.badge_outlined,
             ),
             validator: (v) =>
                 (v == null || v.trim().isEmpty) ? 'Required' : null,
           ),
           const SizedBox(height: 12),
-          _sectionLabel('Contact Number'),
+          _sectionLabel('Business Permit (optional)'),
           TextFormField(
-            controller: _contactController,
+            controller: _businessPermitNoController,
             style: _fieldTextStyle,
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
-            keyboardType: TextInputType.phone,
             decoration: _dec(
-              hint: '09XXXXXXXXX',
+              hint: 'Permit number (optional)',
+              icon: Icons.article_outlined,
+            ),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _submitting ? null : _pickBusinessPermitPhoto,
+            icon: Icon(
+              _permitImageBytes == null
+                  ? Icons.add_photo_alternate_outlined
+                  : Icons.check_circle_outline,
+              size: 18,
+            ),
+            label: Text(
+              _permitImageBytes == null
+                  ? 'Attach permit photo (optional)'
+                  : 'Permit photo attached'
+                      '${_permitImageName != null ? ' · $_permitImageName' : ''}',
+            ),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppTheme.brandOrange,
+              side: BorderSide(
+                color: AppTheme.brandOrange.withValues(alpha: 0.55),
+              ),
+              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+            ),
+          ),
+          if (_permitImageBytes != null) ...[
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: _submitting
+                    ? null
+                    : () => setState(() {
+                          _permitImageBytes = null;
+                          _permitImageName = null;
+                        }),
+                child: Text(
+                  'Remove photo',
+                  style: TextStyle(
+                    color: _isDesktopGlass
+                        ? Colors.white70
+                        : const Color(0xFF78716C),
+                  ),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          _sectionLabel('Contact Number'),
+          DialCodeMobileField(
+            controller: _contactController,
+            dialCode: _contactDialCode,
+            onDialCodeChanged: (v) => setState(() => _contactDialCode = v),
+            textStyle: _fieldTextStyle,
+            dialTextStyle: _fieldTextStyle.copyWith(fontWeight: FontWeight.w700),
+            dropdownColor: _isDesktopGlass
+                ? const Color(0xFF1C1917)
+                : Colors.white,
+            menuItemTextStyle: TextStyle(
+              fontSize: 14,
+              color: _isDesktopGlass ? Colors.white : Colors.black87,
+            ),
+            dialDecoration: _dec(hint: '+63').copyWith(
+              prefixIcon: null,
+              prefixIconConstraints:
+                  const BoxConstraints(minWidth: 0, minHeight: 0),
+            ),
+            numberDecoration: _dec(
+              hint: _contactDialCode == '+63'
+                  ? '9XXXXXXXXX'
+                  : 'Enter your number',
               icon: Icons.phone_rounded,
             ),
-            validator: validatePhilippineMobile,
           ),
           const SizedBox(height: 12),
           _sectionLabel('Email Address'),
@@ -991,7 +1243,10 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             keyboardType: TextInputType.emailAddress,
             autocorrect: false,
-            decoration: _dec(hint: 'email@example.com', icon: Icons.email),
+            decoration: _dec(
+              hint: 'Enter your email',
+              icon: Icons.email,
+            ),
             validator: (v) {
               if (v == null || v.trim().isEmpty) return 'Required';
               if (!isValidEmailFormat(v)) return 'Enter a valid email.';
@@ -1014,10 +1269,10 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
             ),
           ),
           const SizedBox(height: 12),
-          _sectionLabel('Location — Municipality / City'),
+          _sectionLabel('Location'),
           _glassDropdown<String>(
             value: _municipality,
-            hint: 'Select municipality',
+            hint: 'Select municipality / city',
             icon: Icons.location_city,
             items: _municipalities
                 .map((m) => DropdownMenuItem(value: m, child: Text(m)))
@@ -1031,7 +1286,6 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
             validator: (v) => v == null ? 'Required' : null,
           ),
           const SizedBox(height: 12),
-          _sectionLabel('Barangay'),
           _glassDropdown<String>(
             value: _barangay,
             hint: 'Select barangay',
@@ -1045,10 +1299,28 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
             validator: (v) => v == null ? 'Required' : null,
           ),
           const SizedBox(height: 12),
+          _sectionLabel('Map pin (for tourist Explore map)'),
+          EstablishmentLocationCapture(
+            latitude: _latitude,
+            longitude: _longitude,
+            busy: _locating || _submitting,
+            onBusyChanged: (b) {
+              if (mounted) setState(() => _locating = b);
+            },
+            onChanged: (pin) {
+              if (mounted) {
+                setState(() {
+                  _latitude = pin.latitude;
+                  _longitude = pin.longitude;
+                });
+              }
+            },
+          ),
+          const SizedBox(height: 12),
           _sectionLabel('Year Established'),
           _glassDropdown<int>(
             value: _yearEstablished,
-            hint: 'Select year',
+            hint: 'Select year established',
             icon: Icons.calendar_today,
             items: _years
                 .map(
@@ -1067,7 +1339,10 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
             style: _fieldTextStyle,
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             autocorrect: false,
-            decoration: _dec(hint: 'Unique username', icon: Icons.person),
+            decoration: _dec(
+              hint: 'Enter your username',
+              icon: Icons.person,
+            ),
             validator: UsernameRegistryService.validateFormat,
           ),
           const SizedBox(height: 12),
@@ -1078,7 +1353,7 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             obscureText: _obscurePassword,
             decoration: _dec(
-              hint: 'Create password',
+              hint: 'Enter your password',
               icon: Icons.lock_outline,
               suffix: IconButton(
                 icon: Icon(
@@ -1101,7 +1376,7 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             obscureText: _obscureConfirm,
             decoration: _dec(
-              hint: 'Re-enter password',
+              hint: 'Confirm your password',
               icon: Icons.lock_outline,
               suffix: IconButton(
                 icon: Icon(
@@ -1149,9 +1424,7 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
 
     final form = Theme(
       data: Theme.of(context).copyWith(
-        hintColor: _isDesktopGlass
-            ? Colors.white.withValues(alpha: 0.95)
-            : const Color(0xFF57534E),
+        hintColor: const Color(0xFF9CA3AF),
         textTheme: Theme.of(context).textTheme.apply(
               bodyColor: _isDesktopGlass ? Colors.white : const Color(0xFF1C1917),
               displayColor:

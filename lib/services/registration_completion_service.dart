@@ -1,11 +1,14 @@
+import 'dart:async' show unawaited;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/config/user_profile_storage.dart';
 import 'package:atmos_trs_system/services/welcome_notification_service.dart';
 import 'package:atmos_trs_system/services/otp_service.dart';
 import 'package:atmos_trs_system/services/pending_registration_cache.dart';
+import 'package:atmos_trs_system/services/push_notification_service.dart';
 import 'package:atmos_trs_system/services/tourist_activity_firestore_sync.dart';
 import 'package:atmos_trs_system/services/tourist_registration_service.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart';
@@ -36,6 +39,11 @@ class RegistrationCompletionService {
       await OtpService.deleteOtp(uid);
     } catch (e) {
       debugPrint('[REG] deleteOtp after verify (non-fatal): $e');
+    }
+
+    // FCM token only after verified profile exists (avoids stub users/tourists docs).
+    if (!kIsWeb) {
+      unawaited(syncFcmTokenToUserDoc(uid));
     }
 
     final local = pending.localProfile;

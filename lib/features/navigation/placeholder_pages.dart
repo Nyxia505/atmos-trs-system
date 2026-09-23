@@ -1,9 +1,11 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:geolocator/geolocator.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
+import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
@@ -18,8 +20,11 @@ import 'package:atmos_trs_system/services/qr_checkin_service.dart';
 import 'package:atmos_trs_system/services/qr_scan_demo_guard.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
+import 'package:atmos_trs_system/services/pending_establishment_stay_storage.dart';
+import 'package:atmos_trs_system/services/establishment_stay_service.dart';
 import 'package:atmos_trs_system/screens/spot_checkin_screen.dart';
 import 'package:atmos_trs_system/screens/lgu_checkin_screen.dart';
+import 'package:atmos_trs_system/screens/establishment_stay_pending_screen.dart';
 import 'package:atmos_trs_system/screens/event_detail_screen.dart';
 import 'package:atmos_trs_system/services/announcement_notification_sync.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
@@ -255,6 +260,7 @@ class _ScanTabPageState extends State<ScanTabPage> {
   static const Duration _scanCooldown = Duration(seconds: 3);
   DateTime? _lastScanAt;
   bool _isProcessing = false;
+  String _processingLabel = 'Saving check-in...';
   bool _isStartingCamera = false;
 
   @override
@@ -307,11 +313,17 @@ class _ScanTabPageState extends State<ScanTabPage> {
 
   void _clearProcessing() {
     if (!mounted) return;
-    setState(() => _isProcessing = false);
+    setState(() {
+      _isProcessing = false;
+      _processingLabel = 'Saving check-in...';
+    });
   }
 
   void _onDetect(BarcodeCapture capture) {
     if (_isProcessing) return;
+    // Scan tab stays alive under IndexedStack; ignore detects while a result
+    // route (wait / receipt / check-in) is on top.
+    if (ModalRoute.of(context)?.isCurrent != true) return;
     final barcodes = capture.barcodes;
     if (barcodes.isEmpty) return;
     final raw = barcodes.first.rawValue;
@@ -320,107 +332,152 @@ class _ScanTabPageState extends State<ScanTabPage> {
       return;
     }
     _lastScanAt = DateTime.now();
-    setState(() => _isProcessing = true);
-    _processScannedPayload(raw);
+    setState(() {
+      _isProcessing = true;
+      _processingLabel = 'Reading QR…';
+    });
+    unawaited(_processScannedPayload(raw));
   }
 
   Future<void> _processScannedPayload(String raw) async {
-    // Try tourist QR: {"type":"tourist","tourist_id":"..."}
-    final touristId = _tryParseTouristQr(raw);
-    if (touristId != null && touristId.isNotEmpty) {
-      await _handleTouristQrScanned(touristId);
-      _clearProcessing();
-      return;
-    }
-
-    final lguPayload = parseLguQrPayload(raw);
-    if (lguPayload != null) {
-      await _handleLguQrScanned(lguPayload);
-      _clearProcessing();
-      return;
-    }
-
-    final spotPayload = parseSpotCheckInPayload(raw);
-    final String spotId;
-    final String? municipalityIdFromQr;
-    final double? qrEmbedLat;
-    final double? qrEmbedLng;
-    if (spotPayload != null && spotPayload.spotId.isNotEmpty) {
-      spotId = spotPayload.spotId;
-      municipalityIdFromQr = spotPayload.municipalityId;
-      qrEmbedLat = spotPayload.qrLat;
-      qrEmbedLng = spotPayload.qrLng;
-    } else {
-      final deepSpotId = extractSpotIdFromCheckInDeepLink(raw);
-      if (deepSpotId != null && deepSpotId.isNotEmpty) {
-        spotId = deepSpotId;
-        municipalityIdFromQr = null;
-        qrEmbedLat = null;
-        qrEmbedLng = null;
-      } else {
-        final parsed = parseSpotQrPayload(raw);
-        spotId = parsed.spotId;
-        municipalityIdFromQr = parsed.municipalityId;
-        qrEmbedLat = null;
-        qrEmbedLng = null;
-      }
-    }
-
-    if (spotId.isEmpty) {
-      if (mounted) _showError('Invalid QR code: no spot ID.');
-      _clearProcessing();
-      return;
-    }
-
-    // Temporary: allow check-ins in Oroquieta City only (disabled in beta).
-    if (!BetaTestingGuard.bypassValidation &&
-        municipalityIdFromQr != null &&
-        municipalityIdFromQr!.trim().isNotEmpty &&
-        normalizeMunicipalityId(municipalityIdFromQr!) != _kAllowedMunicipalityId) {
-      if (mounted) {
-        _showError(
-          'For now, QR check-in is available in Oroquieta City only. '
-          'Please scan an Oroquieta QR code.',
-        );
-      }
-      _clearProcessing();
-      return;
-    }
-
-    SpotInfo? spot = await QRCheckInService.getSpotById(
-      spotId,
-      municipalityId: municipalityIdFromQr,
-    );
-    if (spot == null) {
-      // Allow "unlisted" check-ins for Oroquieta even if the spot isn't registered in Firestore.
-      // This supports scans from web/images or prints not yet added to Tourist Spots.
-      final mid = normalizeMunicipalityId(
-        municipalityIdFromQr ?? _kAllowedMunicipalityId,
-      );
-      if (!BetaTestingGuard.bypassValidation && mid != _kAllowedMunicipalityId) {
-        if (mounted) {
-          _showError('Tourist spot not found. Use a valid ATMOS-TRS spot QR code.');
-        }
-        _clearProcessing();
+    try {
+      // Try tourist QR: {"type":"tourist","tourist_id":"..."}
+      final touristId = _tryParseTouristQr(raw);
+      if (touristId != null && touristId.isNotEmpty) {
+        await _handleTouristQrScanned(touristId);
         return;
       }
-      spot = SpotInfo(
-        spotId: spotId,
-        spotName: spotId.replaceAll('_', ' ').trim(),
-        municipality: BetaTestingGuard.isActive
-            ? BetaTestingGuard.dashboardMunicipalityName
-            : 'Oroquieta City',
-        municipalityId: BetaTestingGuard.isActive
-            ? BetaTestingGuard.dashboardMunicipalityId
-            : _kAllowedMunicipalityId,
+
+      final establishmentPayload = parseEstablishmentQrPayload(raw);
+      if (establishmentPayload != null) {
+        if (mounted) {
+          setState(() => _processingLabel = 'Creating stay request…');
+        }
+        await _handleEstablishmentQrScanned(establishmentPayload);
+        return;
+      }
+
+      final lguPayload = parseLguQrPayload(raw);
+      if (lguPayload != null) {
+        if (mounted) {
+          setState(() => _processingLabel = 'Saving check-in…');
+        }
+        await _handleLguQrScanned(lguPayload);
+        return;
+      }
+
+      if (mounted) {
+        setState(() => _processingLabel = 'Saving check-in…');
+      }
+
+      final spotPayload = parseSpotCheckInPayload(raw);
+      final String spotId;
+      final String? municipalityIdFromQr;
+      final double? qrEmbedLat;
+      final double? qrEmbedLng;
+      if (spotPayload != null && spotPayload.spotId.isNotEmpty) {
+        spotId = spotPayload.spotId;
+        municipalityIdFromQr = spotPayload.municipalityId;
+        qrEmbedLat = spotPayload.qrLat;
+        qrEmbedLng = spotPayload.qrLng;
+      } else {
+        final deepSpotId = extractSpotIdFromCheckInDeepLink(raw);
+        if (deepSpotId != null && deepSpotId.isNotEmpty) {
+          spotId = deepSpotId;
+          municipalityIdFromQr = null;
+          qrEmbedLat = null;
+          qrEmbedLng = null;
+        } else {
+          final parsed = parseSpotQrPayload(raw);
+          spotId = parsed.spotId;
+          municipalityIdFromQr = parsed.municipalityId;
+          qrEmbedLat = null;
+          qrEmbedLng = null;
+        }
+      }
+
+      if (spotId.isEmpty) {
+        if (mounted) _showError('Invalid QR code: no spot ID.');
+        return;
+      }
+
+      // Temporary: allow check-ins in Oroquieta City only (disabled in beta).
+      if (!BetaTestingGuard.bypassValidation &&
+          municipalityIdFromQr != null &&
+          municipalityIdFromQr!.trim().isNotEmpty &&
+          normalizeMunicipalityId(municipalityIdFromQr!) !=
+              _kAllowedMunicipalityId) {
+        if (mounted) {
+          _showError(
+            'For now, QR check-in is available in Oroquieta City only. '
+            'Please scan an Oroquieta QR code.',
+          );
+        }
+        return;
+      }
+
+      SpotInfo? spot = await QRCheckInService.getSpotById(
+        spotId,
+        municipalityId: municipalityIdFromQr,
       );
+      if (spot == null) {
+        // Allow "unlisted" check-ins for Oroquieta even if the spot isn't registered in Firestore.
+        // This supports scans from web/images or prints not yet added to Tourist Spots.
+        final mid = normalizeMunicipalityId(
+          municipalityIdFromQr ?? _kAllowedMunicipalityId,
+        );
+        if (!BetaTestingGuard.bypassValidation &&
+            mid != _kAllowedMunicipalityId) {
+          if (mounted) {
+            _showError(
+              'Tourist spot not found. Use a valid ATMOS-TRS spot QR code.',
+            );
+          }
+          return;
+        }
+        spot = SpotInfo(
+          spotId: spotId,
+          spotName: spotId.replaceAll('_', ' ').trim(),
+          municipality: BetaTestingGuard.isActive
+              ? BetaTestingGuard.dashboardMunicipalityName
+              : 'Oroquieta City',
+          municipalityId: BetaTestingGuard.isActive
+              ? BetaTestingGuard.dashboardMunicipalityId
+              : _kAllowedMunicipalityId,
+        );
+      }
+      // Continue existing spot flow below — inlined continuation via goto pattern.
+      await _finishSpotCheckInFromScan(
+        spot: spot,
+        municipalityIdFromQr: municipalityIdFromQr,
+        qrEmbedLat: qrEmbedLat,
+        qrEmbedLng: qrEmbedLng,
+        spotId: spotId,
+      );
+    } catch (e, st) {
+      debugPrint('[Scan] payload failed: $e\n$st');
+      if (mounted) _showError('Scan failed: $e');
+    } finally {
+      _clearProcessing();
     }
+  }
+
+  Future<void> _finishSpotCheckInFromScan({
+    required SpotInfo spot,
+    required String spotId,
+    String? municipalityIdFromQr,
+    double? qrEmbedLat,
+    double? qrEmbedLng,
+  }) async {
     final municipalityId = spot.municipalityId;
     final spotName = spot.spotName;
     final municipality = spot.municipality;
     if (municipalityId.isEmpty) {
-      if (mounted) _showError('This spot has no municipality set. Ask the tourism office to update it.');
-      _clearProcessing();
+      if (mounted) {
+        _showError(
+          'This spot has no municipality set. Ask the tourism office to update it.',
+        );
+      }
       return;
     }
 
@@ -428,7 +485,6 @@ class _ScanTabPageState extends State<ScanTabPage> {
         QrScanDemoGuard.municipalityRestrictionMessage(municipalityId);
     if (demoSpotMsg != null) {
       if (mounted) _showDemoRestrictionSnack(demoSpotMsg);
-      _clearProcessing();
       return;
     }
 
@@ -441,8 +497,6 @@ class _ScanTabPageState extends State<ScanTabPage> {
     final uid = await QRCheckInService.getCurrentUserId();
     final isGuestSpotScan = uid == null || uid.isEmpty;
 
-    // For unlisted scans (no coords), we still allow logging under Oroquieta.
-    // For listed spots with coords, keep strict QR+GPS validation for logged-in check-ins.
     if (hasCoords && !isGuestSpotScan && !BetaTestingGuard.bypassValidation) {
       final qrMismatchError = QRCheckInService.verifyQrCoordinatesMatchFirestore(
         qrLat: qrEmbedLat,
@@ -452,7 +506,6 @@ class _ScanTabPageState extends State<ScanTabPage> {
       );
       if (qrMismatchError != null) {
         if (mounted) _showError(qrMismatchError);
-        _clearProcessing();
         return;
       }
 
@@ -464,7 +517,6 @@ class _ScanTabPageState extends State<ScanTabPage> {
       );
       if (spotLocationError != null) {
         if (mounted) _showError(spotLocationError);
-        _clearProcessing();
         return;
       }
     }
@@ -483,28 +535,20 @@ class _ScanTabPageState extends State<ScanTabPage> {
         spotName: routed.spotName,
         municipality: routed.municipality,
       );
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
       Navigator.of(context, rootNavigator: true)
           .pushReplacementNamed('/qr-welcome');
-      _clearProcessing();
       return;
     }
 
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
     await Navigator.push<void>(
       context,
       MaterialPageRoute<void>(
-        builder: (_) => SpotCheckInScreen(spotInfo: spot!),
+        builder: (_) => SpotCheckInScreen(spotInfo: spot),
       ),
     );
-    if (mounted) {
-      _lastScanAt = DateTime.now();
-    }
-    _clearProcessing();
+    if (mounted) _lastScanAt = DateTime.now();
   }
 
   void _showError(String message) {
@@ -521,6 +565,158 @@ class _ScanTabPageState extends State<ScanTabPage> {
         backgroundColor: Colors.amber.shade800,
       ),
     );
+  }
+
+  Future<void> _handleEstablishmentQrScanned(
+    EstablishmentQrPayload payload,
+  ) async {
+    final eid = payload.establishmentId.trim();
+    if (eid.isEmpty) {
+      if (mounted) _showError('Invalid establishment QR.');
+      return;
+    }
+
+    debugPrint('[Scan] establishment QR id=$eid');
+
+    final est = await EstablishmentStayService.loadEstablishment(eid)
+        .timeout(const Duration(seconds: 10), onTimeout: () => null);
+    final businessName = (est?['businessName'] ??
+            est?['name'] ??
+            payload.businessName ??
+            'Establishment')
+        .toString();
+    final municipalityId = (est?['municipalityId'] ??
+            payload.municipalityId ??
+            '')
+        .toString();
+    final municipality = (est?['municipality'] ?? '').toString();
+
+    if (est == null) {
+      debugPrint('[Scan] establishment doc missing for $eid — using QR hints');
+    }
+
+    // Stay create requires Firebase Auth (not SessionStorage-only).
+    final authUid = FirebaseAuth.instance.currentUser?.uid;
+    if (authUid == null || authUid.isEmpty) {
+      await PendingSpotCheckInStorage.clear();
+      await PendingLguCheckInStorage.clear();
+      await PendingEstablishmentStayStorage.save(
+        establishmentId: eid,
+        municipalityId: municipalityId.isEmpty ? null : municipalityId,
+        businessName: businessName,
+        municipality: municipality.isEmpty ? null : municipality,
+      );
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true)
+          .pushReplacementNamed('/qr-welcome');
+      return;
+    }
+
+    try {
+      if (mounted) {
+        setState(() => _processingLabel = "Checking today's bookings…");
+      }
+      final existing = await EstablishmentStayService.findTodaysStayForTourist(
+        touristId: authUid,
+        establishmentId: eid,
+      );
+
+      var bookAgain = true;
+      if (existing != null && mounted) {
+        bookAgain = await _confirmBookAgainToday(
+              businessName: businessName,
+              existing: existing,
+            ) ??
+            false;
+        if (!bookAgain) {
+          await _openExistingEstablishmentStay(existing);
+          if (mounted) _lastScanAt = DateTime.now();
+          return;
+        }
+      }
+
+      if (mounted) {
+        setState(() => _processingLabel = 'Creating stay request…');
+      }
+      final stay = await EstablishmentStayService.createPendingStay(
+        establishmentId: eid,
+        municipalityId: municipalityId.isEmpty ? null : municipalityId,
+        businessNameHint: businessName,
+        municipalityHint: municipality.isEmpty ? null : municipality,
+      );
+      if (!mounted) return;
+      debugPrint(
+        '[Scan] stay pending ${stay.id} for AE $eid — opening wait screen',
+      );
+      // Await push so _isProcessing stays true (blocks camera re-detect).
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => EstablishmentStayPendingScreen(stayId: stay.id),
+        ),
+      );
+      if (mounted) _lastScanAt = DateTime.now();
+    } catch (e) {
+      debugPrint('[Scan] createPendingStay failed: $e');
+      if (mounted) _showError('Could not start stay request: $e');
+    }
+  }
+
+  /// Same-day AE rescan: null = dismissed, false = Not now, true = Book again.
+  Future<bool?> _confirmBookAgainToday({
+    required String businessName,
+    required EstablishmentStayRequest existing,
+  }) async {
+    final statusLine = existing.isConfirmed
+        ? 'Your stay was already confirmed today.'
+        : 'You already have a pending stay request today.';
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Already booked today'),
+        content: Text(
+          'You already booked with $businessName for today.\n\n'
+          '$statusLine\n\n'
+          'Book again for another transaction?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Not now'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppTheme.brandOrange,
+            ),
+            child: const Text('Book again'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openExistingEstablishmentStay(
+    EstablishmentStayRequest existing,
+  ) async {
+    if (!mounted) return;
+    if (existing.isConfirmed) {
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => EstablishmentStayReceiptScreen(stay: existing),
+        ),
+      );
+    } else {
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) =>
+              EstablishmentStayPendingScreen(stayId: existing.id),
+        ),
+      );
+    }
   }
 
   Future<void> _handleLguQrScanned(LguQrPayload payload) async {
@@ -774,8 +970,11 @@ class _ScanTabPageState extends State<ScanTabPage> {
                               CircularProgressIndicator(color: AppTheme.primary),
                               const SizedBox(height: 16),
                               Text(
-                                'Saving check-in...',
-                                style: TextStyle(color: Colors.white, fontSize: 16),
+                                _processingLabel,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                ),
                               ),
                             ],
                           ),
@@ -2080,7 +2279,11 @@ class VrToursTabPage extends StatelessWidget {
                   title: 'Oroquieta City Plaza',
                 ),
                 icon: const Icon(Icons.play_circle_filled, size: 22),
-                label: const Text('Oroquieta City Plaza VR'),
+                label: Text(
+                  VrDownloadAppPrompt.ctaLabel(
+                    mobileLabel: 'Oroquieta City Plaza VR',
+                  ),
+                ),
                 style: FilledButton.styleFrom(
                   backgroundColor: AppTheme.primary,
                   foregroundColor: Colors.white,

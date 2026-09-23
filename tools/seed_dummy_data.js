@@ -29,6 +29,9 @@ async function main() {
   console.log(
     `Seeding dummy report data for ${municipalityId} (focus: ${reportFocus})`,
   );
+  console.log(
+    '(Tip: for live dashboard charts use: node tools/seed_dashboard_analytics.js)',
+  );
   const response = await callSeed({municipalityId, reportFocus});
   const data = response.data;
   console.log('seedTourismDummyData response:', JSON.stringify(data, null, 2));

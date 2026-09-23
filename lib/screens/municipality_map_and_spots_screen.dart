@@ -6,10 +6,13 @@ import 'package:atmos_trs_system/data/tourist_spot_image_catalog.dart';
 import 'package:atmos_trs_system/data/tourist_spots_by_municipality.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/models/municipality.dart';
+import 'package:atmos_trs_system/models/establishment_map_pin.dart';
 import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
 import 'package:atmos_trs_system/features/explore/explore_data.dart' show TouristSpot;
 import 'package:atmos_trs_system/features/tourism/tourist_spot_detail_screen.dart';
+import 'package:atmos_trs_system/services/establishment_map_pins_service.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart';
+import 'package:atmos_trs_system/screens/establishment_public_detail_screen.dart';
 import 'package:atmos_trs_system/widgets/misamis_occidental_explore_map.dart';
 import 'package:atmos_trs_system/widgets/tourist_spot_thumbnail.dart';
 
@@ -161,21 +164,44 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
                 bottomLeft: Radius.circular(12),
                 bottomRight: Radius.circular(12),
               ),
-              child: MisamisOccidentalExploreMap(
-                key: ValueKey('municipality-map-${m.id}'),
-                spots: mapSpots,
-                centerLat: m.lat,
-                centerLng: m.lng,
-                initialZoom: _kMapZoom,
-                onMapReady: (move) => move(m.lat, m.lng, zoom: _kMapZoom),
-                onSpotTap: (fs) {
-                  final spot = _spotForFirestore(fs);
-                  if (spot == null) return;
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => TouristSpotDetailScreen(spot: spot),
-                    ),
+              child: StreamBuilder<List<EstablishmentMapPin>>(
+                stream: EstablishmentMapPinsService.watchActivePins(),
+                builder: (context, aeSnap) {
+                  final muniKey = normalizeMunicipalityId(m.id);
+                  final muniNameKey = normalizeMunicipalityId(m.name);
+                  final aePins = (aeSnap.data ?? const <EstablishmentMapPin>[])
+                      .where((p) {
+                    final key = normalizeMunicipalityId(p.municipality);
+                    return key == muniKey || key == muniNameKey;
+                  }).toList();
+                  return MisamisOccidentalExploreMap(
+                    key: ValueKey('municipality-map-${m.id}'),
+                    spots: mapSpots,
+                    establishmentPins: aePins,
+                    centerLat: m.lat,
+                    centerLng: m.lng,
+                    initialZoom: _kMapZoom,
+                    onMapReady: (move) => move(m.lat, m.lng, zoom: _kMapZoom),
+                    onSpotTap: (fs) {
+                      final spot = _spotForFirestore(fs);
+                      if (spot == null) return;
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              TouristSpotDetailScreen(spot: spot),
+                        ),
+                      );
+                    },
+                    onEstablishmentTap: (pin) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              EstablishmentPublicDetailScreen(pin: pin),
+                        ),
+                      );
+                    },
                   );
                 },
               ),

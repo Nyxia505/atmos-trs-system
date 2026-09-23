@@ -214,7 +214,11 @@ class _BundledVrTourScreenState extends State<BundledVrTourScreen> {
     if (kIsWeb) return;
     final controller = _buildController();
     _controller = controller;
-    loadBundledVrTour(controller);
+    // Defer load so the WebView widget is attached before navigation.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      loadBundledVrTour(controller);
+    });
   }
 
   WebViewController _buildController() {
@@ -252,6 +256,8 @@ class _BundledVrTourScreenState extends State<BundledVrTourScreen> {
             if (mounted) setState(() => _loading = false);
           },
           onWebResourceError: (err) {
+            // Ignore subresource failures (e.g. CDN Marzipano briefly failing).
+            if (err.isForMainFrame == false) return;
             if (mounted) {
               setState(() {
                 _loading = false;

@@ -19,10 +19,20 @@ class VisitRecordImageResolver {
 
   static String? _assetForKey(String key) {
     if (key.isEmpty) return null;
+    final normalized = _normalizeKey(key);
+    final mid = normalizeMunicipalityId(
+      normalized.startsWith('lgu_') ? normalized.substring(4) : normalized,
+    );
+
+    // Prefer flat assets/images heroes — reliable for Visited thumbnails.
+    if (mid.isNotEmpty) {
+      final flat = TouristSpotImageCatalog.kMunicipalityAssetById[mid];
+      if (flat != null) return SupabaseStorageConfig.resolve(flat);
+    }
+
     final direct = TouristSpotImageCatalog.bundledAssetFor(spotId: key);
     if (direct != null) return SupabaseStorageConfig.resolve(direct);
 
-    final normalized = _normalizeKey(key);
     final normHit = TouristSpotImageCatalog.bundledAssetFor(spotId: normalized);
     if (normHit != null) return SupabaseStorageConfig.resolve(normHit);
 
@@ -96,6 +106,13 @@ class VisitRecordImageResolver {
     if (stored != null &&
         stored.isNotEmpty &&
         TouristSpotImageCatalog.isValidDisplayUrl(stored)) {
+      // Old LGU visits may store gallery paths that 404 — upgrade to flat heroes.
+      final lower = stored.toLowerCase();
+      if (lower.contains('municipalities/') ||
+          entry.spotId.toLowerCase().startsWith('lgu_')) {
+        final mun = _municipalityAssetForVisit(entry);
+        if (mun != null && mun.isNotEmpty) return mun;
+      }
       return SupabaseStorageConfig.resolve(stored);
     }
 
@@ -198,10 +215,14 @@ class VisitRecordImageResolver {
 
       final nameChanged = nextName != v.spotName;
       final categoryChanged = nextCategory != v.category;
+      final existingLower = (existing ?? '').toLowerCase();
+      final needsImageUpgrade = existing == null ||
+          existing.isEmpty ||
+          !TouristSpotImageCatalog.isValidDisplayUrl(existing) ||
+          existingLower.contains('municipalities/') ||
+          v.spotId.toLowerCase().startsWith('lgu_');
       final imageChanged = img.isNotEmpty &&
-          (existing == null ||
-              existing.isEmpty ||
-              !TouristSpotImageCatalog.isValidDisplayUrl(existing)) &&
+          needsImageUpgrade &&
           img != existing;
 
       if (!nameChanged && !categoryChanged && !imageChanged) {

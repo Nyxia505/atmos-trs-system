@@ -42,13 +42,17 @@ import 'package:atmos_trs_system/utils/csv_file_download.dart';
 import 'package:atmos_trs_system/utils/checkin_visitor_count.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
 import 'package:atmos_trs_system/utils/production_data_filters.dart';
+import 'package:atmos_trs_system/utils/visit_stats.dart';
 import 'package:atmos_trs_system/services/vr_tour_firestore_service.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:atmos_trs_system/widgets/dot_report_export_panel.dart';
+import 'package:atmos_trs_system/widgets/lgu_submit_report_to_optaca_panel.dart';
+import 'package:atmos_trs_system/widgets/lgu_establishment_registry_panel.dart';
 import 'package:atmos_trs_system/services/dae3_auto_report_service.dart';
 import 'package:atmos_trs_system/widgets/lgu_events_panel.dart';
 import 'package:atmos_trs_system/services/lgu_event_service.dart';
+import 'package:atmos_trs_system/widgets/lgu_debug_data_dialogs.dart';
 
 class LguDashboard extends StatefulWidget {
   const LguDashboard({super.key});
@@ -164,10 +168,31 @@ class _LguDashboardState extends State<LguDashboard>
   );
 
   Widget _wrapTourismPanel(Widget child, {EdgeInsets? padding}) {
-    return Container(
-      padding: padding ?? EdgeInsets.all(_isMobile ? 14 : 16),
-      decoration: _tourismPanelDecoration(),
-      child: child,
+    return SizedBox(
+      width: double.infinity,
+      child: Container(
+        padding: padding ?? EdgeInsets.all(_isMobile ? 14 : 16),
+        decoration: _tourismPanelDecoration(),
+        child: child,
+      ),
+    );
+  }
+
+  /// Makes DataTables stretch to the available width (avoids shrink-wrap white gaps).
+  Widget _fullWidthScrollableTable({required Widget table}) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final minW = constraints.maxWidth.isFinite && constraints.maxWidth > 0
+            ? constraints.maxWidth
+            : 0.0;
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minWidth: minW),
+            child: table,
+          ),
+        );
+      },
     );
   }
 
@@ -179,8 +204,8 @@ class _LguDashboardState extends State<LguDashboard>
   bool _hasCachedStats = false;
   String? _errorMessage;
 
-  /// Newest check-ins only — enough for dashboard lists/KPIs without full history.
-  static const int _qrCheckInFetchLimit = 100;
+  /// Recent check-ins for LGU lists/KPIs (raised so seed/debug stats stay accurate).
+  static const int _qrCheckInFetchLimit = 500;
   static const int _touristDocIdChunkSize = 10;
 
   // Dashboard stats
@@ -231,7 +256,6 @@ class _LguDashboardState extends State<LguDashboard>
   final _touristsSearchController = TextEditingController();
   final _dashboardSearchController = TextEditingController();
   // Filter states
-  String _checkInStatusFilter = 'All';
   String _checkInDateFilter = 'All';
   String _spotCategoryFilter = 'All';
   String _spotVrFilter = 'All';
@@ -262,6 +286,7 @@ class _LguDashboardState extends State<LguDashboard>
     _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
     _NavItem(icon: Icons.qr_code_scanner_rounded, label: 'Tourist Visits'),
     _NavItem(icon: Icons.place_rounded, label: 'Tourist Spots'),
+    _NavItem(icon: Icons.hotel_rounded, label: 'Establishments'),
     _NavItem(icon: Icons.qr_code_2_rounded, label: 'Spot QR Codes'),
     _NavItem(icon: Icons.people_alt_rounded, label: 'Registered Tourists'),
     _NavItem(icon: Icons.analytics_rounded, label: 'Analytics'),
@@ -269,12 +294,14 @@ class _LguDashboardState extends State<LguDashboard>
     _NavItem(icon: Icons.settings_rounded, label: 'Settings'),
   ];
 
-  static const int _mainNavCount = 6; // Dashboard through Analytics
+  static const int _mainNavCount = 7; // Dashboard through Analytics
   static const int _touristSpotsNavIndex = 2;
-  static const int _spotQRCodesIndex = 3;
-  static const int _analyticsIndex = 5;
-  static const int _eventsIndex = 6;
-  static const int _settingsIndex = 7;
+  static const int _establishmentsIndex = 3;
+  static const int _spotQRCodesIndex = 4;
+  static const int _registeredTouristsIndex = 5;
+  static const int _analyticsIndex = 6;
+  static const int _eventsIndex = 7;
+  static const int _settingsIndex = 8;
 
   final List<String> _categories = [
     'All',
@@ -347,7 +374,9 @@ class _LguDashboardState extends State<LguDashboard>
             .toList(),
       ),
     );
-    return sorted.length > 100 ? sorted.take(100).toList() : sorted;
+    return sorted.length > _qrCheckInFetchLimit
+        ? sorted.take(_qrCheckInFetchLimit).toList()
+        : sorted;
   }
 
   Future<void> _loadMunicipalityCheckInsAndTourists({
@@ -383,12 +412,6 @@ class _LguDashboardState extends State<LguDashboard>
       unawaited(_saveLguStatsCache());
     }
 
-    final checkInUserIds = _checkIns
-        .map((c) => c['userId']?.toString().trim())
-        .whereType<String>()
-        .where((id) => id.isNotEmpty)
-        .toSet();
-
     await Future.wait<void>([
       () async {
         try {
@@ -396,7 +419,6 @@ class _LguDashboardState extends State<LguDashboard>
             await _loadRegisteredTouristsForMunicipality(
               firestore: firestore,
               queryIds: queryIds,
-              checkInUserIds: checkInUserIds,
             ),
           );
           _tourists = _filterRealTourists(
@@ -1000,18 +1022,19 @@ class _LguDashboardState extends State<LguDashboard>
         final registered = await _loadRegisteredTouristsForMunicipality(
           firestore: FirebaseFirestore.instance,
           queryIds: queryIds,
-          checkInUserIds: checkInUserIds,
         );
         _tourists = _filterRealTourists(registered);
-      } else if (missingIds.isNotEmpty) {
+      }
+      if (missingIds.isNotEmpty) {
+        // Profiles for visit rows only — do not add out-of-address tourists
+        // to the Registered tourists list.
         final extra = await _fetchTouristDocsByIds(
           FirebaseFirestore.instance,
           missingIds,
-          queryIds: queryIds,
-          checkInUserIds: checkInUserIds,
         );
-        if (extra.isNotEmpty) {
-          _tourists = _filterRealTourists([..._tourists, ...extra]);
+        for (final row in extra) {
+          final uid = row['id']?.toString().trim() ?? '';
+          if (uid.isNotEmpty) _touristProfileByUid[uid] = row;
         }
       }
     } catch (e) {
@@ -1146,7 +1169,7 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
-  /// Reloads municipality-scoped registered tourists (registration + check-in visitors).
+  /// Reloads municipality-scoped registered tourists (signup address only).
   Future<void> _reloadMunicipalityRegisteredTourists(
     List<String> queryIds,
   ) async {
@@ -1156,20 +1179,10 @@ class _LguDashboardState extends State<LguDashboard>
         _touristFirestoreReadsBlocked) {
       return;
     }
-    final checkInUserIds = _checkIns
-        .map(
-          (c) =>
-              c['userId']?.toString().trim() ??
-              c['tourist_id']?.toString().trim(),
-        )
-        .whereType<String>()
-        .where((id) => id.isNotEmpty)
-        .toSet();
     try {
       final registered = await _loadRegisteredTouristsForMunicipality(
         firestore: FirebaseFirestore.instance,
         queryIds: queryIds,
-        checkInUserIds: checkInUserIds,
       );
       if (!mounted) return;
       setState(() {
@@ -1532,42 +1545,36 @@ class _LguDashboardState extends State<LguDashboard>
     }
     if (missing.isEmpty) return;
 
-    final checkInUserIds = _checkIns
-        .map(
-          (c) =>
-              c['userId']?.toString().trim() ??
-              c['tourist_id']?.toString().trim() ??
-              '',
-        )
-        .where((id) => id.isNotEmpty)
-        .toSet();
-    final queryIds = municipalityIdsForQuery(_storedMunicipalityId);
     final extraTourists = await _fetchTouristDocsByIds(
       FirebaseFirestore.instance,
       missing,
-      queryIds: queryIds,
-      checkInUserIds: checkInUserIds,
     );
     if (extraTourists.isNotEmpty) {
       for (final row in extraTourists) {
         final uid = row['id']?.toString().trim() ?? '';
         if (uid.isNotEmpty) _touristProfileByUid[uid] = row;
       }
-      _tourists = _mergeTouristVisitsFromCheckIns([
-        ..._tourists,
-        ...extraTourists,
-      ]);
-      _totalTourists = _tourists.length;
+      final queryIds = municipalityIdsForQuery(_storedMunicipalityId);
+      final addressMatched = extraTourists.where((row) {
+        return RegistrationMunicipalityResolver.touristMatchesMunicipality(
+          tourist: row,
+          queryIds: queryIds,
+        );
+      }).toList();
+      if (addressMatched.isNotEmpty) {
+        _tourists = _filterRealTourists(
+          _mergeTouristVisitsFromCheckIns([..._tourists, ...addressMatched]),
+        );
+        _totalTourists = _tourists.length;
+      }
     }
   }
 
   /// Batched `tourists` doc reads (avoids sequential N+1 gets).
   Future<List<Map<String, dynamic>>> _fetchTouristDocsByIds(
     FirebaseFirestore firestore,
-    Set<String> uids, {
-    required List<String> queryIds,
-    required Set<String> checkInUserIds,
-  }) async {
+    Set<String> uids,
+  ) async {
     if (uids.isEmpty || _touristFirestoreReadsBlocked) return const [];
     final out = <Map<String, dynamic>>[];
     final idList = uids.toList(growable: false);
@@ -1584,20 +1591,13 @@ class _LguDashboardState extends State<LguDashboard>
           if (!doc.exists || doc.data().isEmpty) continue;
           final row = <String, dynamic>{'id': doc.id, ...doc.data()};
           if (ProductionDataFilters.isDummyTourist(row)) continue;
-          if (RegistrationMunicipalityResolver.touristMatchesMunicipality(
-            tourist: row,
-            queryIds: queryIds,
-            checkInUserIds: checkInUserIds,
-          )) {
-            out.add(row);
-          }
+          out.add(row);
         }
       } catch (e) {
         if (_isFirestorePermissionDenied(e)) {
           _onTouristFirestorePermissionDenied(e);
           break;
         }
-        // Fallback: per-doc gets for this chunk if whereIn is unsupported.
         for (final uid in chunk) {
           try {
             final doc = await firestore
@@ -1608,13 +1608,7 @@ class _LguDashboardState extends State<LguDashboard>
             if (!doc.exists || doc.data() == null) continue;
             final row = <String, dynamic>{'id': doc.id, ...doc.data()!};
             if (ProductionDataFilters.isDummyTourist(row)) continue;
-            if (RegistrationMunicipalityResolver.touristMatchesMunicipality(
-              tourist: row,
-              queryIds: queryIds,
-              checkInUserIds: checkInUserIds,
-            )) {
-              out.add(row);
-            }
+            out.add(row);
           } catch (e2) {
             if (_isFirestorePermissionDenied(e2)) {
               _onTouristFirestorePermissionDenied(e2);
@@ -1710,15 +1704,15 @@ class _LguDashboardState extends State<LguDashboard>
 
   void _recomputeDashboardStats() {
     final today = DateTime.now();
-    _todayCheckIns = sumCheckInVisitors(
-      _filterRealCheckIns(_checkIns).where((c) {
-        final d = _parseCheckInTimestamp(c);
-        if (d == null) return false;
-        return d.year == today.year &&
-            d.month == today.month &&
-            d.day == today.day;
-      }),
-    );
+    final todayRows = _filterRealCheckIns(_checkIns).where((c) {
+      final d = _parseCheckInTimestamp(c);
+      if (d == null) return false;
+      return d.year == today.year &&
+          d.month == today.month &&
+          d.day == today.day;
+    });
+    // KPI stores visitor headcount (party size); check-in session count is separate in UI.
+    _todayCheckIns = VisitStats.fromCheckIns(todayRows).visitors;
     _mergeVisitorsFromCheckIns();
     _recentActivity = _filterRealCheckIns(_checkIns)
         .take(5)
@@ -1881,7 +1875,8 @@ class _LguDashboardState extends State<LguDashboard>
     final min = dates.reduce((a, b) => a.isBefore(b) ? a : b);
     final max = dates.reduce((a, b) => a.isAfter(b) ? a : b);
     final days = max.difference(min).inDays + 1;
-    return days > 0 ? (_realCheckIns.length / days).round() : _realCheckIns.length;
+    final visitors = sumCheckInVisitors(_realCheckIns);
+    return days > 0 ? (visitors / days).round() : visitors;
   }
 
   String get _lguAnalyticsPeakHour {
@@ -1890,7 +1885,7 @@ class _LguDashboardState extends State<LguDashboard>
       final d = _parseCheckInTimestamp(c);
       if (d != null) {
         final h = d.hour;
-        byHour[h] = (byHour[h] ?? 0) + 1;
+        byHour[h] = (byHour[h] ?? 0) + checkInVisitorCount(c);
       }
     }
     if (byHour.isEmpty) return '?';
@@ -1993,7 +1988,7 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   Widget _buildMobileBottomNav() {
-    const tabIndices = [0, 1, 2, 5];
+    const tabIndices = [0, 1, 2, 6];
     final selected = tabIndices.contains(_selectedIndex)
         ? tabIndices.indexOf(_selectedIndex)
         : 0;
@@ -2231,12 +2226,11 @@ class _LguDashboardState extends State<LguDashboard>
     _totalVRTours = _vrTours.length;
   }
 
-  /// Registered visitors + check-in profiles for this LGU (no full-collection scan).
-  /// Loads real Firestore `tourists` by registrationMunicipalityId, city name, and check-in UIDs.
+  /// Registered tourists for this LGU by signup address (not QR check-in UIDs).
+  /// Loads Firestore `tourists` by registrationMunicipalityId and city name.
   Future<List<Map<String, dynamic>>> _loadRegisteredTouristsForMunicipality({
     required FirebaseFirestore firestore,
     required List<String> queryIds,
-    required Set<String> checkInUserIds,
   }) async {
     final byId = <String, Map<String, dynamic>>{};
     if (_touristFirestoreReadsBlocked) return byId.values.toList();
@@ -2247,7 +2241,6 @@ class _LguDashboardState extends State<LguDashboard>
       if (!RegistrationMunicipalityResolver.touristMatchesMunicipality(
         tourist: row,
         queryIds: queryIds,
-        checkInUserIds: checkInUserIds,
       )) {
         return;
       }
@@ -2300,23 +2293,6 @@ class _LguDashboardState extends State<LguDashboard>
       }
     }
     await Future.wait(queryFutures);
-
-    if (_touristFirestoreReadsBlocked) return byId.values.toList();
-
-    final missingUids =
-        checkInUserIds.where((uid) => !byId.containsKey(uid)).toSet();
-    if (missingUids.isNotEmpty) {
-      final extra = await _fetchTouristDocsByIds(
-        firestore,
-        missingUids,
-        queryIds: queryIds,
-        checkInUserIds: checkInUserIds,
-      );
-      for (final row in extra) {
-        final id = row['id']?.toString() ?? '';
-        if (id.isNotEmpty) byId[id] = row;
-      }
-    }
 
     return byId.values.toList();
   }
@@ -2614,13 +2590,40 @@ class _LguDashboardState extends State<LguDashboard>
       0 => _buildDashboardContent(),
       1 => _buildCheckInsContent(),
       2 => _buildTouristSpotsContent(),
+      _establishmentsIndex => _buildEstablishmentsContent(),
       _spotQRCodesIndex => _buildSpotQRCodesContent(),
-      4 => _buildTouristsContent(),
+      _registeredTouristsIndex => _buildTouristsContent(),
       _analyticsIndex => _buildAnalyticsContent(),
       _eventsIndex => _buildEventsContent(),
       _settingsIndex => _buildSettingsContent(),
       _ => _buildDashboardContent(),
     };
+  }
+
+  Widget _buildEstablishmentsContent() {
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      color: _primaryOrange,
+      child: _buildFramedContentShell(
+        title: 'Establishments',
+        subtitle:
+            'Accommodation & tourism businesses in ${_municipalityName ?? 'this municipality'} '
+            '(view only — OPTACA approves registrations)',
+        body: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.all(_isMobile ? 10 : 12),
+          child: _wrapTourismPanel(
+            LguEstablishmentRegistryPanel(
+              municipalityId: _storedMunicipalityId,
+              municipalityName: _municipalityName,
+              primaryColor: _primaryOrange,
+              textDark: _textDark,
+              textMuted: _textMuted,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildFramedContentShell({
@@ -2911,7 +2914,7 @@ class _LguDashboardState extends State<LguDashboard>
                     final query = q.trim();
                     if (query.isEmpty) return;
                     _touristsSearchController.text = query;
-                    setState(() => _selectedIndex = 4);
+                    setState(() => _selectedIndex = _registeredTouristsIndex);
                   },
                   style: GoogleFonts.inter(fontSize: 14, color: _textDark),
                   decoration: InputDecoration(
@@ -3264,7 +3267,7 @@ class _LguDashboardState extends State<LguDashboard>
               ),
               TextButton(
                 onPressed: () => setState(() {
-                  _selectedIndex = 4;
+                  _selectedIndex = _registeredTouristsIndex;
                   if (_isMobile) _isSidebarExpanded = false;
                 }),
                 style: TextButton.styleFrom(
@@ -3832,11 +3835,35 @@ class _LguDashboardState extends State<LguDashboard>
     final priorWeek = _checkInsInDayRange(7, 14);
     final weekDelta = weekVisits - priorWeek;
 
+    final todayRows = _filterRealCheckIns(_checkIns).where((c) {
+      final d = _parseCheckInTimestamp(c);
+      if (d == null) return false;
+      final now = DateTime.now();
+      return d.year == now.year && d.month == now.month && d.day == now.day;
+    });
+    final todayStats = VisitStats.fromCheckIns(todayRows);
+    final weekCheckInRows = _filterRealCheckIns(_checkIns).where((c) {
+      final d = _parseCheckInTimestamp(c);
+      if (d == null) return false;
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final day = DateTime(d.year, d.month, d.day);
+      final diff = today.difference(day).inDays;
+      return diff >= 0 && diff < 7;
+    });
+    final weekStats = VisitStats(
+      checkIns: weekCheckInRows.length,
+      visitors: weekVisits,
+    );
+    final cappedNote = _checkIns.length >= _qrCheckInFetchLimit
+        ? ' (latest $_qrCheckInFetchLimit)'
+        : '';
+
     final stats = [
       _StatCard(
-        title: 'Today\'s Visits',
-        value: '$_todayCheckIns',
-        subtitle: 'QR check-ins today',
+        title: 'Today\'s visitors',
+        value: '${todayStats.visitors}',
+        subtitle: '${todayStats.asVisitorsSubtitle}$cappedNote',
         icon: Icons.qr_code_scanner_rounded,
         color: _kpiOrange,
         tint: _tintOrange,
@@ -3857,7 +3884,7 @@ class _LguDashboardState extends State<LguDashboard>
         trendLabel: 'â†‘ +$touristTrendPct% from last month',
         trendPositive: true,
         onTap: () => setState(() {
-          _selectedIndex = 4;
+          _selectedIndex = _registeredTouristsIndex;
           if (_isMobile) _isSidebarExpanded = false;
         }),
       ),
@@ -3876,11 +3903,15 @@ class _LguDashboardState extends State<LguDashboard>
         trendPositive: inactiveSpots == 0,
       ),
       _StatCard(
-        title: 'Visits 7 days',
-        value: '$weekVisits',
-        subtitle: activeVrCount > 0
-            ? '$activeVrCount spots with VR'
-            : 'Last 7 days in this LGU',
+        title: 'Visitors · 7 days',
+        value: '${weekStats.visitors}',
+        subtitle: weekStats.checkIns == 0
+            ? (activeVrCount > 0
+                ? '$activeVrCount spots with VR'
+                : 'Last 7 days in this LGU')
+            : '${weekStats.asVisitorsSubtitle}'
+                '${activeVrCount > 0 ? ' · $activeVrCount VR' : ''}'
+                '$cappedNote',
         icon: Icons.insights_rounded,
         color: _kpiPurple,
         tint: _tintPurple,
@@ -3947,7 +3978,7 @@ class _LguDashboardState extends State<LguDashboard>
       final day = DateTime(date.year, date.month, date.day);
       final diff = today.difference(day).inDays;
       if (diff >= startExclusiveDaysAgo && diff < endExclusiveDaysAgo) {
-        count++;
+        count += checkInVisitorCount(c);
       }
     }
     return count;
@@ -3969,7 +4000,7 @@ class _LguDashboardState extends State<LguDashboard>
       final day = DateTime(date.year, date.month, date.day);
       final diff = today.difference(day).inDays;
       if (diff >= 0 && diff < 7) {
-        counts[6 - diff] += 1;
+        counts[6 - diff] += checkInVisitorCount(c).toDouble();
       }
     }
     return counts;
@@ -4434,12 +4465,9 @@ class _LguDashboardState extends State<LguDashboard>
           (c['spot_name']?.toString() ?? '').toLowerCase().contains(searchQuery) ||
           (c['spotId']?.toString() ?? '').toLowerCase().contains(searchQuery);
 
-      final matchesStatus =
-          _checkInStatusFilter == 'All' || c['status'] == _checkInStatusFilter;
-
       final matchesDate = _matchesCheckInDateFilter(c);
 
-      return matchesSearch && matchesStatus && matchesDate;
+      return matchesSearch && matchesDate;
     }).toList();
 
     final munLabel =
@@ -4451,26 +4479,30 @@ class _LguDashboardState extends State<LguDashboard>
       child: _buildFramedContentShell(
         title: 'Tourist Visits',
         subtitle:
-            'QR check-ins in $munLabel â€” names hidden for data privacy',
+            'QR check-ins in $munLabel — names hidden for data privacy',
         body: Padding(
           padding: EdgeInsets.fromLTRB(
-            _isMobile ? 12 : 16,
+            _isMobile ? 10 : 12,
+            10,
+            _isMobile ? 10 : 12,
             12,
-            _isMobile ? 12 : 16,
-            16,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _buildLguVisitsSummaryBar(sumCheckInVisitors(filteredCheckIns)),
+              _buildLguVisitsSummaryBar(
+                VisitStats.fromCheckIns(filteredCheckIns),
+              ),
               const SizedBox(height: 10),
               _buildCheckInDateFilterBar(),
               const SizedBox(height: 12),
               Expanded(
                 child: Container(
+                  width: double.infinity,
                   decoration: _tourismPanelDecoration(),
                   clipBehavior: Clip.antiAlias,
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Padding(
                         padding: EdgeInsets.fromLTRB(
@@ -4503,14 +4535,25 @@ class _LguDashboardState extends State<LguDashboard>
                                   _buildCheckInsListMobile(filteredCheckIns),
                                 ],
                               )
-                            : SingleChildScrollView(
-                                padding: const EdgeInsets.fromLTRB(
-                                  12,
-                                  12,
-                                  12,
-                                  16,
-                                ),
-                                child: _buildCheckInsTable(filteredCheckIns),
+                            : LayoutBuilder(
+                                builder: (context, constraints) {
+                                  return SingleChildScrollView(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      12,
+                                      12,
+                                      12,
+                                      16,
+                                    ),
+                                    child: ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        minWidth: constraints.maxWidth - 24,
+                                      ),
+                                      child: _buildCheckInsTable(
+                                        filteredCheckIns,
+                                      ),
+                                    ),
+                                  );
+                                },
                               ),
                       ),
                     ],
@@ -4524,19 +4567,27 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
-  Widget _buildLguVisitsSummaryBar(int visibleCount) {
+  Widget _buildLguVisitsSummaryBar(VisitStats visible) {
     final munLabel =
         (_municipalityName ?? _storedMunicipalityId ?? 'Your LGU').trim();
-    final pending = _checkIns.where((c) => c['status'] == 'Pending').length;
-    final verified = _checkIns.where((c) => c['status'] == 'Verified').length;
     final today = _checkIns.where((c) {
       final t = _parseCheckInTimestamp(c);
       if (t == null) return false;
       final now = DateTime.now();
       return t.year == now.year && t.month == now.month && t.day == now.day;
     }).length;
+    final loaded = VisitStats.fromCheckIns(_checkIns);
+    final capped = _checkIns.length >= _qrCheckInFetchLimit
+        ? ' · latest $_qrCheckInFetchLimit'
+        : '';
+    final headline = visible.visitors == visible.checkIns
+        ? '${visible.checkIns} of ${loaded.checkIns} check-ins$capped'
+        : '${visible.visitors} of ${loaded.visitors} visitors · '
+            '${visible.checkIns}/${loaded.checkIns} check-ins$capped';
 
-    return Container(
+    return SizedBox(
+      width: double.infinity,
+      child: Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -4563,7 +4614,7 @@ class _LguDashboardState extends State<LguDashboard>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '$visibleCount of ${sumCheckInVisitors(_checkIns)} visitors',
+                  headline,
                   style: const TextStyle(
                     color: _textDark,
                     fontSize: 13,
@@ -4571,7 +4622,7 @@ class _LguDashboardState extends State<LguDashboard>
                   ),
                 ),
                 Text(
-                  'Today $today Â· Verified $verified Â· Pending $pending',
+                  'Today $today check-ins',
                   style: const TextStyle(color: _textMuted, fontSize: 11),
                 ),
               ],
@@ -4611,6 +4662,7 @@ class _LguDashboardState extends State<LguDashboard>
             ),
           ),
         ],
+      ),
       ),
     );
   }
@@ -4658,63 +4710,34 @@ class _LguDashboardState extends State<LguDashboard>
       );
     }
 
-    Widget statusChip(String option) {
-      final selected = _checkInStatusFilter == option;
-      return FilterChip(
-        label: Text(option == 'All' ? 'All status' : option),
-        selected: selected,
-        showCheckmark: false,
-        onSelected: (_) => setState(() => _checkInStatusFilter = option),
-        selectedColor: _primaryOrange.withValues(alpha: 0.18),
-        labelStyle: TextStyle(
-          color: selected ? _primaryOrange : _textDark,
-          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-          fontSize: 12,
+    return SizedBox(
+      width: double.infinity,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _panelBorder),
         ),
-        side: BorderSide(
-          color: selected
-              ? _primaryOrange.withValues(alpha: 0.45)
-              : _panelBorder,
-        ),
-        backgroundColor: Colors.white,
-        visualDensity: VisualDensity.compact,
-      );
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: _panelBorder),
-      ),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          const Text(
-            'Filter by visit:',
-            style: TextStyle(
-              color: _textMuted,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+        child: Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            const Text(
+              'Filter by visit:',
+              style: TextStyle(
+                color: _textMuted,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
             ),
-          ),
-          modeChip('All'),
-          modeChip('Today'),
-          modeChip('7 days'),
-          modeChip('30 days'),
-          Container(
-            width: 1,
-            height: 22,
-            color: _panelBorder,
-            margin: const EdgeInsets.symmetric(horizontal: 4),
-          ),
-          statusChip('All'),
-          statusChip('Verified'),
-          statusChip('Pending'),
-        ],
+            modeChip('All'),
+            modeChip('Today'),
+            modeChip('7 days'),
+            modeChip('30 days'),
+          ],
+        ),
       ),
     );
   }
@@ -4758,34 +4781,17 @@ class _LguDashboardState extends State<LguDashboard>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(child: _buildCheckInTouristCell(c)),
-                        const SizedBox(width: 8),
-                        _buildStatusBadge(c['status']),
-                      ],
-                    ),
+                    _buildCheckInTouristCell(c),
                     const SizedBox(height: 8),
-                    Text(c['location'], style: TextStyle(color: _textMuted)),
+                    Text(
+                      c['location']?.toString() ?? '',
+                      style: TextStyle(color: _textMuted),
+                    ),
                     const SizedBox(height: 4),
                     Text(
                       _formatTime(c['timestamp']),
                       style: TextStyle(color: _textMuted, fontSize: 12),
                     ),
-                    if (c['status'] == 'Pending') ...[
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: () => _verifyCheckIn(c),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _primaryOrange,
-                          ),
-                          child: const Text('Verify'),
-                        ),
-                      ),
-                    ],
                   ],
                 ),
               ),
@@ -4805,75 +4811,77 @@ class _LguDashboardState extends State<LguDashboard>
       letterSpacing: 0.35,
     );
 
-    const minTableWidth = 760.0;
+    const minTableWidth = 720.0;
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(20),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: _kAnalyticsSurfaceBorder, width: 1),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 14,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final cw = constraints.maxWidth;
-            final tableWidth = cw.isFinite && cw > 0
-                ? (cw < minTableWidth ? minTableWidth : cw)
-                : minTableWidth;
+    return SizedBox(
+      width: double.infinity,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(color: _kAnalyticsSurfaceBorder, width: 1),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.05),
+                blurRadius: 14,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final cw = constraints.maxWidth;
+              final tableWidth = cw.isFinite && cw > minTableWidth
+                  ? cw
+                  : minTableWidth;
 
-            return SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: SizedBox(
-                width: tableWidth,
-                child: DataTable(
-                  headingRowColor: WidgetStateProperty.all(headerBg),
-                  headingRowHeight: 48,
-                  dataRowMinHeight: 54,
-                  dataRowMaxHeight: 88,
-                  horizontalMargin: 20,
-                  columnSpacing: 24,
-                  headingTextStyle: tableHeadingStyle,
-                  dataTextStyle: const TextStyle(
-                    color: _textDark,
-                    fontSize: 13,
-                  ),
-                  dividerThickness: 1,
-                  border: TableBorder(
-                    horizontalInside: BorderSide(
-                      color: _kAnalyticsSurfaceBorder,
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: tableWidth,
+                  child: DataTable(
+                    headingRowColor: WidgetStateProperty.all(headerBg),
+                    headingRowHeight: 48,
+                    dataRowMinHeight: 54,
+                    dataRowMaxHeight: 88,
+                    horizontalMargin: 20,
+                    columnSpacing: 28,
+                    headingTextStyle: tableHeadingStyle,
+                    dataTextStyle: const TextStyle(
+                      color: _textDark,
+                      fontSize: 13,
                     ),
-                    top: BorderSide(color: _kAnalyticsSurfaceBorder),
-                    bottom: BorderSide(color: _kAnalyticsSurfaceBorder),
-                  ),
-                  columns: [
-                    const DataColumn(label: Text('Tourist ID')),
-                    const DataColumn(label: Text('Location')),
-                    const DataColumn(label: Text('Time')),
-                    const DataColumn(label: Text('Status')),
-                    DataColumn(
-                      label: SizedBox(
-                        width: 88,
-                        child: Center(
-                          child: Text('Actions', style: tableHeadingStyle),
+                    dividerThickness: 1,
+                    border: TableBorder(
+                      horizontalInside: BorderSide(
+                        color: _kAnalyticsSurfaceBorder,
+                      ),
+                      top: BorderSide(color: _kAnalyticsSurfaceBorder),
+                      bottom: BorderSide(color: _kAnalyticsSurfaceBorder),
+                    ),
+                    columns: [
+                      const DataColumn(label: Text('Tourist ID')),
+                      const DataColumn(label: Text('Location')),
+                      const DataColumn(label: Text('Time')),
+                      DataColumn(
+                        label: SizedBox(
+                          width: 88,
+                          child: Center(
+                            child: Text('Actions', style: tableHeadingStyle),
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                  rows: [
-                    for (var i = 0; i < checkIns.length; i++)
-                      _buildCheckInDataRow(checkIns[i], i, stripe),
-                  ],
+                    ],
+                    rows: [
+                      for (var i = 0; i < checkIns.length; i++)
+                        _buildCheckInDataRow(checkIns[i], i, stripe),
+                    ],
+                  ),
                 ),
-              ),
-            );
-          },
+              );
+            },
+          ),
         ),
       ),
     );
@@ -4901,7 +4909,6 @@ class _LguDashboardState extends State<LguDashboard>
             style: const TextStyle(color: _textMuted, fontSize: 13),
           ),
         ),
-        DataCell(_buildStatusBadge(c['status']?.toString() ?? '')),
         DataCell(
           SizedBox(
             width: 88,
@@ -4991,25 +4998,12 @@ class _LguDashboardState extends State<LguDashboard>
             _buildDetailRow('Tourist ID', id),
             _buildDetailRow(
               'Location',
-              checkIn['location']?.toString() ?? 'â€”',
+              checkIn['location']?.toString() ?? '—',
             ),
             _buildDetailRow('Time', _formatTime(checkIn['timestamp'])),
-            _buildDetailRow(
-              'Status',
-              checkIn['status']?.toString() ?? 'â€”',
-            ),
           ],
         ),
         actions: [
-          if (checkIn['status'] == 'Pending')
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(context);
-                _verifyCheckIn(checkIn);
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: _primaryOrange),
-              child: const Text('Verify'),
-            ),
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Close', style: TextStyle(color: _textMuted)),
@@ -5036,50 +5030,6 @@ class _LguDashboardState extends State<LguDashboard>
         ],
       ),
     );
-  }
-
-  Future<void> _verifyCheckIn(Map<String, dynamic> checkIn) async {
-    final docId = checkIn['id']?.toString();
-    if (docId == null || docId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Cannot verify: missing check-in ID'),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
-      return;
-    }
-
-    try {
-      if (Firebase.apps.isNotEmpty) {
-        await FirebaseFirestore.instance.collection('qr_checkins').doc(docId).update({
-          'status': 'verified',
-          'verifiedAt': FieldValue.serverTimestamp(),
-          'verifiedBy': FirebaseAuth.instance.currentUser?.email ?? '',
-        });
-      }
-      if (!mounted) return;
-      setState(() {
-        final index = _checkIns.indexWhere((c) => c['id'] == docId);
-        if (index != -1) {
-          _checkIns[index]['status'] = 'Verified';
-        }
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Visit verified successfully'),
-          backgroundColor: _primaryOrange,
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Could not verify visit: $e'),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
-    }
   }
 
   // ==================== TOURIST SPOTS SECTION ====================
@@ -5538,7 +5488,7 @@ class _LguDashboardState extends State<LguDashboard>
             'and manage QR codes',
         body: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.all(_isMobile ? 12 : 16),
+          padding: EdgeInsets.all(_isMobile ? 10 : 12),
           child: _wrapTourismPanel(
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -6613,9 +6563,8 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   Widget _buildSpotsTable(List<TouristSpot> spots) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: DataTable(
+    return _fullWidthScrollableTable(
+      table: DataTable(
         headingRowColor: WidgetStateProperty.all(Colors.grey.shade100),
         dataTextStyle: const TextStyle(color: _textDark, fontSize: 13),
         dividerThickness: 0,
@@ -7527,7 +7476,7 @@ class _LguDashboardState extends State<LguDashboard>
                 'registered here. Province-wide list is on the Governor dashboard.',
         body: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.all(_isMobile ? 12 : 16),
+          padding: EdgeInsets.all(_isMobile ? 10 : 12),
           child: _wrapTourismPanel(
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -7718,7 +7667,9 @@ class _LguDashboardState extends State<LguDashboard>
   Widget _buildTouristsTable(List<Map<String, dynamic>> tourists) {
     final sorted = _sortedTouristsByRegistrationDate(tourists);
 
-    return Container(
+    return SizedBox(
+      width: double.infinity,
+      child: Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
@@ -7732,9 +7683,8 @@ class _LguDashboardState extends State<LguDashboard>
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(20),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: DataTable(
+        child: _fullWidthScrollableTable(
+          table: DataTable(
             headingRowColor: WidgetStateProperty.all(Colors.grey.shade50),
             headingTextStyle: const TextStyle(
               color: _textDark,
@@ -7752,7 +7702,6 @@ class _LguDashboardState extends State<LguDashboard>
               DataColumn(label: Text('Date')),
               DataColumn(label: Text('Time')),
               DataColumn(label: Text('Visits')),
-              DataColumn(label: Text('Status')),
               DataColumn(label: Text('Actions')),
             ],
             rows: sorted.map((t) {
@@ -7762,7 +7711,6 @@ class _LguDashboardState extends State<LguDashboard>
               final regDt = _registeredDateTimeNullableFromTourist(t);
               final isLocal =
                   t['isLocal'] == true || t['localOrForeign'] == 'Local';
-              final status = t['status']?.toString() ?? 'Active';
 
               return DataRow(
                 cells: [
@@ -7843,30 +7791,6 @@ class _LguDashboardState extends State<LguDashboard>
                     ),
                   ),
                   DataCell(
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: status == 'Active'
-                            ? Colors.green.withValues(alpha: 0.12)
-                            : Colors.red.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(28),
-                      ),
-                      child: Text(
-                        status,
-                        style: TextStyle(
-                          color: status == 'Active'
-                              ? const Color(0xFF16A34A)
-                              : const Color(0xFFDC2626),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ),
-                  DataCell(
                     IconButton(
                       onPressed: () => _showTouristDetailsDialog(t),
                       icon: const Icon(
@@ -7887,6 +7811,7 @@ class _LguDashboardState extends State<LguDashboard>
             }).toList(),
           ),
         ),
+      ),
       ),
     );
   }
@@ -7930,7 +7855,6 @@ class _LguDashboardState extends State<LguDashboard>
     final isLocal =
         tourist['isLocal'] == true || tourist['localOrForeign'] == 'Local';
     final visits = tourist['totalVisits'] ?? tourist['visits'] ?? 0;
-    final status = tourist['status']?.toString() ?? 'Active';
     final origin = _getTouristOrigin(tourist);
 
     showDialog(
@@ -7986,27 +7910,6 @@ class _LguDashboardState extends State<LguDashboard>
                         ),
                       ),
                       const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: status == 'Active'
-                              ? Colors.green.withValues(alpha: 0.15)
-                              : Colors.red.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          status,
-                          style: TextStyle(
-                            color: status == 'Active'
-                                ? Colors.green
-                                : Colors.red,
-                            fontSize: 10,
-                          ),
-                        ),
-                      ),
                     ],
                   ),
                 ],
@@ -8420,7 +8323,7 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   // ==================== ANALYTICS (LGU-scoped) ====================
-  /// 0 = Overview (insights + charts), 1 = DOT exports
+  /// 0 = Overview, 1 = DOT exports, 2 = Submit to OPTACA
   int _analyticsTab = 0;
 
   Widget _buildAnalyticsContent() {
@@ -8474,15 +8377,20 @@ class _LguDashboardState extends State<LguDashboard>
                 duration: const Duration(milliseconds: 220),
                 switchInCurve: Curves.easeOut,
                 switchOutCurve: Curves.easeIn,
-                child: _analyticsTab == 0
-                    ? KeyedSubtree(
-                        key: const ValueKey('analytics-overview'),
-                        child: _buildAnalyticsOverviewScroll(city),
-                      )
-                    : KeyedSubtree(
-                        key: const ValueKey('analytics-exports'),
-                        child: _buildAnalyticsExportsScroll(),
-                      ),
+                child: switch (_analyticsTab) {
+                  0 => KeyedSubtree(
+                      key: const ValueKey('analytics-overview'),
+                      child: _buildAnalyticsOverviewScroll(city),
+                    ),
+                  1 => KeyedSubtree(
+                      key: const ValueKey('analytics-exports'),
+                      child: _buildAnalyticsExportsScroll(),
+                    ),
+                  _ => KeyedSubtree(
+                      key: const ValueKey('analytics-optaca'),
+                      child: _buildAnalyticsOptacaSubmitScroll(),
+                    ),
+                },
               ),
             ),
           ],
@@ -8558,7 +8466,32 @@ class _LguDashboardState extends State<LguDashboard>
           chip('Overview', Icons.insights_rounded, 0),
           const SizedBox(width: 6),
           chip('DOT exports', Icons.description_outlined, 1),
+          const SizedBox(width: 6),
+          chip('OPTACA', Icons.send_rounded, 2),
         ],
+      ),
+    );
+  }
+
+  Widget _buildAnalyticsOptacaSubmitScroll() {
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: EdgeInsets.fromLTRB(
+        _isMobile ? 16 : 24,
+        16,
+        _isMobile ? 16 : 24,
+        28,
+      ),
+      child: LguSubmitReportToOptacaPanel(
+        municipalityId: _storedMunicipalityId ?? '',
+        municipalityName: (_municipalityName ?? _storedMunicipalityId ?? 'LGU')
+            .trim(),
+        checkIns: _realCheckIns,
+        submittedByName: _profileName,
+        parseTimestamp: _parseCheckInTimestamp,
+        primaryColor: _primaryOrange,
+        textDark: _textDark,
+        textMuted: _textMuted,
       ),
     );
   }
@@ -8663,7 +8596,7 @@ class _LguDashboardState extends State<LguDashboard>
           ),
           const SizedBox(height: 4),
           const Text(
-            'Official Supabase templates filled from your LGU check-ins only',
+            'Preview filled rows from your LGU check-ins, then download official Excel',
             style: TextStyle(color: _textMuted, fontSize: 12.5, height: 1.35),
           ),
           const SizedBox(height: 14),
@@ -8674,7 +8607,7 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   Widget _buildAnalyticsIntroBanner(String city) {
-    final visits = _realCheckIns.length;
+    final stats = VisitStats.fromCheckIns(_realCheckIns);
     final tourists = _realTouristsList.length;
     return Container(
       width: double.infinity,
@@ -8727,7 +8660,7 @@ class _LguDashboardState extends State<LguDashboard>
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    _analyticsStatChip('$visits recent visits'),
+                    _analyticsStatChip(stats.summaryLine),
                     _analyticsStatChip('$tourists registered'),
                     _analyticsStatChip(
                       '${_touristSpots.where((s) => s.status == 'Active').length} active spots',
@@ -9584,6 +9517,15 @@ class _LguDashboardState extends State<LguDashboard>
               ),
             ]),
             const SizedBox(height: 16),
+            _buildTourismSettingsSection('Debug data', [
+              _buildTourismSettingsTileWithSubtitle(
+                'Debug data hub',
+                Icons.analytics_outlined,
+                'Charts, seed, and full purge (tourists + check-ins + establishment stays)',
+                _openLguDebugDataHub,
+              ),
+            ]),
+            const SizedBox(height: 16),
             _buildTourismSettingsSection('About', [
               _buildTourismSettingsTile(
                 'System Information',
@@ -10366,6 +10308,23 @@ class _LguDashboardState extends State<LguDashboard>
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  void _openLguDebugDataHub() {
+    final munId = (_storedMunicipalityId ?? '').trim();
+    final munName =
+        (_municipalityName ?? munId).trim().isEmpty
+            ? 'this LGU'
+            : (_municipalityName ?? munId).trim();
+    unawaited(
+      LguDebugDataDialogs.openHub(
+        context: context,
+        municipalityId: munId,
+        municipalityName: munName,
+        spots: _touristSpots.isNotEmpty ? _touristSpots : _allTouristSpots,
+        onDone: () => unawaited(_loadData()),
       ),
     );
   }

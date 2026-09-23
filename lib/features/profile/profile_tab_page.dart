@@ -12,6 +12,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:atmos_trs_system/services/profile_photo_hydration.dart';
 import 'package:atmos_trs_system/services/tourist_profile_hydration.dart';
 import 'package:atmos_trs_system/services/tourist_activity_firestore_sync.dart';
+import 'package:atmos_trs_system/services/tourist_profile_photo_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
 import 'package:atmos_trs_system/features/navigation/tourist_web_layout.dart';
@@ -19,9 +20,12 @@ import 'package:atmos_trs_system/screens/forgot_password_screen.dart';
 import 'package:atmos_trs_system/navigation/post_logout_navigation.dart';
 import 'package:atmos_trs_system/widgets/app_logout_button.dart';
 import 'package:atmos_trs_system/features/profile/widgets/theme_color_picker_sheet.dart';
+import 'package:atmos_trs_system/utils/web_face_camera_capture.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 
 /// Account tab — tourist profile.
 class ProfileTabPage extends StatefulWidget {
@@ -38,6 +42,8 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
   bool _personalExpanded = false;
   bool _addressExpanded = false;
   bool _otpVerified = false;
+  bool _uploadingPhoto = false;
+  final ImagePicker _imagePicker = ImagePicker();
 
   Color get _textPrimary => AppTheme.textPrimary;
   Color get _textMuted => AppTheme.unselectedMuted;
@@ -76,6 +82,142 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
       _otpVerified = otpVerified;
       _isRefreshing = false;
     });
+  }
+
+  Future<void> _changeProfilePhoto() async {
+    if (_uploadingPhoto) return;
+    final uid =
+        AuthConfig.currentUserUid ??
+        FirebaseAuth.instance.currentUser?.uid ??
+        await SessionStorage.getStoredUser();
+    if (!mounted) return;
+    if (uid == null || uid.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Sign in again to update your photo.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: const Text('Take photo'),
+                onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('Choose from gallery'),
+                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (source == null || !mounted) return;
+
+    Uint8List? bytes;
+    try {
+      if (source == ImageSource.camera && kIsWeb) {
+        bytes = await showWebFaceCameraCapture(context);
+      } else {
+        final picked = await _imagePicker.pickImage(
+          source: source,
+          maxWidth: 1200,
+          maxHeight: 1200,
+          imageQuality: 88,
+          preferredCameraDevice: CameraDevice.front,
+        );
+        if (picked != null) bytes = await picked.readAsBytes();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not pick image: $e'),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    if (bytes == null || bytes.isEmpty || !mounted) return;
+
+    setState(() => _uploadingPhoto = true);
+    try {
+      final result = await TouristProfilePhotoService.uploadBytes(
+        uid: uid,
+        rawBytes: bytes,
+      );
+      if (!mounted) return;
+      if (result == null || !result.hasPhoto) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Could not save profile photo. Try again.'),
+            backgroundColor: Colors.red.shade700,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      await _loadProfile();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.usedFirestoreFallback
+                ? 'Profile photo saved.'
+                : 'Profile photo updated.',
+          ),
+          backgroundColor: Colors.green.shade700,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Upload failed: $e'),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _uploadingPhoto = false);
+    }
+  }
+
+  /// Stable label for the profile header — never "Guest" while signed in if
+  /// Auth displayName or email local-part is available.
+  String _displayNameForHeader(UserProfile? profile) {
+    final fromProfile = profile?.fullName.trim() ?? '';
+    if (fromProfile.isNotEmpty) return fromProfile;
+
+    final auth = FirebaseAuth.instance.currentUser;
+    final display = auth?.displayName?.trim() ?? '';
+    if (display.isNotEmpty) return display;
+
+    final email = (auth?.email ?? profile?.email ?? '').trim();
+    if (email.contains('@')) {
+      final local = email.split('@').first;
+      if (local.isNotEmpty) {
+        return local[0].toUpperCase() + local.substring(1);
+      }
+    }
+
+    if (_isRefreshing) return '';
+    return 'Guest';
   }
 
   double _horizontalPadding(BuildContext context) {
@@ -661,6 +803,9 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
                   size: 64,
                   ringWidth: 2.5,
                   ringColor: onHeader,
+                  showEditBadge: true,
+                  isBusy: _uploadingPhoto,
+                  onTap: _changeProfilePhoto,
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -668,7 +813,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        profile?.fullName ?? 'Guest',
+                        _displayNameForHeader(profile),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(

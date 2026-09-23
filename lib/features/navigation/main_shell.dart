@@ -48,9 +48,12 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     final uid =
         AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
     if (uid != null && uid.isNotEmpty) {
-      UserActivityService.bindToUser(uid);
-      TouristActivityFirestoreSync.resetMergeCache();
-      TouristActivityFirestoreSync.mergeFromCloud(uid);
+      unawaited(() async {
+        await UserActivityService.bindToUser(uid);
+        TouristActivityFirestoreSync.resetMergeCache();
+        await TouristActivityFirestoreSync.mergeFromCloud(uid);
+        await UserActivityService.syncVisitedSpotsFromQrCheckins();
+      }());
       AnnouncementNotificationSync.syncPublishedAnnouncementsToLocal(
         userId: uid,
       );
@@ -96,6 +99,10 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
 
   void _onNavTap(int index) {
     setState(() => _currentIndex = index);
+    if (index == 0) {
+      // Returning to Home — refresh Visited count from check-ins.
+      unawaited(UserActivityService.syncVisitedSpotsFromQrCheckins());
+    }
     if (index == 3) {
       _badge.refresh();
     }

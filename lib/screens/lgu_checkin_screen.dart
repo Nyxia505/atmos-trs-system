@@ -1,13 +1,13 @@
 import 'dart:async' show unawaited;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/app_theme_controller.dart';
 import 'package:atmos_trs_system/config/atmos_brand_typography.dart';
 import 'package:atmos_trs_system/services/qr_checkin_ui.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
+import 'package:atmos_trs_system/widgets/party_demographic_fields.dart';
 
 /// Check-in after scanning an LGU (municipality) QR — records visit for that LGU in [qr_checkins].
 class LguCheckInScreen extends StatefulWidget {
@@ -28,26 +28,14 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
   static const Color _textDark = Color(0xFF111827);
   static const Color _textMuted = Color(0xFF6B7280);
   bool _submitting = false;
-  final TextEditingController _partyController =
-      TextEditingController(text: '1');
-  final TextEditingController _femaleController =
-      TextEditingController(text: '0');
-  final TextEditingController _maleController =
-      TextEditingController(text: '0');
-
-  int _parseCount(TextEditingController c, {int fallback = 0}) {
-    final n = int.tryParse(c.text.trim());
-    if (n == null || n < 0) return fallback;
-    return n > 99 ? 99 : n;
-  }
-
-  int get _partySize {
-    final n = _parseCount(_partyController, fallback: 1);
-    return n < 1 ? 1 : n;
-  }
-
-  int get _femaleCount => _parseCount(_femaleController);
-  int get _maleCount => _parseCount(_maleController);
+  final _demoKey = GlobalKey<PartyDemographicFieldsState>();
+  PartyDemographicValue _demo = const PartyDemographicValue(
+    partySize: 1,
+    maleCount: 0,
+    femaleCount: 1,
+    filipinoCount: 1,
+    foreignCount: 0,
+  );
 
   void _clearSubmitting() {
     if (mounted && _submitting) {
@@ -57,9 +45,6 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
 
   @override
   void dispose() {
-    _partyController.dispose();
-    _femaleController.dispose();
-    _maleController.dispose();
     super.dispose();
   }
 
@@ -81,12 +66,14 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
 
   Future<void> _checkIn() async {
     if (_submitting) return;
-    if (_femaleCount + _maleCount != _partySize) {
+    final demo = _demoKey.currentState?.value ?? _demo;
+    if (!demo.isValid) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Female + male must equal total party ($_partySize).',
+              demo.validationMessage ??
+                  'Enter party size with Male/Female and Filipino/Foreign counts.',
             ),
             behavior: SnackBarBehavior.floating,
             backgroundColor: Colors.red.shade700,
@@ -118,9 +105,9 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
         spotId: spotId,
         spotName: spotName,
         municipality: widget.displayName,
-        partySize: _partySize,
-        femaleCount: _femaleCount,
-        maleCount: _maleCount,
+        partySize: demo.partySize,
+        femaleCount: demo.femaleCount,
+        maleCount: demo.maleCount,
         onBeforeDialog: _clearSubmitting,
       );
       if (ok && mounted) {
@@ -351,74 +338,19 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
           ),
           const SizedBox(height: 4),
           const Text(
-            'Enter total guests, then female and male. Include yourself.',
+            'Enter total guests, then gender and Filipino/Foreign. '
+            'One side auto-fills the other. Include yourself.',
             style: TextStyle(color: _textMuted, fontSize: 13, height: 1.4),
           ),
           const SizedBox(height: 12),
-          TextField(
-            controller: _partyController,
-            keyboardType: TextInputType.number,
-            onChanged: (_) => setState(() {}),
-            inputFormatters: [
-              FilteringTextInputFormatter.digitsOnly,
-              LengthLimitingTextInputFormatter(2),
-            ],
-            decoration: InputDecoration(
-              labelText: 'Total party',
-              hintText: 'e.g. 5',
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _femaleController,
-                  keyboardType: TextInputType.number,
-                  onChanged: (_) => setState(() {}),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(2),
-                  ],
-                  decoration: InputDecoration(
-                    labelText: 'Female',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: TextField(
-                  controller: _maleController,
-                  keyboardType: TextInputType.number,
-                  onChanged: (_) => setState(() {}),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(2),
-                  ],
-                  decoration: InputDecoration(
-                    labelText: 'Male',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Total: $_partySize ($_femaleCount female · $_maleCount male)',
-            style: TextStyle(
-              color: accent,
-              fontWeight: FontWeight.w700,
-              fontSize: 13,
-            ),
+          PartyDemographicFields(
+            key: _demoKey,
+            initialPartySize: 1,
+            initialMale: 0,
+            initialFemale: 1,
+            initialFilipino: 1,
+            initialForeign: 0,
+            onChanged: (v) => setState(() => _demo = v),
           ),
         ],
       ),

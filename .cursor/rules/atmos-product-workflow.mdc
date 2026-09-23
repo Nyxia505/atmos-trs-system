@@ -1,0 +1,66 @@
+---
+description: Atmos TRS role workflows, DOT forms, establishment QR, OPTACA boundaries
+globs: lib/screens/tourism_dashboard.dart,lib/screens/provincial_tourism_dashboard.dart,lib/screens/establishment_**,lib/services/lgu_**,lib/services/dae3_**,lib/services/establishment_**,lib/widgets/lgu_**,lib/widgets/dot_**,lib/widgets/optaca_**,lib/widgets/*report*,lib/utils/dot_**,lib/utils/dae3_**,lib/utils/provincial_report_**,lib/utils/checkin_report_**,lib/config/supabase_report_**,functions/**,firestore.rules,tools/seed_**,tools/cleanup_**,docs/**REPORT**,docs/**DOT**,docs/atmos-forms**
+alwaysApply: false
+---
+
+# Atmos TRS — LGU + reports workflow
+
+Primary work **begins at LGU tourism and DOT/OPTACA reporting**. Upstream (tourist signup, QR) and downstream (Governor) are context unless the user expands scope.
+
+Full product agreements: `docs/atmos-forms-and-establishment-qr.md`.
+
+## Role → surface
+
+| Role | Starts at | Notes |
+|------|-----------|--------|
+| LGU tourism | `tourism_dashboard.dart` | Primary — tourists, analytics, DOT export, OPTACA submit, debug seed |
+| Provincial / OPTACA | Provincial dashboard + `optaca_report_review_panel` | Inbox/review primary |
+| Tourist | Home / QR | Visit data source; seed mid-report work |
+| Governor | Governor dashboard | Aggregates from real/seeded data |
+| Establishment | `establishment_dashboard_*` | Staff confirm queue for AE stays (`establishment_stay_service`) |
+
+Keep Filipino vs foreign, municipality vs province, spot vs LGU vs **establishment** check-ins distinguishable.
+
+## Data flow
+
+Tourist registered → QR (attraction / LGU / later establishment) → LGU analytics → DOT preview + Excel/PDF → optional OPTACA package → Governor aggregates.
+
+## DOT export (Analytics)
+
+| Rule | Detail |
+|------|--------|
+| Preview | **Every** catalog form — best-fill from current data + gaps |
+| Downloads | **Excel** and **PDF** of that filled content (primary CTAs) |
+| Blank official | Secondary/advanced only — not the happy path |
+| Pipeline | One aggregate → preview → Excel → PDF |
+| Attraction data | Feeds VAR family |
+| Confirmed AE stays | Feed DAE family (attraction proxy only if labeled as gap/proxy) |
+
+Extend `dot_report_preview`, `dot_report_export_service`, `dot_report_pdf_export`, `DotReportExportPanel` — do not fork exporters.
+
+## Establishment stay QR (implemented — extend, don’t rebuild)
+
+1. Tourist scans establishment QR → Firestore **pending** stay request.
+2. Logged-in staff sees queue/popup on establishment dashboard → enters DAE fields → **Confirm**.
+3. Status → **confirmed**; tourist sees receipt/history of that transaction.
+4. Reports/DOT count **confirmed** only. Pending ignored.
+5. Same day: attraction check-in + hotel stay = **two records**.
+
+Do not overload attraction `qr_checkins` without `qr_type` / `establishmentId`. Prefer stay-request collection linked to `accommodation_establishments`. Extend fillers when stay fields feed DAE.
+
+## Integration boundary
+
+- Prefer **seeding** when demos need volume (`docs/TEST_ACCOUNTS_REPORTS.md`).
+- Auth/routing shared — confirm before role→route edits.
+- Firestore rules + tagged seeds (`seedTag`, `@misocc-seed.ph`).
+- Supabase = report templates/storage only.
+- Reuse EmailJS + FCM.
+
+## Temporary seeding
+
+LGU Debug data → `tools/seed_dashboard_analytics.js` → `tools/seed_dummy_data.js` → cleanup tools. Seeds are replaceable.
+
+## Do not confuse context with tasks
+
+`Tourist → QR → LGU → OPTACA → Governor` does not mean implement every hop. Start in LGU / DOT / OPTACA (or establishment stay slice when asked).

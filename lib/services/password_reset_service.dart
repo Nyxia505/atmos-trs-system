@@ -5,13 +5,17 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:atmos_trs_system/services/auth_service.dart';
+import 'package:atmos_trs_system/services/push_notification_service.dart';
 import 'package:atmos_trs_system/utils/email_utils.dart';
 import 'package:atmos_trs_system/utils/signup_field_validation.dart';
 
 /// Password reset: OTP + push/SMS/email (Cloud Functions) with Firebase email-link fallback.
 class PasswordResetService {
   PasswordResetService._();
- 
+
+  /// Must match Cloud Function `PASSWORD_RESET_OTP_MINUTES`.
+  static const int otpExpiryMinutes = 5;
+
   static FirebaseFunctions get _functions =>
       FirebaseFunctions.instanceFor(region: 'asia-southeast1');
 
@@ -60,6 +64,9 @@ class PasswordResetService {
 
   /// Step 1: prefer OTP via Cloud Functions; falls back to Firebase reset email if
   /// functions are not deployed or cannot deliver the code.
+  ///
+  /// On mobile, sends this device's FCM token so the Cloud Function can push the
+  /// 6-digit code as a heads-up on **this** phone (not only Inbox/Spam).
   static Future<PasswordResetOtpRequestResult> requestOtp(String email) async {
     if (Firebase.apps.isEmpty) {
       throw StateError('Firebase is not available.');
@@ -69,10 +76,23 @@ class PasswordResetService {
       throw ArgumentError('Please enter a valid email address.');
     }
 
+    String? deviceFcmToken;
+    if (!kIsWeb) {
+      try {
+        deviceFcmToken = await getDeviceFcmTokenForOtpDelivery();
+      } catch (e, st) {
+        debugPrint('[PasswordReset] device FCM token: $e\n$st');
+      }
+    }
+
     try {
       final callable = _functions.httpsCallable('requestPasswordResetOtp');
+      final payload = <String, dynamic>{'email': normalized};
+      if (deviceFcmToken != null && deviceFcmToken.isNotEmpty) {
+        payload['fcmToken'] = deviceFcmToken;
+      }
       final result = await callable
-          .call<Map<String, dynamic>>({'email': normalized})
+          .call<Map<String, dynamic>>(payload)
           .timeout(_callableTimeout);
       final data = Map<String, dynamic>.from(result.data);
       final parsed = PasswordResetOtpRequestResult.fromMap(data, email: normalized);
@@ -222,26 +242,37 @@ class PasswordResetService {
           'Open the email, tap the link, and set a new password.';
     }
     if (!result.accountFound) {
+      // Anti-enumeration: same soft copy whether or not the email is registered.
       return 'If an account exists for ${maskEmailForDisplay(result.email)}, '
-          'you will receive a 6-digit code by email, SMS, or phone notification.';
+          'you will receive a 6-digit code by phone notification and email. '
+          'Codes expire in $otpExpiryMinutes minutes.';
     }
     if (result.pushSent && result.emailSent && result.smsSent) {
-      return 'Code sent! Check your phone notification, SMS, and email inbox.';
+      return 'Code sent! Check your phone notification first. '
+          'SMS and email inbox are backups. Expires in $otpExpiryMinutes minutes.';
     }
     if (result.smsSent && result.emailSent) {
-      return 'Code sent via SMS and email. Check your phone and inbox.';
+      return 'Code sent via SMS and email. Check your phone and Inbox. '
+          'Expires in $otpExpiryMinutes minutes.';
     }
     if (result.pushSent && result.emailSent) {
-      return 'Code sent! Check your phone notification first, then your email inbox.';
+      return 'Code sent! Check your phone notification first. '
+          'A backup copy is in your email Inbox '
+          '(Spam only if you do not see it there). '
+          'Expires in $otpExpiryMinutes minutes.';
     }
     if (result.pushSent) {
-      return 'Check your phone notification for the 6-digit code.';
+      return 'Check your phone notification for the 6-digit code. '
+          'Expires in $otpExpiryMinutes minutes.';
     }
     if (result.smsSent) {
-      return 'Code sent via SMS to your registered mobile number.';
+      return 'Code sent via SMS to your registered mobile number. '
+          'Expires in $otpExpiryMinutes minutes.';
     }
     if (result.emailSent) {
-      return 'Code sent to your email inbox. Check spam if you do not see it.';
+      return 'Code sent to your email Inbox. '
+          'Open Inbox first — check Spam or Promotions only if it is missing. '
+          'Expires in $otpExpiryMinutes minutes.';
     }
     return 'Could not deliver the code. Tap Resend code or try again later.';
   }
@@ -320,6 +351,6 @@ class PasswordResetOtpRequestResult {
       pushSent: map['pushSent'] == true,
       emailSent: map['emailSent'] == true,
       smsSent: map['smsSent'] == true,
-    );
+     );
   }
 }

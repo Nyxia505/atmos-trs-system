@@ -15,6 +15,7 @@ import 'package:atmos_trs_system/services/push_notification_service.dart';
 import 'package:atmos_trs_system/services/registration_rollback_service.dart';
 import 'package:atmos_trs_system/utils/email_utils.dart';
 import 'package:atmos_trs_system/utils/signup_field_validation.dart';
+import 'package:atmos_trs_system/widgets/dial_code_mobile_field.dart';
 import 'package:atmos_trs_system/widgets/web_glass_auth_scaffold.dart';
 
 /// Self-registration for municipal LGU tourism office accounts.
@@ -34,6 +35,7 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
 
+  String _contactDialCode = '+63';
   String? _municipalityId;
   late final List<Municipality> _municipalities =
       List<Municipality>.unmodifiable(getMisamisOccidentalMunicipalities());
@@ -81,12 +83,13 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
         height: 1.35,
       );
 
-  TextStyle get _hintTextStyle => TextStyle(
-        color: _isDesktopGlass
-            ? Colors.white.withValues(alpha: 0.95)
-            : const Color(0xFF57534E),
+  TextStyle get _hintTextStyle => const TextStyle(
+        // Match tourist signup muted grey placeholders.
+        color: Color(0xFF9CA3AF),
         fontSize: 15,
-        fontWeight: FontWeight.w600,
+        fontWeight: FontWeight.w400,
+        letterSpacing: 0.1,
+        height: 1.25,
       );
 
   TextStyle get _dropdownItemStyle => const TextStyle(
@@ -120,6 +123,7 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
         prefixIcon: icon,
         suffixIcon: suffix,
       ).copyWith(
+        fillColor: Colors.black.withValues(alpha: 0.58),
         hintStyle: _hintTextStyle,
         errorStyle: TextStyle(
           color: Colors.orange.shade100,
@@ -215,7 +219,7 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
     final password = _passwordController.text;
     final officeName = _officeNameController.text.trim();
     final contactPerson = _contactPersonController.text.trim();
-    final contact = _contactController.text.trim();
+    final contact = composeE164Mobile(_contactDialCode, _contactController.text);
     final mun = _selectedMunicipality!;
 
     setState(() => _submitting = true);
@@ -252,7 +256,7 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
         displayName: contactPerson.isNotEmpty ? contactPerson : officeName,
         otp: otp,
         mobile: contact,
-        notifyOnThisDevice: !kIsWeb,
+        notifyOnThisDevice: false,
         trySms: false,
         otpAlreadyInFirestore: true,
       );
@@ -640,9 +644,9 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
             // ignore: deprecated_member_use
             value: _municipalityId,
             isExpanded: true,
-            hint: _dropdownHint('Select municipality'),
+            hint: _dropdownHint('Select your municipality'),
             decoration: _dec(
-              hint: 'Select municipality',
+              hint: 'Select your municipality',
               icon: Icons.location_city,
             ).copyWith(hintText: null),
             dropdownColor: Colors.white,
@@ -682,7 +686,7 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             textCapitalization: TextCapitalization.words,
             decoration: _dec(
-              hint: 'e.g. Oroquieta City Tourism Office',
+              hint: 'Enter your tourism office name',
               icon: Icons.account_balance_rounded,
             ),
             validator: (v) =>
@@ -696,7 +700,7 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             textCapitalization: TextCapitalization.words,
             decoration: _dec(
-              hint: 'Full name of officer / staff',
+              hint: 'Enter officer / staff full name',
               icon: Icons.badge_outlined,
             ),
             validator: (v) =>
@@ -704,13 +708,30 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
           ),
           const SizedBox(height: 12),
           _sectionLabel('Contact Number'),
-          TextFormField(
+          DialCodeMobileField(
             controller: _contactController,
-            style: _fieldTextStyle,
-            cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
-            keyboardType: TextInputType.phone,
-            decoration: _dec(hint: '09XXXXXXXXX', icon: Icons.phone_rounded),
-            validator: validatePhilippineMobile,
+            dialCode: _contactDialCode,
+            onDialCodeChanged: (v) => setState(() => _contactDialCode = v),
+            textStyle: _fieldTextStyle,
+            dialTextStyle: _fieldTextStyle.copyWith(fontWeight: FontWeight.w700),
+            dropdownColor: _isDesktopGlass
+                ? const Color(0xFF1C1917)
+                : Colors.white,
+            menuItemTextStyle: TextStyle(
+              fontSize: 14,
+              color: _isDesktopGlass ? Colors.white : Colors.black87,
+            ),
+            dialDecoration: _dec(hint: '+63').copyWith(
+              prefixIcon: null,
+              prefixIconConstraints:
+                  const BoxConstraints(minWidth: 0, minHeight: 0),
+            ),
+            numberDecoration: _dec(
+              hint: _contactDialCode == '+63'
+                  ? '9XXXXXXXXX'
+                  : 'Enter your number',
+              icon: Icons.phone_rounded,
+            ),
           ),
           const SizedBox(height: 12),
           _sectionLabel('Email Address'),
@@ -720,7 +741,10 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             keyboardType: TextInputType.emailAddress,
             autocorrect: false,
-            decoration: _dec(hint: 'email@example.com', icon: Icons.email),
+            decoration: _dec(
+              hint: 'Enter your email',
+              icon: Icons.email,
+            ),
             validator: (v) {
               if (v == null || v.trim().isEmpty) return 'Required';
               if (!isValidEmailFormat(v)) return 'Enter a valid email.';
@@ -749,7 +773,7 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             obscureText: _obscurePassword,
             decoration: _dec(
-              hint: 'Create password',
+              hint: 'Enter your password',
               icon: Icons.lock_outline,
               suffix: IconButton(
                 icon: Icon(
@@ -772,7 +796,7 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             obscureText: _obscureConfirm,
             decoration: _dec(
-              hint: 'Re-enter password',
+              hint: 'Confirm your password',
               icon: Icons.lock_outline,
               suffix: IconButton(
                 icon: Icon(
@@ -820,9 +844,10 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
 
     final form = Theme(
       data: Theme.of(context).copyWith(
-        hintColor: _isDesktopGlass
-            ? Colors.white.withValues(alpha: 0.95)
-            : const Color(0xFF57534E),
+        hintColor: const Color(0xFF9CA3AF),
+        inputDecorationTheme: InputDecorationTheme(
+          hintStyle: _hintTextStyle,
+        ),
       ),
       child: _signupStep == 0
           ? Column(

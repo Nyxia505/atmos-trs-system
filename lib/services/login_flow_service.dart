@@ -11,11 +11,16 @@ import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/services/welcome_notification_service.dart';
 import 'package:atmos_trs_system/services/pending_lgu_registration_cache.dart';
 import 'package:atmos_trs_system/services/pending_establishment_registration_cache.dart';
+import 'package:atmos_trs_system/services/pending_registration_cache.dart';
+import 'package:atmos_trs_system/services/otp_service.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 
 /// Resolves post-login navigation quickly (cache-first), then finishes setup in background.
 class LoginFlowService {
   LoginFlowService._();
+
+  /// Auth signed in but no durable Firestore registration — must sign up again.
+  static const String mustSignUpAgainRoute = '/__must_signup_again__';
 
   static Future<bool?> _getCachedTouristVerified(String uid) async {
     if (uid.isEmpty) return null;
@@ -43,11 +48,35 @@ class LoginFlowService {
     }
     if (roleFromEmail == UserRole.tourism) return '/lgu-dashboard';
 
-    // 2) If this same user already logged in before, use cached role/verification.
+    // 2) Pending signup OTP (local) — allow finish verification.
+    await PendingRegistrationCache.hydrate();
+    await PendingLguRegistrationCache.hydrate();
+    await PendingEstablishmentRegistrationCache.hydrate();
+    if (PendingLguRegistrationCache.forUid(uid) != null ||
+        PendingEstablishmentRegistrationCache.forUid(uid) != null ||
+        PendingRegistrationCache.forUid(uid) != null) {
+      return '/verify-otp';
+    }
+
+    // Active signup OTP but no local pending payload — cannot finish profile here.
+    // Treat as incomplete / removed registration (must sign up again).
+    if (await OtpService.hasActiveOtp(uid) &&
+        !await UserDirectoryService.hasDurableRegistrationRecord(uid)) {
+      await _setCachedTouristVerified(uid, false);
+      return mustSignUpAgainRoute;
+    }
+
+    // 3) Cached role only if server still has a completed tourist account.
     final storedUid = await SessionStorage.getStoredUser();
     final storedRole = await SessionStorage.getStoredRole();
     if (storedUid == uid && storedRole == UserRole.tourismEstablishment) {
-      return '/establishment-dashboard';
+      final profile = await UserDirectoryService.getProfileByUid(
+        uid,
+        preferServer: true,
+      );
+      if (profile != null && profile.isTourismEstablishment) {
+        return '/establishment-dashboard';
+      }
     }
     if (storedUid == uid && storedRole == UserRole.tourism) {
       return '/lgu-dashboard';
@@ -55,35 +84,45 @@ class LoginFlowService {
     if (storedUid == uid && storedRole == UserRole.tourist) {
       final cachedVerified = await _getCachedTouristVerified(uid);
       if (cachedVerified == true) {
-        return '/dashboard';
+        if (await UserDirectoryService.hasCompletedTouristAccount(uid)) {
+          return '/dashboard';
+        }
+        await _setCachedTouristVerified(uid, false);
       }
     }
 
-    // 2b) Pending LGU / establishment signup — finish OTP first.
-    await PendingLguRegistrationCache.hydrate();
-    await PendingEstablishmentRegistrationCache.hydrate();
-    if (PendingLguRegistrationCache.forUid(uid) != null ||
-        PendingEstablishmentRegistrationCache.forUid(uid) != null) {
-      return '/verify-otp';
-    }
-
-    // 3) Cached profile lookup (doc by uid only; cheaper than extra email query).
+    // 4) Server profile (prefer server so deleted accounts are detected).
     final profile = await UserDirectoryService.getProfileByUid(
       uid,
-      preferServer: false,
+      preferServer: true,
     );
     if (profile != null) {
       if (profile.isTourist) {
-        await _setCachedTouristVerified(uid, profile.isVerified);
+        if (!profile.isVerified) {
+          // Email must not stay as an unverified permanent user row.
+          return mustSignUpAgainRoute;
+        }
+        await _setCachedTouristVerified(uid, true);
       }
       return RoleRouter.routeForProfile(profile);
     }
 
-    // 4) Tourist fallback: keep verify-OTP correctness for first-time/no-cache users.
+    // 5) Legacy tourists/{uid} only (verified).
+    if (await UserDirectoryService.hasCompletedTouristAccount(uid)) {
+      await _setCachedTouristVerified(uid, true);
+      return '/dashboard';
+    }
+
+    // 6) Auth remnant / deleted DB registration → sign up again.
+    if (!await UserDirectoryService.hasDurableRegistrationRecord(uid)) {
+      await _setCachedTouristVerified(uid, false);
+      return mustSignUpAgainRoute;
+    }
+
     final verified =
         await UserDirectoryService.touristEmailVerificationComplete(uid);
     await _setCachedTouristVerified(uid, verified);
-    return verified ? '/dashboard' : '/verify-otp';
+    return verified ? '/dashboard' : mustSignUpAgainRoute;
   }
 
   /// Persists staff session from email heuristics only (no Firestore).
@@ -99,6 +138,13 @@ class LoginFlowService {
         role: UserRole.governor,
         email: email,
       );
+      unawaited(
+        UserDirectoryService.ensureStaffUserDoc(
+          uid: uid,
+          email: email,
+          roleRaw: 'governor',
+        ),
+      );
       return;
     }
     if (role == UserRole.provincialTourism) {
@@ -106,6 +152,13 @@ class LoginFlowService {
         uid,
         role: UserRole.provincialTourism,
         email: email,
+      );
+      unawaited(
+        UserDirectoryService.ensureStaffUserDoc(
+          uid: uid,
+          email: email,
+          roleRaw: 'provincial_tourism',
+        ),
       );
       return;
     }
@@ -117,6 +170,14 @@ class LoginFlowService {
         role: UserRole.tourism,
         email: email,
         municipalityId: municipalityId,
+      );
+      unawaited(
+        UserDirectoryService.ensureStaffUserDoc(
+          uid: uid,
+          email: email,
+          roleRaw: 'tourism',
+          municipalityId: municipalityId,
+        ),
       );
     }
   }
@@ -266,11 +327,18 @@ class LoginFlowService {
 
       final migratedVerified =
           await UserDirectoryService.getTouristIsVerifiedFromTouristsDoc(uid);
+      if (migratedVerified != true &&
+          !await UserDirectoryService.hasCompletedTouristAccount(uid)) {
+        debugPrint(
+          '[LoginFlow] skip synthetic tourist — no durable verified registration',
+        );
+        return;
+      }
       final synthetic = AppUserProfile(
         uid: uid,
         email: email,
         roleRaw: 'tourist',
-        isVerified: migratedVerified == true,
+        isVerified: true,
       );
       await UserActivityService.bindToUser(uid);
       TouristActivityFirestoreSync.resetMergeCache();
@@ -279,7 +347,7 @@ class LoginFlowService {
         email: email,
       );
       await WelcomeNotificationService.ensureForUser(uid: uid);
-      await _setCachedTouristVerified(uid, synthetic.isVerified);
+      await _setCachedTouristVerified(uid, true);
       await RoleRouter.persistSessionAndGetRoute(
         profile: synthetic,
         firebaseUid: uid,

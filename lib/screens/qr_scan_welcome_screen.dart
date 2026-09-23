@@ -1,18 +1,19 @@
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/atmos_brand_typography.dart';
+import 'package:atmos_trs_system/services/pending_establishment_stay_storage.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/qr_welcome_destination_context.dart';
 import 'package:atmos_trs_system/widgets/atmos_brand_logo.dart';
+import 'package:atmos_trs_system/widgets/party_demographic_fields.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 /// Welcome shown after a new visitor scans an LGU or spot QR without an account.
 ///
-/// Asks party size + gender split (pila kabook / baye / laki) before signup.
-/// Persisted with the pending QR payload for LGU analytics after verify.
+/// Asks party size + gender / nationality splits (semi-auto like desk confirm)
+/// before signup. Persisted with the pending QR payload for analytics after verify.
 class QrScanWelcomeScreen extends StatefulWidget {
   const QrScanWelcomeScreen({super.key});
 
@@ -33,35 +34,14 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
   bool _loading = true;
   late final AnimationController _fadeController;
   late final Animation<double> _fadeAnimation;
-  final TextEditingController _partyController =
-      TextEditingController(text: '1');
-  final TextEditingController _femaleController =
-      TextEditingController(text: '0');
-  final TextEditingController _maleController =
-      TextEditingController(text: '0');
-
-  int _parseCount(TextEditingController c, {int fallback = 0}) {
-    final n = int.tryParse(c.text.trim());
-    if (n == null || n < 0) return fallback;
-    return n > 99 ? 99 : n;
-  }
-
-  /// Total people in the party (including the scanner).
-  int get _partySize {
-    final n = _parseCount(_partyController, fallback: 1);
-    return n < 1 ? 1 : n;
-  }
-
-  int get _femaleCount => _parseCount(_femaleController);
-  int get _maleCount => _parseCount(_maleController);
-
-  String? get _partyValidationError {
-    if (_femaleCount + _maleCount != _partySize) {
-      return 'Baye + laki should equal total party ($_partySize). '
-          'Now: ${_femaleCount + _maleCount}.';
-    }
-    return null;
-  }
+  final _demoKey = GlobalKey<PartyDemographicFieldsState>();
+  PartyDemographicValue _demo = const PartyDemographicValue(
+    partySize: 1,
+    maleCount: 0,
+    femaleCount: 1,
+    filipinoCount: 1,
+    foreignCount: 0,
+  );
 
   @override
   void initState() {
@@ -74,32 +54,25 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
       parent: _fadeController,
       curve: Curves.easeOutCubic,
     );
-    void refresh() {
-      if (mounted) setState(() {});
-    }
-
-    _partyController.addListener(refresh);
-    _femaleController.addListener(refresh);
-    _maleController.addListener(refresh);
     _loadContext();
   }
 
   @override
   void dispose() {
-    _partyController.dispose();
-    _femaleController.dispose();
-    _maleController.dispose();
     _fadeController.dispose();
     super.dispose();
   }
 
   Future<bool> _persistPartyDemographics() async {
-    final err = _partyValidationError;
-    if (err != null) {
+    final demo = _demoKey.currentState?.value ?? _demo;
+    if (!demo.isValid) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(err),
+            content: Text(
+              demo.validationMessage ??
+                  'Enter party size with Male/Female and Filipino/Foreign counts.',
+            ),
             behavior: SnackBarBehavior.floating,
             backgroundColor: Colors.red.shade700,
           ),
@@ -108,14 +81,25 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
       return false;
     }
     await PendingSpotCheckInStorage.setPartyDemographics(
-      partySize: _partySize,
-      femaleCount: _femaleCount,
-      maleCount: _maleCount,
+      partySize: demo.partySize,
+      femaleCount: demo.femaleCount,
+      maleCount: demo.maleCount,
+      filipinoCount: demo.filipinoCount,
+      foreignCount: demo.foreignCount,
     );
     await PendingLguCheckInStorage.setPartyDemographics(
-      partySize: _partySize,
-      femaleCount: _femaleCount,
-      maleCount: _maleCount,
+      partySize: demo.partySize,
+      femaleCount: demo.femaleCount,
+      maleCount: demo.maleCount,
+      filipinoCount: demo.filipinoCount,
+      foreignCount: demo.foreignCount,
+    );
+    await PendingEstablishmentStayStorage.setPartyDemographics(
+      partySize: demo.partySize,
+      femaleCount: demo.femaleCount,
+      maleCount: demo.maleCount,
+      filipinoCount: demo.filipinoCount,
+      foreignCount: demo.foreignCount,
     );
     return true;
   }
@@ -480,28 +464,6 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
   }
 
   Widget _buildPartySizeCard() {
-    final genderSum = _femaleCount + _maleCount;
-    final mismatch = genderSum != _partySize;
-
-    InputDecoration fieldDecoration(String label, String hint) {
-      return InputDecoration(
-        labelText: label,
-        hintText: hint,
-        filled: true,
-        fillColor: const Color(0xFFF8FAFC),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(
-            color: AppTheme.brandOrange,
-            width: 1.5,
-          ),
-        ),
-      );
-    }
-
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -529,8 +491,8 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
           ),
           const SizedBox(height: 6),
           const Text(
-            'Enter your total party size, then how many females (baye) '
-            'and males (laki). Include yourself in the total.',
+            'Enter your total party, then gender and Filipino/Foreign counts. '
+            'Editing one side auto-fills the other. Include yourself.',
             style: TextStyle(
               color: _bodyText,
               fontSize: 14,
@@ -539,65 +501,18 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
             ),
           ),
           const SizedBox(height: 14),
-          TextField(
-            controller: _partyController,
-            keyboardType: TextInputType.number,
-            inputFormatters: [
-              FilteringTextInputFormatter.digitsOnly,
-              LengthLimitingTextInputFormatter(2),
-            ],
-            decoration: fieldDecoration('Total party (kabook)', 'e.g. 5'),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _femaleController,
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(2),
-                  ],
-                  decoration: fieldDecoration('Baye (female)', 'e.g. 2'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: TextField(
-                  controller: _maleController,
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(2),
-                  ],
-                  decoration: fieldDecoration('Laki (male)', 'e.g. 3'),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: (mismatch ? Colors.red : AppTheme.brandOrange)
-                  .withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Text(
-              mismatch
-                  ? 'Baye ($_femaleCount) + laki ($_maleCount) = $genderSum — '
-                      'should equal total $_partySize'
-                  : 'Total visitors: $_partySize '
-                      '($_femaleCount baye · $_maleCount laki)',
-              style: TextStyle(
-                color: mismatch ? Colors.red.shade700 : AppTheme.brandOrange,
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-                height: 1.35,
-              ),
-            ),
+          PartyDemographicFields(
+            key: _demoKey,
+            initialPartySize: 1,
+            initialMale: 0,
+            initialFemale: 1,
+            initialFilipino: 1,
+            initialForeign: 0,
+            partyLabel: 'Total party (kabook)',
+            maleLabel: 'Laki (male)',
+            femaleLabel: 'Baye (female)',
+            partyHelperText: 'Total visitors including yourself',
+            onChanged: (v) => setState(() => _demo = v),
           ),
         ],
       ),

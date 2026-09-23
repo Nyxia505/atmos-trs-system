@@ -1,9 +1,9 @@
+import 'dart:async';
 import 'dart:ui' show ImageFilter;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
@@ -27,8 +27,8 @@ import 'package:atmos_trs_system/services/registration_rollback_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/utils/email_utils.dart';
 
-/// OTP verification before tourist dashboard: code in Firestore + on-device notification
-/// (EmailJS email is optional backup).
+/// OTP verification before tourist dashboard: code is emailed to the user
+/// (open Inbox; Spam only if missing). No on-device OTP popup during signup.
 class VerifyOtpScreen extends StatefulWidget {
   const VerifyOtpScreen({super.key});
 
@@ -45,8 +45,13 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
   bool _resending = false;
   bool _autoResendAttempted = false;
   bool _forceResendOnEntry = false;
+  bool _otpAlreadySentFromSignup = false;
+  bool _emailDeliveryFailed = false;
   String? _statusBanner;
   int _cooldown = 0;
+  /// Seconds remaining until the active OTP expires (null = unknown / none).
+  int? _expirySecondsLeft;
+  Timer? _expiryTicker;
   String? _contactEmail;
 
   static const Color _verifyOrange = Color(0xFFFF6B00);
@@ -97,31 +102,54 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
         if (args['forceResend'] == true) {
           _forceResendOnEntry = true;
         }
+        if (args['otpAlreadySent'] == true || args['fromSignup'] == true) {
+          _otpAlreadySentFromSignup = true;
+        }
+        if (args['emailDeliveryFailed'] == true) {
+          _emailDeliveryFailed = true;
+        }
       }
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await PendingRegistrationCache.hydrate();
-      await PendingEstablishmentRegistrationCache.hydrate();
-      await PendingLguRegistrationCache.hydrate();
-      final u = FirebaseAuth.instance.currentUser;
-      if (u != null) {
-        await ensureEmailOtpNotificationSupport();
-        await syncFcmTokenToUserDoc(u.uid);
-        await AnnouncementNotificationSync.syncPublishedAnnouncementsToLocal(
-          userId: u.uid,
-        );
-      }
-      if (!mounted) return;
-      await _redirectIfVerifiedOrStaff();
-      if (!mounted) return;
-      await _ensureActiveOtpOnEntry();
-      if (mounted && _digitFocusNodes.isNotEmpty) {
-        _digitFocusNodes.first.requestFocus();
-      }
+      unawaited(_bootstrapVerifyScreen());
     });
   }
 
+  Future<void> _bootstrapVerifyScreen() async {
+    await PendingRegistrationCache.hydrate();
+    await PendingEstablishmentRegistrationCache.hydrate();
+    await PendingLguRegistrationCache.hydrate();
+    final u = FirebaseAuth.instance.currentUser;
+    if (u != null) {
+      // Preserve signup OTP ASAP — do not wait on announcement sync first.
+      if (_otpAlreadySentFromSignup) {
+        await ensureEmailOtpNotificationSupport();
+        if (!mounted) return;
+        await _redirectIfVerifiedOrStaff();
+        if (!mounted) return;
+        await _ensureActiveOtpOnEntry();
+        if (mounted && _digitFocusNodes.isNotEmpty) {
+          _digitFocusNodes.first.requestFocus();
+        }
+        // No FCM sync until verified — prevents stub users/{uid} before OTP.
+        return;
+      }
+      await ensureEmailOtpNotificationSupport();
+      // Defer FCM token write until after OTP (see RegistrationCompletionService).
+      await AnnouncementNotificationSync.syncPublishedAnnouncementsToLocal(
+        userId: u.uid,
+      );
+    }
+    if (!mounted) return;
+    await _redirectIfVerifiedOrStaff();
+    if (!mounted) return;
+    await _ensureActiveOtpOnEntry();
+    if (mounted && _digitFocusNodes.isNotEmpty) {
+      _digitFocusNodes.first.requestFocus();
+    }
+  }
+
   /// After login, send a fresh code if signup OTP expired or was never saved.
+  /// When coming from signup with [otpAlreadySent], keep the existing code —
+  /// do not generate a new OTP that would invalidate the notification/email.
   Future<void> _ensureActiveOtpOnEntry() async {
     if (_autoResendAttempted) return;
     _autoResendAttempted = true;
@@ -134,31 +162,51 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
         (routeArgs is Map && routeArgs['forceResend'] == true);
     _forceResendOnEntry = false;
 
+    final otpAlreadySent = _otpAlreadySentFromSignup ||
+        (routeArgs is Map &&
+            (routeArgs['otpAlreadySent'] == true ||
+                routeArgs['fromSignup'] == true));
+
     if (await UserDirectoryService.touristEmailVerificationComplete(user.uid)) {
       return;
     }
 
-    final hasActive = forceResend
+    var hasActive = forceResend
         ? false
         : await OtpService.hasActiveOtp(user.uid);
+    // Brief retry — Firestore may lag right after signup save.
+    if (!hasActive && !forceResend && otpAlreadySent) {
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      if (!mounted) return;
+      hasActive = await OtpService.hasActiveOtp(user.uid);
+    }
     if (!mounted) return;
     if (hasActive) {
       final inbox = _deliveryEmailFor(user);
       setState(() {
-        _statusBanner = 'Email is not verified. Enter the code sent to your inbox.';
+        // Active OTP means signup already stored a code — never scare with
+        // "email does not exist" even if delivery confirmation timed out.
+        _statusBanner = _emailDeliveryFailed
+            ? OtpDeliveryResult.deliveryUnconfirmedMessage(inbox)
+            : 'Open your email Inbox for the 6-digit code, then enter it below '
+                '(check Spam only if it is missing).';
       });
       _startCooldown(60);
-      debugPrint('[OTP] active code exists for $inbox');
+      await _syncExpiryFromStore(user.uid);
+      debugPrint('[OTP] active code exists for $inbox (preserved)');
       return;
     }
 
+    // From signup but no active OTP found — recover with one resend only.
     final email = _deliveryEmailFor(user);
     if (email.isEmpty) return;
 
     setState(() {
       _statusBanner = forceResend
-          ? 'Sending a new verification code…'
-          : 'Email is not verified. Sending a verification code…';
+          ? 'Sending a new verification code to your email…'
+          : otpAlreadySent
+              ? 'Refreshing your verification email…'
+              : 'Sending your verification code to email…';
     });
 
     final deliveryOk = await _resend(
@@ -168,9 +216,11 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
 
     if (!mounted) return;
     setState(() {
+      _emailDeliveryFailed = !deliveryOk;
       _statusBanner = deliveryOk
-          ? 'Email is not verified. Enter the 6-digit code below.'
-          : 'Could not send email. Tap Resend when available.';
+          ? 'Check your email Inbox for the 6-digit code '
+              '(Spam only if missing), then enter it below.'
+          : OtpDeliveryResult.deliveryUnconfirmedMessage(email);
     });
     if (deliveryOk) {
       _startCooldown(60);
@@ -249,6 +299,7 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
 
   @override
   void dispose() {
+    _expiryTicker?.cancel();
     _otpController.dispose();
     for (final c in _digitControllers) {
       c.dispose();
@@ -275,6 +326,52 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
     final m = (seconds ~/ 60).toString().padLeft(2, '0');
     final s = (seconds % 60).toString().padLeft(2, '0');
     return '$m:$s';
+  }
+
+  void _startExpiryCountdown(DateTime? expiresAt) {
+    _expiryTicker?.cancel();
+    if (expiresAt == null) {
+      if (mounted) setState(() => _expirySecondsLeft = null);
+      return;
+    }
+    void tick() {
+      if (!mounted) return;
+      final left = expiresAt.difference(DateTime.now()).inSeconds;
+      setState(() => _expirySecondsLeft = left > 0 ? left : 0);
+      if (left <= 0) {
+        _expiryTicker?.cancel();
+        _expiryTicker = null;
+      }
+    }
+
+    tick();
+    _expiryTicker = Timer.periodic(const Duration(seconds: 1), (_) => tick());
+  }
+
+  Future<void> _syncExpiryFromStore(String uid) async {
+    final expiresAt = await OtpService.fetchActiveOtpExpiresAt(uid);
+    if (!mounted) return;
+    if (expiresAt != null) {
+      _startExpiryCountdown(expiresAt);
+    } else {
+      // Fresh save may not be readable yet — fall back to local TTL.
+      _startExpiryCountdown(
+        DateTime.now().add(
+          const Duration(minutes: OtpService.otpExpiryMinutes),
+        ),
+      );
+    }
+  }
+
+  String _expiryLabel() {
+    final left = _expirySecondsLeft;
+    if (left == null) {
+      return 'Code expires in ${OtpService.otpExpiryMinutes} minutes.';
+    }
+    if (left <= 0) {
+      return 'Code expired — tap Resend Code.';
+    }
+    return 'Code expires in ${_formatCooldown(left)}';
   }
 
   void _applyOtpToDigits(String raw) {
@@ -454,11 +551,19 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
               .collection('tourists')
               .doc(user.uid)
               .get()
-              .then((d) => d.exists);
+              .then((d) {
+            if (!d.exists || d.data() == null) return false;
+            final data = d.data()!;
+            final email = data['email']?.toString().trim() ?? '';
+            final touristId = data['touristId']?.toString().trim() ?? '';
+            return email.isNotEmpty || touristId.isNotEmpty;
+          });
+          // FCM-only stubs (users doc without role) do not count as registration.
+          final usersIsStubOnly = usersDoc.exists && roleRaw.isEmpty;
           if (!touristExists &&
               !isEstablishment &&
               !isLgu &&
-              !usersDoc.exists) {
+              (!usersDoc.exists || usersIsStubOnly)) {
             if (mounted) {
               _snack(
                 'Registration data is missing. Please sign up again.',
@@ -701,23 +806,33 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
         displayName: name,
         otp: otp,
         mobile: mobile,
-        notifyOnThisDevice: !kIsWeb,
+        notifyOnThisDevice: false,
         trySms: false,
         otpAlreadyInFirestore: true,
       );
-      final deliveryOk = delivery.emailSent;
+      final deliveryOk = delivery.canCompleteRegistration;
       if (!delivery.emailSent) {
         debugPrint('[OTP] resend email failed: ${delivery.emailError}');
       }
 
       if (mounted) {
-        if (!deliveryOk &&
-            delivery.otpForDisplay != null &&
-            delivery.otpForDisplay!.length == 6) {
-          _applyOtpToDigits(delivery.otpForDisplay!);
+        if (!delivery.emailSent && deliveryOk) {
           setState(() {
+            _emailDeliveryFailed = true;
             _statusBanner =
-                'Email not delivered. Code filled below — tap Verify.';
+                OtpDeliveryResult.deliveryUnconfirmedMessage(email);
+          });
+        } else if (!deliveryOk) {
+          setState(() {
+            _emailDeliveryFailed = true;
+            _statusBanner =
+                OtpDeliveryResult.emailDoesNotExistMessage(email);
+          });
+        } else {
+          setState(() {
+            _emailDeliveryFailed = false;
+            _statusBanner =
+                'Check your email Inbox for the 6-digit code, then enter it below.';
           });
         }
         if (showDeliverySnack) {
@@ -729,6 +844,7 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
         if (!isAuto) {
           _startCooldown(60);
         }
+        await _syncExpiryFromStore(user.uid);
       }
       // OTP is saved even when email fails — allow UI to treat resend as usable.
       return delivery.canCompleteRegistration;
@@ -775,6 +891,24 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
     );
   }
 
+  Future<void> _onEditSignupDetails() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    await PendingRegistrationCache.hydrate();
+    if (!PendingRegistrationCache.hasPendingFor(user.uid)) {
+      if (mounted) {
+        _snack('No unfinished signup to edit.', isError: true);
+      }
+      return;
+    }
+    if (!mounted) return;
+    Navigator.pushReplacementNamed(
+      context,
+      '/signup',
+      arguments: <String, dynamic>{'editPending': true},
+    );
+  }
+
   Future<bool> _onCancelRegistration() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return true;
@@ -786,7 +920,8 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Cancel registration?'),
         content: const Text(
-          'Your account will not be saved. You can sign up again anytime.',
+          'Your unfinished account will be removed. You can sign up again anytime.\n\n'
+          'If you only mistyped your email, use “Edit details” instead.',
         ),
         actions: [
           TextButton(
@@ -808,7 +943,7 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
     await RegistrationRollbackService.rollback(user.uid);
     await SessionStorage.clearSession();
     AuthConfig.currentUserUid = null;
-  if (mounted) {
+    if (mounted) {
       Navigator.pushReplacementNamed(context, '/signup');
     }
     return false;
@@ -828,7 +963,8 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
       canPop: !hasPendingSignup,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop || !hasPendingSignup) return;
-        await _onCancelRegistration();
+        // System back → review/edit filled signup (not cancel).
+        await _onEditSignupDetails();
       },
       child: Scaffold(
         body: Stack(
@@ -862,7 +998,8 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
                           ),
                           const SizedBox(height: 10),
                           const Text(
-                            'Enter the 6-digit code sent to',
+                            'Open your email Inbox for the 6-digit code, '
+                            'then enter it below (Spam only if missing).',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: 15,
@@ -884,12 +1021,15 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
                           ),
                           const SizedBox(height: 14),
                           Text(
-                            'Code expires in ${OtpService.otpExpiryMinutes} minutes.',
+                            _expiryLabel(),
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: 13,
-                              color: _textMuted.withValues(alpha: 0.95),
-                              fontWeight: FontWeight.w500,
+                              color: (_expirySecondsLeft != null &&
+                                      _expirySecondsLeft! <= 0)
+                                  ? Colors.red.shade700
+                                  : _textMuted.withValues(alpha: 0.95),
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                           if (_statusBanner != null) ...[
@@ -900,9 +1040,7 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
                               style: TextStyle(
                                 fontSize: 13,
                                 height: 1.35,
-                                color: _statusBanner!
-                                        .toLowerCase()
-                                        .contains('could not')
+                                color: _isDeliveryFailureBanner(_statusBanner!)
                                     ? Colors.red.shade700
                                     : _verifyOrange,
                                 fontWeight: FontWeight.w600,
@@ -967,7 +1105,27 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
                           ),
                           const SizedBox(height: 22),
                           _buildResendRow(),
-                          const SizedBox(height: 8),
+                          if (hasPendingSignup) ...[
+                            const SizedBox(height: 8),
+                            TextButton(
+                              onPressed: _onEditSignupDetails,
+                              style: TextButton.styleFrom(
+                                foregroundColor: _verifyOrange,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 8,
+                                ),
+                              ),
+                              child: const Text(
+                                'Wrong email? Edit details',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 4),
                           TextButton(
                             onPressed: () async {
                               if (hasPendingSignup) {
@@ -1137,6 +1295,15 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
         );
       },
     );
+  }
+
+  bool _isDeliveryFailureBanner(String text) {
+    final t = text.toLowerCase();
+    return t.contains('sorry') ||
+        t.contains('does not exist') ||
+        t.contains("couldn't confirm") ||
+        t.contains('could not') ||
+        t.contains('not delivered');
   }
 
   Widget _buildResendRow() {

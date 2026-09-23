@@ -18,6 +18,8 @@ migrate_working_dir/
 *.env
 !functions/.env.example
 !.env.example
+dart_defines.json
+lib/config/supabase_secrets.local.dart
 
 # IntelliJ related
 *.iml
@@ -58,3 +60,8 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Local release builds / scratch DOT workbooks (do not push)
+*.apk
+tmp_*.xlsx
+tmp_templates/

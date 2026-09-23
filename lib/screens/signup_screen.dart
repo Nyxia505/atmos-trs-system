@@ -1,116 +1,29 @@
 import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
-import 'package:flutter/foundation.dart' show compute, debugPrint, kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 import 'dart:async';
-import 'dart:convert';
 import 'package:atmos_trs_system/utils/email_utils.dart';
 import 'package:atmos_trs_system/utils/signup_field_validation.dart';
 import 'package:atmos_trs_system/utils/tourist_id_helper.dart';
 import 'package:atmos_trs_system/utils/firebase_client_blocked_message.dart';
-import 'package:atmos_trs_system/config/user_profile_storage.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/services/otp_service.dart';
 import 'package:atmos_trs_system/services/registration_municipality_resolver.dart';
 import 'package:atmos_trs_system/services/tourist_registration_service.dart';
 import 'package:atmos_trs_system/services/pending_registration_cache.dart';
-import 'package:atmos_trs_system/services/registration_rollback_service.dart';
 import 'package:atmos_trs_system/services/otp_delivery_service.dart';
-import 'package:atmos_trs_system/services/push_notification_service.dart';
+import 'package:atmos_trs_system/services/registration_rollback_service.dart';
+import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_barangays.dart';
-import 'package:atmos_trs_system/utils/web_face_camera_capture.dart';
 import 'package:atmos_trs_system/widgets/web_glass_auth_scaffold.dart';
 import 'package:atmos_trs_system/widgets/tourist_signup_chrome.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:atmos_trs_system/widgets/dial_code_mobile_field.dart';
+import 'package:atmos_trs_system/widgets/country_city_autocomplete_field.dart';
+import 'package:atmos_trs_system/data/signup_cities_by_country.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'package:image/image.dart' as img;
-
-class ProfileJpegCompressArgs {
-  const ProfileJpegCompressArgs(this.bytes, this.maxSide, this.quality);
-
-  final Uint8List bytes;
-  final int maxSide;
-  final int quality;
-}
-
-/// Top-level entry for [compute] — keeps JPEG work off the UI isolate.
-Uint8List compressProfileJpegIsolate(ProfileJpegCompressArgs args) {
-  return _compressProfileJpeg(
-    args.bytes,
-    maxSide: args.maxSide,
-    quality: args.quality,
-  );
-}
-
-/// Resize/compress profile photos so Storage uploads succeed and Firestore docs stay under ~1MB.
-Uint8List _compressProfileJpeg(
-  Uint8List raw, {
-  int maxSide = 1024,
-  int quality = 82,
-}) {
-  try {
-    final decoded = img.decodeImage(raw);
-    if (decoded == null) return raw;
-    var work = decoded;
-    if (work.width > maxSide || work.height > maxSide) {
-      if (work.width >= work.height) {
-        work = img.copyResize(work, width: maxSide);
-      } else {
-        work = img.copyResize(work, height: maxSide);
-      }
-    }
-    return Uint8List.fromList(img.encodeJpg(work, quality: quality));
-  } catch (e, st) {
-    debugPrint('Profile image compress skipped: $e $st');
-    return raw;
-  }
-}
-
-/// Result of profile photo upload — Storage URL and/or Firestore base64 fallback.
-class _ProfilePhotoResult {
-  const _ProfilePhotoResult({
-    this.profilePhotoUrl,
-    this.profileImageBase64,
-    this.usedFirestoreFallback = false,
-  });
-
-  final String? profilePhotoUrl;
-  final String? profileImageBase64;
-  final bool usedFirestoreFallback;
-
-  bool get hasPhoto =>
-      (profilePhotoUrl != null && profilePhotoUrl!.isNotEmpty) ||
-      (profileImageBase64 != null && profileImageBase64!.isNotEmpty);
-}
-
-bool _storageUploadShouldUseFirestoreFallback(FirebaseException e) {
-  if (e.plugin != 'firebase_storage') return false;
-  // Profile photos are optional for Storage; save base64 in Firestore when
-  // Storage is unavailable (billing 402, quota, App Check, etc.).
-  const fallbackCodes = {
-    'quota-exceeded',
-    'unauthorized',
-    'unauthenticated',
-    'retry-limit-exceeded',
-    'bucket-not-found',
-    'project-not-found',
-    'object-not-found',
-    'canceled',
-    'unavailable',
-    'unknown',
-  };
-  if (fallbackCodes.contains(e.code)) return true;
-  final m = (e.message ?? '').toLowerCase();
-  return m.contains('billing') ||
-      m.contains('delinquent') ||
-      m.contains('402') ||
-      m.contains('payment') ||
-      m.contains('terminated the upload');
-}
 
 bool _looksLikeFirebaseBillingDisabled(Object e) {
   final text = e.toString().toLowerCase();
@@ -120,71 +33,75 @@ bool _looksLikeFirebaseBillingDisabled(Object e) {
           text.contains('402'));
 }
 
-String? _profilePhotoBase64ForFirestore(Uint8List jpegBytes) {
-  var bytes = jpegBytes;
-  var encoded = base64Encode(bytes);
-  if (encoded.length <= UserProfileStorage.maxProfileImageBase64Length) {
-    return encoded;
+/// Capitalizes the first letter of each word (e.g. juan → Juan).
+class _CapitalizeWordsFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final text = newValue.text;
+    if (text.isEmpty) return newValue;
+    final buffer = StringBuffer();
+    var capitalizeNext = true;
+    for (final rune in text.runes) {
+      final ch = String.fromCharCode(rune);
+      if (RegExp(r'\s|-').hasMatch(ch)) {
+        buffer.write(ch);
+        capitalizeNext = true;
+      } else if (capitalizeNext) {
+        buffer.write(ch.toUpperCase());
+        capitalizeNext = false;
+      } else {
+        buffer.write(ch);
+      }
+    }
+    final formatted = buffer.toString();
+    if (formatted == text) return newValue;
+    return TextEditingValue(
+      text: formatted,
+      selection: newValue.selection,
+      composing: TextRange.empty,
+    );
   }
-  bytes = _compressProfileJpeg(bytes, maxSide: 512, quality: 70);
-  encoded = base64Encode(bytes);
-  if (encoded.length <= UserProfileStorage.maxProfileImageBase64Length) {
-    return encoded;
-  }
-  bytes = _compressProfileJpeg(bytes, maxSide: 384, quality: 60);
-  encoded = base64Encode(bytes);
-  if (encoded.length <= UserProfileStorage.maxProfileImageBase64Length) {
-    return encoded;
-  }
-  return null;
 }
 
-Future<_ProfilePhotoResult?> _uploadProfilePhoto({
-  required String uid,
-  required Uint8List compressedPhoto,
-}) async {
-  try {
-    debugPrint(
-      '[REG] STEP 2: Storage.putData (bytes) — Flutter Web compatible; do not use putFile here',
-    );
-    final storageRef = FirebaseStorage.instance.ref().child(
-      'profile_photos/$uid.jpg',
-    );
-    final uploadTask = await storageRef.putData(
-      compressedPhoto,
-      SettableMetadata(contentType: 'image/jpeg'),
-    );
-    final profilePhotoUrl = await uploadTask.ref.getDownloadURL();
-    debugPrint('[REG] STEP 2 OK: url=$profilePhotoUrl');
-    return _ProfilePhotoResult(profilePhotoUrl: profilePhotoUrl);
-  } on FirebaseException catch (e, st) {
-    if (!_storageUploadShouldUseFirestoreFallback(e)) {
-      debugPrint(
-        '[REG] STEP 2 FAIL: plugin=${e.plugin} code=${e.code} message=${e.message}\n$st',
+/// Single letter, always uppercase (middle initial).
+class _MiddleInitialFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final letters = newValue.text.replaceAll(RegExp(r'[^a-zA-Z]'), '');
+    if (letters.isEmpty) {
+      return const TextEditingValue(
+        text: '',
+        selection: TextSelection.collapsed(offset: 0),
       );
-      rethrow;
     }
-    debugPrint(
-      '[REG] STEP 2 Storage unavailable (${e.code}); saving photo in Firestore instead',
-    );
-  } catch (e, st) {
-    debugPrint(
-      '[REG] STEP 2 Storage error ($e); trying Firestore fallback\n$st',
+    final initial = letters[0].toUpperCase();
+    return TextEditingValue(
+      text: initial,
+      selection: const TextSelection.collapsed(offset: 1),
     );
   }
+}
 
-  final profileImageBase64 = _profilePhotoBase64ForFirestore(compressedPhoto);
-  if (profileImageBase64 == null) {
-    debugPrint('[REG] STEP 2 FAIL: photo too large for Firestore fallback');
-    return null;
-  }
-  debugPrint(
-    '[REG] STEP 2 OK: Firestore base64 fallback (${profileImageBase64.length} chars)',
-  );
-  return _ProfilePhotoResult(
-    profileImageBase64: profileImageBase64,
-    usedFirestoreFallback: true,
-  );
+String _capitalizeNameWords(String raw) {
+  final trimmed = raw.trim();
+  if (trimmed.isEmpty) return '';
+  return trimmed.split(RegExp(r'\s+')).map((word) {
+    if (word.isEmpty) return word;
+    if (word.length == 1) return word.toUpperCase();
+    return '${word[0].toUpperCase()}${word.substring(1)}';
+  }).join(' ');
+}
+
+String _normalizeMiddleInitial(String raw) {
+  final letters = raw.replaceAll(RegExp(r'[^a-zA-Z]'), '');
+  if (letters.isEmpty) return '';
+  return letters[0].toUpperCase();
 }
 
 class SignupScreen extends StatefulWidget {
@@ -230,8 +147,10 @@ class _SignupScreenState extends State<SignupScreen> {
 
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
+  /// Dial code for primary mobile (synced from nationality/country).
+  String _mobileDialCode = '+63';
 
-  // Upload step variables
+  // Optional marketing preference (shown on final signup step).
   bool _receiveUpdates = false;
   bool _agreeToTerms = false;
   bool _privacySectionExpanded = false;
@@ -239,9 +158,15 @@ class _SignupScreenState extends State<SignupScreen> {
   bool _hasReviewedPrivacy = false;
   bool _hasReviewedTerms = false;
   bool _isSubmitting = false;
+  String? _submitPhase;
   bool _registrationInFlight = false;
-  Uint8List? _uploadedImageBytes;
-  final ImagePicker _imagePicker = ImagePicker();
+
+  /// Returned from OTP “Edit details” — review/fix fields without cancelling.
+  bool _editingPendingSignup = false;
+  String? _pendingContactEmailBaseline;
+  String? _existingTouristId;
+  String? _pendingRegistrationMunicipalityId;
+  bool _pendingEditRestoreStarted = false;
 
   // OTP verification variables
   final List<TextEditingController> _otpControllers = List.generate(
@@ -268,20 +193,16 @@ class _SignupScreenState extends State<SignupScreen> {
   static const Color _inputFill = Color(0xFFF3F4F6);
   static const Color _requiredAccent = Color(0xFFEF4444);
 
-  /// Mock visual step (0–3): Personal Details → Personal Info → Contact → Uploads.
+  /// Mock visual step (0–2): Personal Details → Personal Info → Contact.
   int get _visualStepIndex {
-    if (_currentStep >= 1) return 3;
     switch (_personalDetailsSubStep) {
       case 0:
       case 1:
         return 0;
       case 2:
         return 1;
-      case 3:
-      case 4:
-        return 2;
       default:
-        return 0;
+        return 2;
     }
   }
 
@@ -298,7 +219,11 @@ class _SignupScreenState extends State<SignupScreen> {
   }
 
   final List<String> _suffixes = ['None', 'Jr.', 'Sr.', 'II', 'III', 'IV', 'V'];
-  final List<String> _sexOptions = ['Male', 'Female'];
+  final List<String> _sexOptions = [
+    'Male',
+    'Female',
+    'Prefer not to say',
+  ];
   static const String _dualCitizenNationalityLabel = 'Filipino (dual citizen)';
 
   /// Maps signup nationality label → [ _countries ] entry (auto home country).
@@ -665,18 +590,30 @@ class _SignupScreenState extends State<SignupScreen> {
       if (homeCountry != null) {
         _selectedCountry = homeCountry;
         _clearPhilippineAddressFields();
+        // City list depends on country — reset so user picks under new country.
+        _foreignCityController.clear();
         _foreignRegionController.clear();
       } else if (!mayPh) {
         if (_selectedCountry == 'Philippines') {
           _selectedCountry = null;
         }
         _clearPhilippineAddressFields();
+        _foreignCityController.clear();
       } else if (nationality == 'Filipino' && _selectedCountry == null) {
         _selectedCountry = 'Philippines';
         _clearInternationalAddressFields();
       }
+      _syncMobileDialCodeFromCountry();
     });
   }
+
+  void _syncMobileDialCodeFromCountry() {
+    _mobileDialCode = dialCodeForCountry(_selectedCountry);
+  }
+
+  /// Local digits + selected dial code → E.164-ish value for save / SMS helpers.
+  String _mobileForSave() =>
+      composeE164Mobile(_mobileDialCode, _mobileController.text);
 
   void _clearPhilippineAddressFields() {
     _selectedProvince = null;
@@ -720,7 +657,10 @@ class _SignupScreenState extends State<SignupScreen> {
         _clearInternationalAddressFields();
       } else {
         _clearPhilippineAddressFields();
+        // Suggestions are country-scoped — clear previous city.
+        _foreignCityController.clear();
       }
+      _syncMobileDialCodeFromCountry();
     });
   }
 
@@ -747,6 +687,172 @@ class _SignupScreenState extends State<SignupScreen> {
       ];
     }
     return const ['Select province first'];
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_maybeRestorePendingEdit());
+    });
+  }
+
+  bool get _pendingEmailChanged {
+    if (!_editingPendingSignup) return false;
+    final baseline = normalizeEmail(
+      _pendingContactEmailBaseline ??
+          PendingRegistrationCache.forUid(
+            FirebaseAuth.instance.currentUser?.uid ?? '',
+          )?.contactEmail ??
+          '',
+    );
+    if (baseline.isEmpty) return false;
+    return normalizeEmail(_emailController.text) != baseline;
+  }
+
+  Future<void> _maybeRestorePendingEdit() async {
+    if (!mounted || _pendingEditRestoreStarted) return;
+    final args = ModalRoute.of(context)?.settings.arguments;
+    final editPending = args is Map && args['editPending'] == true;
+    if (!editPending) return;
+    _pendingEditRestoreStarted = true;
+
+    await PendingRegistrationCache.hydrate();
+    if (!mounted) return;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      _registrationSnack(
+        'Sign-in session missing. Please sign up again.',
+        background: Colors.red.shade700,
+      );
+      return;
+    }
+    final pending = PendingRegistrationCache.forUid(user.uid);
+    if (pending == null) {
+      _registrationSnack(
+        'No unfinished signup found to edit.',
+        background: Colors.orange.shade800,
+      );
+      return;
+    }
+
+    _applyPendingToForm(pending);
+    if (!mounted) return;
+    setState(() {
+      _editingPendingSignup = true;
+      _pendingContactEmailBaseline = pending.contactEmail;
+      _currentStep = 0;
+      _personalDetailsSubStep = 3; // Contact & Address (email)
+      _agreeToTerms = true;
+      _hasReviewedPrivacy = true;
+      _hasReviewedTerms = true;
+      _privacySectionExpanded = false;
+      _termsSectionExpanded = false;
+    });
+    _registrationSnack(
+      'Review your details. Fix your email if needed, then continue.',
+      background: Colors.green.shade700,
+    );
+  }
+
+  void _applyPendingToForm(PendingRegistration pending) {
+    final local = pending.localProfile;
+    final t = pending.touristData;
+
+    String str(String key) =>
+        (local != null
+                ? _localProfileString(local, key)
+                : null) ??
+            t[key]?.toString() ??
+            '';
+
+    _firstNameController.text = str('firstName');
+    _middleNameController.text = str('middleName');
+    _lastNameController.text = str('lastName');
+    _emailController.text = pending.contactEmail.isNotEmpty
+        ? pending.contactEmail
+        : str('email');
+    _selectedSuffix = local?.suffix ?? t['suffix']?.toString();
+    if (_selectedSuffix == 'None') _selectedSuffix = null;
+    _selectedSex = local?.sex ?? t['sex']?.toString();
+    _selectedNationality =
+        local?.nationality ?? t['nationality']?.toString();
+    _selectedCountry = (local?.country.isNotEmpty == true)
+        ? local!.country
+        : t['country']?.toString();
+    _selectedProvince = (local?.province.isNotEmpty == true)
+        ? local!.province
+        : t['province']?.toString();
+    _selectedCity = (local?.city.isNotEmpty == true)
+        ? local!.city
+        : t['city']?.toString();
+
+    final barangay = (local?.barangay.isNotEmpty == true)
+        ? local!.barangay
+        : (t['barangay']?.toString() ?? '');
+    if (_selectedProvince == 'Misamis Occidental' &&
+        isMisamisOccidentalSignupCity(_selectedCity)) {
+      _selectedBarangay = barangay.isEmpty ? null : barangay;
+      _barangayController.clear();
+    } else {
+      _selectedBarangay = null;
+      _barangayController.text = barangay;
+    }
+
+    if (_selectedCountry != null && _selectedCountry != 'Philippines') {
+      _foreignCityController.text = _selectedCity ?? '';
+      _foreignRegionController.text = _selectedProvince ?? '';
+    }
+
+    _applyMobileFromSaved(local?.mobile ?? t['mobile']?.toString() ?? '');
+    _applyDobFromSaved(local?.dateOfBirth ?? t['dateOfBirth']?.toString());
+
+    final parent = t['parentGuardianFullName']?.toString();
+    if (parent != null && parent.isNotEmpty) {
+      _parentGuardianController.text = parent;
+    }
+    _receiveUpdates = t['receiveUpdates'] == true;
+    _existingTouristId =
+        local?.touristId ?? t['touristId']?.toString();
+    final muni = t['registrationMunicipalityId']?.toString();
+    if (muni != null && muni.isNotEmpty) {
+      _pendingRegistrationMunicipalityId = muni;
+    }
+  }
+
+  String? _localProfileString(PendingLocalProfile local, String key) {
+    switch (key) {
+      case 'firstName':
+        return local.firstName;
+      case 'middleName':
+        return local.middleName;
+      case 'lastName':
+        return local.lastName;
+      case 'email':
+        return local.email;
+      default:
+        return null;
+    }
+  }
+
+  void _applyMobileFromSaved(String saved) {
+    final parsed = parseStoredMobile(saved);
+    _mobileDialCode = parsed.dialCode;
+    _mobileController.text = parsed.localDigits;
+  }
+
+  void _applyDobFromSaved(String? dob) {
+    if (dob == null || dob.trim().isEmpty) return;
+    final parts = dob.trim().split('-');
+    if (parts.length != 3) return;
+    final y = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    final d = int.tryParse(parts[2]);
+    if (y == null || m == null || d == null) return;
+    _selectedYear = y;
+    _selectedMonth = m;
+    _selectedDay = d;
+    _selectedDateOfBirth = DateTime(y, m, d);
   }
 
   @override
@@ -1249,10 +1355,9 @@ class _SignupScreenState extends State<SignupScreen> {
         }
       }
       if (_personalDetailsSubStep == 3) {
-        // Party size / gender is captured on QR welcome after scan — not here.
-        // Minors still need the parent/guardian step.
+        // Adults: contact is the last signup step (photo is post-registration).
+        // Minors continue to parent/guardian.
         if (!_isMinorRegistrant()) {
-          setState(() => _currentStep++);
           return;
         }
       }
@@ -1268,7 +1373,6 @@ class _SignupScreenState extends State<SignupScreen> {
           );
           return;
         }
-        setState(() => _currentStep++);
         return;
       }
       if (_personalDetailsSubStep < 4) {
@@ -1278,7 +1382,6 @@ class _SignupScreenState extends State<SignupScreen> {
         return;
       }
     }
-    setState(() => _currentStep++);
   }
 
   void _focusNextFormField() {
@@ -1288,36 +1391,28 @@ class _SignupScreenState extends State<SignupScreen> {
 
   void _submitCurrentStepFromKeyboard() {
     if (_isSubmitting || _registrationInFlight) return;
-    if (_currentStep == 1) {
-      _submitForm();
-    } else {
-      _nextStep();
+    if (_currentStep == 0) {
+      final lastAdult =
+          _personalDetailsSubStep == 3 && !_isMinorRegistrant();
+      final lastMinor = _personalDetailsSubStep == 4;
+      if (lastAdult || lastMinor) {
+        if (_formKey.currentState?.validate() ?? false) {
+          unawaited(_submitForm());
+        }
+        return;
+      }
     }
+    _nextStep();
   }
 
   void _previousStep() {
-    if (_currentStep == 0 && _personalDetailsSubStep > 0) {
+    if (_personalDetailsSubStep > 0) {
       setState(() => _personalDetailsSubStep--);
-      return;
     }
-    setState(() => _currentStep--);
   }
 
   String _formatPhoneNumber(String phone) {
-    String cleaned = phone.replaceAll(RegExp(r'[^\d+]'), '');
-    if (cleaned.startsWith('09') && cleaned.length == 11) {
-      return '+63${cleaned.substring(1)}';
-    }
-    if (cleaned.startsWith('639') && cleaned.length == 12) {
-      return '+$cleaned';
-    }
-    if (cleaned.startsWith('+639') && cleaned.length == 13) {
-      return cleaned;
-    }
-    if (!cleaned.startsWith('+')) {
-      return '+$cleaned';
-    }
-    return cleaned;
+    return composeE164Mobile(_mobileDialCode, phone);
   }
 
   void _startResendTimer() {
@@ -1577,8 +1672,18 @@ class _SignupScreenState extends State<SignupScreen> {
     );
   }
 
-  void _setSubmitting(bool v) {
-    if (mounted) setState(() => _isSubmitting = v);
+  void _setSubmitting(bool v, {String? phase}) {
+    if (!mounted) return;
+    setState(() {
+      _isSubmitting = v;
+      _submitPhase = v ? (phase ?? _submitPhase) : null;
+    });
+  }
+
+  void _updateSubmitPhase(String phase) {
+    if (mounted && _isSubmitting) {
+      setState(() => _submitPhase = phase);
+    }
   }
 
   /// Full registration validation on final submit (step 3 has almost no [FormField]s).
@@ -1599,7 +1704,10 @@ class _SignupScreenState extends State<SignupScreen> {
             _selectedYear == null)) {
       return 'Please select your complete date of birth (Step 1).';
     }
-    final mobileErr = validatePhilippineMobile(_mobileController.text);
+    final mobileErr = validateMobileForDialCode(
+      _mobileController.text,
+      _mobileDialCode,
+    );
     if (mobileErr != null) return mobileErr;
     if (_selectedCountry == null) {
       return 'Please select your country (Step 1).';
@@ -1634,13 +1742,19 @@ class _SignupScreenState extends State<SignupScreen> {
       return 'Please enter a valid email address.';
     }
     final pw = _passwordController.text;
-    if (pw.isEmpty) return 'Please enter a password.';
-    if (pw.length < 8) {
-      return 'Password must be at least 8 characters.';
-    }
-    if (!_isPasswordStrongEnough(pw)) {
-      return 'Password is too weak. Use at least 8 characters including '
-          'uppercase, lowercase, and a number.';
+    final emailChanging = _editingPendingSignup && _pendingEmailChanged;
+    if (!_editingPendingSignup || emailChanging || pw.isNotEmpty) {
+      if (pw.isEmpty) {
+        return emailChanging
+            ? 'Enter your password to change your email.'
+            : 'Please enter a password.';
+      }
+      if (pw.length < 8) {
+        return 'Password must be at least 8 characters.';
+      }
+      if (_confirmPasswordController.text != pw) {
+        return 'Password and confirm password do not match.';
+      }
     }
     if (_firstNameController.text.trim().isEmpty) {
       return 'Please enter your first name.';
@@ -1649,14 +1763,6 @@ class _SignupScreenState extends State<SignupScreen> {
       return 'Please enter your last name.';
     }
     return null;
-  }
-
-  /// Client-side bar so users see a clear message before Firebase rejects weak passwords.
-  bool _isPasswordStrongEnough(String pw) {
-    final hasUpper = RegExp(r'[A-Z]').hasMatch(pw);
-    final hasLower = RegExp(r'[a-z]').hasMatch(pw);
-    final hasDigit = RegExp(r'[0-9]').hasMatch(pw);
-    return hasUpper && hasLower && hasDigit;
   }
 
   bool _isGmailAddress(String email) {
@@ -1681,9 +1787,87 @@ class _SignupScreenState extends State<SignupScreen> {
     }
   }
 
-  /// Removes partial signup data when OTP cannot be saved or delivered.
-  Future<void> _rollbackFailedRegistration(String uid) async {
-    await RegistrationRollbackService.rollback(uid);
+  /// When Auth still has an email but Firestore registration was deleted (or never
+  /// completed), sign in with the same password, wipe the remnant, so signup can
+  /// recreate the account. Returns true if Auth is clear for a new createUser.
+  Future<bool> _tryReclaimOrphanAuthEmail({
+    required String contactEmail,
+    required String authEmail,
+    required String password,
+  }) async {
+    final durable =
+        await UserDirectoryService.emailHasDurableRegistration(contactEmail);
+    if (durable) return false;
+
+    try {
+      try {
+        await FirebaseAuth.instance.signOut();
+      } catch (_) {}
+      final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: authEmail,
+        password: password,
+      );
+      final orphanUid = cred.user?.uid;
+      if (orphanUid == null || orphanUid.isEmpty) return false;
+      await RegistrationRollbackService.rollback(orphanUid);
+      try {
+        await FirebaseAuth.instance.signOut();
+      } catch (_) {}
+      debugPrint('[REG] reclaimed orphan Auth for $authEmail');
+      return true;
+    } on FirebaseAuthException catch (e) {
+      debugPrint('[REG] orphan reclaim failed: ${e.code} ${e.message}');
+      return false;
+    } catch (e, st) {
+      debugPrint('[REG] orphan reclaim error: $e\n$st');
+      return false;
+    }
+  }
+
+  Future<void> _handleEmailAlreadyInUseOnSignup({
+    required String contactEmail,
+    required String authEmail,
+    required String password,
+  }) async {
+    final durable =
+        await UserDirectoryService.emailHasDurableRegistration(contactEmail);
+    if (durable) {
+      if (mounted) {
+        _registrationSnack(
+          'This email is already registered. Please sign in instead.',
+          background: Colors.orange.shade800,
+        );
+        Navigator.pushReplacementNamed(context, '/login');
+      }
+      return;
+    }
+
+    if (mounted) {
+      _registrationSnack(
+        'This email was removed from the system. '
+        'Sign up again with the same password to recreate your account, '
+        'or use a different email.',
+        background: Colors.orange.shade800,
+      );
+    }
+    final reclaimed = await _tryReclaimOrphanAuthEmail(
+      contactEmail: contactEmail,
+      authEmail: authEmail,
+      password: password,
+    );
+    if (!mounted) return;
+    if (reclaimed) {
+      _registrationSnack(
+        'Previous account cleared. Tap Submit Registration again to continue.',
+        background: Colors.green.shade700,
+      );
+    } else {
+      _registrationSnack(
+        'Could not free this email automatically. Use the password from the '
+        'old signup and tap Submit again, or contact support.',
+        background: Colors.red.shade700,
+      );
+    }
   }
 
   /// Ensures Firestore requests run with a fresh Auth token (fixes web permission-denied after sign-up).
@@ -1712,6 +1896,10 @@ class _SignupScreenState extends State<SignupScreen> {
     if (looksLikeGoogleFirebaseClientBlocked(m)) {
       debugPrintFirebaseClientBlockedHint();
       return firebaseClientBlockedUserMessage();
+    }
+    if (e.code == 'weak-password') {
+      return 'Password was rejected by Firebase. Use at least 8 characters '
+          '(your project may still require a stronger password in Firebase Console).';
     }
     if (m != null && m.isNotEmpty) return 'Auth [${e.code}]: $m';
     return 'Auth [${e.code}]: (no message — check Firebase Console → Authentication)';
@@ -1758,9 +1946,327 @@ class _SignupScreenState extends State<SignupScreen> {
     return s;
   }
 
+  /// Re-save pending signup after OTP “Edit details” (no cancel / rollback).
+  Future<void> _submitPendingSignupEdits() async {
+    if (_registrationInFlight || _isSubmitting) return;
+    _registrationInFlight = true;
+    debugPrint('[REG] ========== pending edit start ==========');
+
+    try {
+      final snapshotError = _validateRegistrationSnapshot();
+      if (snapshotError != null) {
+        _registrationSnack(snapshotError, background: Colors.red.shade700);
+        return;
+      }
+      if (_formKey.currentState != null && !_formKey.currentState!.validate()) {
+        _registrationSnack(
+          'Please fix the highlighted fields before continuing.',
+          background: Colors.red.shade700,
+        );
+        return;
+      }
+
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        _registrationSnack(
+          'Session expired. Please sign up again.',
+          background: Colors.red.shade700,
+        );
+        return;
+      }
+      await PendingRegistrationCache.hydrate();
+      final existing = PendingRegistrationCache.forUid(user.uid);
+      if (existing == null) {
+        _registrationSnack(
+          'No unfinished signup found.',
+          background: Colors.red.shade700,
+        );
+        return;
+      }
+
+      _setSubmitting(true, phase: 'Saving your updates…');
+      TextInput.finishAutofillContext(shouldSave: false);
+
+      final contactEmail = normalizeEmail(_emailController.text);
+      final emailChanged =
+          contactEmail != normalizeEmail(existing.contactEmail);
+      var authEmail = emailChanged
+          ? contactEmail
+          : (existing.authEmail.isNotEmpty
+              ? existing.authEmail
+              : contactEmail);
+      var regUid = user.uid;
+      String? registrationOtp;
+      var otpAlreadySent = true;
+      var emailDeliveryFailed = false;
+
+      if (emailChanged) {
+        final password = _passwordController.text;
+        _updateSubmitPhase('Updating account email…');
+        try {
+          final oldAuthEmail = normalizeEmail(
+            existing.authEmail.isNotEmpty
+                ? existing.authEmail
+                : (user.email ?? existing.contactEmail),
+          );
+          final credential = EmailAuthProvider.credential(
+            email: oldAuthEmail,
+            password: password,
+          );
+          await user.reauthenticateWithCredential(credential);
+          try {
+            await OtpService.deleteOtp(user.uid);
+          } catch (_) {}
+          // Keep pending until new Auth user exists.
+          await user.delete();
+
+          try {
+            final cred =
+                await FirebaseAuth.instance.createUserWithEmailAndPassword(
+              email: authEmail,
+              password: password,
+            );
+            regUid = cred.user?.uid ?? '';
+          } on FirebaseAuthException catch (e) {
+            if (e.code == 'email-already-in-use' &&
+                _isMinorRegistrant() &&
+                _isGmailAddress(contactEmail)) {
+              authEmail = _buildMinorGmailAlias(contactEmail);
+              final cred =
+                  await FirebaseAuth.instance.createUserWithEmailAndPassword(
+                email: authEmail,
+                password: password,
+              );
+              regUid = cred.user?.uid ?? '';
+            } else {
+              rethrow;
+            }
+          }
+          if (regUid.isEmpty) {
+            throw StateError('Auth user id missing after email change.');
+          }
+          await _ensureAuthReadyForFirestore(regUid);
+          registrationOtp = OtpService.generateSixDigitOtp();
+          await OtpService.saveOtp(
+            uid: regUid,
+            email: contactEmail,
+            otp: registrationOtp,
+          );
+          otpAlreadySent = false;
+        } on FirebaseAuthException catch (e) {
+          _setSubmitting(false);
+          _registrationSnack(
+            e.code == 'wrong-password' || e.code == 'invalid-credential'
+                ? 'Wrong password. Enter the password you used to sign up.'
+                : _formatFirebaseAuthException(e),
+            background: Colors.red.shade700,
+          );
+          return;
+        } catch (e) {
+          _setSubmitting(false);
+          _registrationSnack(
+            _formatRegistrationError(e),
+            background: Colors.red.shade700,
+          );
+          return;
+        }
+      }
+
+      final firstName = _capitalizeNameWords(_firstNameController.text);
+      final middleInitial =
+          _normalizeMiddleInitial(_middleNameController.text);
+      final lastName = _capitalizeNameWords(_lastNameController.text);
+      String fullName = firstName;
+      if (middleInitial.isNotEmpty) fullName += ' $middleInitial.';
+      fullName += ' $lastName';
+      if (_selectedSuffix != null && _selectedSuffix != 'None') {
+        fullName += ' $_selectedSuffix';
+      }
+
+      String? dobString;
+      if (_selectedDateOfBirth != null) {
+        dobString =
+            '${_selectedDateOfBirth!.year}-${_selectedDateOfBirth!.month.toString().padLeft(2, '0')}-${_selectedDateOfBirth!.day.toString().padLeft(2, '0')}';
+      }
+
+      final ageYears = _ageInYears();
+      final isMinorAccount =
+          ageYears != null && ageYears <= _minorMaxAgeYears;
+      final touristId = (_existingTouristId != null &&
+              _existingTouristId!.trim().isNotEmpty)
+          ? _existingTouristId!.trim()
+          : TouristIdHelper.generate(province: _resolvedProvinceForSave());
+
+      String? profileImageBase64 = existing.localProfile?.profileImageBase64 ??
+          existing.touristData['profileImageBase64']?.toString();
+      String? profilePhotoUrl = existing.localProfile?.profilePhotoUrl ??
+          existing.touristData['profilePhotoUrl']?.toString();
+      var usedPhotoFirestoreFallback = existing.usedPhotoFirestoreFallback;
+
+      final registrationMunicipalityId =
+          RegistrationMunicipalityResolver.fromHomeAddress(
+            country: _selectedCountry,
+            province: _resolvedProvinceForSave(),
+            city: _resolvedCityForSave(),
+          );
+
+      final touristData = <String, dynamic>{
+        ...Map<String, dynamic>.from(existing.touristData),
+        'touristId': touristId,
+        'firebaseUid': regUid,
+        'firstName': firstName,
+        'middleName': middleInitial,
+        'lastName': lastName,
+        'fullName': fullName,
+        'suffix': _selectedSuffix,
+        'sex': _selectedSex,
+        'nationality': _selectedNationality,
+        'dateOfBirth': dobString,
+        'mobile': _mobileForSave(),
+        'email': contactEmail,
+        'authEmail': authEmail,
+        'country': _selectedCountry,
+        'province': _resolvedProvinceForSave(),
+        'city': _resolvedCityForSave(),
+        'street': '',
+        'barangay': _resolvedBarangay(),
+        'profilePhotoUrl': profilePhotoUrl,
+        'profilePhotoPending': usedPhotoFirestoreFallback,
+        'isLocal': _isPhilippines,
+        'localOrForeign': _derivedLocalOrForeign,
+        'receiveUpdates': _receiveUpdates,
+        if (registrationMunicipalityId != null &&
+            registrationMunicipalityId.isNotEmpty)
+          'registrationMunicipalityId': registrationMunicipalityId,
+        'isVerified': false,
+        'minorAccountHolder': isMinorAccount,
+        'parentGuardianFullName': isMinorAccount
+            ? _parentGuardianController.text.trim()
+            : null,
+        if (isMinorAccount) 'parentGuardianEmail': contactEmail,
+      };
+      if (profileImageBase64 != null) {
+        touristData['profileImageBase64'] = profileImageBase64;
+      } else {
+        touristData.remove('profileImageBase64');
+      }
+
+      final userData = <String, dynamic>{
+        ...Map<String, dynamic>.from(existing.userData),
+        'firebaseUid': regUid,
+        'email': authEmail,
+        if (isMinorAccount) 'parentGuardianEmail': contactEmail,
+        'fullName': fullName,
+        'role': 'tourist',
+        'isVerified': false,
+      };
+
+      await PendingRegistrationCache.save(
+        PendingRegistration(
+          uid: regUid,
+          contactEmail: contactEmail,
+          authEmail: authEmail,
+          touristData: TouristRegistrationService.jsonSafeMap(touristData),
+          userData: TouristRegistrationService.jsonSafeMap(userData),
+          usedPhotoFirestoreFallback: usedPhotoFirestoreFallback,
+          localProfile: PendingLocalProfile(
+            firstName: firstName,
+            middleName: middleInitial,
+            lastName: lastName,
+            suffix: _selectedSuffix,
+            sex: _selectedSex,
+            nationality: _selectedNationality,
+            dateOfBirth: dobString,
+            mobile: _mobileForSave(),
+            email: contactEmail,
+            country: _selectedCountry ?? '',
+            province: _resolvedProvinceForSave(),
+            city: _resolvedCityForSave(),
+            street: '',
+            barangay: _resolvedBarangay(),
+            touristId: touristId,
+            profileImageBase64: profileImageBase64,
+            profilePhotoUrl: profilePhotoUrl,
+          ),
+        ),
+      );
+
+      AuthConfig.currentUserUid = regUid;
+      try {
+        await SessionStorage.saveSession(
+          regUid,
+          role: UserRole.tourist,
+          email: authEmail,
+        );
+      } catch (e, st) {
+        debugPrint('[REG] pending-edit session (non-fatal): $e\n$st');
+      }
+
+      if (emailChanged && registrationOtp != null) {
+        _updateSubmitPhase('Sending email code…');
+        final delivery = await OtpDeliveryService.deliverVerificationCode(
+          uid: regUid,
+          email: contactEmail,
+          displayName: fullName,
+          otp: registrationOtp,
+          mobile: _mobileForSave(),
+          notifyOnThisDevice: false,
+          trySms: false,
+          otpAlreadyInFirestore: true,
+          emailInBackground: true,
+        ).timeout(
+          const Duration(seconds: 5),
+          onTimeout: () => const OtpDeliveryResult(
+            emailSent: false,
+            emailError: 'Delivery timed out',
+            otpAlreadyInFirestore: true,
+          ),
+        );
+        emailDeliveryFailed = !delivery.canCompleteRegistration;
+        if (!mounted) return;
+        _registrationSnack(
+          delivery.emailSent
+              ? 'We sent a new code to $contactEmail.'
+              : delivery.messageForUser(contactEmail),
+          background: delivery.emailSent
+              ? Colors.green.shade700
+              : Colors.orange.shade800,
+        );
+      } else if (!mounted) {
+        return;
+      } else {
+        _registrationSnack(
+          'Details updated. Enter the code sent to $contactEmail.',
+          background: Colors.green.shade700,
+        );
+      }
+
+      _setSubmitting(false);
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(
+        context,
+        '/verify-otp',
+        arguments: <String, dynamic>{
+          'contactEmail': contactEmail,
+          'fromSignup': true,
+          'otpAlreadySent': otpAlreadySent || !emailChanged,
+          'emailDeliveryFailed': emailDeliveryFailed,
+        },
+      );
+      debugPrint('[REG] ========== pending edit end ==========');
+    } finally {
+      _registrationInFlight = false;
+      if (mounted) _setSubmitting(false);
+    }
+  }
+
   Future<void> _submitForm() async {
     if (_registrationInFlight || _isSubmitting) {
       debugPrint('[REG] submit ignored (already in progress)');
+      return;
+    }
+    if (_editingPendingSignup) {
+      await _submitPendingSignupEdits();
       return;
     }
     _registrationInFlight = true;
@@ -1787,7 +2293,7 @@ class _SignupScreenState extends State<SignupScreen> {
       // Decline OS/browser "save password?" prompts (esp. Chrome) for shared/public devices.
       TextInput.finishAutofillContext(shouldSave: false);
 
-      _setSubmitting(true);
+      _setSubmitting(true, phase: 'Creating account…');
 
       if (Firebase.apps.isEmpty) {
         _registrationSnack(
@@ -1804,15 +2310,14 @@ class _SignupScreenState extends State<SignupScreen> {
     final isMinorRegistrant =
         ageYearsForAuth != null && ageYearsForAuth <= _minorMaxAgeYears;
 
-    // Compress photo in parallel with auth / OTP work (optional — skip if none).
-    final hasProfilePhoto =
-        _uploadedImageBytes != null && _uploadedImageBytes!.isNotEmpty;
-    final Future<Uint8List> compressFuture = hasProfilePhoto
-        ? compute(
-            compressProfileJpegIsolate,
-            ProfileJpegCompressArgs(_uploadedImageBytes!, 800, 78),
-          )
-        : Future<Uint8List>.value(Uint8List(0));
+    // Home LGU for Registered tourists = signup address (not QR scan place).
+    final Future<String?> municipalityFuture = Future<String?>.value(
+      RegistrationMunicipalityResolver.fromHomeAddress(
+        country: _selectedCountry,
+        province: _resolvedProvinceForSave(),
+        city: _resolvedCityForSave(),
+      ),
+    );
 
     // Firebase Auth 6 removed fetchSignInMethodsForEmail (email enumeration).
     // For minors using a parent Gmail, try that address first; on conflict we
@@ -1824,7 +2329,7 @@ class _SignupScreenState extends State<SignupScreen> {
     String? uid;
     String? registrationOtp;
 
-    // --- STEP 1: Firebase Auth + OTP save ---
+    // --- STEP 1: Firebase Auth + OTP save (must succeed before navigate) ---
     try {
       debugPrint('[REG] STEP 1: createUserWithEmailAndPassword');
       try {
@@ -1852,6 +2357,18 @@ class _SignupScreenState extends State<SignupScreen> {
             email: authEmail,
             password: password,
           );
+        } else if (e.code == 'email-already-in-use') {
+          final reclaimed = await _tryReclaimOrphanAuthEmail(
+            contactEmail: contactEmail,
+            authEmail: authEmail,
+            password: password,
+          );
+          if (!reclaimed) rethrow;
+          userCredential =
+              await FirebaseAuth.instance.createUserWithEmailAndPassword(
+            email: authEmail,
+            password: password,
+          );
         } else {
           rethrow;
         }
@@ -1868,6 +2385,7 @@ class _SignupScreenState extends State<SignupScreen> {
       }
       await _ensureAuthReadyForFirestore(uid);
 
+      _updateSubmitPhase('Saving verification code…');
       registrationOtp = OtpService.generateSixDigitOtp();
       debugPrint('[REG] STEP 3: email_otps save (immediately after auth)');
       await OtpService.saveOtp(
@@ -1879,16 +2397,12 @@ class _SignupScreenState extends State<SignupScreen> {
     } on FirebaseAuthException catch (e, st) {
       debugPrint('[REG] STEP 1 FAIL: code=${e.code} message=${e.message}\n$st');
       _setSubmitting(false);
-      // Account already exists in Firebase Authentication — no new signup / OTP flow.
       if (e.code == 'email-already-in-use') {
-        if (mounted) {
-          _registrationSnack(
-            'This email is already registered. Sign in, then enter your '
-            'verification code on the next screen.',
-            background: Colors.orange.shade800,
-          );
-          Navigator.pushReplacementNamed(context, '/login');
-        }
+        await _handleEmailAlreadyInUseOnSignup(
+          contactEmail: contactEmail,
+          authEmail: authEmail,
+          password: password,
+        );
         return;
       }
       _registrationSnack(
@@ -1917,76 +2431,13 @@ class _SignupScreenState extends State<SignupScreen> {
       return;
     }
 
-    // --- STEP 2: optional photo upload + municipality resolve ---
-    _ProfilePhotoResult? profilePhoto;
-    late final String? registrationMunicipalityId;
+    // OTP is saved — never delete the Auth user from here on (keeps code intact).
+    final String regUid = uid;
+    _updateSubmitPhase('Preparing your profile…');
 
-    if (!hasProfilePhoto) {
-      debugPrint('[REG] STEP 2: no profile photo — skipping upload');
-      try {
-        registrationMunicipalityId =
-            await RegistrationMunicipalityResolver.resolveForSignup();
-      } catch (e, st) {
-        debugPrint('[REG] STEP 2 municipality resolve (non-fatal): $e\n$st');
-        registrationMunicipalityId = null;
-      }
-    } else {
-      debugPrint('[REG] awaiting photo compress (started in parallel)');
-      final compressedPhoto = await compressFuture;
-      if (compressedPhoto.isEmpty) {
-        await _deleteAuthUserBestEffort();
-        _setSubmitting(false);
-        _registrationSnack(
-          'Photo could not be compressed. Try another JPG/PNG, or skip the photo.',
-          background: Colors.red.shade700,
-        );
-        return;
-      }
-
-      try {
-        final parallel = await Future.wait<Object?>([
-          _uploadProfilePhoto(uid: uid, compressedPhoto: compressedPhoto),
-          RegistrationMunicipalityResolver.resolveForSignup(),
-        ]);
-        profilePhoto = parallel[0] as _ProfilePhotoResult?;
-        registrationMunicipalityId = parallel[1] as String?;
-      } on FirebaseException catch (e, st) {
-        debugPrint(
-          '[REG] STEP 2 FAIL: plugin=${e.plugin} code=${e.code} message=${e.message}\n$st',
-        );
-        await _deleteAuthUserBestEffort();
-        _setSubmitting(false);
-        _registrationSnack(
-          'Profile photo could not be saved — ${_formatFirebaseException(e)}',
-          background: Colors.red.shade700,
-        );
-        return;
-      } catch (e, st) {
-        debugPrint('[REG] STEP 2 FAIL (non-Firebase): $e\n$st');
-        await _deleteAuthUserBestEffort();
-        _setSubmitting(false);
-        _registrationSnack(
-          'Profile photo upload failed — ${_formatRegistrationError(e)}',
-          background: Colors.red.shade700,
-        );
-        return;
-      }
-
-      if (profilePhoto == null || !profilePhoto.hasPhoto) {
-        await _deleteAuthUserBestEffort();
-        _setSubmitting(false);
-        _registrationSnack(
-          'Photo is too large to save. Try a smaller JPG/PNG, or skip the photo.',
-          background: Colors.red.shade700,
-        );
-        return;
-      }
-    }
-
-    final profilePhotoUrl = profilePhoto?.profilePhotoUrl;
-    final profileImageBase64 = profilePhoto?.profileImageBase64;
-    final usedPhotoFirestoreFallback =
-        profilePhoto?.usedFirestoreFallback ?? false;
+    // Profile photo is optional and added later from Profile tab.
+    debugPrint('[REG] STEP 2: skipping profile photo during signup');
+    final String? registrationMunicipalityId = await municipalityFuture;
 
     // --- Prepare name + tourist id (needed for Firestore) ---
     final touristId = TouristIdHelper.generate(
@@ -1999,11 +2450,35 @@ class _SignupScreenState extends State<SignupScreen> {
           '${_selectedDateOfBirth!.year}-${_selectedDateOfBirth!.month.toString().padLeft(2, '0')}-${_selectedDateOfBirth!.day.toString().padLeft(2, '0')}';
     }
 
-    String fullName = _firstNameController.text.trim();
-    if (_middleNameController.text.trim().isNotEmpty) {
-      fullName += ' ${_middleNameController.text.trim()[0]}.';
+    final firstName = _capitalizeNameWords(_firstNameController.text);
+    final middleInitial =
+        _normalizeMiddleInitial(_middleNameController.text);
+    final lastName = _capitalizeNameWords(_lastNameController.text);
+    // Keep controllers in sync with normalized casing for later UI / pending save.
+    if (_firstNameController.text != firstName) {
+      _firstNameController.value = TextEditingValue(
+        text: firstName,
+        selection: TextSelection.collapsed(offset: firstName.length),
+      );
     }
-    fullName += ' ${_lastNameController.text.trim()}';
+    if (_middleNameController.text != middleInitial) {
+      _middleNameController.value = TextEditingValue(
+        text: middleInitial,
+        selection: TextSelection.collapsed(offset: middleInitial.length),
+      );
+    }
+    if (_lastNameController.text != lastName) {
+      _lastNameController.value = TextEditingValue(
+        text: lastName,
+        selection: TextSelection.collapsed(offset: lastName.length),
+      );
+    }
+
+    String fullName = firstName;
+    if (middleInitial.isNotEmpty) {
+      fullName += ' $middleInitial.';
+    }
+    fullName += ' $lastName';
     if (_selectedSuffix != null && _selectedSuffix != 'None') {
       fullName += ' $_selectedSuffix';
     }
@@ -2015,66 +2490,55 @@ class _SignupScreenState extends State<SignupScreen> {
 
     final otp = registrationOtp;
 
-    // --- STEP 4: Email delivery (OTP already in Firestore from STEP 3) ---
-    if (!kIsWeb) {
-      // Non-blocking device notification setup — don't delay email send.
-      unawaited(ensureEmailOtpNotificationSupport());
-      unawaited(syncFcmTokenToUserDoc(uid));
-    }
-    debugPrint('[REG] STEP 4: OTP delivery (email)');
+    // --- STEP 4: email Inbox only (no on-device OTP popup) ---
+    // Do NOT sync FCM / write users|tourists stubs until after OTP verification.
+    _updateSubmitPhase('Sending email code…');
+    debugPrint('[REG] STEP 4: OTP email delivery (Inbox only, no local popup)');
     final delivery = await OtpDeliveryService.deliverVerificationCode(
-      uid: uid,
+      uid: regUid,
       email: contactEmail,
       displayName: fullName,
       otp: otp,
-      mobile: _mobileController.text.trim(),
-      notifyOnThisDevice: !kIsWeb,
+      mobile: _mobileForSave(),
+      notifyOnThisDevice: false,
       trySms: false,
       otpAlreadyInFirestore: true,
+      emailInBackground: true,
     ).timeout(
-      const Duration(seconds: 15),
+      const Duration(seconds: 5),
       onTimeout: () {
         debugPrint('[REG] STEP 4 timeout — continuing with saved OTP');
         return const OtpDeliveryResult(
           emailSent: false,
-          emailError: 'Email send timed out',
+          emailError: 'Delivery timed out',
           otpAlreadyInFirestore: true,
         );
       },
     );
-    if (!delivery.canCompleteRegistration) {
-      debugPrint(
-        '[REG] STEP 4 FAIL: email=${delivery.emailError} sms=${delivery.smsError}',
-      );
-      await _rollbackFailedRegistration(uid);
-      _registrationSnack(
-        'Verification code could not be saved. Your account was not created. '
-        'Please try again.',
-        background: Colors.red.shade700,
-      );
-      return;
-    }
+    // OTP already in Firestore — never roll back for delivery hiccups.
     if (delivery.emailSent) {
       debugPrint('[REG] STEP 4 OK: email sent');
     } else {
       debugPrint(
-        '[REG] STEP 4: email delivery failed/timed out — OTP saved, continuing',
+        '[REG] STEP 4: email deferred/background — OTP saved, continuing to verify',
       );
     }
+
+    _updateSubmitPhase('Opening verification…');
 
     // --- Defer Firestore profile until OTP verified on /verify-otp ---
     final touristData = <String, dynamic>{
       'touristId': touristId,
-      'firebaseUid': uid,
-      'firstName': _firstNameController.text.trim(),
-      'middleName': _middleNameController.text.trim(),
-      'lastName': _lastNameController.text.trim(),
+      'firebaseUid': regUid,
+      'firstName': firstName,
+      'middleName': middleInitial,
+      'lastName': lastName,
       'fullName': fullName,
       'suffix': _selectedSuffix,
       'sex': _selectedSex,
       'nationality': _selectedNationality,
       'dateOfBirth': dobString,
-      'mobile': _mobileController.text.trim(),
+      'mobile': _mobileForSave(),
       'email': contactEmail,
       'authEmail': authEmail,
       'country': _selectedCountry,
@@ -2082,9 +2546,8 @@ class _SignupScreenState extends State<SignupScreen> {
       'city': _resolvedCityForSave(),
       'street': '',
       'barangay': _resolvedBarangay(),
-      'profilePhotoUrl': profilePhotoUrl,
-      if (profileImageBase64 != null) 'profileImageBase64': profileImageBase64,
-      'profilePhotoPending': usedPhotoFirestoreFallback,
+      'profilePhotoUrl': null,
+      'profilePhotoPending': false,
       'isLocal': _isPhilippines,
       'localOrForeign': _derivedLocalOrForeign,
       'transportation': '',
@@ -2114,7 +2577,7 @@ class _SignupScreenState extends State<SignupScreen> {
       'partyHeadcount': partyHeadcount,
     };
     final userData = <String, dynamic>{
-      'firebaseUid': uid,
+      'firebaseUid': regUid,
       'email': authEmail,
       if (isMinorAccount) 'parentGuardianEmail': contactEmail,
       'fullName': fullName,
@@ -2125,21 +2588,21 @@ class _SignupScreenState extends State<SignupScreen> {
 
     await PendingRegistrationCache.save(
       PendingRegistration(
-        uid: uid,
+        uid: regUid,
         contactEmail: contactEmail,
         authEmail: authEmail,
         touristData: TouristRegistrationService.jsonSafeMap(touristData),
         userData: TouristRegistrationService.jsonSafeMap(userData),
-        usedPhotoFirestoreFallback: usedPhotoFirestoreFallback,
+        usedPhotoFirestoreFallback: false,
         localProfile: PendingLocalProfile(
-          firstName: _firstNameController.text.trim(),
-          middleName: _middleNameController.text.trim(),
-          lastName: _lastNameController.text.trim(),
+          firstName: firstName,
+          middleName: middleInitial,
+          lastName: lastName,
           suffix: _selectedSuffix,
           sex: _selectedSex,
           nationality: _selectedNationality,
           dateOfBirth: dobString,
-          mobile: _mobileController.text.trim(),
+          mobile: _mobileForSave(),
           email: contactEmail,
           country: _selectedCountry ?? '',
           province: _resolvedProvinceForSave(),
@@ -2147,16 +2610,16 @@ class _SignupScreenState extends State<SignupScreen> {
           street: '',
           barangay: _resolvedBarangay(),
           touristId: touristId,
-          profileImageBase64: profileImageBase64,
-          profilePhotoUrl: profilePhotoUrl,
+          profileImageBase64: null,
+          profilePhotoUrl: null,
         ),
       ),
     );
 
-    AuthConfig.currentUserUid = uid;
+    AuthConfig.currentUserUid = regUid;
     try {
       await SessionStorage.saveSession(
-        uid,
+        regUid,
         role: UserRole.tourist,
         email: authEmail,
       );
@@ -2166,15 +2629,9 @@ class _SignupScreenState extends State<SignupScreen> {
 
     _setSubmitting(false);
     if (mounted) {
-      if (usedPhotoFirestoreFallback) {
-        _registrationSnack(
-          'Photo will be linked to your account after you verify your email.',
-          background: Colors.orange.shade800,
-        );
-      }
       debugPrint('[REG] STEP 5 deferred — navigate to verify-otp');
       final snackMsg = delivery.emailSent
-          ? 'We sent a 6-digit code to $contactEmail. Enter it below to finish signup.'
+          ? 'We sent a 6-digit code to $contactEmail. Open your email Inbox and enter it below.'
           : delivery.messageForUser(contactEmail);
       _registrationSnack(
         snackMsg,
@@ -2189,6 +2646,8 @@ class _SignupScreenState extends State<SignupScreen> {
         arguments: <String, dynamic>{
           'contactEmail': contactEmail,
           'fromSignup': true,
+          'otpAlreadySent': true,
+          'emailDeliveryFailed': !delivery.canCompleteRegistration,
         },
       );
     }
@@ -2199,46 +2658,6 @@ class _SignupScreenState extends State<SignupScreen> {
     }
   }
 
-  Future<void> _pickImage(ImageSource source) async {
-    try {
-      final XFile? pickedFile = await _imagePicker.pickImage(
-        source: source,
-        maxWidth: 800,
-        maxHeight: 800,
-        imageQuality: 85,
-        preferredCameraDevice: CameraDevice.front,
-      );
-      if (pickedFile != null) {
-        final bytes = await pickedFile.readAsBytes();
-        if (!mounted) return;
-        setState(() {
-          _uploadedImageBytes = bytes;
-        });
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error picking image: $e'),
-          backgroundColor: Colors.red.shade700,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
-  }
-
-  Future<void> _pickFaceFromCamera() async {
-    if (kIsWeb) {
-      final bytes = await showWebFaceCameraCapture(context);
-      if (!mounted || bytes == null) return;
-      setState(() => _uploadedImageBytes = bytes);
-      return;
-    }
-    await _pickImage(ImageSource.camera);
-  }
-
-  Future<void> _pickFaceFromGallery() => _pickImage(ImageSource.gallery);
-
   InputDecoration _inputDecoration({
     required String hint,
     IconData? prefixIcon,
@@ -2247,10 +2666,16 @@ class _SignupScreenState extends State<SignupScreen> {
     bool compact = false,
   }) {
     if (_isDesktopGlass) {
-      return webGlassInputDecoration(
+      final base = webGlassInputDecoration(
         hint: hint,
         prefixIcon: prefixIcon,
         suffixIcon: suffixIcon,
+      );
+      return base.copyWith(
+        fillColor: _formFillColor,
+        hintStyle: compact
+            ? _fieldHintTextStyle.copyWith(fontSize: 14)
+            : _fieldHintTextStyle,
       );
     }
     return InputDecoration(
@@ -2387,21 +2812,6 @@ class _SignupScreenState extends State<SignupScreen> {
 
   Widget _buildStepInfoBanner() {
     // Per-step peach info banners (mock).
-    if (_currentStep >= 1) {
-      return TouristSignupInfoBanner(
-        icon: Icons.photo_camera_outlined,
-        child: Text(
-          'Optional: add a clear face photo for your tourist profile. You can skip and finish registration.',
-          style: TextStyle(
-            fontSize: 12.5,
-            height: 1.4,
-            fontWeight: FontWeight.w500,
-            color: TouristSignupChrome.textDark.withValues(alpha: 0.85),
-          ),
-        ),
-      );
-    }
-
     switch (_personalDetailsSubStep) {
       case 0:
         return TouristSignupInfoBanner(
@@ -2537,26 +2947,32 @@ class _SignupScreenState extends State<SignupScreen> {
         : Colors.black.withValues(alpha: 0.44);
   }
 
-  Color get _formFillColor =>
-      _isDesktopGlass ? Colors.black.withValues(alpha: 0.38) : _inputFill;
+  /// Opaque enough that white value text stays readable over light panels.
+  Color get _formFillColor => _isDesktopGlass
+      ? Colors.black.withValues(alpha: 0.58)
+      : _inputFill;
 
   Color get _formBorderColor =>
       _isDesktopGlass ? Colors.white.withValues(alpha: 0.45) : _inputBorder;
 
-  /// High-contrast placeholders on dark glass / light mobile fills.
+  /// Light-mode placeholder grey (matches signup UX reference).
+  static const Color _fieldHintColorLight = Color(0xFF9CA3AF);
+
+  /// Placeholders: muted grey on light fills; near-white on dark glass fills.
   TextStyle get _fieldHintTextStyle => TextStyle(
         color: _isDesktopGlass
-            ? Colors.white.withValues(alpha: 0.95)
-            : const Color(0xFF475569),
+            ? Colors.white.withValues(alpha: 0.88)
+            : _fieldHintColorLight,
         fontSize: 15,
-        fontWeight: FontWeight.w600,
+        fontWeight: FontWeight.w400,
         letterSpacing: 0.1,
+        height: 1.25,
       );
 
   TextStyle get _formValueTextStyle => TextStyle(
-        color: _isDesktopGlass ? Colors.white.withValues(alpha: 0.98) : _textDark,
+        color: _isDesktopGlass ? Colors.white : _textDark,
         fontSize: 16,
-        fontWeight: FontWeight.w500,
+        fontWeight: FontWeight.w600,
       );
 
   Widget _dropdownHint(String text, {double fontSize = 15}) {
@@ -2938,14 +3354,7 @@ class _SignupScreenState extends State<SignupScreen> {
   }
 
   Widget _buildCurrentStep() {
-    switch (_currentStep) {
-      case 0:
-        return _buildPersonalDetailsStep();
-      case 1:
-        return _buildUploadsStep();
-      default:
-        return _buildPersonalDetailsStep();
-    }
+    return _buildPersonalDetailsStep();
   }
 
   Widget _buildPersonalDetailsStep() {
@@ -3199,16 +3608,17 @@ class _SignupScreenState extends State<SignupScreen> {
             onEditingComplete: _focusNextFormField,
             style: _formValueTextStyle,
             decoration: _inputDecoration(
-              hint: 'e.g. Juan',
+              hint: 'enter your name',
               prefixIcon: Icons.person_outline_rounded,
             ),
             validator: (v) => _requiredField(v, 'First name'),
             textCapitalization: TextCapitalization.words,
+            inputFormatters: [_CapitalizeWordsFormatter()],
           ),
         ),
 
         _buildFormField(
-          label: 'Middle Name',
+          label: 'Middle Initial',
           child: TextFormField(
             controller: _middleNameController,
             textInputAction: TextInputAction.next,
@@ -3216,10 +3626,14 @@ class _SignupScreenState extends State<SignupScreen> {
             onEditingComplete: _focusNextFormField,
             style: _formValueTextStyle,
             decoration: _inputDecoration(
-              hint: 'e.g. Dela',
+              hint: 'enter your middle initial',
               prefixIcon: Icons.badge_outlined,
             ),
-            textCapitalization: TextCapitalization.words,
+            textCapitalization: TextCapitalization.characters,
+            inputFormatters: [
+              LengthLimitingTextInputFormatter(1),
+              _MiddleInitialFormatter(),
+            ],
           ),
         ),
 
@@ -3233,11 +3647,12 @@ class _SignupScreenState extends State<SignupScreen> {
             onEditingComplete: _submitCurrentStepFromKeyboard,
             style: _formValueTextStyle,
             decoration: _inputDecoration(
-              hint: 'e.g. Cruz',
+              hint: 'enter your last name',
               prefixIcon: Icons.person_outline_rounded,
             ),
             validator: (v) => _requiredField(v, 'Last name'),
             textCapitalization: TextCapitalization.words,
+            inputFormatters: [_CapitalizeWordsFormatter()],
           ),
         ),
 
@@ -3478,18 +3893,30 @@ class _SignupScreenState extends State<SignupScreen> {
         _buildFormField(
           label: 'Primary Mobile No.',
           required: true,
-          child: TextFormField(
+          child: DialCodeMobileField(
             controller: _mobileController,
-            keyboardType: TextInputType.phone,
+            dialCode: _mobileDialCode,
+            onDialCodeChanged: (v) => setState(() => _mobileDialCode = v),
+            textStyle: _formValueTextStyle,
+            dialTextStyle: _formValueTextStyle.copyWith(
+              fontSize: 15,
+              height: 1.2,
+              fontWeight: FontWeight.w700,
+            ),
+            menuItemTextStyle: _dropdownMenuTextStyle(fontSize: 14),
             textInputAction: TextInputAction.next,
             onFieldSubmitted: (_) => _focusNextFormField(),
             onEditingComplete: _focusNextFormField,
-            style: _formValueTextStyle,
-            decoration: _inputDecoration(
-              hint: 'e.g. 09171234567',
+            dialDecoration: _inputDecoration(
+              hint: '+63',
+              compact: true,
+            ),
+            numberDecoration: _inputDecoration(
+              hint: _mobileDialCode == '+63'
+                  ? '9XXXXXXXXX'
+                  : 'enter your number',
               prefixIcon: Icons.phone_outlined,
             ),
-            validator: validatePhilippineMobile,
           ),
         ),
         const SizedBox(height: 16),
@@ -3503,6 +3930,11 @@ class _SignupScreenState extends State<SignupScreen> {
             textInputAction: TextInputAction.next,
             onFieldSubmitted: (_) => _focusNextFormField(),
             onEditingComplete: _focusNextFormField,
+            onChanged: _editingPendingSignup
+                ? (_) {
+                    setState(() {});
+                  }
+                : null,
             autofillHints: const [],
             autocorrect: false,
             enableSuggestions: false,
@@ -3511,7 +3943,7 @@ class _SignupScreenState extends State<SignupScreen> {
               letterSpacing: 0,
             ),
             decoration: _inputDecoration(
-              hint: 'e.g. juan@email.com',
+              hint: 'enter your email',
               prefixIcon: Icons.email_outlined,
               compact: true,
             ),
@@ -3522,11 +3954,27 @@ class _SignupScreenState extends State<SignupScreen> {
             },
           ),
         ),
+        if (_editingPendingSignup) ...[
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              _pendingEmailChanged
+                  ? 'Email changed — enter your password below, then continue to get a new code.'
+                  : 'You can fix your email here. Password is only needed if you change it.',
+              style: TextStyle(
+                fontSize: 12.5,
+                height: 1.35,
+                fontWeight: FontWeight.w600,
+                color: _helperTextColor,
+              ),
+            ),
+          ),
+        ],
         const SizedBox(height: 16),
 
         _buildFormField(
           label: 'Password',
-          required: true,
+          required: !_editingPendingSignup,
           child: TextFormField(
             controller: _passwordController,
             obscureText: _obscurePassword,
@@ -3538,7 +3986,9 @@ class _SignupScreenState extends State<SignupScreen> {
             enableSuggestions: false,
             style: _formValueTextStyle,
             decoration: _inputDecoration(
-              hint: 'Min 8 chars',
+              hint: _editingPendingSignup
+                  ? 'needed only to change email'
+                  : 'enter your password',
               prefixIcon: Icons.lock_outline,
               suffixIcon: IconButton(
                 icon: Icon(
@@ -3553,19 +4003,26 @@ class _SignupScreenState extends State<SignupScreen> {
               ),
             ),
             validator: (v) {
-              if (v == null || v.isEmpty) return 'Required';
-              if (v.length < 8) return 'Min 8 chars';
-              if (!_isPasswordStrongEnough(v)) {
-                return 'Use upper, lower, and a number';
+              if (_editingPendingSignup) {
+                if (!_pendingEmailChanged && (v == null || v.isEmpty)) {
+                  return null;
+                }
+                if (_pendingEmailChanged && (v == null || v.isEmpty)) {
+                  return 'Required to change email';
+                }
+                if (v != null && v.isNotEmpty && v.length < 8) {
+                  return 'Password must be at least 8 characters';
+                }
+                return null;
               }
-              return null;
+              return validateTouristSignupPassword(v);
             },
           ),
         ),
         const SizedBox(height: 16),
         _buildFormField(
           label: 'Confirm Password',
-          required: true,
+          required: !_editingPendingSignup,
           child: TextFormField(
             controller: _confirmPasswordController,
             obscureText: _obscureConfirmPassword,
@@ -3577,7 +4034,9 @@ class _SignupScreenState extends State<SignupScreen> {
             enableSuggestions: false,
             style: _formValueTextStyle,
             decoration: _inputDecoration(
-              hint: 'Re-type',
+              hint: _editingPendingSignup
+                  ? 'confirm if changing email'
+                  : 'confirm your password',
               prefixIcon: Icons.lock_outline,
               suffixIcon: IconButton(
                 icon: Icon(
@@ -3593,7 +4052,19 @@ class _SignupScreenState extends State<SignupScreen> {
               ),
             ),
             validator: (v) {
-              if (v == null || v.isEmpty) return 'Required';
+              if (_editingPendingSignup) {
+                if (!_pendingEmailChanged &&
+                    _passwordController.text.isEmpty &&
+                    (v == null || v.isEmpty)) {
+                  return null;
+                }
+              }
+              if (v == null || v.isEmpty) {
+                if (_editingPendingSignup && !_pendingEmailChanged) {
+                  return null;
+                }
+                return 'Required';
+              }
               if (v != _passwordController.text) return 'No match';
               return null;
             },
@@ -3604,8 +4075,14 @@ class _SignupScreenState extends State<SignupScreen> {
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: TouristSignupChrome.peachBanner,
+            // Peach washes out white glass field text; use a dark panel on glass.
+            color: _isDesktopGlass
+                ? Colors.black.withValues(alpha: 0.42)
+                : TouristSignupChrome.peachBanner,
             borderRadius: BorderRadius.circular(16),
+            border: _isDesktopGlass
+                ? Border.all(color: Colors.white.withValues(alpha: 0.22))
+                : null,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -3618,7 +4095,7 @@ class _SignupScreenState extends State<SignupScreen> {
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: TouristSignupChrome.heroOrange.withValues(
-                        alpha: 0.12,
+                        alpha: _isDesktopGlass ? 0.28 : 0.12,
                       ),
                     ),
                     child: const Icon(
@@ -3797,16 +4274,30 @@ class _SignupScreenState extends State<SignupScreen> {
                 _buildFormField(
                   label: 'City',
                   required: true,
-                  child: TextFormField(
+                  child: CountryCityAutocompleteField(
+                    key: ValueKey('city_${_selectedCountry ?? 'none'}'),
                     controller: _foreignCityController,
-                    style: _formValueTextStyle,
+                    country: _selectedCountry,
+                    textStyle: _formValueTextStyle,
+                    textInputAction: _showForeignStateRegion
+                        ? TextInputAction.next
+                        : TextInputAction.done,
+                    onFieldSubmitted: (_) {
+                      if (!_showForeignStateRegion) {
+                        _submitCurrentStepFromKeyboard();
+                      }
+                    },
+                    onEditingComplete: _showForeignStateRegion
+                        ? null
+                        : _submitCurrentStepFromKeyboard,
                     decoration: _inputDecoration(
-                      hint: _countryLockedByNationality
-                          ? 'e.g. Los Angeles'
-                          : 'e.g. Sydney',
+                      hint: SignupCitiesByCountry.hasCuratedList(
+                            _selectedCountry,
+                          )
+                          ? 'Type or pick a city'
+                          : 'e.g. your city',
+                      prefixIcon: Icons.location_city_outlined,
                     ),
-                    textCapitalization: TextCapitalization.words,
-                    validator: (v) => validateInternationalCity(v),
                   ),
                 ),
                 if (_showForeignStateRegion) ...[
@@ -3829,7 +4320,9 @@ class _SignupScreenState extends State<SignupScreen> {
         ),
         const SizedBox(height: 32),
 
-        _buildPersonalDetailsNavButtons(),
+        _buildPersonalDetailsNavButtons(
+          isRegistrationSubmit: !_isMinorRegistrant(),
+        ),
       ],
     );
   }
@@ -3867,14 +4360,14 @@ class _SignupScreenState extends State<SignupScreen> {
           ),
         ),
         const SizedBox(height: 24),
-        _buildPersonalDetailsNavButtons(isLastSubStep: true),
+        _buildPersonalDetailsNavButtons(isRegistrationSubmit: true),
       ],
     );
   }
 
   Widget _buildPersonalDetailsNavButtons({
     bool showBack = true,
-    bool isLastSubStep = false,
+    bool isRegistrationSubmit = false,
   }) {
     final nextStyle = FilledButton.styleFrom(
       backgroundColor: TouristSignupChrome.heroOrange,
@@ -3886,6 +4379,56 @@ class _SignupScreenState extends State<SignupScreen> {
 
     return Column(
       children: [
+        if (isRegistrationSubmit) ...[
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 24,
+                height: 24,
+                child: Checkbox(
+                  value: _receiveUpdates,
+                  onChanged: (v) =>
+                      setState(() => _receiveUpdates = v ?? false),
+                  activeColor: AppTheme.brandOrange,
+                  checkColor: Colors.white,
+                  fillColor: WidgetStateProperty.resolveWith((states) {
+                    if (states.contains(WidgetState.selected)) {
+                      return AppTheme.brandOrange;
+                    }
+                    return _isDesktopGlass
+                        ? Colors.white.withValues(alpha: 0.2)
+                        : null;
+                  }),
+                  side: BorderSide(
+                    color: _isDesktopGlass
+                        ? Colors.white.withValues(alpha: 0.75)
+                        : _inputBorder,
+                    width: 1.5,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'I would like to receive updates and promotions (optional)',
+                  style: TextStyle(
+                    fontSize: 14,
+                    height: 1.4,
+                    fontWeight: FontWeight.w600,
+                    color: _isDesktopGlass
+                        ? Colors.white.withValues(alpha: 0.95)
+                        : _textDark,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+        ],
         const SizedBox(height: 8),
         Divider(color: _inputBorder.withValues(alpha: 0.9), height: 1),
         const SizedBox(height: 16),
@@ -3923,12 +4466,50 @@ class _SignupScreenState extends State<SignupScreen> {
               ),
             const Spacer(),
             FilledButton(
-              onPressed: _nextStep,
+              onPressed: isRegistrationSubmit
+                  ? (_isSubmitting ? null : _submitForm)
+                  : _nextStep,
               style: nextStyle,
-              child: Text(
-                isLastSubStep ? 'Continue →' : 'Next →',
-                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
-              ),
+              child: isRegistrationSubmit && _isSubmitting
+                  ? Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox(
+                          height: 18,
+                          width: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor:
+                                AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
+                        ),
+                        if (_submitPhase != null) ...[
+                          const SizedBox(width: 10),
+                          Flexible(
+                            child: Text(
+                              _submitPhase!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    )
+                  : Text(
+                      isRegistrationSubmit
+                          ? (_editingPendingSignup
+                              ? 'Save & continue verification'
+                              : 'Submit Registration')
+                          : 'Next',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                      ),
+                    ),
             ),
           ],
         ),
@@ -4286,278 +4867,6 @@ class _SignupScreenState extends State<SignupScreen> {
                 ),
               ),
           ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildUploadsStep() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildFormField(
-          label: 'Upload a close-up photo of your face',
-          required: false,
-          child: Text(
-            'You can skip this and add a photo later if you prefer.',
-            style: TextStyle(
-              fontSize: 13,
-              color: _helperTextColor,
-              height: 1.35,
-            ),
-          ),
-        ),
-        Container(
-          width: double.infinity,
-          height: 180,
-          decoration: BoxDecoration(
-            color: _inputFill,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: _uploadedImageBytes != null
-                  ? AppTheme.brandOrange
-                  : _inputBorder,
-              width: _uploadedImageBytes != null ? 2 : 1,
-            ),
-          ),
-          child: _uploadedImageBytes != null
-              ? Stack(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(7),
-                      child: Image.memory(
-                        _uploadedImageBytes!,
-                        width: double.infinity,
-                        height: double.infinity,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: GestureDetector(
-                        onTap: () => setState(() {
-                          _uploadedImageBytes = null;
-                        }),
-                        child: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: const BoxDecoration(
-                            color: Colors.red,
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.close,
-                            color: Colors.white,
-                            size: 16,
-                          ),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      bottom: 8,
-                      left: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppTheme.brandOrange,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.check, color: Colors.white, size: 14),
-                            SizedBox(width: 4),
-                            Text(
-                              'Photo uploaded',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                )
-              : Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.camera_alt_outlined,
-                      size: 48,
-                      color: _helperTextColor.withValues(alpha: 0.62),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'No file chosen',
-                      style: TextStyle(
-                        color: _helperTextColor.withValues(alpha: 0.78),
-                        fontSize: 14,
-                      ),
-                    ),
-                  ],
-                ),
-        ),
-        const SizedBox(height: 16),
-
-        Row(
-          children: [
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: _pickFaceFromCamera,
-                icon: const Icon(Icons.camera_alt, size: 18),
-                label: const Text('Take Photo'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppTheme.brandOrange,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _pickFaceFromGallery,
-                icon: const Icon(Icons.photo_library_outlined, size: 18),
-                label: const Text('Gallery'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppTheme.brandOrange,
-                  side: const BorderSide(color: AppTheme.brandOrange),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 32),
-
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 24,
-              height: 24,
-              child: Checkbox(
-                value: _receiveUpdates,
-                onChanged: (v) => setState(() => _receiveUpdates = v ?? false),
-                activeColor: AppTheme.brandOrange,
-                checkColor: Colors.white,
-                fillColor: WidgetStateProperty.resolveWith((states) {
-                  if (states.contains(WidgetState.selected)) {
-                    return AppTheme.brandOrange;
-                  }
-                  return _isDesktopGlass
-                      ? Colors.white.withValues(alpha: 0.2)
-                      : null;
-                }),
-                side: BorderSide(
-                  color: _isDesktopGlass
-                      ? Colors.white.withValues(alpha: 0.75)
-                      : _inputBorder,
-                  width: 1.5,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                'I would like to receive updates and promotions (optional)',
-                style: TextStyle(
-                  fontSize: 14,
-                  height: 1.4,
-                  fontWeight: FontWeight.w600,
-                  color: _isDesktopGlass
-                      ? Colors.white.withValues(alpha: 0.95)
-                      : _textDark,
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 32),
-
-        LayoutBuilder(
-          builder: (context, c) {
-            final tight = c.maxWidth < 360;
-            final submit = SizedBox(
-              width: tight ? double.infinity : null,
-              child: FilledButton(
-                onPressed: _isSubmitting ? null : _submitForm,
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppTheme.brandOrange,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 14,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-                child: _isSubmitting
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            Colors.white,
-                          ),
-                        ),
-                      )
-                    : const Text(
-                        'Submit Registration',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-              ),
-            );
-
-            final back = TextButton(
-              onPressed: _previousStep,
-              child: Text(
-                'Back',
-                style: TextStyle(color: _helperTextColor, fontSize: 15),
-              ),
-            );
-
-            if (tight) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  back,
-                  const SizedBox(height: 8),
-                  submit,
-                ],
-              );
-            }
-
-            return Row(
-              children: [
-                back,
-                const Spacer(),
-                Flexible(child: submit),
-              ],
-            );
-          },
         ),
       ],
     );

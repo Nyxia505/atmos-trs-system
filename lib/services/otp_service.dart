@@ -15,7 +15,7 @@ class OtpService {
   OtpService._();
 
   static const String collectionId = 'email_otps';
-  static const int otpExpiryMinutes = 15;
+  static const int otpExpiryMinutes = 5;
 
   static FirebaseFirestore get _db => FirebaseFirestore.instance;
 
@@ -305,6 +305,38 @@ class OtpService {
   static Future<bool> hasActiveOtp(String uid) async {
     final digits = await fetchActiveOtpDigits(uid);
     return digits != null && digits.length == 6;
+  }
+
+  /// Expiry of the active OTP for [uid], or null if missing/expired.
+  static Future<DateTime?> fetchActiveOtpExpiresAt(String uid) async {
+    if (!_ready || uid.isEmpty) return null;
+
+    try {
+      await refreshAuthTokenForUid(uid);
+    } catch (_) {}
+
+    try {
+      final snap = await _db.collection(collectionId).doc(uid).get(
+            const GetOptions(source: Source.server),
+          );
+      if (!snap.exists || snap.data() == null) {
+        return await OtpLocalFallbackCache.activeOtpExpiresAt(uid);
+      }
+
+      final data = snap.data()!;
+      final expiresAt = data['expiresAt'];
+      if (expiresAt is Timestamp) {
+        final when = expiresAt.toDate();
+        if (DateTime.now().isAfter(when)) return null;
+        return when;
+      }
+      return null;
+    } on FirebaseException catch (e) {
+      if (e.code == 'permission-denied') {
+        return await OtpLocalFallbackCache.activeOtpExpiresAt(uid);
+      }
+      return null;
+    }
   }
 
   /// Returns the active 6-digit code for [uid], or null if missing/expired.

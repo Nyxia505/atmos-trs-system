@@ -3,7 +3,21 @@
 /// **Setup:** In [EmailJS Dashboard](https://dashboard.emailjs.com):
 /// 1. **Email Services** → copy **Service ID** (Gmail: atmostrs@gmail.com).
 /// 2. **Email Templates** → open your OTP template → copy **Template ID**.
+///    Prefer Subject `{{subject}}` and body `{{message}}` / `{{otp}}` so the
+///    app controls wording (avoid hard-coded “OTP CODE!!!” in the template).
+///    From name: use `{{from_name}}` or set service default to “ATMOS-TRS Tourism”.
 /// 3. **Account → API keys** → copy **Public Key** (safe for client apps).
+///
+/// **Inbox vs Spam — what we can / cannot fix:**
+/// | Layer | What we control in-app | What needs EmailJS / DNS |
+/// | --- | --- | --- |
+/// | Subject / From name / body | Yes ([EmailjsService] soft copy) | Template must use `{{subject}}` etc. |
+/// | Gmail Spam classification | No | SPF/DKIM/DMARC on sending domain |
+/// | Primary UX (no Gmail) | Yes — phone heads-up via [OtpDeliveryService] | — |
+///
+/// Client softens wording only. For durable Inbox rates: custom domain SMTP
+/// (EmailJS paid) with SPF/DKIM, or Gmail “Not spam” once for atmostrs@gmail.com.
+/// Phone notification remains the primary channel for tourists.
 ///
 /// **403 "non-browser environments":** In EmailJS go to
 /// **Account → Security** and enable **Allow email sending from non-browser

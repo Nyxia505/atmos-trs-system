@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async' show unawaited;
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:flutter/services.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
@@ -11,6 +11,7 @@ import 'package:atmos_trs_system/utils/firebase_client_blocked_message.dart';
 import 'package:atmos_trs_system/services/login_flow_service.dart';
 import 'package:atmos_trs_system/services/auth_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
+import 'package:atmos_trs_system/services/registration_rollback_service.dart';
 import 'package:atmos_trs_system/navigation/login_route_args.dart';
 import 'package:atmos_trs_system/navigation/pending_checkin_navigation.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
@@ -227,6 +228,35 @@ class _LoginScreenState extends State<LoginScreen> {
         uid: uid,
         email: email,
       );
+
+      if (route == LoginFlowService.mustSignUpAgainRoute) {
+        debugPrint('[Login] no durable registration — clear Auth remnant');
+        try {
+          await RegistrationRollbackService.rollback(uid);
+        } catch (e) {
+          debugPrint('[Login] rollback orphan Auth: $e');
+          try {
+            await FirebaseAuth.instance.signOut();
+          } catch (_) {}
+        }
+        AuthConfig.currentUserUid = null;
+        try {
+          await SessionStorage.clearSession();
+          await SessionStorage.setTouristEmailVerified(uid, verified: false);
+        } catch (_) {}
+        setState(() => _isLoading = false);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'This email is not registered (or was removed). Please sign up again.',
+            ),
+            backgroundColor: Color(0xFFFF6B00),
+          ),
+        );
+        Navigator.pushReplacementNamed(context, '/signup');
+        return;
+      }
 
       LoginFlowService.scheduleBackgroundFinalize(
         uid: uid,
@@ -1083,7 +1113,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
               child: const Text(
-                'Forgot Password? >',
+                'Forgot Password?',
                 style: TextStyle(
                   fontWeight: FontWeight.w600,
                   fontSize: 13,
@@ -1117,20 +1147,13 @@ class _LoginScreenState extends State<LoginScreen> {
                             AlwaysStoppedAnimation<Color>(Colors.white),
                       ),
                     )
-                  : const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.login_rounded, size: 20),
-                        SizedBox(width: 8),
-                        Text(
-                          'Sign In',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.2,
-                          ),
-                        ),
-                      ],
+                  : const Text(
+                      'Sign In',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.2,
+                      ),
                     ),
             ),
           ),

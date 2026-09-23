@@ -94,13 +94,20 @@ class QrSpotCheckInScreen extends StatelessWidget {
                   }
                   return;
                 }
-                await performQRCheckIn(
+                final ok = await performQRCheckIn(
                   context,
                   municipalityId: municipalityId,
                   spotId: spot.id,
                   spotName: spot.name,
                   municipality: spot.municipality,
                 );
+                if (ok && context.mounted) {
+                  Navigator.pushNamedAndRemoveUntil(
+                    context,
+                    '/dashboard',
+                    (route) => false,
+                  );
+                }
               },
             ),
           ),

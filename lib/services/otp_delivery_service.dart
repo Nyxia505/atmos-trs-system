@@ -1,13 +1,16 @@
+import 'dart:async';
+
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter/foundation.dart' show debugPrint, kDebugMode, kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:atmos_trs_system/services/emailjs_service.dart';
-import 'package:atmos_trs_system/services/otp_service.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
 
-/// Delivers signup / resend OTP to the tourist's email inbox and registered mobile (SMS).
-/// Does not flash the code on the signup device unless [notifyOnThisDevice] is true.
+/// Delivers signup / resend OTP primarily to the user's email Inbox.
+///
+/// [notifyOnThisDevice] defaults to false — signup/verify require opening email
+/// for the code. Local heads-up is opt-in only.
 class OtpDeliveryService {
   OtpDeliveryService._();
 
@@ -93,23 +96,16 @@ class OtpDeliveryService {
       }
     }
 
-    if (kIsWeb) {
-      // Web: EmailJS with Origin is the reliable path on Spark (no CF deploy).
-      final emailJsErr = await tryEmailJs();
-      if (emailJsErr == null) return null;
-      debugPrint('[OTP] Web EmailJS failed: $emailJsErr — trying Cloud Function');
-      final cfErr = await tryCloudFunction();
-      if (cfErr == null) return null;
-      return emailJsErr;
-    }
-
-    final cfErr = await tryCloudFunction();
-    if (cfErr == null) return null;
-
+    // Prefer EmailJS for verification mail. Cloud Function sendOtpEmail is
+    // inbox-only (must never FCM-push OTP — that leaked to stale fcmTokens).
     final emailJsErr = await tryEmailJs();
     if (emailJsErr == null) {
       debugPrint('[OTP] Email sent via client EmailJS to=$deliverTo');
+      return null;
     }
+    debugPrint('[OTP] EmailJS failed: $emailJsErr — trying Cloud Function');
+    final cfErr = await tryCloudFunction();
+    if (cfErr == null) return null;
     return emailJsErr;
   }
 
@@ -160,10 +156,14 @@ class OtpDeliveryService {
     }
   }
 
-  /// After OTP is saved: email inbox and optionally SMS.
-  /// [notifyOnThisDevice] should stay false during signup so a shared phone
-  /// does not show another person's code.
+  /// After OTP is saved: email inbox (primary) + optional SMS.
+  ///
+  /// [notifyOnThisDevice] defaults to **false** for signup / verify — users open
+  /// their email Inbox for the code (no on-device OTP heads-up).
   /// Set [otpAlreadyInFirestore] true when signup already stored the code.
+  ///
+  /// When [emailInBackground] is true, returns quickly and fires the inbox email
+  /// without blocking navigation to verify-otp.
   static Future<OtpDeliveryResult> deliverVerificationCode({
     required String uid,
     required String email,
@@ -173,9 +173,49 @@ class OtpDeliveryService {
     bool notifyOnThisDevice = false,
     bool trySms = false,
     bool otpAlreadyInFirestore = false,
+    bool emailInBackground = false,
   }) async {
+    // Prepare notification channel only when explicitly requested.
     if (notifyOnThisDevice && !kIsWeb) {
       await ensureEmailOtpNotificationSupport();
+    }
+
+    // On-device notify is opt-in only (signup uses email Inbox instead).
+    var notificationShown = false;
+    if (notifyOnThisDevice && !kIsWeb) {
+      try {
+        notificationShown = await deliverEmailOtpToDevice(
+          uid: uid,
+          otp: otp,
+          displayName: displayName,
+        ).timeout(const Duration(seconds: 4));
+      } catch (e, st) {
+        debugPrint('[OTP] on-device notify failed: $e\n$st');
+        notificationShown = false;
+      }
+    }
+
+    if (emailInBackground) {
+      unawaited(() async {
+        final err = await sendOtpToUserEmail(
+          toEmail: email,
+          toName: displayName,
+          otp: otp,
+        );
+        if (err != null) {
+          debugPrint('[OTP] background email failed: $err');
+        } else {
+          debugPrint('[OTP] background email sent to $email');
+        }
+      }());
+      return OtpDeliveryResult(
+        emailSent: false,
+        emailError: null,
+        notificationShown: notificationShown,
+        // Never surface the code on-screen for signup — user must open email.
+        otpForDisplay: null,
+        otpAlreadyInFirestore: otpAlreadyInFirestore,
+      );
     }
 
     final emailErr = await sendOtpToUserEmail(
@@ -188,16 +228,6 @@ class OtpDeliveryService {
     final mobileRaw = mobile?.trim() ?? '';
     if (trySms && mobileRaw.isNotEmpty) {
       smsResult = await sendOtpSms(mobile: mobileRaw, otp: otp);
-    }
-
-    var notificationShown = false;
-    if (notifyOnThisDevice && !kIsWeb) {
-      await deliverEmailOtpToDevice(
-        uid: uid,
-        otp: otp,
-        displayName: displayName,
-      );
-      notificationShown = true;
     }
 
     return OtpDeliveryResult(
@@ -213,8 +243,8 @@ class OtpDeliveryService {
           ? smsResult
           : null,
       notificationShown: notificationShown,
-      // Reveal code in-app when inbox delivery failed (OTP is already stored).
-      otpForDisplay: emailErr != null ? otp : (kDebugMode ? otp : null),
+      // Do not put the OTP on the verify screen — Inbox only.
+      otpForDisplay: null,
       maskedMobile: mobileRaw.isNotEmpty
           ? _maskMobile(formatPhilippineMobile(mobileRaw) ?? mobileRaw)
           : null,
@@ -258,49 +288,49 @@ class OtpDeliveryResult {
   bool get canCompleteRegistration =>
       emailSent || otpAlreadyInFirestore || smsSent || notificationShown;
 
+  /// Hard failure only when no OTP was stored and delivery fully failed.
+  static String emailDoesNotExistMessage(String email) {
+    final shown = email.trim().isEmpty ? 'this email' : email.trim();
+    return 'Sorry, $shown does not exist or could not receive our verification '
+        'code. Please use Edit details and enter a real, working email address.';
+  }
+
+  /// Soft warning when OTP is saved but email delivery was not confirmed.
+  static String deliveryUnconfirmedMessage(String email) {
+    final shown = email.trim().isEmpty ? 'your email' : email.trim();
+    return 'We couldn\'t confirm email delivery to $shown. Check Inbox/Spam, '
+        'or tap Resend if the code doesn\'t arrive.';
+  }
+
   String messageForUser(String email) {
-    if (otpAlreadyInFirestore && !emailSent) {
-      if (otpForDisplay != null && otpForDisplay!.length == 6) {
-        return 'Email could not be delivered to $email. '
-            'Use this code now: $otpForDisplay '
-            '(also try Resend after EmailJS Template ID is fixed).';
-      }
-      return 'Could not email $email right now. Continue to enter your code — '
-          'use Resend on the next screen if you did not receive it.';
-    }
     if (smsError != null && smsError!.isNotEmpty) {
       return 'Email: ${emailSent ? "sent" : "failed"}. SMS failed: $smsError';
     }
     if (smsSent && maskedMobile != null) {
-      if (emailSent) {
-        return 'Code sent to $email and SMS to $maskedMobile. '
-            'Check your own phone for the text message.';
+      if (emailSent || notificationShown) {
+        return 'Code sent by SMS to $maskedMobile'
+            '${emailSent ? ". A copy was also sent to $email — open your Inbox." : ""}.';
       }
-      return 'Code sent via SMS to $maskedMobile. '
-          'Also check $email on the phone where that email is signed in.';
+      return 'Code sent via SMS to $maskedMobile.';
+    }
+    if (notificationShown && emailSent) {
+      return 'Code sent to $email. Open your email Inbox and enter it in the app '
+          '(Spam only if you do not see it).';
+    }
+    if (notificationShown) {
+      return 'Open your email Inbox for the verification code, then enter it here.';
     }
     if (emailSent) {
-      if (smsSkippedNotConfigured && maskedMobile != null) {
-        return 'Code sent to $email. On your own phone, open the mail app '
-            'where you read $email (not necessarily this device).';
-      }
-      if (notificationShown) {
-        return 'Verification code sent to $email and shown in your phone '
-            'notification. Also check your email inbox (not Spam).';
-      }
-      return 'Code sent to $email. Open your mail app and check the inbox '
-          '(not Spam) on the phone where that email is signed in.';
+      return 'Code sent to $email. Open your email Inbox and enter the 6-digit code '
+          '(check Spam only if it is missing).';
+    }
+    // OTP stored (or recoverable) but email not confirmed — soft warning, not "does not exist".
+    if (otpAlreadyInFirestore || canCompleteRegistration) {
+      return OtpDeliveryResult.deliveryUnconfirmedMessage(email);
     }
     if (smsSent && maskedMobile != null) {
       return 'Code sent via SMS to $maskedMobile.';
     }
-    if (otpForDisplay != null && otpForDisplay!.length == 6) {
-      return 'Email could not be sent. Your code is $otpForDisplay '
-          '(expires in ${OtpService.otpExpiryMinutes} min).';
-    }
-    if (kIsWeb) {
-      return 'Could not send email. Please check your EmailJS Template ID, then tap Resend.';
-    }
-    return 'Could not send the code. Check your email address and tap Resend.';
+    return OtpDeliveryResult.emailDoesNotExistMessage(email);
   }
 }

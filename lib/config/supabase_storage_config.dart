@@ -14,6 +14,8 @@ abstract final class SupabaseStorageConfig {
       '$projectUrl/storage/v1/object/public/$bucket';
 
   /// Logos / branding stay bundled for splash, auth, and offline chrome.
+  /// Municipality hero thumbs under assets/images/ also stay local so Visited
+  /// places can show photos when Storage gallery URLs are missing.
   static bool keepLocalAsset(String path) {
     final p = path.replaceAll('\\', '/').toLowerCase();
     if (!p.startsWith('assets/')) return true;
@@ -29,6 +31,11 @@ abstract final class SupabaseStorageConfig {
     if (p.contains('landing page.png')) return true;
     if (p.contains('onboarding_screen/')) return true;
     if (p.contains('vr_tour/')) return true;
+    if (p.startsWith('assets/images/') &&
+        !p.contains('/nearby/') &&
+        !p.contains('municipalities/')) {
+      return true;
+    }
     if (p.endsWith('.mp4') || p.endsWith('.webm') || p.endsWith('.ttf')) {
       return true;
     }

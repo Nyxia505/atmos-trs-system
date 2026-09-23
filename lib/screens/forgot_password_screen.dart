@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -43,6 +45,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   bool _resending = false;
   bool _requestInFlight = false;
   int _cooldown = 0;
+  int? _expirySecondsLeft;
+  Timer? _expiryTicker;
   String? _emailStepBanner;
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
@@ -92,6 +96,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   @override
   void dispose() {
+    _expiryTicker?.cancel();
     if (!kIsWeb) {
       disposePasswordResetNotificationSupport();
     }
@@ -159,6 +164,21 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     final email = normalizeEmail(_emailController.text);
 
     try {
+      // Refresh FCM + local channels so CF push can land as a heads-up on this phone.
+      if (!kIsWeb) {
+        await ensurePasswordResetNotificationSupport(
+          onOtpFromPush: (otp) {
+            if (!mounted) return;
+            if (_otpController.text.isEmpty) {
+              _otpController.text = otp;
+            }
+          },
+        );
+        final uid = FirebaseAuth.instance.currentUser?.uid;
+        if (uid != null && uid.isNotEmpty) {
+          await syncFcmTokenToUserDoc(uid);
+        }
+      }
       final result = await PasswordResetService.requestOtp(email);
       if (!mounted) return;
       _applyRequestResult(result);
@@ -196,6 +216,11 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         _passwordController.clear();
         _confirmPasswordController.clear();
         _startCooldown(60);
+        _startExpiryCountdown(
+          DateTime.now().add(
+            const Duration(minutes: PasswordResetService.otpExpiryMinutes),
+          ),
+        );
       } else {
         _step = _ForgotPasswordStep.enterEmail;
         _emailStepBanner = hint;
@@ -303,6 +328,39 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       setState(() => _cooldown = _cooldown - 1);
       return _cooldown > 0;
     });
+  }
+
+  void _startExpiryCountdown(DateTime expiresAt) {
+    _expiryTicker?.cancel();
+    void tick() {
+      if (!mounted) return;
+      final left = expiresAt.difference(DateTime.now()).inSeconds;
+      setState(() => _expirySecondsLeft = left > 0 ? left : 0);
+      if (left <= 0) {
+        _expiryTicker?.cancel();
+        _expiryTicker = null;
+      }
+    }
+
+    tick();
+    _expiryTicker = Timer.periodic(const Duration(seconds: 1), (_) => tick());
+  }
+
+  String _formatMmSs(int seconds) {
+    final m = (seconds ~/ 60).toString().padLeft(2, '0');
+    final s = (seconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  String _expiryLabel() {
+    final left = _expirySecondsLeft;
+    if (left == null) {
+      return 'Code expires in ${PasswordResetService.otpExpiryMinutes} minutes.';
+    }
+    if (left <= 0) {
+      return 'Code expired — tap Resend code.';
+    }
+    return 'Code expires in ${_formatMmSs(left)}';
   }
 
   void _showSnack(String message, {required bool isError}) {
@@ -416,14 +474,34 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                 ],
               ),
               const SizedBox(height: 8),
-              const Center(
-                child: TransparentLogo(
-                  width: 72,
-                  height: 72,
-                  fit: BoxFit.contain,
+              Center(
+                child: Container(
+                  width: 112,
+                  height: 112,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.18),
+                        blurRadius: 18,
+                        offset: const Offset(0, 6),
+                      ),
+                    ],
+                  ),
+                  child: const ClipOval(
+                    child: Padding(
+                      padding: EdgeInsets.all(8),
+                      child: TransparentLogo(
+                        width: 96,
+                        height: 96,
+                        fit: BoxFit.contain,
+                      ),
+                    ),
+                  ),
                 ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 16),
               const Text(
                 'Reset your password',
                 textAlign: TextAlign.center,
@@ -527,7 +605,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
             kIsWeb
                 ? 'We will send a 6-digit code to your email inbox and to your phone if you use the ATMOS app.'
                 : 'We will send a 6-digit code as a phone notification — no need to open Gmail. '
-                    'We also send it to your inbox as backup.',
+                    'A backup copy also goes to your email Inbox '
+                    '(check Spam only if it is not in Inbox).',
             style: const TextStyle(fontSize: 14, color: _textMuted, height: 1.45),
           ),
           if (_emailStepBanner != null) ...[
@@ -672,6 +751,17 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
               style: const TextStyle(fontSize: 13, color: _textMuted, height: 1.4),
             ),
           ],
+          const SizedBox(height: 8),
+          Text(
+            _expiryLabel(),
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: (_expirySecondsLeft != null && _expirySecondsLeft! <= 0)
+                  ? Colors.red.shade700
+                  : _textMuted,
+            ),
+          ),
           const SizedBox(height: 20),
           TextFormField(
             controller: _otpController,

@@ -13,8 +13,10 @@ import 'package:url_launcher/url_launcher.dart';
 // Helper: open VR tour (all platforms)
 // -----------------------------------------------------------------------------
 
-/// Opens the VR tour in-app (mobile). On web, tourists are prompted to download
-/// the app unless [allowWeb] is true (e.g. tourism staff preview).
+/// Opens the VR tour in-app on **mobile**.
+///
+/// On web, tourists are prompted to install the ATMOS app unless [allowWeb] is
+/// true (tourism dashboard staff preview only — option B).
 Future<void> openVrTour(
   BuildContext context, {
   bool useLocalTour = false,
@@ -74,6 +76,8 @@ Future<void> openVrTourWithUrl(
     openVrTour(context, url: url, allowWeb: allowWeb);
 
 /// Opens hosted VR (Teleport360) or static panorama preview for a tourist spot.
+///
+/// Tourists: mobile app only. Pass [allowWeb] only for tourism staff preview.
 Future<void> openVrForTouristSpot(
   BuildContext context, {
   required String spotId,

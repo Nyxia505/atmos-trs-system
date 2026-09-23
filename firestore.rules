@@ -116,7 +116,8 @@ service cloud.firestore {
     match /tourists/{touristId} {
       // Signed-in read: LGU dashboards list/filter tourists; tourists read own profile.
       allow read: if isSignedIn();
-      allow create, update: if isSignedIn() && request.auth.uid == touristId;
+      allow create, update: if isSignedIn()
+        && (request.auth.uid == touristId || isLguStaff());
       // Governor / tourism may remove tourist profiles from dashboards.
       allow delete: if isLguStaff();
     }
@@ -145,8 +146,12 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn() && request.auth.uid == userId;
-      allow update: if isSignedIn() && request.auth.uid == userId;
+      allow create: if isSignedIn()
+        && (request.auth.uid == userId
+            || (isLguStaff()
+                && request.resource.data.get('role', 'tourist') == 'tourist'));
+      allow update: if isSignedIn()
+        && (request.auth.uid == userId || isLguStaff());
       // Staff may delete tourist role docs (never used for self-service Auth delete).
       allow delete: if isLguStaff()
         && (
@@ -182,16 +187,17 @@ service cloud.firestore {
     match /qr_checkins/{docId} {
       // Signed-in read: LGU dashboards + tourists viewing own history (client filters by municipality).
       allow get, list: if isSignedIn();
-      allow create: if isQrCheckInOwner();
+      allow create: if isQrCheckInOwner() || isLguStaff();
       allow update: if isSignedIn()
-                    && resource.data.get('tourist_id', '') == request.auth.uid;
+                    && (resource.data.get('tourist_id', '') == request.auth.uid
+                        || isLguStaff());
       allow delete: if isLguStaff();
     }
 
     match /checkins/{docId} {
       allow get: if isLguStaff() || canReadOwnCheckInRow();
       allow list: if isLguStaff() || canReadOwnCheckInRow() || checkInInLguMunicipality();
-      allow create: if isCheckInOwner();
+      allow create: if isCheckInOwner() || isLguStaff();
       allow update: if false;
       allow delete: if isLguStaff();
     }
@@ -207,6 +213,30 @@ service cloud.firestore {
     match /provincial_campaigns/{campaignId} {
       allow read: if isSignedIn();
       allow create, update, delete: if isProvincialStaff();
+    }
+
+    /// LGU → OPTACA (Provincial Tourism) formal report packages.
+    match /lgu_report_submissions/{submissionId} {
+      allow read: if isLguStaff();
+      allow create: if isLguStaff()
+        && request.resource.data.keys().hasAll([
+          'municipalityId',
+          'reportType',
+          'status',
+          'periodStart',
+          'periodEnd',
+          'submittedByUid',
+          'submittedAt',
+        ])
+        && request.resource.data.submittedByUid == request.auth.uid
+        && request.resource.data.status == 'submitted';
+      allow update: if isProvincialStaff()
+        || (
+          isLguStaff()
+          && resource.data.submittedByUid == request.auth.uid
+          && request.resource.data.status == 'withdrawn'
+        );
+      allow delete: if isProvincialStaff();
     }
 
     match /spot_reviews/{reviewId} {
@@ -255,8 +285,10 @@ service cloud.firestore {
     }
 
     /// Tourism establishments (hotels, resorts, restaurants, attractions, …).
+    /// Registry reads are open so OPTACA/LGU/AE dashboards work even when the
+    /// web Auth token is slow to attach; writes stay owner/staff gated.
     match /accommodation_establishments/{estId} {
-      allow read: if isSignedIn();
+      allow read: if true;
       allow create: if isSignedIn()
                     && (
                       request.resource.data.get('ownerUid', '') == request.auth.uid
@@ -272,6 +304,62 @@ service cloud.firestore {
                       || isLguStaff()
                     );
       allow delete: if isLguStaff();
+    }
+
+    /// Hotel / AE stay requests: tourist scan → staff confirm → checkout → receipt.
+    /// DOT/DAE counts status == 'confirmed' or 'checked_out'.
+    match /establishment_stay_requests/{stayId} {
+      allow get: if isSignedIn()
+        && (
+          resource.data.touristId == request.auth.uid
+          || resource.data.establishmentId == request.auth.uid
+          || isLguStaff()
+        );
+      // List may run before web Auth token attaches; desk/history still filter client-side.
+      allow list: if true;
+      // Keep create checks minimal — FieldValue / extra keys must not fail the write.
+      allow create: if request.auth != null
+        && request.resource.data.touristId == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.establishmentId is string
+        && request.resource.data.establishmentId.size() > 0;
+      allow update: if isSignedIn()
+        && (
+          resource.data.establishmentId == request.auth.uid
+          || isLguStaff()
+          || (
+            resource.data.touristId == request.auth.uid
+            && resource.data.status == 'confirmed'
+            && request.resource.data.status == 'checked_out'
+            && request.resource.data.touristId == resource.data.touristId
+            && request.resource.data.establishmentId == resource.data.establishmentId
+          )
+        );
+      allow delete: if isLguStaff()
+        || (
+          isSignedIn()
+          && resource.data.establishmentId == request.auth.uid
+        );
+    }
+
+    /// Guest reviews after establishment stay checkout.
+    match /establishment_stay_reviews/{reviewId} {
+      allow read: if true;
+      allow create: if isSignedIn()
+        && request.resource.data.touristId == request.auth.uid
+        && request.resource.data.hotelRating is number
+        && request.resource.data.hotelRating >= 1
+        && request.resource.data.hotelRating <= 5
+        && request.resource.data.roomRating is number
+        && request.resource.data.roomRating >= 1
+        && request.resource.data.roomRating <= 5
+        && request.resource.data.stayRequestId is string
+        && request.resource.data.establishmentId is string;
+      allow update: if isSignedIn()
+        && resource.data.touristId == request.auth.uid
+        && request.resource.data.touristId == request.auth.uid;
+      allow delete: if (isSignedIn() && resource.data.touristId == request.auth.uid)
+        || isLguStaff();
     }
 
     match /{document=**} {

@@ -4,7 +4,7 @@ import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:atmos_trs_system/config/auth_config.dart';
@@ -13,6 +13,13 @@ import 'package:atmos_trs_system/utils/checkin_dedupe.dart';
 /// Service to manage user activity data like visits, saved spots, and stats.
 class UserActivityService {
   UserActivityService._();
+
+  /// Notifies Home / Visited UI after a QR check-in is recorded locally.
+  static final ValueNotifier<int> visitedSpotsRevision = ValueNotifier<int>(0);
+
+  static void _notifyVisitedChanged() {
+    visitedSpotsRevision.value = visitedSpotsRevision.value + 1;
+  }
 
   static const String _keyVisitedSpots = 'user_visited_spots';
   static const String _keySavedSpots = 'user_saved_spots';
@@ -33,9 +40,43 @@ class UserActivityService {
     final previous = prefs.getString(_keyActivityBoundUid);
     _boundUidCache = id;
     await prefs.setString(_keyActivityBoundUid, id);
+    await _migrateUnscopedKeysIfNeeded(prefs, id);
     if (previous != null && previous.isNotEmpty && previous != id) {
       _boundUidCache = id;
     }
+  }
+
+  /// Older builds wrote visits to unscoped keys; copy into uid-scoped keys once.
+  static Future<void> _migrateUnscopedKeysIfNeeded(
+    SharedPreferences prefs,
+    String uid,
+  ) async {
+    Future<void> migrateString(String base) async {
+      final scoped = '${base}_$uid';
+      final scopedVal = prefs.getString(scoped);
+      if (scopedVal != null && scopedVal.isNotEmpty) return;
+      final legacy = prefs.getString(base);
+      if (legacy != null && legacy.isNotEmpty) {
+        await prefs.setString(scoped, legacy);
+      }
+    }
+
+    Future<void> migrateStringList(String base) async {
+      final scoped = '${base}_$uid';
+      final scopedVal = prefs.getStringList(scoped);
+      if (scopedVal != null && scopedVal.isNotEmpty) return;
+      final legacy = prefs.getStringList(base);
+      if (legacy != null && legacy.isNotEmpty) {
+        await prefs.setStringList(scoped, legacy);
+      }
+    }
+
+    await migrateString(_keyVisitedSpots);
+    await migrateString(_keyBadges);
+    await migrateString(_keyRecentlyViewed);
+    await migrateString(_keyNotifications);
+    await migrateString(_keyFirstVisitDate);
+    await migrateStringList(_keySavedSpots);
   }
 
   static Future<String?> _activeUid() async {
@@ -120,6 +161,7 @@ class UserActivityService {
       await _scoped(_keyVisitedSpots),
       json.encode(sorted.map((v) => v.toJson()).toList()),
     );
+    _notifyVisitedChanged();
   }
 
   /// Get list of visited spot IDs with timestamps
@@ -142,15 +184,25 @@ class UserActivityService {
     Map<String, dynamic> d,
   ) {
     final spotId = CheckInDedupe.spotId(d);
-    if (spotId.isEmpty || _isLguOnlyCheckIn(spotId)) return;
+    if (spotId.isEmpty) return;
 
-    var spotName = (d['spot_name'] ?? d['spotName'] ?? '').toString().trim();
+    var spotName = (d['spot_name'] ?? d['spotName'] ?? d['location'] ?? '')
+        .toString()
+        .trim();
     if (spotName.isEmpty) {
-      spotName = spotId.replaceAll('_', ' ');
+      if (_isLguOnlyCheckIn(spotId)) {
+        final muni = (d['municipality'] ?? '').toString().trim();
+        spotName = muni.isNotEmpty ? 'LGU visit — $muni' : 'LGU visit';
+      } else {
+        spotName = spotId.replaceAll('_', ' ');
+      }
     }
     var category = (d['category'] ?? d['spotCategory'] ?? '').toString().trim();
     if (category.isEmpty) {
-      category = 'Spot';
+      category = (d['municipality'] ?? '').toString().trim();
+    }
+    if (category.isEmpty) {
+      category = _isLguOnlyCheckIn(spotId) ? 'LGU' : 'Spot';
     }
 
     var visitedAt = DateTime.now();
@@ -176,40 +228,37 @@ class UserActivityService {
     }
   }
 
-  /// Municipality LGU QR visits are not tourist-spot destinations on Home.
+  /// Municipality LGU QR check-ins use spot ids like `lgu_oroquieta`.
   static bool _isLguOnlyCheckIn(String spotId) {
     return spotId.trim().toLowerCase().startsWith('lgu_');
   }
 
-  static Future<QuerySnapshot<Map<String, dynamic>>> _queryUserCollection(
+  /// Loads the user's docs from [collection], trying every uid field variant.
+  /// An empty first query must not skip the others (Firestore returns [] not throw).
+  static Future<List<Map<String, dynamic>>> _queryUserRows(
     String collection,
     String uid,
   ) async {
     final db = FirebaseFirestore.instance;
-    try {
-      return db
-          .collection(collection)
-          .where('tourist_id', isEqualTo: uid)
-          .limit(300)
-          .get();
-    } catch (_) {
+    final byDocId = <String, Map<String, dynamic>>{};
+    for (final field in ['userId', 'tourist_id', 'user_id']) {
       try {
-        return db
+        final snap = await db
             .collection(collection)
-            .where('userId', isEqualTo: uid)
+            .where(field, isEqualTo: uid)
             .limit(300)
             .get();
-      } catch (_) {
-        return db
-            .collection(collection)
-            .where('user_id', isEqualTo: uid)
-            .limit(300)
-            .get();
+        for (final doc in snap.docs) {
+          byDocId[doc.id] = doc.data();
+        }
+      } catch (e) {
+        debugPrint('[UserActivity] $collection where $field skipped: $e');
       }
     }
+    return byDocId.values.toList();
   }
 
-  /// Rebuilds local visit history from Firestore QR check-ins (source of truth).
+  /// Rebuilds local visit history from Firestore QR check-ins + local visits.
   static Future<List<VisitRecord>> syncVisitedSpotsFromQrCheckins() async {
     final uid = AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
     if (uid == null || uid.isEmpty || Firebase.apps.isEmpty) {
@@ -219,14 +268,11 @@ class UserActivityService {
     final local = await getVisitedSpots();
     try {
       final bySpot = <String, VisitRecord>{};
-      var firestoreSynced = false;
+      var firestoreQueried = false;
 
       try {
-        final qrRows = (await _queryUserCollection('qr_checkins', uid))
-            .docs
-            .map((d) => d.data())
-            .toList();
-        firestoreSynced = true;
+        final qrRows = await _queryUserRows('qr_checkins', uid);
+        firestoreQueried = true;
         for (final row in CheckInDedupe.oneVisitPerUserSpotDay(qrRows)) {
           _mergeCheckInRowIntoBySpot(bySpot, row);
         }
@@ -235,9 +281,9 @@ class UserActivityService {
       }
 
       try {
-        for (final doc in (await _queryUserCollection('checkins', uid)).docs) {
-          firestoreSynced = true;
-          final row = doc.data();
+        final checkinRows = await _queryUserRows('checkins', uid);
+        firestoreQueried = true;
+        for (final row in checkinRows) {
           final spotId = CheckInDedupe.spotId(row);
           if (spotId.isEmpty || bySpot.containsKey(spotId)) continue;
           _mergeCheckInRowIntoBySpot(bySpot, row);
@@ -246,18 +292,24 @@ class UserActivityService {
         debugPrint('[UserActivity] checkins sync skipped: $e');
       }
 
-      // Keep a just-completed local QR visit until Firestore index catches up.
-      if (firestoreSynced) {
-        final now = DateTime.now();
-        for (final v in local) {
-          if (v.spotId.isEmpty || _isLguOnlyCheckIn(v.spotId)) continue;
-          if (now.difference(v.visitedAt).inMinutes > 5) continue;
-          if (bySpot.containsKey(v.spotId)) continue;
+      // Always keep local visits (spot + LGU) so a just-saved check-in is never dropped.
+      for (final v in local) {
+        if (v.spotId.isEmpty) continue;
+        final existing = bySpot[v.spotId];
+        if (existing == null || v.visitedAt.isAfter(existing.visitedAt)) {
           bySpot[v.spotId] = v;
+        } else if ((existing.spotName.trim().isEmpty ||
+                existing.spotName == existing.spotId) &&
+            v.spotName.trim().isNotEmpty) {
+          bySpot[v.spotId] = existing.copyWith(
+            spotName: v.spotName,
+            category: v.category.trim().isNotEmpty ? v.category : existing.category,
+            imageUrl: v.imageUrl ?? existing.imageUrl,
+          );
         }
       }
 
-      if (!firestoreSynced) return local;
+      if (!firestoreQueried && bySpot.isEmpty) return local;
 
       final merged = bySpot.values.toList()
         ..sort((a, b) => b.visitedAt.compareTo(a.visitedAt));
@@ -268,6 +320,7 @@ class UserActivityService {
         json.encode(merged.map((v) => v.toJson()).toList()),
       );
       _schedulePushActivityToCloud();
+      _notifyVisitedChanged();
       return merged;
     } catch (e) {
       debugPrint('UserActivityService.syncVisitedSpotsFromQrCheckins: $e');
@@ -282,17 +335,28 @@ class UserActivityService {
     required String category,
     String? imageUrl,
   }) async {
+    final id = spotId.trim();
+    if (id.isEmpty) return;
+    final name = spotName.trim().isNotEmpty ? spotName.trim() : id.replaceAll('_', ' ');
+    final cat = category.trim().isNotEmpty ? category.trim() : 'Spot';
+
+    final uid =
+        AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null && uid.isNotEmpty) {
+      await bindToUser(uid);
+    }
+
     final prefs = await SharedPreferences.getInstance();
     final visits = await getVisitedSpots();
     
     final img = imageUrl?.trim();
-    final existingIndex = visits.indexWhere((v) => v.spotId == spotId);
+    final existingIndex = visits.indexWhere((v) => v.spotId == id);
 
     if (existingIndex >= 0) {
       final existing = visits[existingIndex];
       final updated = existing.copyWith(
-        spotName: spotName,
-        category: category,
+        spotName: name,
+        category: cat,
         visitedAt: DateTime.now(),
         imageUrl: (img != null && img.isNotEmpty)
             ? img
@@ -305,13 +369,14 @@ class UserActivityService {
         json.encode(visits.map((v) => v.toJson()).toList()),
       );
       _schedulePushActivityToCloud();
+      _notifyVisitedChanged();
       return;
     }
 
     visits.insert(0, VisitRecord(
-      spotId: spotId,
-      spotName: spotName,
-      category: category,
+      spotId: id,
+      spotName: name,
+      category: cat,
       imageUrl: imageUrl,
       visitedAt: DateTime.now(),
     ));
@@ -323,9 +388,10 @@ class UserActivityService {
 
     // Check for badge achievements
     await _checkBadgeAchievements(
-      visits.map((v) => v.spotId).where((id) => id.isNotEmpty).toSet().length,
+      visits.map((v) => v.spotId).where((sid) => sid.isNotEmpty).toSet().length,
     );
     _schedulePushActivityToCloud();
+    _notifyVisitedChanged();
   }
 
   /// Backs up visits + badges + recently viewed + saved spots so progress
@@ -460,19 +526,20 @@ class UserActivityService {
     }
   }
 
-  /// Add a badge
-  static Future<void> _addBadge(Badge badge) async {
+  /// Add a badge. Returns true when the badge was newly earned.
+  static Future<bool> _addBadge(Badge badge) async {
     final prefs = await SharedPreferences.getInstance();
     final badges = await getEarnedBadges();
     
     // Don't add duplicate badges
-    if (badges.any((b) => b.id == badge.id)) return;
+    if (badges.any((b) => b.id == badge.id)) return false;
     
     badges.add(badge);
     await prefs.setString(
       await _scoped(_keyBadges),
       json.encode(badges.map((b) => b.toJson()).toList()),
     );
+    return true;
   }
 
   /// Check and award badges based on achievements
@@ -514,15 +581,20 @@ class UserActivityService {
     }
     
     if (newBadge != null) {
-      await _addBadge(newBadge);
-      await addNotification(
-        title: 'New Badge Earned!',
-        message: 'You earned the "${newBadge.name}" badge!',
-        type: NotificationType.badge,
-      );
+      final added = await _addBadge(newBadge);
+      if (added) {
+        await addNotificationIfAbsent(
+          id: 'badge_${newBadge.id}',
+          title: 'New Badge Earned!',
+          message: 'You earned the "${newBadge.name}" badge!',
+          type: NotificationType.badge,
+        );
+        return newBadge;
+      }
+      return null;
     }
     
-    return newBadge;
+    return null;
   }
 
   /// Get badges count
@@ -559,16 +631,44 @@ class UserActivityService {
   /// Get notifications
   static Future<List<AppNotification>> getNotifications() async {
     final prefs = await SharedPreferences.getInstance();
-    final jsonString = prefs.getString(await _scoped(_keyNotifications));
+    final key = await _scoped(_keyNotifications);
+    final jsonString = prefs.getString(key);
     if (jsonString == null || jsonString.isEmpty) return [];
     
     try {
       final List<dynamic> jsonList = json.decode(jsonString);
-      return jsonList.map((e) => AppNotification.fromJson(e)).toList()
+      final list = jsonList.map((e) => AppNotification.fromJson(e)).toList()
         ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      final pruned = _pruneDuplicateBadgeNotifications(list);
+      if (pruned.length != list.length) {
+        await prefs.setString(
+          key,
+          json.encode(pruned.map((n) => n.toJson()).toList()),
+        );
+      }
+      return pruned;
     } catch (_) {
       return [];
     }
+  }
+
+  /// Collapse legacy duplicate "New Badge Earned!" rows (timestamp ids).
+  static List<AppNotification> _pruneDuplicateBadgeNotifications(
+    List<AppNotification> list,
+  ) {
+    final seenBadgeKeys = <String>{};
+    final out = <AppNotification>[];
+    for (final n in list) {
+      if (n.type == NotificationType.badge) {
+        final key = n.id.startsWith('badge_')
+            ? n.id
+            : 'msg:${n.message}';
+        if (seenBadgeKeys.contains(key)) continue;
+        seenBadgeKeys.add(key);
+      }
+      out.add(n);
+    }
+    return out;
   }
 
   /// Add a notification only if [id] is not already stored.

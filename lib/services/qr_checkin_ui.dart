@@ -296,27 +296,71 @@ Future<bool> performQRCheckIn(
   if (!context.mounted) return false;
 
   switch (result) {
-    case QRCheckInSuccess(:final welcomeMessage, :final dialogTitle):
+    case QRCheckInSuccess(
+        :final welcomeMessage,
+        :final dialogTitle,
+        spotId: final savedSpotId,
+        spotName: final savedSpotName,
+        municipality: final savedMunicipality,
+        municipalityId: final savedMunicipalityId,
+      ):
+      final uid = await QRCheckInService.getCurrentUserId();
+      if (uid != null && uid.isNotEmpty) {
+        await UserActivityService.bindToUser(uid);
+      }
+      final visitSpotId = () {
+        final fromSave = savedSpotId?.trim() ?? '';
+        if (fromSave.isNotEmpty) return fromSave;
+        return spotId.trim();
+      }();
+      final displayName = () {
+        final fromSave = savedSpotName?.trim() ?? '';
+        if (fromSave.isNotEmpty) return fromSave;
+        final fromArg = spotName?.trim() ?? '';
+        if (fromArg.isNotEmpty) return fromArg;
+        return visitSpotId.replaceAll('_', ' ');
+      }();
+      final muniLabel = (savedMunicipality ?? municipality)?.trim() ?? '';
+      final visitCategory = (category != null && category.trim().isNotEmpty)
+          ? category.trim()
+          : (muniLabel.isNotEmpty ? muniLabel : 'Spot');
+      final visitMunicipalityId =
+          (savedMunicipalityId ?? municipalityId).trim();
+
+      // Persist Visited BEFORE the dialog so Home sees it as soon as we navigate.
+      await UserActivityService.addVisit(
+        spotId: visitSpotId,
+        spotName: displayName,
+        category: visitCategory,
+        imageUrl: VisitRecordImageResolver.imageForCheckIn(
+          spotId: visitSpotId,
+          spotName: displayName,
+          category: visitCategory,
+          municipalityId: visitMunicipalityId,
+        ),
+      );
+      // Force a second local write path: sync from Firestore so Home Visited
+      // matches qr_checkins even if prefs were read with a stale uid scope.
+      final synced = await UserActivityService.syncVisitedSpotsFromQrCheckins();
+      if (synced.every((v) => v.spotId != visitSpotId) && visitSpotId.isNotEmpty) {
+        await UserActivityService.addVisit(
+          spotId: visitSpotId,
+          spotName: displayName,
+          category: visitCategory,
+          imageUrl: VisitRecordImageResolver.imageForCheckIn(
+            spotId: visitSpotId,
+            spotName: displayName,
+            category: visitCategory,
+            municipalityId: visitMunicipalityId,
+          ),
+        );
+      }
+
+      if (!context.mounted) return true;
       await showQRCheckInSuccessDialog(
         context,
         message: welcomeMessage,
         title: dialogTitle,
-      );
-      final uid = await QRCheckInService.getCurrentUserId();
-      final displayName = (spotName ?? spotId).trim();
-      final visitCategory = (category ?? 'Spot').trim().isNotEmpty
-          ? category!.trim()
-          : 'Spot';
-      await UserActivityService.addVisit(
-        spotId: spotId,
-        spotName: displayName,
-        category: visitCategory,
-        imageUrl: VisitRecordImageResolver.imageForCheckIn(
-          spotId: spotId,
-          spotName: displayName,
-          category: visitCategory,
-          municipalityId: municipalityId,
-        ),
       );
       if (uid != null && uid.isNotEmpty) {
         unawaited(

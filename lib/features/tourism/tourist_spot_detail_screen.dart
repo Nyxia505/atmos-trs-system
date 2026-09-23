@@ -7,6 +7,7 @@ import 'package:atmos_trs_system/features/explore/explore_screen.dart'
     show TouristSpot, kTextMuted;
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart';
+import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
 
 class TouristSpotDetailScreen extends StatefulWidget {
   const TouristSpotDetailScreen({super.key, required this.spot});
@@ -204,9 +205,11 @@ class _TouristSpotDetailScreenState extends State<TouristSpotDetailScreen> {
                         onPressed: () => _openVrForSpot(context),
                         icon: const Icon(Icons.vrpano_rounded, size: 20),
                         label: Text(
-                          _spotHasHostedVr
-                              ? 'Open 360° VR in browser'
-                              : 'View VR preview',
+                          VrDownloadAppPrompt.ctaLabel(
+                            mobileLabel: _spotHasHostedVr
+                                ? 'Launch VR Tour'
+                                : 'View VR preview',
+                          ),
                         ),
                         style: FilledButton.styleFrom(
                           backgroundColor: accent,

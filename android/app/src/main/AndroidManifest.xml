@@ -31,6 +31,27 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- Phone camera / browser → ATMOS when app is installed (App Links). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data
+                    android:scheme="https"
+                    android:host="atmos-trs-system.web.app"
+                    android:pathPrefix="/checkin"/>
+                <data
+                    android:scheme="https"
+                    android:host="atmos-trs-system.web.app"
+                    android:pathPrefix="/landing"/>
+            </intent-filter>
+            <!-- Fallback custom scheme (manual / marketing links). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="atmos" android:host="checkin"/>
+            </intent-filter>
         </activity>
         <!-- Google Maps API key (required for Explore map) -->
         <meta-data

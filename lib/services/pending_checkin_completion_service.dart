@@ -1,6 +1,8 @@
 import 'dart:async' show unawaited;
 
+import 'package:atmos_trs_system/services/establishment_stay_service.dart';
 import 'package:atmos_trs_system/services/notification_firestore_service.dart';
+import 'package:atmos_trs_system/services/pending_establishment_stay_storage.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
@@ -14,11 +16,50 @@ import 'package:flutter/foundation.dart' show debugPrint;
 class PendingCheckinCompletionService {
   PendingCheckinCompletionService._();
 
-  /// Completes a pending spot or LGU QR check-in. Skips GPS (registration path).
+  /// Last establishment stay id created during [completePendingAfterAuth], if any.
+  static String? lastCompletedEstablishmentStayId;
+
+  /// Completes a pending spot, LGU, or establishment QR. Skips GPS (registration path).
   /// Returns a welcome message on success, or null if nothing pending / failed.
-  ///
-  /// One pending scan session → one recorded party visit (uses stored [partySize]).
   static Future<String?> completePendingAfterAuth() async {
+    lastCompletedEstablishmentStayId = null;
+
+    final est = await PendingEstablishmentStayStorage.peek();
+    if (est != null) {
+      try {
+        final stay = await EstablishmentStayService.createPendingStay(
+          establishmentId: est.establishmentId,
+          municipalityId: est.municipalityId,
+          businessNameHint: est.businessName,
+          municipalityHint: est.municipality,
+          partySize: est.partySize,
+          femaleCount: est.femaleCount,
+          maleCount: est.maleCount,
+          filipinoCount: est.filipinoCount,
+          foreignCount: est.foreignCount,
+        );
+        await PendingEstablishmentStayStorage.clear();
+        await PendingSpotCheckInStorage.clear();
+        await PendingLguCheckInStorage.clear();
+        lastCompletedEstablishmentStayId = stay.id;
+        final label = stay.establishmentName;
+        final uid = await QRCheckInService.getCurrentUserId();
+        if (uid != null && uid.isNotEmpty) {
+          unawaited(
+            NotificationFirestoreService.createCheckInNotification(
+              uid,
+              'Stay request at $label — waiting for front desk',
+            ),
+          );
+        }
+        debugPrint('[PendingCheckin] establishment stay pending: ${stay.id}');
+        return 'Stay request sent to $label. Waiting for front desk confirmation.';
+      } catch (e) {
+        debugPrint('[PendingCheckin] establishment stay failed: $e');
+        return null;
+      }
+    }
+
     final spot = await PendingSpotCheckInStorage.peek();
     if (spot != null) {
       final result = await QRCheckInService.saveCheckIn(
@@ -36,17 +77,20 @@ class PendingCheckinCompletionService {
           await PendingSpotCheckInStorage.clear();
           await PendingLguCheckInStorage.clear();
           final label = (spot.spotName ?? spot.spotId).trim();
+          final muni = spot.municipality?.trim() ?? '';
+          final visitCategory = muni.isNotEmpty ? muni : 'Spot';
           await UserActivityService.addVisit(
             spotId: spot.spotId,
             spotName: label,
-            category: 'Spot',
+            category: visitCategory,
             imageUrl: VisitRecordImageResolver.imageForCheckIn(
               spotId: spot.spotId,
               spotName: label,
-              category: 'Spot',
+              category: visitCategory,
               municipalityId: spot.municipalityId,
             ),
           );
+          await UserActivityService.syncVisitedSpotsFromQrCheckins();
           final uid = await QRCheckInService.getCurrentUserId();
           if (uid != null && uid.isNotEmpty) {
             unawaited(

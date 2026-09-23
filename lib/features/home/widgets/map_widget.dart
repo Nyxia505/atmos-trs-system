@@ -5,6 +5,7 @@ import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
 import 'package:atmos_trs_system/screens/simple_image_vr_screen.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
+import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
 
 /// Misamis Occidental map center and zoom (per requirements).
 const double _kMapCenterLat = 8.3375;
@@ -80,16 +81,19 @@ class _MapWidgetState extends State<MapWidget> {
       backgroundColor: Colors.transparent,
       builder: (context) => _SpotModalSheet(
         spot: spot,
-        onLaunchVrTour: () {
+        onLaunchVrTour: () async {
           Navigator.pop(context);
           final link = spot.vrLink?.trim();
           if (link != null && link.isNotEmpty) {
-            openVrTour(context, url: link, title: spot.name);
+            await openVrTour(context, url: link, title: spot.name);
             return;
           }
+          // Image preview is still VR UX — gate on web (app-only policy).
+          if (!await VrDownloadAppPrompt.ensureAllowed(context)) return;
+          if (!context.mounted) return;
           final img = spot.image?.trim();
           if (img != null && img.isNotEmpty) {
-            Navigator.of(context).push<void>(
+            await Navigator.of(context).push<void>(
               MaterialPageRoute<void>(
                 builder: (_) =>
                     SimpleImageVrScreen(title: spot.name, imageUrl: img),
@@ -236,9 +240,11 @@ class _SpotModalSheet extends StatelessWidget {
                 onPressed: onLaunchVrTour,
                 icon: const Icon(Icons.vrpano_rounded, size: 20),
                 label: Text(
-                  spot.vrLink?.trim().isNotEmpty == true
-                      ? 'Launch VR tour'
-                      : 'View VR preview',
+                  VrDownloadAppPrompt.ctaLabel(
+                    mobileLabel: spot.vrLink?.trim().isNotEmpty == true
+                        ? 'Launch VR tour'
+                        : 'View VR preview',
+                  ),
                 ),
                 style: FilledButton.styleFrom(
                   backgroundColor: AppTheme.primary,

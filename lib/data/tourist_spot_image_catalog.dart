@@ -221,13 +221,16 @@ class TouristSpotImageCatalog {
         .toList(growable: false);
   }
 
-  /// Hero photo for an LGU — first gallery entry, else the legacy asset.
+  /// Hero photo for an LGU — prefer flat `assets/images/` heroes (Visited thumbs),
+  /// then municipality gallery paths.
   static String? municipalityHeroAsset(String? municipalityId) {
-    final gallery = galleryAssetsFor(municipalityId);
-    if (gallery.isNotEmpty) return gallery.first;
     final mid = normalizeMunicipalityId(municipalityId);
     if (mid.isEmpty) return null;
-    return byMunicipalityId[mid] ?? kMunicipalityAssetById[mid];
+    final flat = byMunicipalityId[mid] ?? kMunicipalityAssetById[mid];
+    if (flat != null) return flat;
+    final gallery = galleryAssetsFor(municipalityId);
+    if (gallery.isNotEmpty) return gallery.first;
+    return null;
   }
 
   static Map<String, String>? _byDocId;
@@ -348,7 +351,17 @@ class TouristSpotImageCatalog {
   }) {
     final sid = spotId?.trim() ?? '';
     if (sid.isNotEmpty) {
-      final gallery = galleryAssetsFor(sid);
+      final rawSid = sid.toLowerCase().startsWith('lgu_')
+          ? sid.substring(4)
+          : sid;
+      final midFromSid = normalizeMunicipalityId(rawSid);
+      if (midFromSid.isNotEmpty) {
+        final flat = kMunicipalityAssetById[midFromSid] ??
+            kMunicipalityAssetById[_slug(midFromSid)];
+        if (flat != null) return flat;
+      }
+
+      final gallery = galleryAssetsFor(rawSid);
       if (gallery.isNotEmpty) return gallery.first;
       final direct = kMunicipalityAssetById[sid] ??
           kMunicipalityAssetById[_slug(sid)];
@@ -365,6 +378,11 @@ class TouristSpotImageCatalog {
       if (fromName != null &&
           fromName.startsWith(MisamisOccidentalImages.kPrefix)) {
         return fromName;
+      }
+      final midFromName = getMunicipalityIdFromName(name);
+      if (midFromName.isNotEmpty) {
+        final flat = kMunicipalityAssetById[midFromName];
+        if (flat != null) return flat;
       }
     }
 

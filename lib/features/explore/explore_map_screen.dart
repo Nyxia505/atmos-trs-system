@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/widgets/misamis_occidental_explore_map.dart';
+import 'package:atmos_trs_system/models/establishment_map_pin.dart';
 import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
+import 'package:atmos_trs_system/services/establishment_map_pins_service.dart';
 import 'package:atmos_trs_system/services/tourist_spots_repository.dart';
 import 'package:atmos_trs_system/screens/municipality_map_and_spots_screen.dart';
+import 'package:atmos_trs_system/screens/establishment_public_detail_screen.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart'
     as activity;
 import 'package:intl/intl.dart';
@@ -51,6 +54,15 @@ class _ExploreScreenState extends State<ExploreScreen> {
       MaterialPageRoute(
         builder: (context) =>
             MunicipalityMapAndSpotsScreen(municipalityIdOrName: spot.name),
+      ),
+    );
+  }
+
+  void _onEstablishmentPinTap(EstablishmentMapPin pin) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EstablishmentPublicDetailScreen(pin: pin),
       ),
     );
   }
@@ -203,6 +215,23 @@ class _ExploreScreenState extends State<ExploreScreen> {
         : MisamisOccidentalDisplaySpots.fromSeeds();
     final isMobile = MediaQuery.sizeOf(context).width < 600;
 
+    Widget mapBody({required void Function(TouristSpotFirestore) onSpotTap}) {
+      return StreamBuilder<List<EstablishmentMapPin>>(
+        stream: EstablishmentMapPinsService.watchActivePins(),
+        builder: (context, aeSnap) {
+          return MisamisOccidentalExploreMap(
+            key: const ValueKey('explore-fullscreen-map'),
+            spots: spots,
+            establishmentPins: aeSnap.data ?? const [],
+            onSpotTap: onSpotTap,
+            onEstablishmentTap: (pin) {
+              _onEstablishmentPinTap(pin);
+            },
+          );
+        },
+      );
+    }
+
     if (isMobile) {
       Navigator.of(context).push<void>(
         MaterialPageRoute<void>(
@@ -263,9 +292,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                 ],
               ),
             ),
-            body: MisamisOccidentalExploreMap(
-              key: const ValueKey('explore-fullscreen-map'),
-              spots: spots,
+            body: mapBody(
               onSpotTap: (spot) {
                 Navigator.pop(ctx);
                 _openMunicipality(spot);
@@ -362,9 +389,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(20),
-                    child: MisamisOccidentalExploreMap(
-                      key: const ValueKey('explore-fullscreen-map'),
-                      spots: spots,
+                    child: mapBody(
                       onSpotTap: (spot) {
                         Navigator.pop(context);
                         _openMunicipality(spot);
@@ -523,79 +548,91 @@ class _ExploreScreenState extends State<ExploreScreen> {
                 _municipalitySpots = baseSpots;
                 final visibleCount = baseSpots.length;
 
-                return Stack(
-                  children: [
-                    MisamisOccidentalExploreMap(
-                      key: const ValueKey('explore-embedded-map'),
-                      spots: baseSpots,
-                      onMapReady: (moveTo) => _mapMoveTo = moveTo,
-                      onSpotTap: _openMunicipality,
-                    ),
-                    Positioned(
-                      top: 12,
-                      left: 12,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
+                return StreamBuilder<List<EstablishmentMapPin>>(
+                  stream: EstablishmentMapPinsService.watchActivePins(),
+                  builder: (context, aeSnap) {
+                    final aePins = aeSnap.data ?? const <EstablishmentMapPin>[];
+                    return Stack(
+                      children: [
+                        MisamisOccidentalExploreMap(
+                          key: const ValueKey('explore-embedded-map'),
+                          spots: baseSpots,
+                          establishmentPins: aePins,
+                          onMapReady: (moveTo) => _mapMoveTo = moveTo,
+                          onSpotTap: _openMunicipality,
+                          onEstablishmentTap: _onEstablishmentPinTap,
                         ),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: accent.withValues(alpha: 0.25),
+                        Positioned(
+                          top: 12,
+                          left: 12,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: accent.withValues(alpha: 0.25),
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.08),
+                                  blurRadius: 10,
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.place_rounded,
+                                  color: accent,
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  aePins.isEmpty
+                                      ? '$visibleCount destinations'
+                                      : '$visibleCount destinations · ${aePins.length} stays',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 13,
+                                    color: accent,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.08),
-                              blurRadius: 10,
-                            ),
-                          ],
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.place_rounded,
-                              color: accent,
-                              size: 18,
+                        Positioned(
+                          bottom: 10,
+                          right: 10,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
                             ),
-                            const SizedBox(width: 6),
-                            Text(
-                              '$visibleCount destinations',
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.95),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              aePins.isEmpty
+                                  ? 'Tap a pin to explore'
+                                  : 'Orange: towns · Blue: stays',
                               style: TextStyle(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 13,
-                                color: accent,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: _kMuted,
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      bottom: 10,
-                      right: 10,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.95),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(
-                          'Tap a pin to explore',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: _kMuted,
                           ),
                         ),
-                      ),
-                    ),
-                  ],
+                      ],
+                    );
+                  },
                 );
               },
             ),

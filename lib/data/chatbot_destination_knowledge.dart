@@ -464,38 +464,85 @@ class ChatbotDestinationKnowledge {
       _ => '📍',
     };
 
-    final list = items.map(_formatNearbyLine).join('\n\n');
+    final numbered = <String>[];
+    for (var i = 0; i < items.length; i++) {
+      numbered.add(_formatNearbyBlock(items[i], index: i + 1, lang: lang));
+    }
+    final list = numbered.join('\n\n────────────────\n\n');
     final noteBlock = note.isNotEmpty ? '$note\n\n' : '';
     return _localized(
       lang: lang,
       en: '$emoji Nearby ${labelEn.toLowerCase()} — $name\n\n$noteBlock$list\n\n'
-          'Open Home → Discover → $name for photos and Get Directions.',
+          'Tip: Open Home → Discover → $name for photos and Get Directions.',
       fil: '$emoji Nearby ${labelEn.toLowerCase()} — $name\n\n$noteBlock$list\n\n'
-          'Buksan ang Home → Discover → $name para sa photos at Get Directions.',
+          'Tip: Buksan ang Home → Discover → $name para sa photos at Get Directions.',
       ceb: '$emoji Nearby ${labelEn.toLowerCase()} — $name\n\n$noteBlock$list\n\n'
-          'Ablihi ang Home → Discover → $name para sa photos ug Get Directions.',
+          'Tip: Ablihi ang Home → Discover → $name para sa photos ug Get Directions.',
     );
   }
 
-  static String _formatNearbyLine(_NearbyEntry entry) {
-    final lines = <String>['• ${entry.name}'];
+  static String _formatNearbyBlock(
+    _NearbyEntry entry, {
+    required int index,
+    required String lang,
+  }) {
+    final typeLabel = _localized(
+      lang: lang,
+      en: 'Type',
+      fil: 'Uri',
+      ceb: 'Klase',
+    );
+    final ratingLabel = _localized(
+      lang: lang,
+      en: 'Rating',
+      fil: 'Rating',
+      ceb: 'Rating',
+    );
+    final contactLabel = _localized(
+      lang: lang,
+      en: 'Contact',
+      fil: 'Contact',
+      ceb: 'Contact',
+    );
+    final addressLabel = _localized(
+      lang: lang,
+      en: 'Address',
+      fil: 'Address',
+      ceb: 'Address',
+    );
+    final driveLabel = _localized(
+      lang: lang,
+      en: 'Drive',
+      fil: 'Byahe',
+      ceb: 'Byahe',
+    );
+    final notesLabel = _localized(
+      lang: lang,
+      en: 'Notes',
+      fil: 'Notes',
+      ceb: 'Notes',
+    );
+
+    final lines = <String>['$index. ${entry.name}'];
     if (entry.category.isNotEmpty) {
-      lines.add('  ${entry.category}');
+      lines.add('   $typeLabel: ${entry.category}');
     }
     if (entry.rating != null && entry.rating! > 0) {
-      lines.add('  ${entry.rating!.toStringAsFixed(1)}★');
+      lines.add('   $ratingLabel: ${entry.rating!.toStringAsFixed(1)}★');
     }
     if (entry.contact.isNotEmpty) {
-      lines.add('  Contact: ${entry.contact}');
+      lines.add('   $contactLabel: ${entry.contact}');
     }
     if (entry.location.isNotEmpty) {
-      lines.add('  📍 ${entry.location}');
+      lines.add('   $addressLabel: ${entry.location}');
     }
     if (entry.driveMinutes != null) {
-      lines.add('  🚗 ~${entry.driveMinutes!.round()} min drive');
+      lines.add(
+        '   $driveLabel: ~${entry.driveMinutes!.round()} min',
+      );
     }
     if (entry.description.isNotEmpty) {
-      lines.add('  ${entry.description}');
+      lines.add('   $notesLabel: ${entry.description}');
     }
     return lines.join('\n');
   }

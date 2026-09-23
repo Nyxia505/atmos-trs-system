@@ -18,19 +18,16 @@ abstract final class TouristSignupChrome {
     'Personal Details',
     'Personal Info',
     'Contact & Address',
-    'Uploads',
   ];
 
   static String sloganForVisualStep(int visualStepIndex) {
-    switch (visualStepIndex.clamp(0, 3)) {
+    switch (visualStepIndex.clamp(0, 2)) {
       case 0:
         return 'Start Your Journey';
       case 1:
         return 'More Than Registration';
-      case 2:
-        return 'Discover More Together';
       default:
-        return 'Almost There';
+        return 'Discover More Together';
     }
   }
 }

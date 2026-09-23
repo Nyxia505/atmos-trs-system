@@ -90,61 +90,11 @@ class AppFaqSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent = AppTheme.primary;
-    final body = _FaqChatBody(
-      accent: accent,
+    return _FaqChatBody(
+      accent: AppTheme.primary,
       centeredPanel: centeredPanel,
       fullScreen: fullScreen,
     );
-
-    if (fullScreen) {
-      return Scaffold(
-        backgroundColor: Colors.white,
-        appBar: AppBar(
-          backgroundColor: Colors.white,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          leadingWidth: 80,
-          leading: Padding(
-            padding: const EdgeInsets.only(left: 12),
-            child: Center(
-              child: FilledButton(
-                onPressed: () => Navigator.pop(context),
-                style: FilledButton.styleFrom(
-                  backgroundColor: accent,
-                  foregroundColor: AppTheme.onPrimary,
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  minimumSize: const Size(0, 36),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
-                child: const Text(
-                  'Back',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                ),
-              ),
-            ),
-          ),
-          title: Text(
-            FaqChatbotService.botName,
-            style: AtmosBrandTypography.meaningTagline(
-              color: _kDarkText,
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.2,
-            ),
-          ),
-          actions: const [
-            _FaqChatMenuButton(),
-          ],
-        ),
-        body: SafeArea(child: body),
-      );
-    }
-
-    return body;
   }
 }
 
@@ -163,20 +113,17 @@ class _FaqChatBody extends StatefulWidget {
   State<_FaqChatBody> createState() => _FaqChatBodyState();
 }
 
-class _FaqChatBodyState extends State<_FaqChatBody>
-    with SingleTickerProviderStateMixin {
+class _FaqChatBodyState extends State<_FaqChatBody> {
   final _chatbot = FaqChatbotService.instance;
   final _store = FaqChatStore.instance;
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
   final _focusNode = FocusNode();
   bool _isTyping = false;
-  late final TabController _tabController;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
     _store.addListener(_onStoreChanged);
     unawaited(_initializeChat());
   }
@@ -199,7 +146,6 @@ class _FaqChatBodyState extends State<_FaqChatBody>
   @override
   void dispose() {
     _store.removeListener(_onStoreChanged);
-    _tabController.dispose();
     _inputController.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
@@ -278,49 +224,182 @@ class _FaqChatBodyState extends State<_FaqChatBody>
     await _store.deleteMessage(message.id);
   }
 
+  Future<void> _openFaqBrowse() async {
+    final accent = widget.accent;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        final height = MediaQuery.sizeOf(sheetContext).height * 0.72;
+        return Container(
+          height: height,
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: 10),
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 14, 8, 8),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.12),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.help_outline_rounded,
+                        color: accent,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Frequently asked',
+                            style: AtmosBrandTypography.meaningTagline(
+                              color: _kDarkText,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          Text(
+                            'Tap a question to ask Tala',
+                            style: AtmosBrandTypography.meaningTagline(
+                              color: AppTheme.unselectedMuted,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(sheetContext),
+                      icon: Icon(Icons.close, color: Colors.grey.shade600),
+                      tooltip: 'Close',
+                    ),
+                  ],
+                ),
+              ),
+              Divider(height: 1, color: Colors.grey.shade200),
+              Expanded(
+                child: ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+                  itemCount: kAppFaqItems.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 4),
+                  itemBuilder: (context, index) {
+                    final item = kAppFaqItems[index];
+                    return _FaqBrowseTile(
+                      item: item,
+                      accent: accent,
+                      onAsk: () {
+                        Navigator.pop(sheetContext);
+                        unawaited(_sendMessage(item.question));
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Column(
+    final content = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _buildHeader(),
-        Material(
-          color: widget.accent.withValues(alpha: 0.06),
-          child: TabBar(
-            controller: _tabController,
-            labelColor: widget.accent,
-            unselectedLabelColor: AppTheme.unselectedMuted,
-            indicatorColor: widget.accent,
-            indicatorWeight: 3,
-            labelStyle: AtmosBrandTypography.meaningTagline(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: widget.accent,
-            ),
-            unselectedLabelStyle: AtmosBrandTypography.meaningTagline(
-              fontSize: 14,
-              color: AppTheme.unselectedMuted,
-            ),
-            tabs: const [
-              Tab(text: 'Chat'),
-              Tab(text: 'Browse FAQ'),
-            ],
-          ),
-        ),
-        Expanded(
-          child: TabBarView(
-            controller: _tabController,
-            children: [
-              _buildChatTab(),
-              _buildBrowseTab(),
-            ],
-          ),
-        ),
+        if (!widget.fullScreen) _buildHeader(),
+        Expanded(child: _buildChat()),
       ],
+    );
+
+    if (!widget.fullScreen) return content;
+
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        leadingWidth: 80,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 12),
+          child: Center(
+            child: FilledButton(
+              onPressed: () => Navigator.pop(context),
+              style: FilledButton.styleFrom(
+                backgroundColor: widget.accent,
+                foregroundColor: AppTheme.onPrimary,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                minimumSize: const Size(0, 36),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              child: const Text(
+                'Back',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+        ),
+        title: Text(
+          FaqChatbotService.botName,
+          style: AtmosBrandTypography.meaningTagline(
+            color: _kDarkText,
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.2,
+          ),
+        ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: Center(
+              child: _FaqHelpCircleButton(
+                accent: widget.accent,
+                onPressed: _openFaqBrowse,
+              ),
+            ),
+          ),
+          const _FaqChatMenuButton(),
+        ],
+      ),
+      body: SafeArea(child: content),
     );
   }
 
   Widget _buildHeader() {
+    final help = _FaqHelpCircleButton(
+      accent: widget.accent,
+      onPressed: _openFaqBrowse,
+    );
+
     if (widget.centeredPanel) {
       return Padding(
         padding: const EdgeInsets.fromLTRB(20, 16, 8, 8),
@@ -363,6 +442,7 @@ class _FaqChatBodyState extends State<_FaqChatBody>
                 ],
               ),
             ),
+            help,
             IconButton(
               onPressed: () => Navigator.pop(context),
               icon: Icon(Icons.close, color: Colors.grey.shade600),
@@ -374,46 +454,44 @@ class _FaqChatBodyState extends State<_FaqChatBody>
       );
     }
 
-    if (!widget.fullScreen) {
-      return Column(
-        children: [
-          Container(
-            margin: const EdgeInsets.only(top: 12),
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: Colors.grey.shade300,
-              borderRadius: BorderRadius.circular(2),
-            ),
+    return Column(
+      children: [
+        Container(
+          margin: const EdgeInsets.only(top: 12),
+          width: 40,
+          height: 4,
+          decoration: BoxDecoration(
+            color: Colors.grey.shade300,
+            borderRadius: BorderRadius.circular(2),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
-            child: Row(
-              children: [
-                Icon(Icons.smart_toy_outlined, color: widget.accent, size: 22),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    FaqChatbotService.botName,
-                    style: AtmosBrandTypography.meaningTagline(
-                      color: _kDarkText,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w600,
-                    ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 16, 12, 8),
+          child: Row(
+            children: [
+              Icon(Icons.smart_toy_outlined, color: widget.accent, size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  FaqChatbotService.botName,
+                  style: AtmosBrandTypography.meaningTagline(
+                    color: _kDarkText,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-                const _FaqChatMenuButton(),
-              ],
-            ),
+              ),
+              help,
+              const SizedBox(width: 4),
+              const _FaqChatMenuButton(),
+            ],
           ),
-        ],
-      );
-    }
-
-    return const SizedBox.shrink();
+        ),
+      ],
+    );
   }
 
-  Widget _buildChatTab() {
+  Widget _buildChat() {
     final messages = _store.messages;
 
     if (_store.isLoading && messages.isEmpty) {
@@ -550,23 +628,39 @@ class _FaqChatBodyState extends State<_FaqChatBody>
       ),
     );
   }
+}
 
-  Widget _buildBrowseTab() {
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-      itemCount: kAppFaqItems.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 4),
-      itemBuilder: (context, index) {
-        final item = kAppFaqItems[index];
-        return _FaqBrowseTile(
-          item: item,
-          accent: widget.accent,
-          onAsk: () {
-            _tabController.animateTo(0);
-            _sendMessage(item.question);
-          },
-        );
-      },
+/// Compact help circle — opens the FAQ list without competing with chat.
+class _FaqHelpCircleButton extends StatelessWidget {
+  const _FaqHelpCircleButton({
+    required this.accent,
+    required this.onPressed,
+  });
+
+  final Color accent;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'FAQ',
+      child: Material(
+        color: accent.withValues(alpha: 0.12),
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onPressed,
+          child: SizedBox(
+            width: 36,
+            height: 36,
+            child: Icon(
+              Icons.question_mark_rounded,
+              size: 18,
+              color: accent,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -721,14 +815,17 @@ class _ChatBubble extends StatelessWidget {
                         ? null
                         : Border.all(color: Colors.grey.shade200),
                   ),
-                  child: Text(
-                    message.message,
-                    style: AtmosBrandTypography.meaningTagline(
-                      color: isUser ? Colors.white : _kDarkText,
-                      fontSize: 14,
-                      height: 1.45,
-                    ),
-                  ),
+                  child: isUser
+                      ? Text(
+                          message.message,
+                          style: AtmosBrandTypography.meaningTagline(
+                            color: Colors.white,
+                            fontSize: 14,
+                            height: 1.45,
+                            letterSpacing: 0.15,
+                          ),
+                        )
+                      : _FaqBotMessageText(text: message.message),
                 ),
               ),
             ),
@@ -737,6 +834,116 @@ class _ChatBubble extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _FaqBotMessageText extends StatelessWidget {
+  const _FaqBotMessageText({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TextStyle(
+      color: _kDarkText,
+      fontSize: 14,
+      height: 1.5,
+      fontWeight: FontWeight.w500,
+      letterSpacing: 0.1,
+    );
+    final lines = text.replaceAll('\r\n', '\n').split('\n');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < lines.length; i++)
+          if (lines[i].trim().isEmpty)
+            const SizedBox(height: 8)
+          else if (lines[i].trim().startsWith('────'))
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Divider(
+                height: 1,
+                thickness: 1,
+                color: Colors.grey.shade300,
+              ),
+            )
+          else if (_isBulletLine(lines[i]))
+            Padding(
+              padding: const EdgeInsets.only(left: 4, bottom: 2),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '•  ',
+                    style: style.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  Expanded(
+                    child: Text(
+                      _bulletBody(lines[i]),
+                      style: style,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else
+            Padding(
+              padding: EdgeInsets.only(
+                bottom: _isSectionHeader(lines[i]) ? 2 : 0,
+              ),
+              child: Text(
+                lines[i],
+                style: style.copyWith(
+                  fontWeight: (_isHotelTitleLine(lines[i]) ||
+                          _isSectionHeader(lines[i]))
+                      ? FontWeight.w700
+                      : FontWeight.w500,
+                  fontSize: _isHotelTitleLine(lines[i]) ? 14.5 : 14,
+                  color: (_isHotelTitleLine(lines[i]) ||
+                          _isSectionHeader(lines[i]))
+                      ? const Color(0xFF1F2937)
+                      : _kDarkText,
+                ),
+              ),
+            ),
+      ],
+    );
+  }
+
+  bool _isBulletLine(String line) {
+    final t = line.trimLeft();
+    // Numbered steps stay as title lines (1. 2. 3.) — only bullet markers here.
+    return t.startsWith('• ') || t.startsWith('- ') || t.startsWith('* ');
+  }
+
+  String _bulletBody(String line) {
+    final t = line.trimLeft();
+    if (t.startsWith('• ')) return t.substring(2).trimLeft();
+    if (t.startsWith('- ') || t.startsWith('* ')) {
+      return t.substring(2).trimLeft();
+    }
+    return t;
+  }
+
+  bool _isSectionHeader(String line) {
+    final t = line.trim();
+    if (t.isEmpty || t.length > 42) return false;
+    if (_isBulletLine(t)) return false;
+    return t.endsWith(':');
+  }
+
+  bool _isHotelTitleLine(String line) {
+    final t = line.trim();
+    if (t.isEmpty) return false;
+    // "1. Hotel Name" or header lines with emoji title.
+    if (RegExp(r'^\d+\.\s+\S').hasMatch(t)) return true;
+    if (t.startsWith('🏨') ||
+        t.startsWith('🍽️') ||
+        t.startsWith('☕') ||
+        t.startsWith('🏞️')) {
+      return true;
+    }
+    return false;
   }
 }
 

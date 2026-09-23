@@ -1,5 +1,6 @@
 /// Merges query parameters from the page URL and from hash routes
-/// (e.g. `https://host/#/landing?type=lgu&municipality_id=oroquieta`).
+/// (e.g. `https://host/#/landing?type=lgu&municipality_id=oroquieta`
+/// or path `https://host/checkin?type=spot&spot_id=…`).
 Map<String, String> mergedLaunchQueryParameters(Uri uri) {
   final out = Map<String, String>.from(uri.queryParameters);
   final fragment = uri.fragment.trim();
@@ -17,9 +18,5 @@ Map<String, String> mergedLaunchQueryParameters(Uri uri) {
 
 /// Full launch URL string for QR parsing on web (includes fragment query).
 String launchUrlStringForQrParsing() {
-  final base = Uri.base;
-  if (base.fragment.contains('?')) {
-    return base.toString();
-  }
-  return base.toString();
+  return Uri.base.toString();
 }

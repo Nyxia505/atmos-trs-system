@@ -70,6 +70,22 @@ class OtpLocalFallbackCache {
     return digits.length == 6 ? digits : null;
   }
 
+  /// Expiry of the locally cached OTP, or null if missing/expired.
+  static Future<DateTime?> activeOtpExpiresAt(String uid) async {
+    final data = await _read(uid);
+    if (data == null) return null;
+
+    final expiresMs = data['expiresAtMs'];
+    if (expiresMs is! int) return null;
+    if (DateTime.now().millisecondsSinceEpoch > expiresMs) {
+      await clear(uid);
+      return null;
+    }
+    final digits = _digitsOnly(data['otp']?.toString() ?? '');
+    if (digits.length != 6) return null;
+    return DateTime.fromMillisecondsSinceEpoch(expiresMs);
+  }
+
   static Future<bool> verify({
     required String uid,
     required String enteredOtp,

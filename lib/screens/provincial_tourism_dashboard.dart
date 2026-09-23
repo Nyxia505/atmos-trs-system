@@ -18,11 +18,18 @@ import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/provincial_report_builder.dart';
+import 'package:atmos_trs_system/utils/visit_stats.dart';
+import 'package:atmos_trs_system/widgets/dot_report_export_panel.dart';
+import 'package:atmos_trs_system/widgets/optaca_establishment_review_panel.dart';
+import 'package:atmos_trs_system/widgets/optaca_report_review_panel.dart';
 import 'package:atmos_trs_system/widgets/report_export_preview.dart';
 import 'package:atmos_trs_system/widgets/ui_skeleton.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+
+import 'package:atmos_trs_system/config/app_theme.dart';
+import 'package:atmos_trs_system/widgets/lgu_debug_data_dialogs.dart';
 
 class ProvincialTourismDashboard extends StatefulWidget {
   const ProvincialTourismDashboard({super.key});
@@ -86,6 +93,7 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
     _NavItem(Icons.insights_rounded, 'Tourist Insights'),
     _NavItem(Icons.event_rounded, 'Events & Campaigns'),
     _NavItem(Icons.assessment_rounded, 'DOT Reports'),
+    _NavItem(Icons.hotel_rounded, 'Establishments'),
     _NavItem(Icons.warning_amber_rounded, 'Alerts & Quality'),
     _NavItem(Icons.settings_rounded, 'Settings'),
   ];
@@ -96,8 +104,9 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
   static const _insightsIndex = 3;
   static const _eventsIndex = 4;
   static const _reportsIndex = 5;
-  static const _alertsIndex = 6;
-  static const _settingsIndex = 7;
+  static const _establishmentsIndex = 6;
+  static const _alertsIndex = 7;
+  static const _settingsIndex = 8;
   static const _bottomNavItemCount = 5;
 
   static const _categories = [
@@ -481,10 +490,21 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
       _insightsIndex => _buildInsightsTab(),
       _eventsIndex => _buildEventsTab(),
       _reportsIndex => _buildReportsTab(),
+      _establishmentsIndex => _buildEstablishmentsTab(),
       _alertsIndex => _buildAlertsTab(),
       _settingsIndex => _buildSettingsTab(),
       _ => _buildDashboardTab(),
     };
+  }
+
+  Widget _buildEstablishmentsTab() {
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
+      children: const [
+        OptacaEstablishmentReviewPanel(),
+      ],
+    );
   }
 
   Widget _simpleKpi({
@@ -747,11 +767,12 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
         _kpiGrid(
           children: [
             _simpleKpi(
-              title: 'Total arrivals',
-              value: '${period.length}',
+              title: 'Total visitors',
+              value: '${VisitStats.fromCheckIns(period).visitors}',
               icon: Icons.groups_rounded,
               accent: GovernorDashboardTokens.primary,
-              subtitle: _selectedTimeFilter,
+              subtitle:
+                  '${VisitStats.fromCheckIns(period).checkIns} check-ins · $_selectedTimeFilter',
             ),
             _simpleKpi(
               title: 'Active destinations',
@@ -1601,11 +1622,24 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
       children: [
         Text('DOT Reports', style: GovernorDashboardTokens.heading(size: 20)),
+        const SizedBox(height: 8),
+        Text(
+          'Official forms: preview + Excel/PDF. Scope any spot or establishment '
+          'province-wide (super-admin).',
+          style: GovernorDashboardTokens.body(),
+        ),
         const SizedBox(height: 12),
+        _buildOptacaDotReportExports(),
+        const SizedBox(height: 28),
         _panel(
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Text(
+                'Quick CSV / summary (legacy)',
+                style: GovernorDashboardTokens.sectionTitle(),
+              ),
+              const SizedBox(height: 8),
               DropdownButtonFormField<String>(
                 initialValue: _reportType,
                 items: [
@@ -1669,7 +1703,39 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
             ],
           ),
         ),
+        const SizedBox(height: 28),
+        OptacaReportReviewPanel(
+          primaryColor: AppTheme.brandOrange,
+          textDark: GovernorDashboardTokens.text,
+          textMuted: GovernorDashboardTokens.subtitle,
+        ),
       ],
+    );
+  }
+
+  Widget _buildOptacaDotReportExports() {
+    final catalog = _spots
+        .map(
+          (s) => DotVar2SpotCatalogEntry(
+            spotId: s['id']?.toString() ?? '',
+            name: s['name']?.toString() ?? 'Unknown',
+            dotAttractionCode: s['dotAttractionCode']?.toString() ?? '',
+          ),
+        )
+        .toList();
+    return DotReportExportPanel(
+      primaryColor: AppTheme.brandOrange,
+      textDark: GovernorDashboardTokens.text,
+      textMuted: GovernorDashboardTokens.subtitle,
+      borderColor: const Color(0xFFE2E8F0),
+      scopeLabel: 'Misamis Occidental (OPTACA)',
+      scopeSlug: 'misamis_occidental_optaca',
+      isProvincial: true,
+      isMobile: _isMobile,
+      checkIns: _checkIns,
+      tourists: _tourists,
+      catalogSpots: catalog,
+      wrapPanel: (child) => _panel(child),
     );
   }
 
@@ -1709,12 +1775,14 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
           title: 'DOT Accommodation Establishment Data',
           subtitle:
               '${formatReportDate(_reportStart)} – ${formatReportDate(_reportEnd)}',
-          content:
+              content:
               '=== DOT ACCOMMODATION ESTABLISHMENT DATA ===\n\n'
-              'Status: Stubbed — accommodation establishment collection is not wired yet.\n'
+              'Use the Establishments tab to approve AEs, then confirm stays on the\n'
+              'establishment dashboard. LGU/Analytics DAE forms fill from confirmed stays.\n\n'
               'Scope: ${_reportMunicipality == 'All' ? 'Province-wide' : _reportMunicipality}\n'
               'Period: ${formatReportDate(_reportStart)} to ${formatReportDate(_reportEnd)}\n\n'
-              'Once accommodation data is available in Firestore, this report will export occupancy and guest counts.',
+              'Open Analytics → DAE-3 / DAE 3B.2 on an LGU dashboard (or use the catalogue)\n'
+              'for filled preview + Excel/PDF once stays are confirmed.',
         );
         return;
       }
@@ -1939,6 +2007,28 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Text('Debug data', style: GovernorDashboardTokens.sectionTitle()),
+              const SizedBox(height: 4),
+              Text(
+                'Registered tourists = home address. Charts + seed + full purge (incl. establishment stays).',
+                style: GovernorDashboardTokens.body(),
+              ),
+              const SizedBox(height: 8),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.analytics_outlined),
+                title: const Text('Debug data hub'),
+                subtitle: const Text('Overview charts, seed, full purge'),
+                onTap: _openOptacaDebugDataHub,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _panel(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
               Text('Change password', style: GovernorDashboardTokens.sectionTitle()),
               TextField(
                 controller: _currentPwController,
@@ -1984,6 +2074,29 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
           ),
         ),
       ],
+    );
+  }
+
+  void _openOptacaDebugDataHub() {
+    unawaited(
+      LguDebugDataDialogs.openHub(
+        context: context,
+        municipalityId: '',
+        municipalityName: 'All municipalities',
+        spots: const [],
+        onDone: () {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Debug action complete. Refresh DSS / registry views.',
+                ),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+        },
+      ),
     );
   }
 

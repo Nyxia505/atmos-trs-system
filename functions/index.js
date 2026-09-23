@@ -11,7 +11,12 @@ const {onCall, HttpsError} = require('firebase-functions/v2/https');
 const {defineString} = require('firebase-functions/params');
 const {initializeApp} = require('firebase-admin/app');
 const {getAuth} = require('firebase-admin/auth');
-const {getFirestore, FieldValue, Timestamp} = require('firebase-admin/firestore');
+const {
+  getFirestore,
+  FieldValue,
+  FieldPath,
+  Timestamp,
+} = require('firebase-admin/firestore');
 const {getMessaging} = require('firebase-admin/messaging');
 
 initializeApp();
@@ -27,7 +32,7 @@ const semaphoreSenderName = defineString('SEMAPHORE_SENDER_NAME', {
 });
 const PASSWORD_RESET_OTP_COLLECTION = 'password_reset_otps';
 const PASSWORD_RESET_COOLDOWN_MS = 60 * 1000;
-const PASSWORD_RESET_OTP_MINUTES = 15;
+const PASSWORD_RESET_OTP_MINUTES = 5;
 
 function validateNewPasswordStrength(password) {
   if (!password || password.length < 8) {
@@ -249,42 +254,51 @@ exports.peekEmailOtp = onCall({region: 'asia-southeast1'}, async (request) => {
 
 const OTP_INBOX_REPLY_TO =
   process.env.OTP_INBOX_REPLY_TO || 'atmostrs@gmail.com';
-const OTP_INBOX_FROM_NAME = process.env.OTP_INBOX_FROM_NAME || 'ATMOS-TRS';
+const OTP_INBOX_FROM_NAME = process.env.OTP_INBOX_FROM_NAME || 'ATMOS-TRS Tourism';
 
 function otpEmailSubject(purpose) {
+  // Soft, transactional subjects — avoid ALL-CAPS / "URGENT" / "!!!" (spam triggers).
   if (purpose === 'password_reset') {
     return 'Your ATMOS-TRS password reset code';
   }
-  return 'Complete your ATMOS-TRS registration';
+  return 'Your ATMOS-TRS verification code';
 }
 
 function otpEmailPlainText({displayName, otp, purpose}) {
-  const greeting = displayName ? `Hello ${displayName},` : 'Hello,';
+  const greeting = displayName ? `Hi ${displayName},` : 'Hi,';
   const intro =
     purpose === 'password_reset'
-      ? 'Use this code to reset your ATMOS-TRS password:'
-      : 'Use this code to finish creating your ATMOS-TRS tourist account:';
+      ? 'Here is your ATMOS-TRS password reset code:'
+      : 'Here is your ATMOS-TRS verification code:';
   return (
     `${greeting}\n\n` +
     `${intro}\n\n` +
     `${otp}\n\n` +
-    'This code expires in 15 minutes. Do not share it with anyone.\n\n' +
-    '— ATMOS-TRS Tourism'
+    'Enter this code in the app. It expires in 5 minutes.\n\n' +
+    'If you did not request this, you can ignore this email.\n\n' +
+    'Thanks,\n' +
+    'ATMOS-TRS Tourism'
   );
 }
 
 function otpEmailHtml({displayName, otp, purpose}) {
-  const greeting = displayName ? `Hello ${displayName},` : 'Hello,';
+  const safeName = String(displayName || '')
+    .replace(/</g, '')
+    .replace(/>/g, '');
+  const greeting = safeName ? `Hi ${safeName},` : 'Hi,';
   const intro =
     purpose === 'password_reset'
-      ? 'Use this code to reset your ATMOS-TRS password:'
-      : 'Use this code to finish creating your ATMOS-TRS tourist account:';
+      ? 'Here is your ATMOS-TRS password reset code:'
+      : 'Here is your ATMOS-TRS verification code:';
   return (
     `<p>${greeting}</p>` +
     `<p>${intro}</p>` +
-    `<p style="font-size:24px;font-weight:700;letter-spacing:4px;margin:16px 0;">${otp}</p>` +
-    '<p>This code expires in 15 minutes. Do not share it with anyone.</p>' +
-    '<p>— ATMOS-TRS Tourism</p>'
+    `<p style="font-size:28px;font-weight:700;letter-spacing:6px;` +
+    `font-family:monospace;margin:16px 0;">${otp}</p>` +
+    '<p>Enter this code in the app. It expires in 5 minutes.</p>' +
+    '<p style="color:#666;font-size:13px;">If you did not request this, ' +
+    'you can ignore this email.</p>' +
+    '<p>Thanks,<br/>ATMOS-TRS Tourism</p>'
   );
 }
 
@@ -376,7 +390,7 @@ async function sendEmailJsOtp({toEmail, toName, otp, purpose}) {
       reply_to: OTP_INBOX_REPLY_TO,
       message,
       message_html: messageHtml,
-      preheader: `Your code is ${otp}. Expires in 15 minutes.`,
+      preheader: `Your code is ${otp}. Expires in 5 minutes.`,
     },
   };
   if (accessToken) {
@@ -415,39 +429,12 @@ async function sendOtpInboxEmail({toEmail, toName, otp, purpose}) {
 }
 
 /**
- * High-priority FCM so signup OTP appears as a phone notification (inbox backup).
+ * REMOVED: signup OTP must never be FCM-pushed to users/{uid}.fcmToken.
+ * That leaked codes onto other phones that still held a stale token.
+ * Signup / verify OTP is shown only via client local notification on the
+ * device that requested the code ([deliverEmailOtpToDevice]).
+ * Password-reset OTP uses [sendPasswordResetOtpPush] instead.
  */
-async function sendEmailOtpPush({token, otp, displayName}) {
-  const collapsed =
-    `Your ATMOS-TRS verification code is ${otp}. Expires in 15 minutes.`;
-  await getMessaging().send({
-    token,
-    notification: {
-      title: 'ATMOS-TRS verification',
-      body: collapsed,
-    },
-    data: {
-      type: 'email_otp',
-      otp: String(otp),
-      displayName: displayName || '',
-    },
-    android: {
-      priority: 'high',
-      notification: {
-        channelId: 'atmos_otp_email_style',
-        sound: 'default',
-      },
-    },
-    apns: {
-      payload: {
-        aps: {
-          sound: 'default',
-          badge: 1,
-        },
-      },
-    },
-  });
-}
 
 async function readFcmTokenForUid(uid) {
   const userSnap = await db.collection('users').doc(uid).get();
@@ -519,6 +506,10 @@ async function sendPasswordResetOtpPush({token, otp, displayName}) {
 /**
  * Password reset step 1 (no sign-in): OTP via push + EmailJS inbox.
  * Does not reveal whether the email exists.
+ *
+ * Optional client [fcmToken]: push the code to the phone that requested reset
+ * (safe local-device heads-up). Falls back to users/{uid}.fcmToken. Never
+ * overwrites stored tokens with the client-supplied value.
  */
 exports.requestPasswordResetOtp = onCall(
   {region: 'asia-southeast1'},
@@ -572,6 +563,33 @@ exports.requestPasswordResetOtp = onCall(
     let pushSent = false;
     let smsSent = false;
 
+    // Prefer the requesting device's token so the heads-up lands without Gmail.
+    const clientFcm = normalizeField(request.data && request.data.fcmToken);
+    const storedFcm = await readFcmTokenForUid(uid);
+    const fcmToken = clientFcm || storedFcm;
+
+    if (fcmToken) {
+      try {
+        await sendPasswordResetOtpPush({token: fcmToken, otp, displayName});
+        pushSent = true;
+      } catch (err) {
+        console.error('[requestPasswordResetOtp] FCM', err);
+        // If client token failed and we have a different stored token, try once.
+        if (clientFcm && storedFcm && storedFcm !== clientFcm) {
+          try {
+            await sendPasswordResetOtpPush({
+              token: storedFcm,
+              otp,
+              displayName,
+            });
+            pushSent = true;
+          } catch (err2) {
+            console.error('[requestPasswordResetOtp] FCM stored fallback', err2);
+          }
+        }
+      }
+    }
+
     try {
       await sendOtpInboxEmail({
         toEmail: email,
@@ -582,16 +600,6 @@ exports.requestPasswordResetOtp = onCall(
       emailSent = true;
     } catch (err) {
       console.error('[requestPasswordResetOtp] EmailJS', err);
-    }
-
-    const fcmToken = await readFcmTokenForUid(uid);
-    if (fcmToken) {
-      try {
-        await sendPasswordResetOtpPush({token: fcmToken, otp, displayName});
-        pushSent = true;
-      } catch (err) {
-        console.error('[requestPasswordResetOtp] FCM', err);
-      }
     }
 
     const mobile = await readMobileForUid(uid);
@@ -728,22 +736,11 @@ exports.sendOtpEmail = onCall({region: 'asia-southeast1'}, async (request) => {
     });
     console.log('[sendOtpEmail] inbox channel=', delivery.channel);
 
-    let pushSent = false;
-    try {
-      const fcmToken = await readFcmTokenForUid(request.auth.uid);
-      if (fcmToken) {
-        await sendEmailOtpPush({
-          token: fcmToken,
-          otp,
-          displayName: toName,
-        });
-        pushSent = true;
-      }
-    } catch (pushErr) {
-      console.warn('[sendOtpEmail] FCM push skipped', pushErr);
-    }
-
-    return {ok: true, channel: delivery.channel, pushSent};
+    // CRITICAL: inbox-only. Never call getMessaging().send with the OTP.
+    // Pushing to users/{uid}.fcmToken delivered codes onto other phones that
+    // still held a stale token. Client shows local notification on the
+    // requesting device only.
+    return {ok: true, channel: delivery.channel, pushSent: false};
   } catch (err) {
     console.error('[sendOtpEmail]', err);
     throw new HttpsError(
@@ -786,7 +783,7 @@ async function sendSemaphoreOtpSms({apiKey, mobile, otp, senderName}) {
     body.append('number', mobile);
     body.append(
       'message',
-      'Your ATMOS verification code is {otp}. Valid for 15 minutes. Do not share this code.',
+      'Your ATMOS verification code is {otp}. Valid for 5 minutes. Do not share this code.',
     );
     body.append('code', otp);
     const sn = (senderName || '').trim();
@@ -1870,3 +1867,542 @@ exports.deleteTouristAccount = onCall(
     return {ok: true, uid: targetUid, authDeleted};
   },
 );
+
+/**
+ * LGU / staff debug: seed registered tourists + qr_checkins (visible on Analytics).
+ * UIDs use seed_tourist_* so ProductionDataFilters does NOT hide them.
+ *
+ * Params:
+ *  - municipalityId (default: oroquieta)
+ *  - seedAllMunicipalities (bool)
+ *  - touristCount OR localCount + foreignCount
+ *  - spotIds (optional string[])
+ *  - checkInsPerTourist (default 2)
+ */
+exports.seedLguAnalyticsData = onCall(
+  {region: 'asia-southeast1', timeoutSeconds: 540, memory: '512MiB'},
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Must be signed in.');
+    }
+    await assertStaffCaller(request);
+
+    const data = request.data || {};
+    const seedAll = data.seedAllMunicipalities === true;
+    const checkInsPerTourist = Math.min(
+      10,
+      Math.max(1, Number(data.checkInsPerTourist) || 2),
+    );
+    let localCount = Math.max(0, Math.floor(Number(data.localCount) || 0));
+    let foreignCount = Math.max(0, Math.floor(Number(data.foreignCount) || 0));
+    let touristCount = Math.max(0, Math.floor(Number(data.touristCount) || 0));
+
+    if (localCount + foreignCount > 0) {
+      touristCount = localCount + foreignCount;
+    } else if (touristCount > 0) {
+      localCount = Math.round(touristCount * 0.7);
+      foreignCount = touristCount - localCount;
+    } else {
+      touristCount = 20;
+      localCount = 14;
+      foreignCount = 6;
+    }
+    if (touristCount > 200) {
+      throw new HttpsError(
+        'invalid-argument',
+        'touristCount max is 200 per municipality.',
+      );
+    }
+
+    const spotIdsFilter = Array.isArray(data.spotIds)
+      ? data.spotIds.map((s) => normalizeField(s)).filter(Boolean)
+      : [];
+
+    const municipalityIds = seedAll
+      ? Object.keys(MUNICIPALITY_DISPLAY_NAMES)
+      : [
+          normalizeField(data.municipalityId).toLowerCase() || 'oroquieta',
+        ];
+
+    const firstNames = [
+      'Ana', 'Ben', 'Carla', 'David', 'Erika', 'Francis', 'Grace',
+      'Hector', 'Ivy', 'John', 'Karen', 'Leo', 'Mara', 'Nico', 'Olive',
+      'Paolo', 'Queenie', 'Ramon', 'Sarah', 'Troy', 'Uma', 'Victor',
+      'Wendy', 'Xander', 'Yna', 'Zeke',
+    ];
+    const lastNames = [
+      'Santos', 'Reyes', 'Cruz', 'Lopez', 'Garcia', 'Mendoza',
+      'Ramos', 'Aquino', 'Dela Cruz', 'Torres', 'Villanueva', 'Castillo',
+    ];
+    const localProfiles = DEMO_TOURIST_PROFILES.filter((p) => p.isLocal);
+    const foreignProfiles = DEMO_TOURIST_PROFILES.filter((p) => !p.isLocal);
+
+    const now = new Date();
+    const monthlyDays = currentMonthCheckInDays(now);
+    let seededTourists = 0;
+    let seededCheckins = 0;
+    const perMunicipality = {};
+
+    for (const municipalityId of municipalityIds) {
+      const municipalityName = municipalityDisplayName(municipalityId);
+      let spots = await loadSpotsForMunicipality(municipalityId, spotIdsFilter);
+      if (spots.length === 0) {
+        spots = [{
+          id: `${municipalityId}_visitor_hub`,
+          name: `${municipalityName} Visitor Hub`,
+        }];
+        await db.collection('tourist_spots').doc(spots[0].id).set({
+          name: spots[0].name,
+          category: 'Resort',
+          municipalityId,
+          municipality: municipalityName,
+          status: 'Active',
+          updatedAt: FieldValue.serverTimestamp(),
+        }, {merge: true});
+      }
+
+      let munTourists = 0;
+      let munCheckins = 0;
+
+      for (let i = 0; i < touristCount; i++) {
+        const isLocal = i < localCount;
+        const profilePool = isLocal
+          ? (localProfiles.length ? localProfiles : DEMO_TOURIST_PROFILES)
+          : (foreignProfiles.length ? foreignProfiles : DEMO_TOURIST_PROFILES);
+        const profile = profilePool[i % profilePool.length];
+        const fn = firstNames[i % firstNames.length];
+        const ln = lastNames[i % lastNames.length];
+        const uid =
+          `seed_tourist_${municipalityId}_${String(i + 1).padStart(3, '0')}`;
+        const email =
+          `seed.${municipalityId}.${i + 1}@misocc-seed.ph`;
+        const partyHeadcount = 1 + (i % 4);
+        const sex = profile.sex || ((i % 2 === 0) ? 'Female' : 'Male');
+
+        const touristPayload = {
+          firebaseUid: uid,
+          touristId: uid,
+          firstName: fn,
+          lastName: ln,
+          fullName: `${fn} ${ln}`,
+          email,
+          authEmail: email,
+          sex,
+          nationality: profile.nationality,
+          country: profile.country,
+          province: isLocal
+            ? (profile.province || 'Misamis Occidental')
+            : (profile.province || ''),
+          city: isLocal ? municipalityName : (profile.city || profile.country),
+          barangay: isLocal ? 'Poblacion' : '',
+          isLocal: !!isLocal,
+          localOrForeign: isLocal ? 'Local' : 'Foreign',
+          partyHeadcount,
+          accompanyingChildrenCount: i % 5 === 0 ? 1 : 0,
+          status: 'Active',
+          isVerified: true,
+          // Home-address registry only — foreigners keep overseas city, no LGU id.
+          ...(isLocal ? {registrationMunicipalityId: municipalityId} : {}),
+          totalVisits: 0,
+          source: 'lgu_debug_seed',
+          seedTag: 'lgu_analytics_debug_v2_address',
+          updatedAt: FieldValue.serverTimestamp(),
+          createdAt: FieldValue.serverTimestamp(),
+        };
+
+        await db.collection('tourists').doc(uid).set(touristPayload, {merge: true});
+        // users doc with tourist role so staff lists stay consistent
+        await db.collection('users').doc(uid).set({
+          firebaseUid: uid,
+          email,
+          role: 'tourist',
+          fullName: `${fn} ${ln}`,
+          ...(isLocal
+            ? {municipalityId, municipality: municipalityName}
+            : {}),
+          isVerified: true,
+          source: 'lgu_debug_seed',
+          seedTag: 'lgu_analytics_debug_v2_address',
+          updatedAt: FieldValue.serverTimestamp(),
+        }, {merge: true});
+
+        munTourists += 1;
+        seededTourists += 1;
+
+        let checkinsForUser = 0;
+        for (let j = 0; j < checkInsPerTourist; j++) {
+          const day = monthlyDays[(i + j) % monthlyDays.length];
+          const spot = spots[(i + j) % spots.length];
+          const partySize = 1 + ((i + j) % 3);
+          const femaleCount = sex === 'Female'
+            ? Math.ceil(partySize / 2)
+            : Math.floor(partySize / 2);
+          const maleCount = partySize - femaleCount;
+          const eventDate = new Date(
+            now.getFullYear(),
+            now.getMonth(),
+            day,
+            9 + ((i + j) % 9),
+            (i * 7 + j * 11) % 60,
+            0,
+            0,
+          );
+          const checkinId =
+            `${uid}_${spot.id}_m${now.getMonth() + 1}_d${day}_${j + 1}`;
+
+          const checkInPayload = {
+            userId: uid,
+            user_id: uid,
+            tourist_id: uid,
+            touristName: `${fn} ${ln}`,
+            tourist_name: `${fn} ${ln}`,
+            touristEmail: email,
+            touristNationality: profile.nationality,
+            touristMobile: '',
+            municipalityId,
+            lguId: municipalityId,
+            municipality: municipalityName,
+            spotId: spot.id,
+            spot_id: spot.id,
+            touristSpotId: spot.id,
+            spot_name: spot.name,
+            spotName: spot.name,
+            location: spot.name,
+            status: 'Verified',
+            source: 'qr_scan',
+            seedTag: 'lgu_analytics_debug_v1',
+            partySize,
+            visitorCount: partySize,
+            femaleCount,
+            maleCount,
+            timestamp: Timestamp.fromDate(eventDate),
+            createdAt: Timestamp.fromDate(eventDate),
+          };
+
+          await db.collection('qr_checkins').doc(checkinId).set(
+            checkInPayload,
+            {merge: true},
+          );
+          await db.collection('checkins').doc(checkinId).set({
+            user_id: uid,
+            location_id: spot.id,
+            touristSpotId: spot.id,
+            lguId: municipalityId,
+            partySize,
+            visitorCount: partySize,
+            femaleCount,
+            maleCount,
+            checkin_time: Timestamp.fromDate(eventDate),
+            seedTag: 'lgu_analytics_debug_v1',
+          }, {merge: true});
+
+          munCheckins += 1;
+          seededCheckins += 1;
+          checkinsForUser += 1;
+        }
+
+        await db.collection('tourists').doc(uid).set({
+          totalVisits: checkinsForUser,
+          lastCheckInAt: FieldValue.serverTimestamp(),
+          lastCheckInLguId: municipalityId,
+          lastCheckInSpotId: spots[i % spots.length].id,
+        }, {merge: true});
+      }
+
+      perMunicipality[municipalityId] = {
+        municipalityName,
+        tourists: munTourists,
+        checkIns: munCheckins,
+        spotsUsed: spots.length,
+        localCount,
+        foreignCount,
+      };
+    }
+
+    return {
+      ok: true,
+      seededTourists,
+      seededCheckins,
+      localCount,
+      foreignCount,
+      checkInsPerTourist,
+      seedAllMunicipalities: seedAll,
+      perMunicipality,
+    };
+  },
+);
+
+/**
+ * Wipe tourist profiles + check-ins + establishment stays/reviews (debug).
+ * Requires confirmPhrase. Optional municipalityId scopes the wipe to one LGU.
+ */
+exports.clearAllTouristData = onCall(
+  {region: 'asia-southeast1', timeoutSeconds: 540, memory: '512MiB'},
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Must be signed in.');
+    }
+    await assertStaffCaller(request);
+
+    const data = request.data || {};
+    const phrase = normalizeField(data.confirmPhrase).toUpperCase();
+    if (phrase !== 'CLEAR ALL TOURISTS') {
+      throw new HttpsError(
+        'invalid-argument',
+        'Type CLEAR ALL TOURISTS to confirm.',
+      );
+    }
+
+    const municipalityId = normalizeField(data.municipalityId).toLowerCase();
+    const deleted = {
+      tourists: 0,
+      users: 0,
+      qr_checkins: 0,
+      checkins: 0,
+      check_ins: 0,
+      tourist_activity: 0,
+      establishment_stay_requests: 0,
+      establishment_stay_reviews: 0,
+    };
+
+    if (municipalityId) {
+      const touristIds = await collectTouristIdsForMunicipality(municipalityId);
+      deleted.tourists += await deleteDocsByIds('tourists', touristIds);
+      deleted.users += await deleteTouristUserDocs(touristIds);
+      deleted.qr_checkins += await deleteQueryInBatches(
+        db.collection('qr_checkins')
+          .where('municipalityId', '==', municipalityId),
+      );
+      deleted.qr_checkins += await deleteQueryInBatches(
+        db.collection('qr_checkins')
+          .where('lguId', '==', municipalityId),
+      );
+      deleted.checkins += await deleteQueryInBatches(
+        db.collection('checkins')
+          .where('lguId', '==', municipalityId),
+      );
+      // Establishment stays + reviews for this LGU (and orphan stays for wiped tourists)
+      deleted.establishment_stay_requests += await deleteQueryInBatches(
+        db.collection('establishment_stay_requests')
+          .where('municipalityId', '==', municipalityId),
+      );
+      deleted.establishment_stay_requests +=
+        await deleteDocsMatchingTouristIds(
+          'establishment_stay_requests',
+          'touristId',
+          touristIds,
+        );
+      deleted.establishment_stay_reviews +=
+        await deleteDocsMatchingTouristIds(
+          'establishment_stay_reviews',
+          'touristId',
+          touristIds,
+        );
+    } else {
+      // Full wipe of tourist-related collections (keeps staff users / spots)
+      deleted.tourists += await deleteCollectionInBatches('tourists');
+      deleted.qr_checkins += await deleteCollectionInBatches('qr_checkins');
+      deleted.checkins += await deleteCollectionInBatches('checkins');
+      deleted.check_ins += await deleteCollectionInBatches('check_ins');
+      deleted.tourist_activity +=
+        await deleteCollectionInBatches('tourist_activity');
+      deleted.establishment_stay_requests +=
+        await deleteCollectionInBatches('establishment_stay_requests');
+      deleted.establishment_stay_reviews +=
+        await deleteCollectionInBatches('establishment_stay_reviews');
+      deleted.users += await deleteAllTouristRoleUsers();
+    }
+
+    return {ok: true, municipalityId: municipalityId || null, deleted};
+  },
+);
+
+async function assertStaffCaller(request) {
+  const callerUid = request.auth.uid;
+  const callerEmail = normalizeField(
+    request.auth.token && request.auth.token.email,
+  ).toLowerCase();
+  try {
+    await assertProvincialStaff(callerUid);
+  } catch (err) {
+    const looksStaff =
+      callerEmail === 'governor.atmos@misocc-demo.ph' ||
+      callerEmail === 'tourismoffice.atmos@misocc-demo.ph' ||
+      callerEmail.startsWith('tourism.') ||
+      callerEmail.includes('tourism');
+    if (!looksStaff) {
+      throw err;
+    }
+  }
+}
+
+async function loadSpotsForMunicipality(municipalityId, spotIdsFilter) {
+  const spots = [];
+  const snap = await db.collection('tourist_spots')
+    .where('municipalityId', '==', municipalityId)
+    .limit(100)
+    .get();
+  for (const doc of snap.docs) {
+    const d = doc.data() || {};
+    const name = normalizeField(d.name) || doc.id;
+    if (spotIdsFilter.length && !spotIdsFilter.includes(doc.id)) continue;
+    spots.push({id: doc.id, name});
+  }
+  if (spots.length === 0 && spotIdsFilter.length) {
+    for (const id of spotIdsFilter) {
+      const doc = await db.collection('tourist_spots').doc(id).get();
+      if (doc.exists) {
+        const d = doc.data() || {};
+        spots.push({id: doc.id, name: normalizeField(d.name) || doc.id});
+      } else {
+        spots.push({id, name: id.replace(/_/g, ' ')});
+      }
+    }
+  }
+  return spots;
+}
+
+async function deleteQueryInBatches(query) {
+  let total = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const snap = await query.limit(400).get();
+    if (snap.empty) break;
+    const batch = db.batch();
+    snap.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+    total += snap.size;
+    if (snap.size < 400) break;
+  }
+  return total;
+}
+
+async function deleteCollectionInBatches(collectionId) {
+  return deleteQueryInBatches(db.collection(collectionId));
+}
+
+async function deleteDocsByIds(collectionId, ids) {
+  let total = 0;
+  for (let i = 0; i < ids.length; i += 400) {
+    const chunk = ids.slice(i, i + 400);
+    const batch = db.batch();
+    for (const id of chunk) {
+      batch.delete(db.collection(collectionId).doc(id));
+    }
+    await batch.commit();
+    total += chunk.length;
+  }
+  return total;
+}
+
+/** Delete docs where [field] is in [touristIds] (Firestore whereIn chunks of 10). */
+async function deleteDocsMatchingTouristIds(collectionId, field, touristIds) {
+  let total = 0;
+  const ids = Array.from(new Set((touristIds || []).filter(Boolean)));
+  for (let i = 0; i < ids.length; i += 10) {
+    const chunk = ids.slice(i, i + 10);
+    total += await deleteQueryInBatches(
+      db.collection(collectionId).where(field, 'in', chunk),
+    );
+  }
+  return total;
+}
+
+function isStaffUserRole(role) {
+  const r = normalizeField(role).toLowerCase();
+  return (
+    STAFF_ROLES.has(role) ||
+    STAFF_ROLES.has(r) ||
+    r === 'governor' ||
+    r === 'tourism' ||
+    r === 'tourism_office' ||
+    r === 'provincial' ||
+    r === 'provincial_tourism' ||
+    r === 'provincialtourism'
+  );
+}
+
+function isDeletableTouristUser(docId, data) {
+  if (isStaffUserRole(data && data.role)) return false;
+  const role = normalizeField(data && data.role).toLowerCase();
+  const email = normalizeField(data && data.email).toLowerCase();
+  if (role === 'tourist') return true;
+  if (docId.startsWith('seed_tourist_')) return true;
+  if (docId.startsWith('dummy_tourist_')) return true;
+  if (docId.startsWith('demo_analytics_')) return true;
+  if (email.includes('@misocc-seed.ph')) return true;
+  if (email.includes('@dummy-tourist.test')) return true;
+  if (email.includes('@misocc-demo-analytics.ph')) return true;
+  return false;
+}
+
+async function collectTouristIdsForMunicipality(municipalityId) {
+  const ids = new Set();
+  const byReg = await db.collection('tourists')
+    .where('registrationMunicipalityId', '==', municipalityId)
+    .limit(500)
+    .get();
+  byReg.docs.forEach((d) => ids.add(d.id));
+
+  const cityName = municipalityDisplayName(municipalityId);
+  if (cityName) {
+    const byCity = await db.collection('tourists')
+      .where('city', '==', cityName)
+      .limit(500)
+      .get();
+    byCity.docs.forEach((d) => ids.add(d.id));
+  }
+
+  // Deterministic seed ids for this LGU (up to 200)
+  for (let i = 1; i <= 200; i++) {
+    ids.add(
+      `seed_tourist_${municipalityId}_${String(i).padStart(3, '0')}`,
+    );
+  }
+  return Array.from(ids);
+}
+
+async function deleteTouristUserDocs(touristIds) {
+  let total = 0;
+  for (let i = 0; i < touristIds.length; i += 200) {
+    const chunk = touristIds.slice(i, i + 200);
+    const refs = chunk.map((id) => db.collection('users').doc(id));
+    const snaps = await db.getAll(...refs);
+    const batch = db.batch();
+    let ops = 0;
+    for (const snap of snaps) {
+      if (!snap.exists) continue;
+      if (!isDeletableTouristUser(snap.id, snap.data() || {})) continue;
+      batch.delete(snap.ref);
+      ops += 1;
+      total += 1;
+    }
+    if (ops > 0) await batch.commit();
+  }
+  return total;
+}
+
+async function deleteAllTouristRoleUsers() {
+  let total = 0;
+  let cursor = null;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    let q = db.collection('users').orderBy(FieldPath.documentId()).limit(400);
+    if (cursor) q = q.startAfter(cursor);
+    const snap = await q.get();
+    if (snap.empty) break;
+    const batch = db.batch();
+    let ops = 0;
+    for (const doc of snap.docs) {
+      if (!isDeletableTouristUser(doc.id, doc.data() || {})) continue;
+      batch.delete(doc.ref);
+      ops += 1;
+      total += 1;
+    }
+    if (ops > 0) await batch.commit();
+    cursor = snap.docs[snap.docs.length - 1];
+    if (snap.size < 400) break;
+  }
+  return total;
+}
+

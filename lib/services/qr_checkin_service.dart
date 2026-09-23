@@ -23,6 +23,10 @@ class QRCheckInSuccess extends QRCheckInResult {
     this.checkinsDocId,
     required this.welcomeMessage,
     this.dialogTitle,
+    this.spotId,
+    this.spotName,
+    this.municipality,
+    this.municipalityId,
   });
   final String? checkInId;
   final String? checkinsDocId;
@@ -30,6 +34,12 @@ class QRCheckInSuccess extends QRCheckInResult {
 
   /// When set (e.g. repeat scan today), overrides the default "Visit registered" title.
   final String? dialogTitle;
+
+  /// Canonical spot saved to Firestore (use for Home Visited).
+  final String? spotId;
+  final String? spotName;
+  final String? municipality;
+  final String? municipalityId;
 }
 
 class QRCheckInFailure extends QRCheckInResult {
@@ -493,11 +503,16 @@ class QRCheckInService {
           '[CheckIn] reuse recent qr_checkins/${recent.id} '
           '(same user+spot within 5m)',
         );
+        final recentData = recent.data();
         return QRCheckInSuccess(
           checkInId: recent.id,
-          checkinsDocId: recent.data()['checkins_ref']?.toString(),
+          checkinsDocId: recentData['checkins_ref']?.toString(),
           welcomeMessage: welcome.message,
           dialogTitle: welcome.dialogTitle,
+          spotId: routedLocationId,
+          spotName: locationLabel,
+          municipality: resolvedMunicipality,
+          municipalityId: normalizedMunicipalityId,
         );
       }
 
@@ -584,6 +599,10 @@ class QRCheckInService {
         checkinsDocId: checkinRef.id,
         welcomeMessage: welcome.message,
         dialogTitle: welcome.dialogTitle,
+        spotId: routedLocationId,
+        spotName: locationLabel,
+        municipality: resolvedMunicipality,
+        municipalityId: normalizedMunicipalityId,
       );
     } on FirebaseException catch (e) {
       return QRCheckInFailure(e.message ?? 'Firestore error: ${e.code}');

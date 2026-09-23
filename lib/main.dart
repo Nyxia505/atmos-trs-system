@@ -25,15 +25,17 @@ import 'package:atmos_trs_system/features/navigation/main_shell.dart';
 import 'package:atmos_trs_system/screens/municipality_map_and_spots_screen.dart';
 import 'package:atmos_trs_system/firebase_options.dart';
 import 'package:atmos_trs_system/utils/firebase_client_blocked_message.dart';
+import 'package:atmos_trs_system/navigation/root_navigator.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
 import 'package:atmos_trs_system/widgets/session_inactivity_guard.dart';
 import 'package:atmos_trs_system/services/qr_launch_bootstrap.dart';
+import 'package:atmos_trs_system/services/camera_qr_deep_link_service.dart';
 import 'package:atmos_trs_system/services/startup_route_resolver.dart';
 import 'package:atmos_trs_system/screens/qr_scan_welcome_screen.dart';
+import 'package:atmos_trs_system/screens/qr_pending_resume_screen.dart';
 import 'package:atmos_trs_system/screens/mobile_onboarding_screen.dart';
 
-/// Root navigator for session timeout and global navigation after sign-out.
-final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
+export 'package:atmos_trs_system/navigation/root_navigator.dart' show rootNavigatorKey;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -65,9 +67,6 @@ void main() async {
     if (!kIsWeb) {
       FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
     }
-    if (kIsWeb) {
-      await QrLaunchBootstrap.applyPendingFromLaunchUrl();
-    }
   } catch (e, st) {
     debugPrint('Firebase initialization error: $e\n$st');
     if (kIsWeb) {
@@ -86,6 +85,21 @@ void main() async {
         'restrictions in Google Cloud → Credentials. ',
       );
       debugPrintFirebaseClientBlockedHint();
+    }
+  }
+
+  // Native deep links even if Firebase init partially failed.
+  if (!kIsWeb) {
+    try {
+      await CameraQrDeepLinkService.start();
+    } catch (e, st) {
+      debugPrint('Camera QR deep link start failed: $e\n$st');
+    }
+  } else {
+    try {
+      await QrLaunchBootstrap.applyPendingFromLaunchUrl();
+    } catch (e, st) {
+      debugPrint('QR launch bootstrap failed: $e\n$st');
     }
   }
 
@@ -166,6 +180,7 @@ class _MyAppState extends State<MyApp> {
           '/': (context) => kIsWeb ? const LandingPage() : const LoginScreen(),
           '/landing': (context) => const LandingPage(),
           '/qr-welcome': (context) => const QrScanWelcomeScreen(),
+          '/qr-resume': (context) => const QrPendingResumeScreen(),
           '/mobile-onboarding': (context) => const MobileOnboardingScreen(),
           '/login': (context) => const LoginScreen(),
           '/forgot-password': (context) {

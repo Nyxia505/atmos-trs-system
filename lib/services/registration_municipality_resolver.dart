@@ -1,75 +1,92 @@
 import 'package:atmos_trs_system/config/beta_testing_config.dart';
-import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
-import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 
-/// Resolves which LGU should see this tourist on the municipal tourism dashboard.
+/// Home-LGU ownership for the municipal "Registered tourists" registry.
 ///
-/// Priority: pending QR scan (spot/LGU) → prior-destination LGU in Misamis Occidental.
+/// Product rule: a tourist belongs to an LGU by **signup address** (city /
+/// municipality in Misamis Occidental), not by where they later scan QR.
+/// QR check-ins feed visit / DOT analytics only.
 class RegistrationMunicipalityResolver {
   RegistrationMunicipalityResolver._();
 
-  static Future<String?> resolveForSignup({
-    String? priorDestination1,
-    String? priorDestination2,
-    String? priorDestination3,
-  }) async {
+  /// Home LGU id from signup address. Foreign / non-MisOcc address → null.
+  static String? fromHomeAddress({
+    String? country,
+    String? province,
+    String? city,
+    String? municipality,
+  }) {
     if (BetaTestingGuard.isActive) {
       return BetaTestingGuard.registrationMunicipalityId(null);
     }
 
-    final pendingSpot = await PendingSpotCheckInStorage.peek();
-    if (pendingSpot != null) {
-      final mid = normalizeMunicipalityId(pendingSpot.municipalityId);
-      if (mid.isNotEmpty) return mid;
+    final countryNorm = (country ?? '').trim().toLowerCase();
+    if (countryNorm.isNotEmpty &&
+        countryNorm != 'philippines' &&
+        countryNorm != 'ph' &&
+        countryNorm != 'phl') {
+      return null;
     }
 
-    final pendingLgu = await PendingLguCheckInStorage.peek();
-    if (pendingLgu != null) {
-      final mid = normalizeMunicipalityId(pendingLgu.municipalityId);
-      if (mid.isNotEmpty) return mid;
+    for (final raw in [city, municipality]) {
+      final mid = getMunicipalityIdFromName(raw);
+      if (mid.isNotEmpty && isMisamisOccidentalMunicipalityId(mid)) {
+        return mid;
+      }
     }
 
-    for (final dest in [
-      priorDestination1,
-      priorDestination2,
-      priorDestination3,
-    ]) {
-      if (dest == null || dest.trim().isEmpty) continue;
-      final mid = getMunicipalityIdFromName(dest);
-      if (isMisamisOccidentalMunicipalityId(mid)) return mid;
+    final prov = (province ?? '').trim().toLowerCase();
+    if (prov.isNotEmpty &&
+        !prov.contains('misamis occidental') &&
+        !prov.contains('misocc')) {
+      return null;
     }
     return null;
   }
 
-  /// True when [tourist] row belongs on an LGU dashboard for [queryIds].
+  /// @Deprecated Use [fromHomeAddress]. Kept for call-site compatibility.
+  /// Previously used pending QR / prior destinations — that inflated LGU
+  /// "registered" counts with scanners, not residents.
+  static Future<String?> resolveForSignup({
+    String? priorDestination1,
+    String? priorDestination2,
+    String? priorDestination3,
+    String? country,
+    String? province,
+    String? city,
+    String? municipality,
+  }) async {
+    return fromHomeAddress(
+      country: country,
+      province: province,
+      city: city,
+      municipality: municipality,
+    );
+  }
+
+  /// True when [tourist] belongs on an LGU **Registered tourists** list.
   ///
-  /// Matches real Firestore tourists by:
-  /// - QR check-in in this municipality, or
-  /// - `registrationMunicipalityId`, or
-  /// - `city` / `municipality` display name (older registrations without reg id).
+  /// Matches by home address (`city` / `municipality`) and/or
+  /// `registrationMunicipalityId` written at signup from that address.
+  /// Does **not** match QR check-in UIDs.
   static bool touristMatchesMunicipality({
     required Map<String, dynamic> tourist,
     required List<String> queryIds,
-    required Set<String> checkInUserIds,
+    @Deprecated('Ignored — registered tourists are address-based only')
+    Set<String>? checkInUserIds,
   }) {
     if (queryIds.isEmpty) return false;
 
-    final uid =
-        tourist['firebaseUid']?.toString().trim() ??
-        tourist['id']?.toString().trim() ??
-        '';
-    if (uid.isNotEmpty && checkInUserIds.contains(uid)) return true;
+    for (final field in ['city', 'municipality', 'registrationMunicipality']) {
+      final fromName = getMunicipalityIdFromName(tourist[field]?.toString());
+      if (fromName.isNotEmpty && queryIds.contains(fromName)) return true;
+    }
 
     final regMid = normalizeMunicipalityId(
       tourist['registrationMunicipalityId']?.toString(),
     );
     if (regMid.isNotEmpty && queryIds.contains(regMid)) return true;
 
-    for (final field in ['city', 'municipality', 'registrationMunicipality']) {
-      final fromName = getMunicipalityIdFromName(tourist[field]?.toString());
-      if (fromName.isNotEmpty && queryIds.contains(fromName)) return true;
-    }
     return false;
   }
 }

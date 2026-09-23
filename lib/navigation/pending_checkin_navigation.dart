@@ -1,12 +1,22 @@
 import 'package:flutter/material.dart';
+import 'package:atmos_trs_system/screens/establishment_stay_pending_screen.dart';
 import 'package:atmos_trs_system/services/pending_checkin_completion_service.dart';
+import 'package:atmos_trs_system/services/pending_establishment_stay_storage.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 
 String? landingWelcomeMessageForPending({
   PendingSpotCheckIn? spot,
   PendingLguCheckIn? lgu,
+  PendingEstablishmentStay? establishment,
 }) {
+  if (establishment != null) {
+    final place = establishment.businessName?.trim().isNotEmpty == true
+        ? establishment.businessName!.trim()
+        : 'the establishment';
+    return 'Your stay request at $place was sent. '
+        'Front desk will confirm details — open Stays to watch for your receipt.';
+  }
   if (spot != null) {
     final place = spot.spotName?.trim().isNotEmpty == true
         ? spot.spotName!.trim()
@@ -29,22 +39,26 @@ String? landingWelcomeMessageForPending({
 String? _landingWelcomeMessage({
   PendingSpotCheckIn? spot,
   PendingLguCheckIn? lgu,
+  PendingEstablishmentStay? establishment,
 }) =>
-    landingWelcomeMessageForPending(spot: spot, lgu: lgu);
+    landingWelcomeMessageForPending(
+      spot: spot,
+      lgu: lgu,
+      establishment: establishment,
+    );
 
 /// After tourist login or OTP verification, completes a pending QR scan (registration)
-/// then opens the dashboard or landing page.
+/// then opens the dashboard, stay pending screen, or landing page.
 Future<void> navigateToPendingSpotCheckInOrDashboard(
   BuildContext context, {
   required String defaultRoute,
   required bool isTouristDestination,
-  /// When true and a pending QR exists, land on [/landing] with welcome args
-  /// instead of [defaultRoute] (used after new-tourist OTP verification).
   bool preferLandingAfterPendingCheckIn = false,
 }) async {
   if (!isTouristDestination) {
     await PendingSpotCheckInStorage.clear();
     await PendingLguCheckInStorage.clear();
+    await PendingEstablishmentStayStorage.clear();
     if (context.mounted) {
       Navigator.pushNamedAndRemoveUntil(context, defaultRoute, (route) => false);
     }
@@ -53,16 +67,24 @@ Future<void> navigateToPendingSpotCheckInOrDashboard(
 
   final pendingSpot = await PendingSpotCheckInStorage.peek();
   final pendingLgu = await PendingLguCheckInStorage.peek();
+  final pendingEst = await PendingEstablishmentStayStorage.peek();
 
-  if (pendingSpot != null || pendingLgu != null) {
+  if (pendingSpot != null || pendingLgu != null || pendingEst != null) {
     final landingMessage = preferLandingAfterPendingCheckIn
-        ? _landingWelcomeMessage(spot: pendingSpot, lgu: pendingLgu)
+        ? _landingWelcomeMessage(
+            spot: pendingSpot,
+            lgu: pendingLgu,
+            establishment: pendingEst,
+          )
         : null;
 
     final welcome =
         await PendingCheckinCompletionService.completePendingAfterAuth();
 
     if (!context.mounted) return;
+
+    final stayId =
+        PendingCheckinCompletionService.lastCompletedEstablishmentStayId;
 
     if (preferLandingAfterPendingCheckIn) {
       Navigator.pushNamedAndRemoveUntil(
@@ -72,7 +94,19 @@ Future<void> navigateToPendingSpotCheckInOrDashboard(
         arguments: <String, dynamic>{
           'fromQrRegistration': true,
           'welcomeMessage': landingMessage ?? welcome ?? 'Welcome to ATMOS-TRS!',
+          if (stayId != null) 'establishmentStayId': stayId,
         },
+      );
+      return;
+    }
+
+    if (stayId != null && stayId.isNotEmpty) {
+      Navigator.pushNamedAndRemoveUntil(context, defaultRoute, (route) => false);
+      if (!context.mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => EstablishmentStayPendingScreen(stayId: stayId),
+        ),
       );
       return;
     }

@@ -7,9 +7,14 @@ import 'package:latlong2/latlong.dart' as osm;
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/app_theme_controller.dart';
 import 'package:atmos_trs_system/config/google_maps_config.dart';
+import 'package:atmos_trs_system/models/establishment_map_pin.dart';
 import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
 import 'package:atmos_trs_system/utils/google_maps_js_ready.dart';
 import 'package:atmos_trs_system/widgets/map_zoom_controls.dart';
+
+/// Distinct hue for accommodation establishment pins (vs municipality/spot orange).
+const double kEstablishmentMapMarkerHue = gmaps.BitmapDescriptor.hueAzure;
+const Color kEstablishmentMapPinColor = Color(0xFF0284C7);
 
 /// Misamis Occidental map defaults.
 const double kMisamisMapCenterLat = 8.3377;
@@ -63,7 +68,9 @@ class MisamisOccidentalExploreMap extends StatelessWidget {
   const MisamisOccidentalExploreMap({
     super.key,
     required this.spots,
+    this.establishmentPins = const [],
     this.onSpotTap,
+    this.onEstablishmentTap,
     this.onMapReady,
     this.initialZoom = kMisamisMapDefaultZoom,
     this.showZoomControls = true,
@@ -72,7 +79,10 @@ class MisamisOccidentalExploreMap extends StatelessWidget {
   });
 
   final List<TouristSpotFirestore> spots;
+  /// OPTACA-active accommodations with lat/lng (second marker layer).
+  final List<EstablishmentMapPin> establishmentPins;
   final ValueChanged<TouristSpotFirestore>? onSpotTap;
+  final ValueChanged<EstablishmentMapPin>? onEstablishmentTap;
   final ValueChanged<MisamisMapMoveTo>? onMapReady;
   final double initialZoom;
   final bool showZoomControls;
@@ -89,7 +99,9 @@ class MisamisOccidentalExploreMap extends StatelessWidget {
     if (useGoogle) {
       return _MisamisGoogleExploreMap(
         spots: spots,
+        establishmentPins: establishmentPins,
         onSpotTap: onSpotTap,
+        onEstablishmentTap: onEstablishmentTap,
         onMapReady: onMapReady,
         initialZoom: initialZoom,
         showZoomControls: showZoomControls,
@@ -100,7 +112,9 @@ class MisamisOccidentalExploreMap extends StatelessWidget {
 
     return _MisamisOsmExploreMap(
       spots: spots,
+      establishmentPins: establishmentPins,
       onSpotTap: onSpotTap,
+      onEstablishmentTap: onEstablishmentTap,
       onMapReady: onMapReady,
       initialZoom: initialZoom,
       showZoomControls: showZoomControls,
@@ -122,7 +136,9 @@ final LatLngBounds kMisamisOsmBounds = LatLngBounds(
 class _MisamisOsmExploreMap extends StatefulWidget {
   const _MisamisOsmExploreMap({
     required this.spots,
+    this.establishmentPins = const [],
     this.onSpotTap,
+    this.onEstablishmentTap,
     this.onMapReady,
     required this.initialZoom,
     required this.showZoomControls,
@@ -131,7 +147,9 @@ class _MisamisOsmExploreMap extends StatefulWidget {
   });
 
   final List<TouristSpotFirestore> spots;
+  final List<EstablishmentMapPin> establishmentPins;
   final ValueChanged<TouristSpotFirestore>? onSpotTap;
+  final ValueChanged<EstablishmentMapPin>? onEstablishmentTap;
   final ValueChanged<MisamisMapMoveTo>? onMapReady;
   final double initialZoom;
   final bool showZoomControls;
@@ -183,7 +201,7 @@ class _MisamisOsmExploreMapState extends State<_MisamisOsmExploreMap> {
     );
   }
 
-  List<Marker> _buildMarkers(Color accent) {
+  List<Marker> _buildSpotMarkers(Color accent) {
     return widget.spots
         .where((s) => s.latitude != 0 || s.longitude != 0)
         .map(
@@ -207,6 +225,41 @@ class _MisamisOsmExploreMapState extends State<_MisamisOsmExploreMap> {
                   ],
                 ),
                 child: const Icon(Icons.place, color: Colors.white, size: 22),
+              ),
+            ),
+          ),
+        )
+        .toList();
+  }
+
+  List<Marker> _buildEstablishmentMarkers() {
+    return widget.establishmentPins
+        .where((p) => p.hasValidCoords)
+        .map(
+          (p) => Marker(
+            point: osm.LatLng(p.latitude, p.longitude),
+            width: 40,
+            height: 40,
+            child: GestureDetector(
+              onTap: () => widget.onEstablishmentTap?.call(p),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: kEstablishmentMapPinColor,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.white, width: 2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.25),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.hotel_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
               ),
             ),
           ),
@@ -240,7 +293,8 @@ class _MisamisOsmExploreMapState extends State<_MisamisOsmExploreMap> {
               urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
               userAgentPackageName: 'com.atmos.trs',
             ),
-            MarkerLayer(markers: _buildMarkers(accent)),
+            MarkerLayer(markers: _buildSpotMarkers(accent)),
+            MarkerLayer(markers: _buildEstablishmentMarkers()),
           ],
         ),
         if (widget.showZoomControls)
@@ -262,7 +316,9 @@ class _MisamisOsmExploreMapState extends State<_MisamisOsmExploreMap> {
 class _MisamisGoogleExploreMap extends StatefulWidget {
   const _MisamisGoogleExploreMap({
     required this.spots,
+    this.establishmentPins = const [],
     this.onSpotTap,
+    this.onEstablishmentTap,
     this.onMapReady,
     required this.initialZoom,
     required this.showZoomControls,
@@ -271,7 +327,9 @@ class _MisamisGoogleExploreMap extends StatefulWidget {
   });
 
   final List<TouristSpotFirestore> spots;
+  final List<EstablishmentMapPin> establishmentPins;
   final ValueChanged<TouristSpotFirestore>? onSpotTap;
+  final ValueChanged<EstablishmentMapPin>? onEstablishmentTap;
   final ValueChanged<MisamisMapMoveTo>? onMapReady;
   final double initialZoom;
   final bool showZoomControls;
@@ -299,7 +357,7 @@ class _MisamisGoogleExploreMapState extends State<_MisamisGoogleExploreMap> {
   void initState() {
     super.initState();
     _markerHue = AppTheme.mapMarkerHue;
-    _markers = _buildMarkers(widget.spots);
+    _markers = _buildAllMarkers();
     if (kIsWeb) {
       _waitForGoogleMapsJs();
     } else {
@@ -358,9 +416,11 @@ class _MisamisGoogleExploreMapState extends State<_MisamisGoogleExploreMap> {
     super.didUpdateWidget(oldWidget);
     final hue = AppTheme.mapMarkerHue;
     final spotsChanged = !_sameSpots(oldWidget.spots, widget.spots);
-    if (spotsChanged || hue != _markerHue) {
+    final pinsChanged =
+        !_samePins(oldWidget.establishmentPins, widget.establishmentPins);
+    if (spotsChanged || pinsChanged || hue != _markerHue) {
       _markerHue = hue;
-      _markers = _buildMarkers(widget.spots);
+      _markers = _buildAllMarkers();
     }
   }
 
@@ -376,18 +436,53 @@ class _MisamisGoogleExploreMapState extends State<_MisamisGoogleExploreMap> {
     return true;
   }
 
-  Set<gmaps.Marker> _buildMarkers(List<TouristSpotFirestore> spots) {
-    return spots
-        .where((s) => s.latitude != 0 || s.longitude != 0)
-        .map(
-          (s) => gmaps.Marker(
-            markerId: gmaps.MarkerId(s.id),
-            position: gmaps.LatLng(s.latitude, s.longitude),
-            onTap: () => widget.onSpotTap?.call(s),
-            icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(_markerHue),
+  bool _samePins(List<EstablishmentMapPin> a, List<EstablishmentMapPin> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].id != b[i].id ||
+          a[i].latitude != b[i].latitude ||
+          a[i].longitude != b[i].longitude) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  Set<gmaps.Marker> _buildAllMarkers() {
+    final out = <gmaps.Marker>{};
+    for (final s in widget.spots) {
+      if (s.latitude == 0 && s.longitude == 0) continue;
+      out.add(
+        gmaps.Marker(
+          markerId: gmaps.MarkerId('spot_${s.id}'),
+          position: gmaps.LatLng(s.latitude, s.longitude),
+          onTap: () => widget.onSpotTap?.call(s),
+          icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(_markerHue),
+        ),
+      );
+    }
+    for (final p in widget.establishmentPins) {
+      if (!p.hasValidCoords) continue;
+      out.add(
+        gmaps.Marker(
+          markerId: gmaps.MarkerId('ae_${p.id}'),
+          position: gmaps.LatLng(p.latitude, p.longitude),
+          onTap: () => widget.onEstablishmentTap?.call(p),
+          icon: gmaps.BitmapDescriptor.defaultMarkerWithHue(
+            kEstablishmentMapMarkerHue,
           ),
-        )
-        .toSet();
+          infoWindow: gmaps.InfoWindow(
+            title: p.name,
+            snippet: p.category.isEmpty
+                ? p.municipality
+                : (p.municipality.isEmpty
+                    ? p.category
+                    : '${p.category} · ${p.municipality}'),
+          ),
+        ),
+      );
+    }
+    return out;
   }
 
   void _moveTo(
@@ -435,7 +530,9 @@ class _MisamisGoogleExploreMapState extends State<_MisamisGoogleExploreMap> {
     if (kIsWeb && (_webMapsJsFailed || isGoogleMapsAuthFailed())) {
       return _MisamisOsmExploreMap(
         spots: widget.spots,
+        establishmentPins: widget.establishmentPins,
         onSpotTap: widget.onSpotTap,
+        onEstablishmentTap: widget.onEstablishmentTap,
         onMapReady: widget.onMapReady,
         initialZoom: widget.initialZoom,
         showZoomControls: widget.showZoomControls,

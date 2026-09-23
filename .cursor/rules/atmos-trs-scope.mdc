@@ -1,0 +1,87 @@
+---
+description: Atmos TRS product scope, conventions, and AI behavior
+alwaysApply: true
+---
+
+# Atmos TRS — Team Rules
+
+This is **not a greenfield project**. Existing Flutter + Firebase code is the starting point.
+
+**Workflow:** Inspect → Understand → Plan → Modify/Extend → Verify.
+
+Understand the tourism registration system broadly. **Primary ownership:** LGU municipal tourism + DOT/OPTACA reports (and related seeding). Other roles are in-repo and fair game when the user asks — do not drive-by edit them.
+
+Handoff / new-account briefing: `AGENTS.md`, `docs/PROJECT_CONTEXT.md`.  
+Detailed specs: `.cursor/rules/atmos-product-workflow.mdc`, `docs/atmos-forms-and-establishment-qr.md`, and `docs/` (TEST_ACCOUNTS_REPORTS, DOT/Firestore).
+
+## Who we are
+
+Atmos TRS (Misamis Occidental) — tourist registration, QR check-in, LGU municipal tourism, OPTACA / Provincial Tourism, Governor analytics, establishments, DOT report export.
+
+**Roles (do not invent new ones):** `tourist`, `tourism` / `tourism_office` (LGU), `provincial_tourism` / `tourism_province` (OPTACA), `governor`, `tourism_establishment`.
+
+Canonical profile shape: `lib/services/user_directory_service.dart`, `lib/config/session_storage.dart`.
+
+## Primary scope (default work area)
+
+| Area | Primary paths |
+|------|----------------|
+| LGU dashboard | `lib/screens/tourism_dashboard.dart`, `lib/widgets/lgu_*`, LGU services |
+| DOT / reports | `lib/utils/dot_*`, `lib/utils/dae3_*`, `lib/utils/provincial_report_*`, `lib/utils/checkin_report_*`, `lib/widgets/*report*`, `lib/widgets/dot_*`, `lib/config/supabase_report_*` |
+| LGU → OPTACA | `lgu_report_submission_service`, `lgu_submit_report_to_optaca_panel`, `optaca_report_review_panel` |
+| Seeds / debug | `tools/seed_*.js`, `tools/cleanup_*.js`, `lgu_debug_data_*` |
+| Cloud (reports/seeds) | `functions/index.js`, `firestore.rules` |
+
+## Whole-app surfaces (edit when user asks; otherwise ask-first)
+
+Tourist UI, QR check-in, provincial chrome, Governor, Establishment dashboard, Auth/signup/OTP — see workflow doc. **Establishment QR / stay confirmation** exists in app code; extend when asked, following `docs/atmos-forms-and-establishment-qr.md` (deploy `firestore.rules` for client writes).
+
+**Off limits unless user explicitly asks:** drive-by refactors; role→route changes without confirmation; second report/PDF/email stack; committing secrets; tourist VR/Governor polish as side effects of LGU/report tasks.
+
+**Context vs task:** Tourist → QR → LGU → OPTACA → Governor is integration context, not permission to rebuild every hop.
+
+## DOT forms policy (locked)
+
+- **Every form** in Analytics gets a **filled preview** from current ATMOS data (best effort).
+- Cells we cannot derive yet are **gaps** (shown in preview / `ATMOS_GAPS`) — not a blank official file as the main CTA.
+- Primary downloads: **Excel** and **PDF** of the same filled content. Official empty template is advanced/secondary only.
+- One pipeline: aggregate → preview → Excel writer → PDF writer. When new fields or establishment stays land, extend fillers — do not invent parallel exporters.
+- **Attraction / LGU QR** → VAR-family. **Confirmed establishment stays** → DAE-family. Do not mix without labeling proxies.
+
+## Establishment stay QR (locked product model)
+
+Tourist scans establishment QR → **pending** stay request → staff on establishment dashboard enters fields + **confirms** → tourist gets **receipt/history** → DOT/DAE counts **confirmed** stays only. Same-day attraction check-in + hotel stay = **separate** records.
+
+## Cross-module policy
+
+1. Prefer seeding via Debug data / `tools/seed_*.js` when upstream is incomplete.
+2. Ask before shared auth routing, global Firestore rules, or other-role dashboard one-offs.
+3. Minimal temporary edits outside primary scope only to test — small, reversible, explained.
+
+## Product / platform
+
+- Flutter (Windows primary local; also Android/web). SDK: `C:\flutter\bin`.
+- Firebase Auth + Firestore + Functions + FCM; Supabase for report templates/storage; EmailJS.
+- Reuse `dot_report_*` / preview panels; do not add a second XLSX/PDF pipeline.
+- OPTACA: extend submission + review panels; attach generated files when that slice is built.
+
+## Implementation standards
+
+- Full slice — no stubs/TODO-only unless asked. **Extend** existing code.
+- Minimal diffs; run `flutter analyze` / `dart analyze` when useful; prefer hot restart if app is running.
+- **Git:** never commit/push unless user asks.
+- Do not claim a feature works until the role workflow is verified (or say what was not run).
+
+## Communication
+
+Cut the fluff. Answer first. Flag speculation. Minimal code context in replies.
+
+## Before editing — checklist
+
+1. Inspect existing files first.
+2. Primary LGU/reports scope, or user explicitly asked elsewhere?
+3. Extending existing service/screen vs parallel rebuild?
+4. Role routing / Firestore rules / shared auth? → confirm first.
+5. Seed instead of editing another role’s module?
+6. Reusing DOT/OPTACA/QR patterns?
+7. Requested slice fully implemented?

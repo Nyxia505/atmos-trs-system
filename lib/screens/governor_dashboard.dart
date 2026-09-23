@@ -38,6 +38,9 @@ import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
 import 'package:atmos_trs_system/utils/csv_file_download.dart';
 import 'package:atmos_trs_system/utils/xlsx_file_download.dart';
 import 'package:atmos_trs_system/widgets/dot_report_export_panel.dart';
+import 'package:atmos_trs_system/widgets/lgu_debug_data_dialogs.dart';
+import 'package:atmos_trs_system/screens/governor_municipality_places_screen.dart';
+import 'package:atmos_trs_system/models/tourist_spot.dart';
 import 'package:atmos_trs_system/features/governor/theme/governor_dashboard_tokens.dart';
 import 'package:atmos_trs_system/features/governor/widgets/governor_sidebar.dart';
 import 'package:atmos_trs_system/features/governor/widgets/governor_glass_header.dart';
@@ -2059,7 +2062,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
     final checkInSpark = _statSparklineValues(
       _StatCard(
-        title: 'Total Check-ins',
+        title: 'Total visitors',
         value: _formatNumber(_totalCheckIns),
         icon: Icons.touch_app_rounded,
         color: _kpiBlue,
@@ -2117,13 +2120,13 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         compact: _dashboardOnePage,
       ),
       GovernorKpiCard(
-        title: 'Total Check-ins',
+        title: 'Total visitors',
         value: _formatNumber(_totalCheckIns),
         icon: Icons.touch_app_rounded,
         accent: _kpiBlue,
         changeText: stripTrendSign(checkInTrend.text),
         isPositive: checkInTrend.isPositive,
-        trendHint: 'vs last week',
+        trendHint: 'party headcount · ${_checkIns.length} check-ins',
         sparkline: checkInSpark,
         compact: _dashboardOnePage,
       ),
@@ -3225,36 +3228,29 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   void _showMunicipalityDetails(Map<String, dynamic> municipality) {
-    final unique =
-        (municipality['uniqueVisitors'] as num?)?.toInt() ??
-        (municipality['tourists'] as num?)?.toInt() ??
-        0;
-    final checkIns = (municipality['checkIns'] as num?)?.toInt() ?? 0;
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: _cardBg,
-        title: Text(
-          municipality['name']?.toString() ?? 'Municipality',
-          style: const TextStyle(color: _textDark, fontWeight: FontWeight.w600),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _detailRow('Type', municipality['type']?.toString() ?? '—'),
-            _detailRow('Unique visitors', '$unique'),
-            _detailRow('Total check-ins', '$checkIns'),
-            _detailRow('Latitude', '${municipality['lat']}'),
-            _detailRow('Longitude', '${municipality['lng']}'),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close', style: TextStyle(color: _primaryOrange)),
-          ),
-        ],
+    final name = municipality['name']?.toString() ?? 'Municipality';
+    final type = municipality['type']?.toString() ?? 'Municipality';
+    var mid = normalizeMunicipalityId(getMunicipalityIdFromName(name));
+    if (mid.isEmpty) {
+      mid = normalizeMunicipalityId(municipality['id']?.toString());
+    }
+    if (mid.isEmpty) {
+      for (final m in getMisamisOccidentalMunicipalities()) {
+        if (m.name.toLowerCase() == name.toLowerCase()) {
+          mid = m.id;
+          break;
+        }
+      }
+    }
+    unawaited(
+      GovernorMunicipalityPlacesScreen.open(
+        context,
+        municipalityId: mid.isEmpty ? name.toLowerCase() : mid,
+        municipalityName: name,
+        municipalityType: type,
+        spots: _governorAllSpots,
+        checkIns: _checkIns,
+        tourists: _tourists,
       ),
     );
   }
@@ -4422,8 +4418,8 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         children: [
           _buildHeader(
             'Municipalities & Cities',
-            subtitle:
-                'Unique visitors by check-in location across Misamis Occidental',
+                subtitle:
+                    'Tap a city or municipality → spots & establishments → full analytics',
           ),
           Expanded(
             child: Padding(
@@ -4744,7 +4740,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                         Expanded(
                           child: Text(
                             '$uniqueVisitors unique visitor${uniqueVisitors == 1 ? '' : 's'}'
-                            '${checkIns > 0 ? ' · $checkIns check-in${checkIns == 1 ? '' : 's'}' : ''}',
+                            '${checkIns > 0 ? ' · $checkIns visitors' : ''}',
                             style: TextStyle(
                               color: _textMuted,
                               fontSize: compact ? 12 : 13,
@@ -4919,7 +4915,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                     const SizedBox(height: 22),
                     _buildAnalyticsSectionLabel(
                       'DOT templates (provincial)',
-                      'Official forms from Supabase — filled for all LGUs',
+                      'Fill any form for the province, one LGU filter, or a specific spot / establishment',
                       Icons.description_outlined,
                     ),
                     const SizedBox(height: 12),
@@ -5017,7 +5013,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     final cards = [
       (
         title: 'Daily average',
-        subtitle: 'Check-ins per active day',
+        subtitle: 'Visitors per active day',
         value: '$_analyticsDailyAvg',
         icon: Icons.calendar_today_rounded,
         accent: const Color(0xFF2563EB),
@@ -6488,7 +6484,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     })>[
       (
         title: 'Daily',
-        subtitle: "Today's check-ins",
+        subtitle: "Today's unique scanners",
         icon: Icons.today_rounded,
         accent: const Color(0xFF2563EB),
         type: 'daily',
@@ -7204,6 +7200,15 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                           ? 'Last backup: $_lastBackupDate'
                           : 'No backup yet',
                       _showBackupDialog,
+                    ),
+                  ]),
+                  const SizedBox(height: 16),
+                  _buildSettingsSection('Debug data', [
+                    _buildSettingsTileWithSubtitle(
+                      'Debug data hub',
+                      Icons.analytics_outlined,
+                      'Charts, seed all LGUs, full purge (tourists + stays)',
+                      _openGovernorDebugDataHub,
                     ),
                   ]),
                   const SizedBox(height: 16),
@@ -8246,7 +8251,8 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         content = 'ATMOS-TRS Summary Report\n';
         content += 'Generated: ${DateTime.now()}\n\n';
         content += 'Total Tourists: $_totalTourists\n';
-        content += 'Total Check-ins: $_totalCheckIns\n';
+        content += 'Total visitors: $_totalCheckIns\n';
+        content += 'QR check-ins (sessions): ${_checkIns.length}\n';
         content += 'Active Spots: $_activeSpots\n';
         filename = 'report_${DateTime.now().millisecondsSinceEpoch}.txt';
         break;
@@ -8311,7 +8317,31 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
+  void _openGovernorDebugDataHub() {
+    unawaited(
+      LguDebugDataDialogs.openHub(
+        context: context,
+        municipalityId: '',
+        municipalityName: 'All municipalities',
+        spots: const <TouristSpot>[],
+        onDone: () {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Debug action complete. Refresh Analytics / Registered views.',
+                ),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+        },
+      ),
+    );
+  }
+
   // ==================== BACKUP DIALOG ====================
+
   void _showBackupDialog() {
     bool isBackingUp = false;
     bool isRestoring = false;

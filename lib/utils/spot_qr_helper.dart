@@ -2,8 +2,13 @@ import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/qr_launch_query.dart';
 
 /// Public URL opened by device cameras when the app is not installed.
-/// Use hash route so Firebase Hosting always lands on the web app's landing page.
-const String _kPublicCheckInBaseUrl = 'https://atmos-trs-system.web.app/#/landing';
+///
+/// Path + query (not hash) so Android App Links / iOS Universal Links receive
+/// the full QR parameters. Firebase Hosting rewrites `/checkin` → `index.html`.
+/// Legacy `#/landing?…` URLs remain parseable via [mergedLaunchQueryParameters].
+const String kPublicCheckInBaseUrl = 'https://atmos-trs-system.web.app/checkin';
+
+const String _kPublicCheckInBaseUrl = kPublicCheckInBaseUrl;
 
 /// Parsed LGU QR: municipality id plus optional anchor coordinates printed on the poster.
 class LguQrPayload {
@@ -126,15 +131,33 @@ String lguQrData(String municipalityId, {double? anchorLat, double? anchorLng}) 
 }
 
 /// Full LGU QR parse (id + optional lat/lng after the id).
+///
+/// Does **not** claim establishment/spot URLs that happen to include
+/// `municipality_id` — those must route to their own handlers first.
 LguQrPayload? parseLguQrPayload(String raw) {
   final s = raw.trim();
   final uri = Uri.tryParse(s);
   if (uri != null && (uri.scheme == 'http' || uri.scheme == 'https')) {
     final q = mergedLaunchQueryParameters(uri);
     final type = (q['type'] ?? '').trim().toLowerCase();
+    // Never treat hotel / AE / spot payloads as LGU just because municipality_id is present.
+    if (type == 'establishment' ||
+        type == 'hotel' ||
+        type == 'ae' ||
+        type == 'spot' ||
+        q.containsKey('establishment_id') ||
+        q.containsKey('establishmentId') ||
+        q.containsKey('spot_id') ||
+        q.containsKey('spotId')) {
+      return null;
+    }
     final midRaw = q['municipality_id'] ?? q['lgu_id'] ?? '';
     final id = normalizeMunicipalityId(midRaw);
-    if (id.isNotEmpty && (type == 'lgu' || q.containsKey('municipality_id') || q.containsKey('lgu_id'))) {
+    final isExplicitLgu = type == 'lgu' || type == 'municipality';
+    final hasLguKey = q.containsKey('lgu_id');
+    // Prefer explicit type=lgu. Allow municipality_id only when type is empty/absent
+    // (legacy prints) and no competing typed payload keys above.
+    if (id.isNotEmpty && (isExplicitLgu || hasLguKey || (type.isEmpty && q.containsKey('municipality_id')))) {
       final lat = double.tryParse((q['lat'] ?? '').trim());
       final lng = double.tryParse((q['lng'] ?? '').trim());
       if (lat != null && lng != null) {
@@ -160,7 +183,12 @@ LguQrPayload? parseLguQrPayload(String raw) {
     }
     return LguQrPayload(municipalityId: id);
   }
-  final m = RegExp(r'LGU:\s*', caseSensitive: false).firstMatch(s);
+  // Avoid matching "establishment" strings that merely contain "LGU:" substring noise.
+  if (s.toUpperCase().contains('ATMOS-TRS-EST:') ||
+      s.toUpperCase().contains('TYPE=ESTABLISHMENT')) {
+    return null;
+  }
+  final m = RegExp(r'(?:^|[\s/])LGU:\s*', caseSensitive: false).firstMatch(s);
   if (m != null) {
     final rest = s.substring(m.end).trim();
     final parts = rest.split(':');
@@ -204,4 +232,89 @@ String? extractSpotIdFromCheckInDeepLink(String raw) {
   final q = mergedLaunchQueryParameters(uri);
   final id = q['spot_id'] ?? q['spotId'];
   return id != null && id.isNotEmpty ? id : null;
+}
+
+/// Parsed establishment (hotel / AE) QR.
+class EstablishmentQrPayload {
+  const EstablishmentQrPayload({
+    required this.establishmentId,
+    this.municipalityId,
+    this.businessName,
+  });
+
+  final String establishmentId;
+  final String? municipalityId;
+  final String? businessName;
+}
+
+/// Public URL / payload for an establishment stay QR.
+String establishmentQrData(
+  String establishmentId, {
+  String? municipalityId,
+  String? businessName,
+}) {
+  final eid = establishmentId.trim();
+  final params = <String, String>{
+    'type': 'establishment',
+    'establishment_id': eid,
+  };
+  final mid = (municipalityId ?? '').trim();
+  if (mid.isNotEmpty) {
+    params['municipality_id'] = normalizeMunicipalityId(mid);
+  }
+  final name = (businessName ?? '').trim();
+  if (name.isNotEmpty) {
+    params['name'] = name;
+  }
+  return Uri.parse(_kPublicCheckInBaseUrl)
+      .replace(queryParameters: params)
+      .toString();
+}
+
+/// Parses establishment QR (URL `type=establishment` or `ATMOS-TRS-EST:…`).
+EstablishmentQrPayload? parseEstablishmentQrPayload(String raw) {
+  final s = raw.trim();
+  final uri = Uri.tryParse(s);
+  if (uri != null && (uri.scheme == 'http' || uri.scheme == 'https')) {
+    final q = mergedLaunchQueryParameters(uri);
+    final type = (q['type'] ?? '').trim().toLowerCase();
+    final eid = (q['establishment_id'] ?? q['establishmentId'] ?? '').trim();
+    if (eid.isNotEmpty &&
+        (type == 'establishment' ||
+            type == 'hotel' ||
+            type == 'ae' ||
+            q.containsKey('establishment_id') ||
+            q.containsKey('establishmentId'))) {
+      final midRaw = q['municipality_id'] ?? q['municipalityId'] ?? '';
+      final mid = midRaw.trim().isNotEmpty
+          ? normalizeMunicipalityId(midRaw)
+          : null;
+      final name = (q['name'] ?? q['business_name'] ?? '').trim();
+      return EstablishmentQrPayload(
+        establishmentId: eid,
+        municipalityId: mid,
+        businessName: name.isEmpty ? null : name,
+      );
+    }
+  }
+
+  const prefix = 'ATMOS-TRS-EST:';
+  if (s.startsWith(prefix)) {
+    final rest = s.substring(prefix.length).trim();
+    final parts = rest.split(':');
+    if (parts.isEmpty) return null;
+    if (parts.length >= 2) {
+      final mid = normalizeMunicipalityId(parts.first.trim());
+      final eid = parts.sublist(1).join(':').trim();
+      if (eid.isEmpty) return null;
+      return EstablishmentQrPayload(
+        establishmentId: eid,
+        municipalityId: mid.isEmpty ? null : mid,
+      );
+    }
+    final eid = parts.first.trim();
+    if (eid.isEmpty) return null;
+    return EstablishmentQrPayload(establishmentId: eid);
+  }
+  return null;
 }

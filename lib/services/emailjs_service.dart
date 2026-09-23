@@ -78,13 +78,17 @@ class EmailjsService {
           'lib/config/emailjs_config.dart (Account → API keys → Public Key).';
     }
 
-    final subject = 'ATMOS-TRS OTP code';
+    // Soft transactional copy — avoid ALL-CAPS / “URGENT” / link bait (spam triggers).
+    // Inbox vs Spam still depends on EmailJS From-domain SPF/DKIM (see EmailjsConfig).
+    final subject = 'Your ATMOS-TRS verification code';
     final message =
-        'Hello $toName,\n\n'
-        'Your ATMOS verification code is: $otp\n'
-        'This code will expire in 15 minutes.\n\n'
-        'If this wasn\'t you, please ignore this message.\n\n'
-        '— ATMOS-TRS';
+        'Hi $toName,\n\n'
+        'Here is your ATMOS-TRS verification code:\n\n'
+        '$otp\n\n'
+        'Enter this code in the app. It expires in 5 minutes.\n\n'
+        'If you did not request this, you can ignore this email.\n\n'
+        'Thanks,\n'
+        'ATMOS-TRS Tourism';
     final templateParams = <String, String>{
       'to_email': toEmail,
       'to_name': toName,
@@ -93,17 +97,19 @@ class EmailjsService {
       'email': toEmail,
       'user_email': toEmail,
       'subject': subject,
-      'from_name': 'ATMOS-TRS',
+      'from_name': 'ATMOS-TRS Tourism',
       'reply_to': 'atmostrs@gmail.com',
       'message': message,
       'message_html':
-          '<p>Hello $toName,</p>'
-          '<p>Your ATMOS verification code is:</p>'
-          '<p style="font-size:24px;font-weight:700;letter-spacing:4px;">$otp</p>'
-          '<p>This code will expire in 15 minutes.</p>'
-          '<p>If this wasn\'t you, please ignore this message.</p>'
-          '<p>— ATMOS-TRS</p>',
-      'preheader': 'Your ATMOS code is $otp. Expires in 15 minutes.',
+          '<p>Hi ${toName.replaceAll('<', '').replaceAll('>', '')},</p>'
+          '<p>Here is your ATMOS-TRS verification code:</p>'
+          '<p style="font-size:28px;font-weight:700;letter-spacing:6px;'
+          'font-family:monospace;">$otp</p>'
+          '<p>Enter this code in the app. It expires in 5 minutes.</p>'
+          '<p style="color:#666;font-size:13px;">If you did not request this, '
+          'you can ignore this email.</p>'
+          '<p>Thanks,<br/>ATMOS-TRS Tourism</p>',
+      'preheader': 'Your ATMOS-TRS code · expires in 5 minutes',
     };
 
     String? accessForPayload() {

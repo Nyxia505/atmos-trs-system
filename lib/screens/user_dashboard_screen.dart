@@ -2630,6 +2630,14 @@ class _ScanScreenState extends State<_ScanScreen> with WidgetsBindingObserver {
     );
 
     if (mounted) setState(() => _isProcessing = false);
+    if (saved && mounted) {
+      Navigator.pushNamedAndRemoveUntil(
+        context,
+        '/dashboard',
+        (route) => false,
+      );
+      return;
+    }
     Future.delayed(const Duration(seconds: 3), () {
       _lastScannedCode = null;
     });

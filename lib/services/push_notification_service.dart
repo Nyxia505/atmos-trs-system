@@ -61,12 +61,34 @@ StreamSubscription<RemoteMessage>? _passwordResetForegroundSubscription;
 String _otpBigTextBody(String otp, String? displayName) {
   final name = displayName?.trim();
   final greeting =
-      (name != null && name.isNotEmpty) ? 'Hello $name,' : 'Hello,';
+      (name != null && name.isNotEmpty) ? 'Hi $name,' : 'Hi,';
   return '$greeting\n\n'
-      'Your ATMOS-TRS verification code is: $otp\n\n'
-      'This code will expire in 5 minutes.\n\n'
-      'If this wasn\'t you, please ignore this message.\n\n'
-      '— ATMOS-TRS';
+      'Your ATMOS-TRS verification code is:\n\n'
+      '$otp\n\n'
+      'Enter it in the app. Expires in 5 minutes.\n\n'
+      'If you did not request this, ignore this message.\n\n'
+      '— ATMOS-TRS Tourism';
+}
+
+/// True when an FCM payload is a signup/verify OTP push (stale-token risk).
+/// These must not be shown — only [deliverEmailOtpToDevice] on the request phone.
+bool _looksLikeSignupEmailOtpPush(RemoteMessage message) {
+  final t = message.data['type']?.toString().trim().toLowerCase() ?? '';
+  if (t == 'email_otp') return true;
+  if (t == 'password_reset_otp') return false;
+  final title =
+      '${message.notification?.title ?? ''} ${message.data['title'] ?? ''}'
+          .toLowerCase();
+  final body =
+      '${message.notification?.body ?? ''} ${message.data['body'] ?? ''}'
+          .toLowerCase();
+  final combined = '$title $body';
+  if (combined.contains('password reset')) return false;
+  final hasCode = RegExp(r'\b\d{6}\b').hasMatch(combined);
+  if (!hasCode) return false;
+  return combined.contains('verification') ||
+      combined.contains('verification code') ||
+      (combined.contains('atmos-trs') && combined.contains('code'));
 }
 
 final FlutterLocalNotificationsPlugin _localNotifications =
@@ -299,21 +321,25 @@ Future<void> showCheckInLocalNotification(String spotName) async {
 }
 
 /// Shows the 6-digit code in the shade like a Gmail-style OTP preview (Android BigText / iOS banner).
-Future<void> showEmailOtpLocalNotification(
+/// Returns true when the local notification was posted on this device.
+Future<bool> showEmailOtpLocalNotification(
   String otp, {
   String? displayName,
 }) async {
-  if (kIsWeb || Firebase.apps.isEmpty) return;
+  if (kIsWeb || Firebase.apps.isEmpty) return false;
   final digits = otp.replaceAll(RegExp(r'\D'), '');
-  if (digits.length != 6) return;
+  if (digits.length != 6) return false;
 
   try {
     await ensureEmailOtpNotificationSupport();
-    if (!_localNotificationsReady) return;
+    if (!_localNotificationsReady) {
+      debugPrint('[Push] OTP local notify skipped — plugin not ready');
+      return false;
+    }
 
     final bigText = _otpBigTextBody(digits, displayName);
     final collapsed =
-        'Your ATMOS verification code is: $digits. Expires in 5 minutes.';
+        'Your ATMOS-TRS code is $digits. Expires in 5 minutes.';
 
     final android = AndroidNotificationDetails(
       _androidOtpChannel.id,
@@ -323,10 +349,14 @@ Future<void> showEmailOtpLocalNotification(
       priority: Priority.max,
       visibility: NotificationVisibility.public,
       category: AndroidNotificationCategory.message,
-      ticker: 'ATMOS-TRS OTP code',
+      ticker: 'ATMOS-TRS verification code',
+      playSound: true,
+      enableVibration: true,
+      autoCancel: true,
+      onlyAlertOnce: false,
       styleInformation: BigTextStyleInformation(
         bigText,
-        contentTitle: 'ATMOS-TRS OTP code',
+        contentTitle: 'ATMOS-TRS verification code',
         summaryText: 'ATMOS-TRS',
       ),
       icon: '@mipmap/ic_launcher',
@@ -348,8 +378,11 @@ Future<void> showEmailOtpLocalNotification(
       body: collapsed,
       notificationDetails: details,
     );
+    debugPrint('[Push] OTP local notification shown');
+    return true;
   } catch (e, st) {
     debugPrint('[Push] showEmailOtpLocalNotification: $e\n$st');
+    return false;
   }
 }
 
@@ -360,6 +393,11 @@ Future<void> ensurePasswordResetNotificationSupport({
   if (kIsWeb || Firebase.apps.isEmpty) return;
   try {
     await _ensureLocalNotificationsCore();
+    // Warm FCM so requestPasswordResetOtp can target this phone even when
+    // the tourist is signed out (token passed from the client).
+    try {
+      await FirebaseMessaging.instance.getToken();
+    } catch (_) {}
     await _passwordResetForegroundSubscription?.cancel();
     _passwordResetForegroundSubscription =
         FirebaseMessaging.onMessage.listen((RemoteMessage message) {
@@ -381,18 +419,34 @@ Future<void> disposePasswordResetNotificationSupport() async {
   _passwordResetForegroundSubscription = null;
 }
 
+/// FCM registration token for this install (no Auth required).
+/// Used so password-reset OTP can heads-up on the phone that requested it.
+Future<String?> getDeviceFcmTokenForOtpDelivery() async {
+  if (kIsWeb || Firebase.apps.isEmpty) return null;
+  try {
+    await _ensureLocalNotificationsCore();
+    final token = await FirebaseMessaging.instance.getToken();
+    if (token == null || token.isEmpty) return null;
+    return token;
+  } catch (e, st) {
+    debugPrint('[Push] getDeviceFcmTokenForOtpDelivery: $e\n$st');
+    return null;
+  }
+}
+
 /// Heads-up notification for password reset OTP (same channel as email verification).
-Future<void> showPasswordResetOtpLocalNotification(
+/// Returns true when posted on this device.
+Future<bool> showPasswordResetOtpLocalNotification(
   String otp, {
   String? displayName,
 }) async {
-  if (kIsWeb || Firebase.apps.isEmpty) return;
+  if (kIsWeb || Firebase.apps.isEmpty) return false;
   final digits = otp.replaceAll(RegExp(r'\D'), '');
-  if (digits.length != 6) return;
+  if (digits.length != 6) return false;
 
   try {
     await _ensureLocalNotificationsCore();
-    if (!_localNotificationsReady) return;
+    if (!_localNotificationsReady) return false;
 
     final name = displayName?.trim();
     final greeting =
@@ -414,6 +468,9 @@ Future<void> showPasswordResetOtpLocalNotification(
       visibility: NotificationVisibility.public,
       category: AndroidNotificationCategory.message,
       ticker: 'ATMOS-TRS password reset',
+      playSound: true,
+      enableVibration: true,
+      autoCancel: true,
       styleInformation: BigTextStyleInformation(
         bigText,
         contentTitle: 'ATMOS-TRS password reset',
@@ -438,20 +495,34 @@ Future<void> showPasswordResetOtpLocalNotification(
       body: collapsed,
       notificationDetails: details,
     );
+    return true;
   } catch (e, st) {
     debugPrint('[Push] showPasswordResetOtpLocalNotification: $e\n$st');
+    return false;
   }
 }
 
-/// Saves OTP to Firestore should already be done — this delivers the code on-device + syncs FCM.
-Future<void> deliverEmailOtpToDevice({
+/// Saves OTP to Firestore should already be done — this delivers the code on-device.
+///
+/// **Local heads-up only on this phone** (the install that called signup/resend).
+/// Does not FCM-broadcast the code — that would leak to other devices that still
+/// hold an old [fcmToken] for the same uid.
+Future<bool> deliverEmailOtpToDevice({
   required String uid,
   required String otp,
   String? displayName,
 }) async {
-  if (kIsWeb) return;
-  await syncFcmTokenToUserDoc(uid);
-  await showEmailOtpLocalNotification(otp, displayName: displayName);
+  if (kIsWeb) return false;
+  // Best-effort token sync for announcements / future non-OTP pushes — never
+  // block or replace the local OTP heads-up.
+  unawaited(() async {
+    try {
+      await syncFcmTokenToUserDoc(uid).timeout(const Duration(seconds: 3));
+    } catch (e) {
+      debugPrint('[Push] FCM sync before OTP notify skipped: $e');
+    }
+  }());
+  return showEmailOtpLocalNotification(otp, displayName: displayName);
 }
 
 /// Tourism Office / governor announcement — heads-up + BigText (parity with OTP UX).
@@ -532,6 +603,11 @@ Future<void> _mirrorAnnouncementToUserActivity({
 /// Shows a system notification when a push arrives while the app is in the foreground.
 Future<void> _showForegroundNotification(RemoteMessage message) async {
   if (!_localNotificationsReady || kIsWeb) return;
+  // Never mirror signup OTP pushes into the tray on this install.
+  if (_looksLikeSignupEmailOtpPush(message)) {
+    debugPrint('[Push] skip foreground tray for signup OTP FCM');
+    return;
+  }
   final notification = message.notification;
   final aid = message.data['announcementId']?.toString() ?? '';
   final title = notification?.title ??
@@ -593,12 +669,14 @@ Future<void> registerTouristPushNotifications() async {
     await _onMessageSubscription?.cancel();
     _onMessageSubscription = FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       final t = message.data['type']?.toString();
-      if (t == 'email_otp') {
-        final otp = message.data['otp']?.toString() ?? '';
-        if (otp.replaceAll(RegExp(r'\D'), '').length == 6) {
-          showEmailOtpLocalNotification(otp.replaceAll(RegExp(r'\D'), ''));
-          return;
-        }
+      // Signup / verify OTP must NEVER come via FCM — only local notify on the
+      // phone that tapped Submit/Resend. Ignoring stops stale-token leaks to
+      // other installs (and suppresses duplicate heads-ups).
+      if (t == 'email_otp' || _looksLikeSignupEmailOtpPush(message)) {
+        debugPrint(
+          '[Push] ignoring signup email_otp FCM (local-only OTP on request device)',
+        );
+        return;
       }
       if (t == 'password_reset_otp') {
         final otp = message.data['otp']?.toString() ?? '';

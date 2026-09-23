@@ -66,6 +66,8 @@ dependencies:
     path: lib/tripplan/main
   google_fonts: ^8.2.1
   pointer_interceptor: ^0.10.1+2
+  app_links: ^7.2.1
+  play_install_referrer: ^0.5.0
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -105,6 +107,32 @@ flutter:
     - assets/images/misamis_occidental_official_seal.png
     - assets/images/login_hero_bg.png
     - assets/images/landing page.png
+    # Municipality / destination heroes for Visited place thumbnails
+    - assets/images/oroquieta City plaza.jpeg
+    - assets/images/ozamis city.webp
+    - assets/images/Cotta Fort & Shrine.jpg
+    - assets/images/Immaculate Conception Cathedral.webp
+    - assets/images/Cotta Beach.jpg
+    - assets/images/Asenso Global Garden 1.png
+    - assets/images/aloran.png
+    - assets/images/Baliangao.png
+    - assets/images/Bonifacio_kanao.png
+    - assets/images/Calamba.png
+    - assets/images/Clarin.png
+    - assets/images/lake_duminagat.webp
+    - assets/images/conception_v2.png
+    - assets/images/DonVic_v2.png
+    - assets/images/Jimenez.png
+    - assets/images/Lopez Jaena.png
+    - assets/images/Panaon.png
+    - assets/images/Plaridel.png
+    - assets/images/Sapang_Dalaga_v2.png
+    - assets/images/Amorap.png
+    - assets/images/Tudela Village.webp
+    - assets/images/capitol.webp
+    - assets/images/el triunfo.png
+    - assets/images/lumantas river side garden.webp
+    - assets/images/tripplan.png
     - assets/Onboarding_screen/
     - assets/vr_tour/
 

@@ -63,6 +63,8 @@ class TouristProfileHydration {
   }
 
   /// Local cache first; if empty, pull full profile from Firestore.
+  /// Falls back to Auth displayName / email local-part so UI never flashes
+  /// "Guest" for a signed-in tourist while Firestore is slow or incomplete.
   static Future<UserProfile?> loadProfile({
     String? uid,
     String? email,
@@ -71,7 +73,81 @@ class TouristProfileHydration {
     if (profile != null && profile.firstName.trim().isNotEmpty) {
       return profile;
     }
-    return hydrateFromFirestore(uid: uid, email: email);
+
+    final hydrated = await hydrateFromFirestore(uid: uid, email: email);
+    if (hydrated != null && hydrated.firstName.trim().isNotEmpty) {
+      return hydrated;
+    }
+
+    return _seedFromAuthIfNeeded(
+      existing: hydrated ?? profile,
+      uid: uid,
+      email: email,
+    );
+  }
+
+  /// When Firestore/cache lack a first name, seed from Firebase Auth so the
+  /// Profile tab and Home greeting stay stable across hot restart.
+  static Future<UserProfile?> _seedFromAuthIfNeeded({
+    UserProfile? existing,
+    String? uid,
+    String? email,
+  }) async {
+    final authUser = FirebaseAuth.instance.currentUser;
+    if (authUser == null) return existing;
+
+    final display = authUser.displayName?.trim() ?? '';
+    String first = '';
+    String last = '';
+    if (display.isNotEmpty) {
+      final parts = display.split(RegExp(r'\s+'));
+      first = parts.first;
+      if (parts.length > 1) {
+        last = parts.sublist(1).join(' ');
+      }
+    } else {
+      final mail = normalizeEmail(email ?? authUser.email ?? '');
+      if (mail.contains('@')) {
+        final local = mail.split('@').first;
+        if (local.isNotEmpty) {
+          first = local[0].toUpperCase() + local.substring(1);
+        }
+      }
+    }
+
+    if (first.isEmpty) return existing;
+
+    final resolvedUid = uid ?? authUser.uid;
+    final resolvedEmail = normalizeEmail(
+      email ?? existing?.email ?? authUser.email ?? '',
+    );
+
+    await UserProfileStorage.saveUserProfile(
+      firstName: first,
+      middleName: existing?.middleName,
+      lastName: last.isNotEmpty ? last : (existing?.lastName ?? ''),
+      suffix: existing?.suffix,
+      sex: existing?.sex,
+      civilStatus: existing?.civilStatus,
+      nationality: existing?.nationality,
+      dateOfBirth: existing?.dateOfBirth,
+      mobile: existing?.mobile ?? '',
+      email: resolvedEmail,
+      country: existing?.country,
+      province: existing?.province,
+      city: existing?.city,
+      street: existing?.street,
+      barangay: existing?.barangay,
+      touristId: (existing?.touristId.trim().isNotEmpty == true)
+          ? existing!.touristId
+          : resolvedUid,
+      profileImageBase64: existing?.profileImageBase64,
+      profilePhotoUrl: existing?.profilePhotoUrl,
+    );
+    debugPrint(
+      '[TouristProfile] seeded name from Auth displayName/email for uid=$resolvedUid',
+    );
+    return UserProfileStorage.getUserProfile();
   }
 
   static Future<Map<String, dynamic>?> _fetchTouristData({

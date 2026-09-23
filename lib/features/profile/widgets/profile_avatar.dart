@@ -11,17 +11,23 @@ class ProfileAvatar extends StatelessWidget {
     this.size = 72,
     this.ringWidth = 3,
     this.ringColor,
+    this.onTap,
+    this.showEditBadge = false,
+    this.isBusy = false,
   });
 
   final UserProfile? profile;
   final double size;
   final double ringWidth;
   final Color? ringColor;
+  final VoidCallback? onTap;
+  final bool showEditBadge;
+  final bool isBusy;
 
   @override
   Widget build(BuildContext context) {
     final accent = ringColor ?? AppTheme.primary;
-    return Container(
+    final avatar = Container(
       width: size + ringWidth * 2,
       height: size + ringWidth * 2,
       decoration: BoxDecoration(
@@ -35,7 +41,60 @@ class ProfileAvatar extends StatelessWidget {
           ),
         ],
       ),
-      child: ClipOval(child: _buildImage()),
+      child: ClipOval(
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            _buildImage(),
+            if (isBusy)
+              ColoredBox(
+                color: Colors.black.withValues(alpha: 0.35),
+                child: const Center(
+                  child: SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.2,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+
+    if (onTap == null && !showEditBadge) return avatar;
+
+    return GestureDetector(
+      onTap: isBusy ? null : onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          avatar,
+          if (showEditBadge)
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  color: accent,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 2),
+                ),
+                child: const Icon(
+                  Icons.camera_alt_rounded,
+                  size: 13,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 

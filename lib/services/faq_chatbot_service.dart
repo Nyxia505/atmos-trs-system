@@ -44,18 +44,33 @@ class FaqChatbotService {
 
   static const welcomeEn =
       'Hey! 👋 I\'m Tala AI, your tourism assistant for Misamis Occidental.\n\n'
-      'Chat with me like a friend — ask how I am, or get help with the app, '
-      'destinations, QR check-in, and more. English, Filipino, or Bisaya is fine!';
+      'I can help with:\n'
+      '• App help — register, login, QR check-in, Explore, Profile\n'
+      '• Destinations — hours, fees, address, nearby hotels\n'
+      '• Travel tips for Misamis Occidental\n\n'
+      '────\n'
+      'Next steps:\n'
+      'Ask in English, Filipino, or Bisaya — even a simple "hi" works!';
 
   static const welcomeFil =
       'Kumusta! 👋 Ako si Tala AI, ang tourism assistant mo para sa Misamis Occidental.\n\n'
-      'Puwede tayong mag-usap ng natural — tanungin mo kung kumusta ako, o humingi ng tulong '
-      'sa app, destinations, QR check-in, at iba pa. English, Filipino, o Bisaya — okay lang!';
+      'Matutulungan kita sa:\n'
+      '• App help — register, login, QR check-in, Explore, Profile\n'
+      '• Destinations — hours, fees, address, nearby hotels\n'
+      '• Travel tips sa Misamis Occidental\n\n'
+      '────\n'
+      'Next steps:\n'
+      'Magtanong sa English, Filipino, o Bisaya — kahit "hi" okay!';
 
   static const welcomeCeb =
       'Kumusta! 👋 Ako si Tala AI, ang imong tourism assistant sa Misamis Occidental.\n\n'
-      'Puwede ta mag-storya nga natural — pangutan-a ko kung kumusta ko, o pangayo og tabang '
-      'sa app, destinations, QR check-in, ug uban pa. English, Filipino, o Bisaya — okay ra!';
+      'Makatabang ko sa:\n'
+      '• App help — register, login, QR check-in, Explore, Profile\n'
+      '• Destinations — hours, fees, address, nearby hotels\n'
+      '• Travel tips sa Misamis Occidental\n\n'
+      '────\n'
+      'Next steps:\n'
+      'Pangutana sa English, Filipino, o Bisaya — bisan "hi" okay ra!';
 
   static List<String> get suggestedQuestions => [
         'Bless Amare entrance fee',
@@ -305,18 +320,31 @@ class FaqChatbotService {
         lang: lang,
         en:
             'Misamis Occidental has beaches, heritage sites, resorts, and municipalities '
-            'to explore. Open Home → Discover in ATMOS-TRS for featured destinations with '
-            'opening hours, fees, addresses, and nearby hotels & restaurants. '
+            'to explore.\n\n'
+            'In the app:\n'
+            '• Open Home → Discover for featured destinations\n'
+            '• See opening hours, fees, and addresses\n'
+            '• Browse nearby hotels & restaurants\n\n'
+            '────\n'
+            'Next steps:\n'
             'Ask me something specific like "Bless Amare entrance fee" or "AMORAP address".',
         fil:
-            'May beaches, heritage sites, resorts, at municipalities ang Misamis Occidental. '
-            'Buksan ang Home → Discover sa ATMOS-TRS para sa featured destinations na may '
-            'opening hours, fees, address, at nearby hotels & restaurants. '
+            'May beaches, heritage sites, resorts, at municipalities ang Misamis Occidental.\n\n'
+            'Sa app:\n'
+            '• Buksan ang Home → Discover para sa featured destinations\n'
+            '• Tingnan ang opening hours, fees, at address\n'
+            '• I-browse ang nearby hotels & restaurants\n\n'
+            '────\n'
+            'Next steps:\n'
             'Tanungin ako tulad ng "Bless Amare entrance fee" o "AMORAP address".',
         ceb:
-            'Naay beaches, heritage sites, resorts, ug municipalities ang Misamis Occidental. '
-            'Ablihi ang Home → Discover sa ATMOS-TRS para sa featured destinations nga naay '
-            'opening hours, fees, address, ug nearby hotels & restaurants. '
+            'Naay beaches, heritage sites, resorts, ug municipalities ang Misamis Occidental.\n\n'
+            'Sa app:\n'
+            '• Ablihi ang Home → Discover para sa featured destinations\n'
+            '• Tan-awa ang opening hours, fees, ug address\n'
+            '• Browse sa nearby hotels & restaurants\n\n'
+            '────\n'
+            'Next steps:\n'
             'Pangutana ko sama sa "Bless Amare entrance fee" o "AMORAP address".',
       );
     }
@@ -389,14 +417,20 @@ class FaqChatbotService {
     return _localized(
       lang: lang,
       en:
-          'I don\'t have verified $topicEn for that request right now. '
-          '$tipEn You may also contact the local tourism office in Misamis Occidental.',
+          'I don\'t have verified $topicEn for that request right now.\n\n'
+          'What you can do:\n'
+          '• $tipEn\n'
+          '• Contact the local tourism office in Misamis Occidental',
       fil:
-          'Wala akong verified na $topicFil para sa tanong na ito ngayon. '
-          '$tipFil Puwede mo ring kontakin ang local tourism office sa Misamis Occidental.',
+          'Wala akong verified na $topicFil para sa tanong na ito ngayon.\n\n'
+          'Pwede mong gawin:\n'
+          '• $tipFil\n'
+          '• Kontakin ang local tourism office sa Misamis Occidental',
       ceb:
-          'Wala koy verified nga $topicCeb para ani nga pangutana karon. '
-          '$tipCeb Puwede usab nimo kontakon ang local tourism office sa Misamis Occidental.',
+          'Wala koy verified nga $topicCeb para ani nga pangutana karon.\n\n'
+          'Pwede nimo buhaton:\n'
+          '• $tipCeb\n'
+          '• Kontaka ang local tourism office sa Misamis Occidental',
     );
   }
 
@@ -582,17 +616,26 @@ class FaqChatbotService {
     return _localized(
       lang: lang,
       en:
-          'Sorry — I only assist with the ATMOS-TRS system and tourism-related '
-          'questions 😊 Try asking about registration, login, QR check-in, Explore, '
-          'VR Tour, destinations, entrance fees, or nearby hotels.',
+          'Sorry — I only assist with ATMOS-TRS and tourism questions 😊\n\n'
+          'Try asking about:\n'
+          '• Registration or login\n'
+          '• QR check-in\n'
+          '• Explore / VR Tour\n'
+          '• Destinations, entrance fees, or nearby hotels',
       fil:
-          'Pasensya na — tumutulong lang ako sa ATMOS-TRS system at mga tanong tungkol '
-          'sa tourism 😊 Subukang magtanong tungkol sa registration, login, QR check-in, '
-          'Explore, VR Tour, destinations, entrance fees, o nearby hotels.',
+          'Pasensya na — tumutulong lang ako sa ATMOS-TRS at tourism 😊\n\n'
+          'Subukang magtanong tungkol sa:\n'
+          '• Registration o login\n'
+          '• QR check-in\n'
+          '• Explore / VR Tour\n'
+          '• Destinations, entrance fees, o nearby hotels',
       ceb:
-          'Pasayloa ko — motabang lang ko sa ATMOS-TRS system ug mga pangutana bahin '
-          'sa tourism 😊 Sulayi pangutana bahin sa registration, login, QR check-in, '
-          'Explore, VR Tour, destinations, entrance fees, o nearby hotels.',
+          'Pasayloa ko — motabang lang ko sa ATMOS-TRS ug tourism 😊\n\n'
+          'Sulayi pangutana bahin sa:\n'
+          '• Registration o login\n'
+          '• QR check-in\n'
+          '• Explore / VR Tour\n'
+          '• Destinations, entrance fees, o nearby hotels',
     );
   }
 

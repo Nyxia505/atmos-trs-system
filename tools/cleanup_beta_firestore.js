@@ -18,18 +18,26 @@ function isDummyTourist(data, id) {
   const email = (data.email || '').toString().toLowerCase();
   return (
     uid.startsWith('dummy_tourist_') ||
+    uid.startsWith('demo_analytics_') ||
     email.includes('@dummy-tourist.test') ||
-    data.source === 'dummy_seed'
+    email.includes('@misocc-demo-analytics.ph') ||
+    data.source === 'dummy_seed' ||
+    data.seedTag === 'dashboard_analytics_v1' ||
+    data.demoAnalytics === true
   );
 }
 
 function isDummyCheckIn(data) {
-  const uid = (data.userId || data.tourist_id || '').toString();
+  const uid = (data.userId || data.tourist_id || data.user_id || '').toString();
   const email = (data.touristEmail || data.email || '').toString().toLowerCase();
   return (
     data.source === 'dummy_seed' ||
+    data.seedTag === 'dashboard_analytics_v1' ||
+    data.demoAnalytics === true ||
     uid.startsWith('dummy_tourist_') ||
-    email.includes('@dummy-tourist.test')
+    uid.startsWith('demo_analytics_') ||
+    email.includes('@dummy-tourist.test') ||
+    email.includes('@misocc-demo-analytics.ph')
   );
 }
 

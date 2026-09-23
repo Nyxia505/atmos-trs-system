@@ -4,13 +4,20 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-/// VR tours are mobile-app only. On web, tourists are prompted to download the app.
+/// VR access policy (option B): playable in the **mobile ATMOS app only**.
+///
+/// - Landing + tourist web: always prompt to install the app (no playable VR).
+/// - Tourism dashboard staff preview may pass [ensureAllowed] `allowWeb: true`.
 class VrDownloadAppPrompt {
   VrDownloadAppPrompt._();
 
   static const double _maxDialogWidth = 340;
 
   static bool get blocksVrOnWeb => kIsWeb;
+
+  /// Button / chip label for tourist VR CTAs.
+  static String ctaLabel({String mobileLabel = 'Launch VR Tour'}) =>
+      blocksVrOnWeb ? 'Get the ATMOS app' : mobileLabel;
 
   /// Returns `true` when VR may open. On web (without [allowWeb]), shows the
   /// download prompt and returns `false`.

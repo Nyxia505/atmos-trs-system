@@ -1,4 +1,4 @@
-﻿import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'dart:async' show unawaited;
@@ -15,6 +15,7 @@ import 'package:atmos_trs_system/services/tourist_spots_repository.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart'
     as activity;
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
+import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
 import 'package:atmos_trs_system/screens/municipality_map_and_spots_screen.dart';
 import 'package:atmos_trs_system/features/explore/explore_screen.dart'
     show kMockSpots;
@@ -33,10 +34,12 @@ import 'package:atmos_trs_system/data/misamis_occidental_display_spots.dart';
 import 'package:atmos_trs_system/data/tourist_spot_image_catalog.dart';
 import 'package:atmos_trs_system/widgets/recent_reviews_section.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
+import 'package:atmos_trs_system/widgets/tourist_stays_sheet.dart';
 import 'package:atmos_trs_system/utils/visit_record_image_resolver.dart';
 import 'package:atmos_trs_system/services/tourist_activity_firestore_sync.dart';
 import 'package:atmos_trs_system/features/home/widgets/app_faq_sheet.dart';
 import 'package:atmos_trs_system/utils/maps_directions_launcher.dart';
+import 'package:atmos_trs_system/utils/municipality_helper.dart';
 
 const double _kHomeCenterPanelMaxWidth = 480;
 
@@ -217,9 +220,25 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_userProfile == null) {
       _restoreProfileFromDisk();
     }
+    activity.UserActivityService.visitedSpotsRevision
+        .addListener(_onVisitedSpotsChanged);
     unawaited(_loadCachedStats());
     _loadAllData();
     _fetchWeather();
+  }
+
+  void _onVisitedSpotsChanged() {
+    if (!mounted) return;
+    unawaited(_reloadVisitedUi());
+  }
+
+  Future<void> _reloadVisitedUi() async {
+    await activity.UserActivityService.syncVisitedSpotsFromQrCheckins();
+    if (!mounted) return;
+    await Future.wait([
+      _loadUserStats(),
+      _loadRecentVisits(skipSync: true),
+    ]);
   }
 
   /// Instantly paints Visited / Badges / Days from on-device cache.
@@ -288,8 +307,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (next == _currentFeaturedIndex) return;
     _featuredController.animateToPage(
       next,
-      duration: const Duration(milliseconds: 320),
-      curve: Curves.easeOutCubic,
+      duration: const Duration(milliseconds: 520),
+      curve: Curves.easeInOutCubic,
     );
   }
 
@@ -348,6 +367,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// Cloud merge + check-in sync — updates stats when done, without blocking first paint.
   Future<void> _refreshJourneyFromCloud(String uid) async {
+    await activity.UserActivityService.bindToUser(uid);
     TouristActivityFirestoreSync.resetMergeCache();
     await TouristActivityFirestoreSync.mergeFromCloud(uid);
     if (!mounted) return;
@@ -486,6 +506,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String? _resolveImageForVisitRecord(activity.VisitRecord entry) {
     return VisitRecordImageResolver.resolve(entry, spots: _spotsForVisitImages);
+  }
+
+  String? _municipalityIdForVisit(activity.VisitRecord entry) {
+    final sid = entry.spotId.trim().toLowerCase();
+    if (sid.startsWith('lgu_')) {
+      final mid = sid.substring(4);
+      return mid.isEmpty ? null : mid;
+    }
+    final fromName = getMunicipalityIdFromName(entry.spotName);
+    if (fromName.isNotEmpty) return fromName;
+    final fromCategory = getMunicipalityIdFromName(entry.category);
+    return fromCategory.isEmpty ? null : fromCategory;
   }
 
   Future<List<activity.VisitRecord>> _syncAndEnrichVisits({bool skipSync = false}) async {
@@ -651,6 +683,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    activity.UserActivityService.visitedSpotsRevision
+        .removeListener(_onVisitedSpotsChanged);
     _featuredController.dispose();
     super.dispose();
   }
@@ -890,10 +924,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: _buildStatCard(
-                      'Days',
-                      _userStats.daysAsTourist.toString(),
-                      Icons.calendar_today_rounded,
+                      'Stays',
+                      '›',
+                      Icons.hotel_rounded,
                       accent,
+                      onTap: () => TouristStaysSheet.show(context),
                     ),
                   ),
                 ],
@@ -1540,9 +1575,10 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
 
     Future<List<activity.VisitRecord>> loadVisits() async {
-      final visits = await _syncAndEnrichVisits();
+      // Always re-sync from QR check-ins so Visited matches places you checked in.
+      final visits = await _syncAndEnrichVisits(skipSync: false);
       if (!mounted) return visits;
-      final stats = await activity.UserActivityService.getUserStats();
+      final stats = await activity.UserActivityService.getUserStatsCached();
       if (!mounted) return visits;
       setState(() {
         _recentVisits = visits;
@@ -1615,6 +1651,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   _resolveImageForVisitRecord(visit),
                   width: 50,
                   height: 50,
+                  spotId: visit.spotId,
+                  municipalityId: _municipalityIdForVisit(visit),
+                  spotName: visit.spotName,
+                  category: visit.category,
                 ),
               ),
               const SizedBox(width: 12),
@@ -2666,7 +2706,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           );
                         },
                         icon: const Icon(Icons.vrpano_rounded, size: 18),
-                        label: const Text('Launch VR Tour'),
+                        label: Text(VrDownloadAppPrompt.ctaLabel()),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: AppTheme.primary,
                           side: BorderSide(color: AppTheme.primary),
@@ -3160,7 +3200,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     top: Radius.circular(16),
                   ),
                   child: heroImage != null && heroImage.isNotEmpty
-                      ? _buildSpotImage(heroImage, width: cardW, height: imageH)
+                      ? _buildSpotImage(
+                          heroImage,
+                          width: cardW,
+                          height: imageH,
+                          spotId: visit.spotId,
+                          municipalityId: _municipalityIdForVisit(visit),
+                          spotName: visit.spotName,
+                          category: visit.category,
+                        )
                       : Container(
                           width: cardW,
                           height: imageH,

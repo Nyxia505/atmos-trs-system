@@ -30,8 +30,8 @@ class WebGlassAuthScaffold extends StatefulWidget {
     this.backgroundAssets,
     this.maxWidth = 440,
     this.padding = const EdgeInsets.symmetric(horizontal: 32, vertical: 40),
-    this.slideInterval = const Duration(seconds: 5),
-    this.crossfadeDuration = const Duration(milliseconds: 900),
+    this.slideInterval = const Duration(seconds: 6),
+    this.crossfadeDuration = const Duration(milliseconds: 1400),
   });
 
   final Widget child;
@@ -53,10 +53,18 @@ class WebGlassAuthScaffold extends StatefulWidget {
   State<WebGlassAuthScaffold> createState() => _WebGlassAuthScaffoldState();
 }
 
-class _WebGlassAuthScaffoldState extends State<WebGlassAuthScaffold> {
-  int _index = 0;
+class _WebGlassAuthScaffoldState extends State<WebGlassAuthScaffold>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _crossfade;
+  late final Animation<double> _fadeIn;
   Timer? _timer;
   List<String> _images = const [];
+
+  /// Fully visible base layer.
+  int _baseIndex = 0;
+
+  /// Incoming layer that fades in over [base].
+  int _topIndex = 0;
 
   List<String> _resolveImageList() {
     final explicit = widget.backgroundAssets;
@@ -75,6 +83,15 @@ class _WebGlassAuthScaffoldState extends State<WebGlassAuthScaffold> {
   @override
   void initState() {
     super.initState();
+    _crossfade = AnimationController(
+      vsync: this,
+      duration: widget.crossfadeDuration,
+      value: 1,
+    );
+    _fadeIn = CurvedAnimation(
+      parent: _crossfade,
+      curve: Curves.easeInOutCubic,
+    );
     _images = _resolveImageList();
     _startTimerIfNeeded();
   }
@@ -82,11 +99,16 @@ class _WebGlassAuthScaffoldState extends State<WebGlassAuthScaffold> {
   @override
   void didUpdateWidget(covariant WebGlassAuthScaffold oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.crossfadeDuration != widget.crossfadeDuration) {
+      _crossfade.duration = widget.crossfadeDuration;
+    }
     if (oldWidget.backgroundAsset != widget.backgroundAsset ||
         oldWidget.backgroundAssets != widget.backgroundAssets ||
         oldWidget.slideInterval != widget.slideInterval) {
       _images = _resolveImageList();
-      _index = 0;
+      _baseIndex = 0;
+      _topIndex = 0;
+      _crossfade.value = 1;
       _startTimerIfNeeded();
     }
   }
@@ -94,7 +116,7 @@ class _WebGlassAuthScaffoldState extends State<WebGlassAuthScaffold> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _precacheAround(_index);
+    _precacheAround(_baseIndex);
   }
 
   void _startTimerIfNeeded() {
@@ -102,20 +124,36 @@ class _WebGlassAuthScaffoldState extends State<WebGlassAuthScaffold> {
     _timer = null;
     if (_images.length < 2) return;
     _timer = Timer.periodic(widget.slideInterval, (_) {
-      if (!mounted) return;
-      setState(() {
-        _index = (_index + 1) % _images.length;
-      });
-      _precacheAround(_index);
+      if (!mounted || _crossfade.isAnimating) return;
+      _advanceSlide();
     });
+  }
+
+  void _advanceSlide() {
+    if (_images.length < 2) return;
+    final next = (_topIndex + 1) % _images.length;
+    setState(() {
+      // Promote current top (or base if fade completed) to the under-layer.
+      _baseIndex = _topIndex;
+      _topIndex = next;
+    });
+    _crossfade.value = 0;
+    unawaited(_crossfade.forward());
+    _precacheAround(next);
   }
 
   void _precacheAround(int current) {
     if (!mounted || _images.isEmpty) return;
-    final next = (current + 1) % _images.length;
     final urls = <String>{
       SupabaseStorageConfig.resolve(_images[current]),
-      if (_images.length > 1) SupabaseStorageConfig.resolve(_images[next]),
+      if (_images.length > 1)
+        SupabaseStorageConfig.resolve(
+          _images[(current + 1) % _images.length],
+        ),
+      if (_images.length > 2)
+        SupabaseStorageConfig.resolve(
+          _images[(current + 2) % _images.length],
+        ),
     };
     for (final url in urls) {
       final provider = (url.startsWith('http://') || url.startsWith('https://'))
@@ -128,6 +166,7 @@ class _WebGlassAuthScaffoldState extends State<WebGlassAuthScaffold> {
   @override
   void dispose() {
     _timer?.cancel();
+    _crossfade.dispose();
     super.dispose();
   }
 
@@ -142,6 +181,7 @@ class _WebGlassAuthScaffoldState extends State<WebGlassAuthScaffold> {
           width: double.infinity,
           height: double.infinity,
           cacheWidth: cacheWidth,
+          gaplessPlayback: true,
           errorBuilder: (_, __, ___) => Container(
             color: AppTheme.brandOrange.withValues(alpha: 0.92),
           ),
@@ -155,6 +195,8 @@ class _WebGlassAuthScaffoldState extends State<WebGlassAuthScaffold> {
         width: double.infinity,
         height: double.infinity,
         cacheWidth: cacheWidth,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
         errorBuilder: (_, __, ___) => fallbackNetwork(),
       );
     }
@@ -166,6 +208,8 @@ class _WebGlassAuthScaffoldState extends State<WebGlassAuthScaffold> {
       width: double.infinity,
       height: double.infinity,
       cacheWidth: cacheWidth,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.medium,
       errorBuilder: (_, __, ___) => fallbackNetwork(),
     );
   }
@@ -181,24 +225,23 @@ class _WebGlassAuthScaffoldState extends State<WebGlassAuthScaffold> {
     final images = _images.isNotEmpty
         ? _images
         : kWebGlassAuthBackgroundSlideshow;
-    final current = images[_index % images.length];
+    final basePath = images[_baseIndex % images.length];
+    final topPath = images[_topIndex % images.length];
 
     return SizedBox.expand(
       child: Stack(
         fit: StackFit.expand,
         children: [
-          AnimatedSwitcher(
-            duration: widget.crossfadeDuration,
-            switchInCurve: Curves.easeInOut,
-            switchOutCurve: Curves.easeInOut,
-            transitionBuilder: (child, animation) {
-              return FadeTransition(opacity: animation, child: child);
-            },
-            child: SizedBox.expand(
-              key: ValueKey<String>('bg-$current'),
-              child: _buildBackgroundImage(current, cacheWidth),
+          if (images.length < 2)
+            _buildBackgroundImage(basePath, cacheWidth)
+          else ...[
+            // Dual-layer crossfade: base stays solid while top fades in.
+            _buildBackgroundImage(basePath, cacheWidth),
+            FadeTransition(
+              opacity: _fadeIn,
+              child: _buildBackgroundImage(topPath, cacheWidth),
             ),
-          ),
+          ],
           Container(color: Colors.black.withValues(alpha: 0.28)),
           Center(
             child: SingleChildScrollView(

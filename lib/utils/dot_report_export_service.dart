@@ -4,7 +4,9 @@ import 'package:http/http.dart' as http;
 import 'package:atmos_trs_system/config/supabase_report_templates_config.dart';
 import 'package:atmos_trs_system/utils/checkin_report_summary_csv.dart';
 import 'package:atmos_trs_system/utils/dae3_aggregates.dart';
+import 'package:atmos_trs_system/utils/dot_report_preview.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
+import 'package:atmos_trs_system/utils/establishment_stay_report_query.dart';
 
 /// Result of a filled (or blank) DOT template export.
 class DotReportExportResult {
@@ -74,6 +76,60 @@ class DotReportExportService {
     return fetchTemplateBytes(template.publicUrl);
   }
 
+  Future<List<int>> downloadCatalogBlank(DotFormCatalogEntry form) {
+    return fetchTemplateBytes(form.publicUrl);
+  }
+
+  /// Primary Excel path for Analytics — filled / best-effort for every catalog form.
+  Future<DotReportExportResult> exportCatalog({
+    required DotFormCatalogEntry form,
+    required DateTime startDate,
+    required DateTime endDate,
+    required List<Map<String, dynamic>> checkIns,
+    required List<Map<String, dynamic>> tourists,
+    required List<DotVar2SpotCatalogEntry> catalogSpots,
+    required String scopeLabel,
+    required String scopeSlug,
+    DateTime? Function(Map<String, dynamic> checkIn)? parseTimestamp,
+    List<Map<String, dynamic>> confirmedStays = const [],
+  }) async {
+    final type = form.reportType;
+    if (type != null && form.fillMode == DotFormFillMode.atmosFill) {
+      return exportFilled(
+        type: type,
+        startDate: startDate,
+        endDate: endDate,
+        checkIns: checkIns,
+        tourists: tourists,
+        catalogSpots: catalogSpots,
+        scopeLabel: scopeLabel,
+        scopeSlug: scopeSlug,
+        parseTimestamp: parseTimestamp,
+        confirmedStays: confirmedStays,
+      );
+    }
+
+    final preview = buildDotReportPreview(
+      form: form,
+      startDate: startDate,
+      endDate: endDate,
+      checkIns: checkIns,
+      tourists: tourists,
+      catalogSpots: catalogSpots,
+      scopeLabel: scopeLabel,
+      parseTimestamp: parseTimestamp,
+      confirmedStays: confirmedStays,
+    );
+    return _workbookFromPreview(
+      form: form,
+      preview: preview,
+      scopeLabel: scopeLabel,
+      scopeSlug: scopeSlug,
+      startDate: startDate,
+      endDate: endDate,
+    );
+  }
+
   Future<DotReportExportResult> exportFilled({
     required DotReportType type,
     required DateTime startDate,
@@ -84,9 +140,8 @@ class DotReportExportService {
     required String scopeLabel,
     required String scopeSlug,
     DateTime? Function(Map<String, dynamic> checkIn)? parseTimestamp,
+    List<Map<String, dynamic>> confirmedStays = const [],
   }) async {
-    final templateBytes = await fetchTemplateBytes(type.publicUrl);
-
     final filtered = _checkInsInRange(
       checkIns,
       startDate,
@@ -96,9 +151,19 @@ class DotReportExportService {
     final touristById = _indexTourists(tourists);
     // Join signup profiles onto check-ins so sex / residence / origin fill.
     final enriched = _attachTouristProfiles(filtered, touristById);
+    final stayEvents = _attachTouristProfiles(
+      _checkInsInRange(
+        confirmedStays,
+        startDate,
+        endDate,
+        parseTimestamp: parseStayEventTimestamp,
+      ),
+      touristById,
+    );
 
     switch (type) {
       case DotReportType.var2VisitorRecord:
+        final templateBytes = await fetchTemplateBytes(type.publicUrl);
         return _fillVar2(
           templateBytes: templateBytes,
           filtered: enriched,
@@ -109,9 +174,11 @@ class DotReportExportService {
           endDate: endDate,
         );
       case DotReportType.dae3FormA:
+        final templateBytes = await fetchTemplateBytes(type.publicUrl);
         return _fillDae3FormA(
           templateBytes: templateBytes,
           filtered: enriched,
+          stayEvents: stayEvents,
           touristById: touristById,
           scopeLabel: scopeLabel,
           scopeSlug: scopeSlug,
@@ -119,16 +186,91 @@ class DotReportExportService {
           endDate: endDate,
         );
       case DotReportType.dae3b2Domestic:
+        final templateBytes = await fetchTemplateBytes(type.publicUrl);
         return _fillDae3b2Domestic(
           templateBytes: templateBytes,
-          filtered: enriched,
+          filtered: stayEvents.isNotEmpty ? stayEvents : enriched,
           touristById: touristById,
+          scopeLabel: scopeLabel,
+          scopeSlug: scopeSlug,
+          startDate: startDate,
+          endDate: endDate,
+          fromConfirmedStays: stayEvents.isNotEmpty,
+        );
+      case DotReportType.var4DomesticTravelers:
+      case DotReportType.var5InternationalVisitors:
+      case DotReportType.dae3bFormAInternational:
+        final form = type.catalogEntry;
+        final preview = buildDotReportPreview(
+          form: form,
+          startDate: startDate,
+          endDate: endDate,
+          checkIns: checkIns,
+          tourists: tourists,
+          catalogSpots: catalogSpots,
+          scopeLabel: scopeLabel,
+          parseTimestamp: parseTimestamp,
+          confirmedStays: confirmedStays,
+        );
+        return _workbookFromPreview(
+          form: form,
+          preview: preview,
           scopeLabel: scopeLabel,
           scopeSlug: scopeSlug,
           startDate: startDate,
           endDate: endDate,
         );
     }
+  }
+
+  DotReportExportResult _workbookFromPreview({
+    required DotFormCatalogEntry form,
+    required DotReportPreviewTable preview,
+    required String scopeLabel,
+    required String scopeSlug,
+    required DateTime startDate,
+    required DateTime endDate,
+  }) {
+    final excel = Excel.createExcel();
+    final data = excel['ATMOS_DATA'];
+    _removeSheetIfExists(excel, 'Sheet1');
+    _writeHeaderRow(data, 0, [
+      form.code,
+      form.title,
+      scopeLabel,
+      '${startDate.toIso8601String().split('T').first} → ${endDate.toIso8601String().split('T').first}',
+    ]);
+    _writeHeaderRow(data, 1, [preview.summaryLine]);
+    _writeHeaderRow(data, 3, preview.headers);
+    for (var i = 0; i < preview.rows.length; i++) {
+      _writeRow(data, 4 + i, preview.rows[i]);
+    }
+    if (preview.footer != null) {
+      _writeRow(data, 4 + preview.rows.length, preview.footer!);
+    }
+    final gaps = excel['ATMOS_GAPS'];
+    final gapList = preview.gaps.isEmpty
+        ? <String>[
+            'Best-effort ATMOS workbook — official cell layout not fully mapped yet.',
+          ]
+        : List<String>.from(preview.gaps);
+    _writeGapsSheet(gaps, gapList);
+
+    final s =
+        '${startDate.year}${startDate.month.toString().padLeft(2, '0')}${startDate.day.toString().padLeft(2, '0')}';
+    final e =
+        '${endDate.year}${endDate.month.toString().padLeft(2, '0')}${endDate.day.toString().padLeft(2, '0')}';
+    final slug = scopeSlug.trim().isEmpty ? 'report' : scopeSlug.trim();
+    final filename = 'ATMOS_${form.id}_${slug}_${s}_$e.xlsx';
+    final bytes = excel.encode() ?? <int>[];
+
+    return DotReportExportResult(
+      bytes: bytes,
+      filename: filename,
+      gaps: gapList,
+      summary: preview.summaryLine,
+      checkInsProcessed: preview.rows.length,
+    );
   }
 
   DotReportExportResult _fillVar2({
@@ -331,14 +473,15 @@ class DotReportExportService {
   DotReportExportResult _fillDae3FormA({
     required List<int> templateBytes,
     required List<Map<String, dynamic>> filtered,
+    required List<Map<String, dynamic>> stayEvents,
     required Map<String, Map<String, dynamic>> touristById,
     required String scopeLabel,
     required String scopeSlug,
     required DateTime startDate,
     required DateTime endDate,
   }) {
-    // Official DAE-3 template is AE monthly record (not country Form A).
-    // Fill from check-ins: guests checked-in per spot × month; nights/rooms blank.
+    // Official DAE-3 template is AE monthly record.
+    // Prefer confirmed stays; fall back to attraction/LGU check-in proxy.
     final excel = _decodeOrEmpty(templateBytes);
     final targetName = excel.tables.keys.contains('DAE3')
         ? 'DAE3'
@@ -352,8 +495,9 @@ class DotReportExportService {
       }
     }
 
-    // Group: municipality|year|month|spot → count (official AE monthly record).
-    final rows = aggregateDae3FromCheckIns(
+    final fromStays = stayEvents.isNotEmpty;
+    final rows = aggregateDae3PreferringStays(
+      stayEvents: stayEvents,
       checkIns: filtered,
       scopeLabel: scopeLabel,
     );
@@ -371,24 +515,31 @@ class DotReportExportService {
       _setCellValue(sheet, r, 4, _monthName(row.month));
       _setCellValue(sheet, r, 5, row.aeId);
       _setCellValue(sheet, r, 6, row.typeClass);
-      // Rooms / nights / occupancy not collected — leave blank.
-      _setCellValue(sheet, r, 7, null);
+      _setCellValue(sheet, r, 7, row.roomsAvailable);
       _setCellValue(sheet, r, 8, row.guestsCheckedIn);
-      _setCellValue(sheet, r, 9, null);
-      _setCellValue(sheet, r, 10, null);
+      _setCellValue(sheet, r, 9, row.guestNights);
+      _setCellValue(sheet, r, 10, row.roomsOccupied);
     }
 
     _removeSheetIfExists(excel, 'ATMOS_GAPS');
     final gaps = excel['ATMOS_GAPS'];
     final gapList = <String>[
-      'DAE-3 sheet filled from QR check-ins (Total Guest Checked-In = check-in count).',
-      'AE-ID uses tourist spot name as proxy — not accommodation_establishments registry.',
+      if (fromStays)
+        'DAE-3 filled from confirmed establishment stays (pending excluded).'
+      else
+        'No confirmed AE stays in range — filled from QR check-ins as labeled proxy.',
+      if (!fromStays)
+        'AE-ID uses tourist spot name as proxy — not accommodation_establishments registry.',
       'Google Form / http(s) spot labels are excluded from AE-ID rows.',
-      'Total Rooms, Guest Nights, Rooms Occupied left blank (not collected in ATMOS).',
-      'Overnight vs day-trip not collected.',
+      if (fromStays)
+        'Type/class from AE category; rooms available from AE roomCount snapshot on stay.'
+      else
+        'Total rooms available left blank (monthly inventory not linked yet).',
+      if (fromStays)
+        'Guest nights = partySize × nightsStayed; rooms occupied summed from staff confirm.',
       'Base file: ${DotReportType.dae3FormA.objectFilename} (Supabase bucket "${SupabaseReportTemplatesConfig.bucket}").',
       if (rows.length > capacity)
-        'Overflow: ${rows.length - capacity} spot-month rows omitted (template capacity $capacity).',
+        'Overflow: ${rows.length - capacity} AE-month rows omitted (template capacity $capacity).',
     ];
     _writeGapsSheet(gaps, gapList);
 
@@ -400,9 +551,10 @@ class DotReportExportService {
       bytes: bytes,
       filename: filename,
       gaps: gapList,
-      summary:
-          'DAE-3 filled from ${filtered.length} check-ins (${written.length} rows)',
-      checkInsProcessed: filtered.length,
+      summary: fromStays
+          ? 'DAE-3 filled from ${stayEvents.length} confirmed stays (${written.length} rows)'
+          : 'DAE-3 filled from ${filtered.length} check-ins (${written.length} rows)',
+      checkInsProcessed: fromStays ? stayEvents.length : filtered.length,
     );
   }
 
@@ -414,9 +566,10 @@ class DotReportExportService {
     required String scopeSlug,
     required DateTime startDate,
     required DateTime endDate,
+    bool fromConfirmedStays = false,
   }) {
     // Official DAE3B.2 uses styles the excel package cannot decode — build a
-    // check-in-filled workbook with the same sheet titles instead.
+    // filled workbook with the same sheet titles instead.
     final fetchedOfficialBytes = templateBytes.length;
     final byOriginMonth = <String, Map<String, int>>{};
     final bySex = <String, int>{'Male': 0, 'Female': 0, 'Unknown': 0};
@@ -433,32 +586,94 @@ class DotReportExportService {
             final uid = _userIdFromCheckIn(c);
             return uid == null ? null : touristById[uid];
           })();
-      if (tourist == null) {
-        missingProfile++;
-        continue;
+
+      late final int weight;
+      late final String origin;
+      late final int addMale;
+      late final int addFemale;
+
+      if (fromConfirmedStays) {
+        final fil = _countOrZero(c['filipinoCount']);
+        final for_ = _countOrZero(c['foreignCount']);
+        final hasResidency = fil + for_ > 0;
+        weight = hasResidency
+            ? fil
+            : ((tourist != null && _isDomesticTourist(tourist))
+                ? _partyWeight(c)
+                : 0);
+        if (weight <= 0) {
+          foreignSkipped++;
+          continue;
+        }
+        if (tourist == null) {
+          missingProfile++;
+          continue;
+        }
+        origin = _domesticOriginLabel(tourist);
+        if (origin.isEmpty) {
+          missingOrigin++;
+          continue;
+        }
+        final m = _countOrZero(c['maleCount']);
+        final f = _countOrZero(c['femaleCount']);
+        if (m + f > 0) {
+          final party = _partyWeight(c);
+          if (hasResidency && for_ > 0 && party > 0) {
+            addMale = ((m * weight) / party).round();
+            addFemale = ((f * weight) / party).round();
+          } else {
+            addMale = m;
+            addFemale = f;
+          }
+        } else {
+          final sex = (tourist['sex']?.toString() ?? '').trim();
+          if (sex.toLowerCase().startsWith('m')) {
+            addMale = weight;
+            addFemale = 0;
+          } else if (sex.toLowerCase().startsWith('f')) {
+            addMale = 0;
+            addFemale = weight;
+          } else {
+            addMale = 0;
+            addFemale = 0;
+            bySex['Unknown'] = bySex['Unknown']! + weight;
+          }
+        }
+      } else {
+        if (tourist == null) {
+          missingProfile++;
+          continue;
+        }
+        if (!_isDomesticTourist(tourist)) {
+          foreignSkipped++;
+          continue;
+        }
+        origin = _domesticOriginLabel(tourist);
+        if (origin.isEmpty) {
+          missingOrigin++;
+          continue;
+        }
+        weight = 1;
+        final sex = (tourist['sex']?.toString() ?? '').trim();
+        if (sex.toLowerCase().startsWith('m')) {
+          addMale = 1;
+          addFemale = 0;
+        } else if (sex.toLowerCase().startsWith('f')) {
+          addMale = 0;
+          addFemale = 1;
+        } else {
+          addMale = 0;
+          addFemale = 0;
+          bySex['Unknown'] = bySex['Unknown']! + 1;
+        }
       }
-      if (!_isDomesticTourist(tourist)) {
-        foreignSkipped++;
-        continue;
-      }
-      final origin = _domesticOriginLabel(tourist);
-      if (origin.isEmpty) {
-        missingOrigin++;
-        continue;
-      }
+
       final monthKey = _monthKeyFromCheckIn(c);
       byOriginMonth.putIfAbsent(origin, () => <String, int>{});
       byOriginMonth[origin]![monthKey] =
-          (byOriginMonth[origin]![monthKey] ?? 0) + 1;
-
-      final sex = (tourist['sex']?.toString() ?? '').trim();
-      if (sex.toLowerCase().startsWith('m')) {
-        bySex['Male'] = bySex['Male']! + 1;
-      } else if (sex.toLowerCase().startsWith('f')) {
-        bySex['Female'] = bySex['Female']! + 1;
-      } else {
-        bySex['Unknown'] = bySex['Unknown']! + 1;
-      }
+          (byOriginMonth[origin]![monthKey] ?? 0) + weight;
+      bySex['Male'] = bySex['Male']! + addMale;
+      bySex['Female'] = bySex['Female']! + addFemale;
     }
 
     final months = _monthKeysBetween(startDate, endDate);
@@ -467,7 +682,11 @@ class DotReportExportService {
     excel.rename(defaultName, 'DAE3B.2 (Monthly)');
     final sheet = excel['DAE3B.2 (Monthly)'];
 
-    _writeHeaderRow(sheet, 0, ['FORM: DAE 3B.2 Domestic — filled from ATMOS check-ins']);
+    _writeHeaderRow(sheet, 0, [
+      fromConfirmedStays
+          ? 'FORM: DAE 3B.2 Domestic — filled from confirmed AE stays'
+          : 'FORM: DAE 3B.2 Domestic — filled from ATMOS check-ins',
+    ]);
     _writeHeaderRow(sheet, 1, ['Scope', scopeLabel]);
     _writeHeaderRow(sheet, 2, [
       'Period',
@@ -509,13 +728,17 @@ class DotReportExportService {
 
     final gapsSheet = excel['ATMOS_GAPS'];
     final gapList = <String>[
+      if (fromConfirmedStays)
+        'Filled from confirmed establishment stays '
+            '(Filipino count for domestic weight; Male/Female counts for sex).'
+      else
+        'No confirmed AE stays — filled from attraction/LGU check-ins as proxy.',
       'Official DAE3B.2 template ($fetchedOfficialBytes bytes) could not be merged '
-          'by the Excel library — this file is filled from check-ins with equivalent columns.',
+          'by the Excel library — this file is filled with equivalent columns.',
       'Download the blank official template separately if you need the exact DOT layout.',
       'PSA region not collected.',
-      'Overnight vs day-trip not collected.',
       'Missing tourist profile: $missingProfile',
-      'Foreign profiles skipped: $foreignSkipped',
+      'Foreign / non-domestic skipped: $foreignSkipped',
       'Domestic with empty province/city: $missingOrigin',
     ];
     _writeGapsSheet(gapsSheet, gapList);
@@ -528,10 +751,27 @@ class DotReportExportService {
       bytes: bytes,
       filename: filename,
       gaps: gapList,
-      summary:
-          'DAE 3B.2 filled from check-ins (${origins.length} origins, ${filtered.length} visits)',
+      summary: fromConfirmedStays
+          ? 'DAE 3B.2 filled from confirmed stays (${origins.length} origins, ${filtered.length} stays)'
+          : 'DAE 3B.2 filled from check-ins (${origins.length} origins, ${filtered.length} visits)',
       checkInsProcessed: filtered.length,
     );
+  }
+
+  int _partyWeight(Map<String, dynamic> event) {
+    final p = event['partySize'];
+    if (p is int && p > 0) return p;
+    if (p is num && p.toInt() > 0) return p.toInt();
+    return int.tryParse(p?.toString() ?? '') ?? 1;
+  }
+
+  int _countOrZero(dynamic v) {
+    if (v is int) return v < 0 ? 0 : v;
+    if (v is num) {
+      final n = v.toInt();
+      return n < 0 ? 0 : n;
+    }
+    return int.tryParse(v?.toString() ?? '') ?? 0;
   }
 
   List<Map<String, dynamic>> _attachTouristProfiles(

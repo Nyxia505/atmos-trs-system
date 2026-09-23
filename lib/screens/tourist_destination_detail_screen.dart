@@ -7,6 +7,7 @@ import 'package:atmos_trs_system/models/tourist_destination_detail.dart';
 import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
 import 'package:atmos_trs_system/screens/spot_reviews_screen.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
+import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
 import 'package:atmos_trs_system/services/spot_review_service.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
@@ -721,7 +722,9 @@ class _TouristDestinationDetailScreenState
             child: FilledButton.icon(
               onPressed: _startVrTour,
               icon: const Icon(Icons.play_arrow_rounded),
-              label: const Text('Start VR Tour'),
+              label: Text(
+                VrDownloadAppPrompt.ctaLabel(mobileLabel: 'Start VR Tour'),
+              ),
               style: FilledButton.styleFrom(
                 backgroundColor: accent,
                 foregroundColor: Colors.white,

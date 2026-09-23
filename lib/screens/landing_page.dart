@@ -23,6 +23,7 @@ import 'package:atmos_trs_system/services/landing_intent_service.dart';
 import 'package:atmos_trs_system/services/login_flow_service.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
 import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
+import 'package:atmos_trs_system/widgets/qr_camera_get_app_banner.dart';
 import 'package:atmos_trs_system/utils/logo_utils.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -344,6 +345,10 @@ class _LandingPageState extends State<LandingPage> {
     _pushAuthRoute('/signup');
   }
 
+  void _continueCameraQrCheckInOnWeb() {
+    Navigator.of(context).pushNamed('/qr-welcome');
+  }
+
   void _navigateToLoginForFeature({
     required String returnFeature,
     String? municipalityName,
@@ -438,15 +443,12 @@ class _LandingPageState extends State<LandingPage> {
     unawaited(openVrTour(context, title: title));
   }
 
-  String get _landingVrButtonLabel {
-    if (VrDownloadAppPrompt.blocksVrOnWeb) return 'Get the ATMOS app';
-    return _isMobile ? 'VR Tour' : 'Start VR Tour';
-  }
+  String get _landingVrButtonLabel => VrDownloadAppPrompt.ctaLabel(
+        mobileLabel: _isMobile ? 'VR Tour' : 'Start VR Tour',
+      );
 
-  String get _landingVrQuickActionLabel {
-    if (VrDownloadAppPrompt.blocksVrOnWeb) return 'Get ATMOS app';
-    return 'VR Tour';
-  }
+  String get _landingVrQuickActionLabel =>
+      VrDownloadAppPrompt.ctaLabel(mobileLabel: 'VR Tour');
 
   static const List<String> _sectionOrder = [
     'home',
@@ -872,6 +874,9 @@ class _LandingPageState extends State<LandingPage> {
                   key: _keyHome,
                   height: MediaQuery.sizeOf(context).height,
                   child: _buildHeroSection(),
+                ),
+                QrCameraGetAppBanner(
+                  onContinueCheckIn: _continueCameraQrCheckInOnWeb,
                 ),
                 if (!_isLoggedIn) _buildRegisterCalloutSection(),
                 _buildViewportNavSection(

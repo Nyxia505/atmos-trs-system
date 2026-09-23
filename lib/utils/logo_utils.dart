@@ -97,6 +97,8 @@ class TransparentLogo extends StatelessWidget {
               height: boxSide,
               fit: effectiveFit,
               alignment: alignment,
+              filterQuality: FilterQuality.high,
+              isAntiAlias: true,
               errorBuilder: (_, __, ___) => _fallback(context, boxSide),
             );
           }
@@ -113,6 +115,8 @@ class TransparentLogo extends StatelessWidget {
       height: boxSide,
       fit: BoxFit.contain,
       alignment: alignment,
+      filterQuality: FilterQuality.high,
+      isAntiAlias: true,
       errorBuilder: (_, __, ___) => Icon(
         errorIcon ?? Icons.public,
         size: errorIconSize,

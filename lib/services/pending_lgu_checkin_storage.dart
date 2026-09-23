@@ -54,6 +54,8 @@ class PendingLguCheckInStorage {
     required int partySize,
     required int femaleCount,
     required int maleCount,
+    int filipinoCount = 0,
+    int foreignCount = 0,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final mid = prefs.getString(_kMunicipalityId)?.trim() ?? '';
@@ -61,6 +63,11 @@ class PendingLguCheckInStorage {
     await prefs.setInt(_kPartySize, partySize < 1 ? 1 : partySize);
     await prefs.setInt(_kFemaleCount, femaleCount < 0 ? 0 : femaleCount);
     await prefs.setInt(_kMaleCount, maleCount < 0 ? 0 : maleCount);
+    // Residency counts collected for future LGU analytics; gender is what check-in uses today.
+    await prefs.setInt('pending_lgu_checkin_filipino_count',
+        filipinoCount < 0 ? 0 : filipinoCount);
+    await prefs.setInt(
+        'pending_lgu_checkin_foreign_count', foreignCount < 0 ? 0 : foreignCount);
   }
 
   static Future<PendingLguCheckIn?> peek() async {
