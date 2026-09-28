@@ -36,6 +36,8 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
   Municipality? _municipality;
   List<TouristSpot> _spots = [];
   bool _recordedRecentlyViewed = false;
+  late final Stream<List<EstablishmentMapPin>> _pinsStream =
+      EstablishmentMapPinsService.watchActivePins();
 
   static const double _kMapZoom = 13.5;
 
@@ -165,7 +167,7 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
                 bottomRight: Radius.circular(12),
               ),
               child: StreamBuilder<List<EstablishmentMapPin>>(
-                stream: EstablishmentMapPinsService.watchActivePins(),
+                stream: _pinsStream,
                 builder: (context, aeSnap) {
                   final muniKey = normalizeMunicipalityId(m.id);
                   final muniNameKey = normalizeMunicipalityId(m.name);

@@ -4,7 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class MobileOnboardingStorage {
   MobileOnboardingStorage._();
 
-  static const _kComplete = 'mobile_onboarding_completed_v1';
+  static const _kComplete = 'mobile_onboarding_completed_v2';
 
   static Future<bool> isComplete() async {
     final prefs = await SharedPreferences.getInstance();

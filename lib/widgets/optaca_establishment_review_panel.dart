@@ -30,6 +30,9 @@ class _OptacaEstablishmentReviewPanelState
   final _search = TextEditingController();
   final _notes = TextEditingController();
   late Future<bool> _authReady;
+  // Created on first use (after auth is ready) and kept across search / filter rebuilds.
+  late final Stream<List<EstablishmentRegistryEntry>> _registryStream =
+      EstablishmentApprovalService.watchAll();
 
   @override
   void initState() {
@@ -255,7 +258,7 @@ class _OptacaEstablishmentReviewPanelState
               );
             }
             return StreamBuilder<List<EstablishmentRegistryEntry>>(
-              stream: EstablishmentApprovalService.watchAll(),
+              stream: _registryStream,
               builder: (context, snap) {
                 if (snap.hasError) {
                   final authHint = authSnap.data == true

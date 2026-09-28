@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'dart:async';
 import 'dart:convert';
 import 'package:geolocator/geolocator.dart';
@@ -246,7 +247,8 @@ class ScanTabPage extends StatefulWidget {
   State<ScanTabPage> createState() => _ScanTabPageState();
 }
 
-class _ScanTabPageState extends State<ScanTabPage> {
+class _ScanTabPageState extends State<ScanTabPage>
+    with WidgetsBindingObserver {
   static const String _kAllowedMunicipalityId = 'oroquieta';
 
   final MobileScannerController _controller = MobileScannerController(
@@ -258,16 +260,61 @@ class _ScanTabPageState extends State<ScanTabPage> {
 
   /// Cooldown to avoid duplicate scans (e.g. same code detected many times in a few seconds).
   static const Duration _scanCooldown = Duration(seconds: 3);
+  /// Same QR text is ignored for longer so one code never creates two records.
+  static const Duration _sameCodeCooldown = Duration(seconds: 6);
   DateTime? _lastScanAt;
+  String? _lastScanRaw;
   bool _isProcessing = false;
   String _processingLabel = 'Saving check-in...';
   bool _isStartingCamera = false;
+  bool _resultRouteOpen = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _startCamera();
     _warmLocationForScan();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        if (!_resultRouteOpen) unawaited(_startCamera());
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+        unawaited(_stopCamera());
+      case AppLifecycleState.detached:
+        break;
+    }
+  }
+
+  Future<void> _stopCamera() async {
+    try {
+      await _controller.stop();
+    } catch (e) {
+      debugPrint('ScanTabPage: camera stop error: $e');
+    }
+  }
+
+  /// Opens a result screen with the camera released, then resumes scanning.
+  Future<T?> _pushResult<T>(Widget screen) async {
+    _resultRouteOpen = true;
+    unawaited(_stopCamera());
+    try {
+      return await Navigator.push<T>(
+        context,
+        MaterialPageRoute<T>(builder: (_) => screen),
+      );
+    } finally {
+      _resultRouteOpen = false;
+      if (mounted) {
+        _lastScanAt = DateTime.now();
+        unawaited(_startCamera());
+      }
+    }
   }
 
   Future<void> _warmLocationForScan() async {
@@ -291,14 +338,15 @@ class _ScanTabPageState extends State<ScanTabPage> {
     } catch (_) {}
   }
 
-  Future<void> _startCamera() async {
-    if (_isStartingCamera) return;
+  Future<void> _startCamera({bool restart = false}) async {
+    if (_isStartingCamera || !mounted) return;
+    if (!restart && _controller.value.isRunning) return;
     _isStartingCamera = true;
     try {
-      await _controller.stop();
+      if (restart) await _controller.stop();
       await _controller.start();
     } catch (e) {
-      debugPrint('ScanTabPage: camera restart error: $e');
+      debugPrint('ScanTabPage: camera start error: $e');
       if (mounted) setState(() {});
     } finally {
       _isStartingCamera = false;
@@ -307,7 +355,8 @@ class _ScanTabPageState extends State<ScanTabPage> {
 
   @override
   void dispose() {
-    _controller.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(_controller.dispose());
     super.dispose();
   }
 
@@ -326,12 +375,17 @@ class _ScanTabPageState extends State<ScanTabPage> {
     if (ModalRoute.of(context)?.isCurrent != true) return;
     final barcodes = capture.barcodes;
     if (barcodes.isEmpty) return;
-    final raw = barcodes.first.rawValue;
+    final raw = barcodes.first.rawValue?.trim();
     if (raw == null || raw.isEmpty) return;
-    if (_lastScanAt != null && DateTime.now().difference(_lastScanAt!) < _scanCooldown) {
-      return;
+    final now = DateTime.now();
+    if (_lastScanAt != null) {
+      final since = now.difference(_lastScanAt!);
+      if (since < _scanCooldown) return;
+      if (raw == _lastScanRaw && since < _sameCodeCooldown) return;
     }
-    _lastScanAt = DateTime.now();
+    _lastScanAt = now;
+    _lastScanRaw = raw;
+    HapticFeedback.selectionClick();
     setState(() {
       _isProcessing = true;
       _processingLabel = 'Reading QR…';
@@ -396,8 +450,13 @@ class _ScanTabPageState extends State<ScanTabPage> {
         }
       }
 
-      if (spotId.isEmpty) {
-        if (mounted) _showError('Invalid QR code: no spot ID.');
+      if (spotId.isEmpty || !_looksLikeSpotId(spotId)) {
+        if (mounted) {
+          _showError(
+            'This is not an ATMOS check-in QR. Scan the QR code posted at a '
+            'tourist spot, LGU office, or accommodation establishment.',
+          );
+        }
         return;
       }
 
@@ -416,10 +475,13 @@ class _ScanTabPageState extends State<ScanTabPage> {
         return;
       }
 
+      if (mounted) {
+        setState(() => _processingLabel = 'Finding tourist spot…');
+      }
       SpotInfo? spot = await QRCheckInService.getSpotById(
         spotId,
         municipalityId: municipalityIdFromQr,
-      );
+      ).timeout(const Duration(seconds: 10), onTimeout: () => null);
       if (spot == null) {
         // Allow "unlisted" check-ins for Oroquieta even if the spot isn't registered in Firestore.
         // This supports scans from web/images or prints not yet added to Tourist Spots.
@@ -456,11 +518,16 @@ class _ScanTabPageState extends State<ScanTabPage> {
       );
     } catch (e, st) {
       debugPrint('[Scan] payload failed: $e\n$st');
-      if (mounted) _showError('Scan failed: $e');
+      if (mounted) _showError(friendlyQrScanError(e));
     } finally {
       _clearProcessing();
     }
   }
+
+  /// Plain spot ids are Firestore doc ids (slugs); rejects URLs / random text.
+  static final RegExp _spotIdPattern = RegExp(r'^[A-Za-z0-9_\-]{2,120}$');
+
+  bool _looksLikeSpotId(String id) => _spotIdPattern.hasMatch(id.trim());
 
   Future<void> _finishSpotCheckInFromScan({
     required SpotInfo spot,
@@ -542,13 +609,7 @@ class _ScanTabPageState extends State<ScanTabPage> {
     }
 
     if (!mounted) return;
-    await Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (_) => SpotCheckInScreen(spotInfo: spot),
-      ),
-    );
-    if (mounted) _lastScanAt = DateTime.now();
+    await _pushResult<void>(SpotCheckInScreen(spotInfo: spot));
   }
 
   void _showError(String message) {
@@ -578,8 +639,22 @@ class _ScanTabPageState extends State<ScanTabPage> {
 
     debugPrint('[Scan] establishment QR id=$eid');
 
-    final est = await EstablishmentStayService.loadEstablishment(eid)
+    // Stay create requires Firebase Auth (not SessionStorage-only).
+    final authUid = FirebaseAuth.instance.currentUser?.uid;
+    final signedIn = authUid != null && authUid.isNotEmpty;
+
+    if (mounted) {
+      setState(() => _processingLabel = 'Opening establishment…');
+    }
+    final estFuture = EstablishmentStayService.loadEstablishment(eid)
         .timeout(const Duration(seconds: 10), onTimeout: () => null);
+    final existingFuture = signedIn
+        ? EstablishmentStayService.findTodaysStayForTourist(
+            touristId: authUid,
+            establishmentId: eid,
+          )
+        : Future<EstablishmentStayRequest?>.value(null);
+    final est = await estFuture;
     final businessName = (est?['businessName'] ??
             est?['name'] ??
             payload.businessName ??
@@ -595,9 +670,7 @@ class _ScanTabPageState extends State<ScanTabPage> {
       debugPrint('[Scan] establishment doc missing for $eid — using QR hints');
     }
 
-    // Stay create requires Firebase Auth (not SessionStorage-only).
-    final authUid = FirebaseAuth.instance.currentUser?.uid;
-    if (authUid == null || authUid.isEmpty) {
+    if (!signedIn) {
       await PendingSpotCheckInStorage.clear();
       await PendingLguCheckInStorage.clear();
       await PendingEstablishmentStayStorage.save(
@@ -616,10 +689,7 @@ class _ScanTabPageState extends State<ScanTabPage> {
       if (mounted) {
         setState(() => _processingLabel = "Checking today's bookings…");
       }
-      final existing = await EstablishmentStayService.findTodaysStayForTourist(
-        touristId: authUid,
-        establishmentId: eid,
-      );
+      final existing = await existingFuture;
 
       var bookAgain = true;
       if (existing != null && mounted) {
@@ -630,35 +700,31 @@ class _ScanTabPageState extends State<ScanTabPage> {
             false;
         if (!bookAgain) {
           await _openExistingEstablishmentStay(existing);
-          if (mounted) _lastScanAt = DateTime.now();
           return;
         }
       }
 
       if (mounted) {
-        setState(() => _processingLabel = 'Creating stay request…');
+        setState(() => _processingLabel = 'Sending stay request…');
       }
       final stay = await EstablishmentStayService.createPendingStay(
         establishmentId: eid,
         municipalityId: municipalityId.isEmpty ? null : municipalityId,
         businessNameHint: businessName,
         municipalityHint: municipality.isEmpty ? null : municipality,
+        preloadedEstablishment: est,
       );
       if (!mounted) return;
       debugPrint(
         '[Scan] stay pending ${stay.id} for AE $eid — opening wait screen',
       );
       // Await push so _isProcessing stays true (blocks camera re-detect).
-      await Navigator.push<void>(
-        context,
-        MaterialPageRoute<void>(
-          builder: (_) => EstablishmentStayPendingScreen(stayId: stay.id),
-        ),
+      await _pushResult<void>(
+        EstablishmentStayPendingScreen(stayId: stay.id),
       );
-      if (mounted) _lastScanAt = DateTime.now();
     } catch (e) {
       debugPrint('[Scan] createPendingStay failed: $e');
-      if (mounted) _showError('Could not start stay request: $e');
+      if (mounted) _showError(friendlyQrScanError(e));
     }
   }
 
@@ -702,19 +768,10 @@ class _ScanTabPageState extends State<ScanTabPage> {
   ) async {
     if (!mounted) return;
     if (existing.isConfirmed) {
-      await Navigator.push<void>(
-        context,
-        MaterialPageRoute<void>(
-          builder: (_) => EstablishmentStayReceiptScreen(stay: existing),
-        ),
-      );
+      await _pushResult<void>(EstablishmentStayReceiptScreen(stay: existing));
     } else {
-      await Navigator.push<void>(
-        context,
-        MaterialPageRoute<void>(
-          builder: (_) =>
-              EstablishmentStayPendingScreen(stayId: existing.id),
-        ),
+      await _pushResult<void>(
+        EstablishmentStayPendingScreen(stayId: existing.id),
       );
     }
   }
@@ -793,18 +850,12 @@ class _ScanTabPageState extends State<ScanTabPage> {
 
     if (uid != null && uid.isNotEmpty) {
       if (!mounted) return;
-      await Navigator.push<void>(
-        context,
-        MaterialPageRoute<void>(
-          builder: (_) => LguCheckInScreen(
-            municipalityId: routedLguId,
-            displayName: routedLguName,
-          ),
+      await _pushResult<void>(
+        LguCheckInScreen(
+          municipalityId: routedLguId,
+          displayName: routedLguName,
         ),
       );
-      if (mounted) {
-        _lastScanAt = DateTime.now();
-      }
       return;
     }
 
@@ -881,7 +932,7 @@ class _ScanTabPageState extends State<ScanTabPage> {
         ),
       );
     } catch (e) {
-      if (mounted) _showError('Could not load tourist: ${e.toString()}');
+      if (mounted) _showError(friendlyQrScanError(e));
     }
   }
 
@@ -1010,6 +1061,22 @@ class _ScanTabPageState extends State<ScanTabPage> {
 
   Widget _buildCameraError(MobileScannerException error) {
     final isPermission = error.errorCode == MobileScannerErrorCode.permissionDenied;
+    final isUnsupported = error.errorCode == MobileScannerErrorCode.unsupported;
+    final title = isPermission
+        ? 'Camera permission required'
+        : isUnsupported
+            ? 'Camera not available'
+            : 'Camera could not start';
+    final body = isPermission
+        ? (kIsWeb
+            ? 'Allow camera access in your browser (tap the camera icon in the '
+                'address bar), then tap Try again.'
+            : 'Allow camera access for ATMOS in your phone Settings, then tap '
+                'Try again.')
+        : isUnsupported
+            ? 'This device or browser has no usable camera. Try another device, '
+                'or scan the QR with your phone camera app.'
+            : 'Close other apps that may be using the camera, then tap Try again.';
     return Container(
       color: AppTheme.scaffoldBackground,
       child: Center(
@@ -1025,7 +1092,7 @@ class _ScanTabPageState extends State<ScanTabPage> {
               ),
               const SizedBox(height: 16),
               Text(
-                isPermission ? 'Camera permission required' : 'Camera error',
+                title,
                 style: const TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w600,
@@ -1035,15 +1102,13 @@ class _ScanTabPageState extends State<ScanTabPage> {
               ),
               const SizedBox(height: 8),
               Text(
-                isPermission
-                    ? 'Please allow camera access in Settings to scan QR codes at tourist spots.'
-                    : error.errorDetails?.message ?? error.errorCode.name,
+                body,
                 style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 14),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
               FilledButton.icon(
-                onPressed: () => _startCamera(),
+                onPressed: () => _startCamera(restart: true),
                 icon: const Icon(Icons.refresh, size: 20),
                 label: const Text('Try again'),
                 style: FilledButton.styleFrom(
@@ -1170,15 +1235,27 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
   String? _errorMessage;
   _AlertsFilter _filter = _AlertsFilter.all;
   Timer? _refreshTimer;
+  bool _tabVisible = true;
+  bool _quietLoadInFlight = false;
 
   @override
   void initState() {
     super.initState();
     _load();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 8), (_) {
-      if (!mounted) return;
+    _refreshTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+      if (!mounted || !_tabVisible) return;
       _load(quiet: true);
     });
+  }
+
+  /// IndexedStack turns tickers off for hidden tabs: skip polling while hidden,
+  /// refresh once when the Notifications tab is shown again.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final visible = TickerMode.valuesOf(context).enabled;
+    if (visible && !_tabVisible) unawaited(_load(quiet: true));
+    _tabVisible = visible;
   }
 
   @override
@@ -1238,7 +1315,10 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
 
   Future<void> _load({bool quiet = false}) async {
     if (!mounted) return;
-    if (!quiet) {
+    if (quiet) {
+      if (_quietLoadInFlight || _loading) return;
+      _quietLoadInFlight = true;
+    } else {
       setState(() {
         _loading = true;
         _errorMessage = null;
@@ -1259,13 +1339,16 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
       }
     } catch (e) {
       debugPrint('AlertsTabPage: $e');
-      if (mounted) {
+      // Background refresh failures keep the list already on screen.
+      if (mounted && !quiet) {
         setState(() {
           _items = [];
           _loading = false;
           _errorMessage = e.toString();
         });
       }
+    } finally {
+      if (quiet) _quietLoadInFlight = false;
     }
   }
 

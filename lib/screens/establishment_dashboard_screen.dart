@@ -1,8 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
@@ -18,13 +16,16 @@ import 'package:atmos_trs_system/utils/establishment_lodging_hours.dart';
 import 'package:atmos_trs_system/utils/establishment_qr_export.dart';
 import 'package:atmos_trs_system/utils/establishment_room_grid.dart';
 import 'package:atmos_trs_system/utils/spot_qr_helper.dart';
-import 'package:atmos_trs_system/widgets/atmos_square_logo.dart';
 import 'package:atmos_trs_system/widgets/establishment_dash_tokens.dart';
+import 'package:atmos_trs_system/widgets/establishment_dashboard_components.dart';
 import 'package:atmos_trs_system/widgets/establishment_desk_confirm_dialog.dart';
 import 'package:atmos_trs_system/widgets/establishment_home_board.dart';
 import 'package:atmos_trs_system/widgets/establishment_insights_board.dart';
-import 'package:atmos_trs_system/widgets/establishment_location_capture.dart';
+import 'package:atmos_trs_system/widgets/establishment_profile_cards.dart';
+import 'package:atmos_trs_system/widgets/establishment_reviews_board.dart';
 import 'package:atmos_trs_system/widgets/establishment_rooms_panel.dart';
+import 'package:atmos_trs_system/widgets/establishment_settings_panel.dart';
+import 'package:atmos_trs_system/widgets/establishment_stay_tables.dart';
 
 /// Tourism establishment ops dashboard: pack-aware shell + stay queue.
 class EstablishmentDashboardScreen extends StatefulWidget {
@@ -65,6 +66,7 @@ class _EstablishmentDashboardScreenState
   bool _savingLocation = false;
   bool _locating = false;
   bool _galleryBusy = false;
+  bool _statusBannerDismissed = false;
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
@@ -75,8 +77,21 @@ class _EstablishmentDashboardScreenState
   IconData get _categoryIcon => EstablishmentCapability.iconFor(_category);
 
   List<_AeTab> get _tabs => _isLodging
-      ? const [_AeTab.home, _AeTab.rooms, _AeTab.insights, _AeTab.qr]
-      : const [_AeTab.home, _AeTab.insights, _AeTab.qr];
+      ? const [
+          _AeTab.home,
+          _AeTab.rooms,
+          _AeTab.insights,
+          _AeTab.reviews,
+          _AeTab.qr,
+          _AeTab.settings,
+        ]
+      : const [
+          _AeTab.home,
+          _AeTab.insights,
+          _AeTab.reviews,
+          _AeTab.qr,
+          _AeTab.settings,
+        ];
 
   _AeTab get _currentTab {
     final tabs = _tabs;
@@ -91,6 +106,20 @@ class _EstablishmentDashboardScreenState
     super.initState();
     _roomCountCtrl = TextEditingController(text: '0');
     _load();
+  }
+
+  // One Firestore listener per account; a new stream on every build would
+  // re-subscribe (re-read + loading flash) on each setState.
+  Stream<List<EstablishmentStayRequest>>? _staysStream;
+  String _staysStreamUid = '';
+
+  Stream<List<EstablishmentStayRequest>> _staysStreamFor(String uid) {
+    if (uid.isEmpty) return const Stream.empty();
+    if (_staysStream == null || _staysStreamUid != uid) {
+      _staysStreamUid = uid;
+      _staysStream = EstablishmentStayService.watchForEstablishment(uid);
+    }
+    return _staysStream!;
   }
 
   @override
@@ -124,18 +153,27 @@ class _EstablishmentDashboardScreenState
 
     try {
       final db = FirebaseFirestore.instance;
-      Map<String, dynamic> user = const <String, dynamic>{};
-      try {
-        final userDoc = await db.collection('users').doc(uid).get();
-        user = userDoc.data() ?? const <String, dynamic>{};
-      } catch (e) {
-        debugPrint('[AE Dashboard] users/$uid read: $e');
+      Future<Map<String, dynamic>> readUser() async {
+        try {
+          final userDoc = await db.collection('users').doc(uid).get();
+          return userDoc.data() ?? const <String, dynamic>{};
+        } catch (e) {
+          debugPrint('[AE Dashboard] users/$uid read: $e');
+          return const <String, dynamic>{};
+        }
       }
-      final estDoc = await db
-          .collection(EstablishmentRegistrationService.establishmentsCollection)
-          .doc(uid)
-          .get();
-      final est = estDoc.data() ?? const <String, dynamic>{};
+
+      Future<Map<String, dynamic>> readEstablishment() async {
+        final estDoc = await db
+            .collection(EstablishmentRegistrationService.establishmentsCollection)
+            .doc(uid)
+            .get();
+        return estDoc.data() ?? const <String, dynamic>{};
+      }
+
+      final docs = await Future.wait([readUser(), readEstablishment()]);
+      final user = docs[0];
+      final est = docs[1];
       final businessName = (est['businessName'] ??
               est['name'] ??
               user['businessName'] ??
@@ -174,7 +212,7 @@ class _EstablishmentDashboardScreenState
       final category =
           (est['category'] ?? est['type'] ?? user['category'] ?? '').toString();
       final lodging = EstablishmentCapability.isLodging(category);
-      final maxTab = lodging ? 3 : 2;
+      final maxTab = lodging ? 5 : 4;
       setState(() {
         _uid = uid;
         _businessName = businessName;
@@ -666,7 +704,37 @@ class _EstablishmentDashboardScreenState
     }
   }
 
+  /// Stay ids with a confirm / reject / check-out in progress (blocks double taps).
+  final Set<String> _staysInFlight = <String>{};
+
+  Future<void> _guardStayAction(
+    String stayId,
+    Future<void> Function() action,
+  ) async {
+    if (!_staysInFlight.add(stayId)) return;
+    try {
+      await action();
+    } finally {
+      _staysInFlight.remove(stayId);
+    }
+  }
+
   Future<void> _openConfirmDialog(
+    EstablishmentStayRequest stay, {
+    required List<EstablishmentStayRequest> allStays,
+  }) =>
+      _guardStayAction(
+        stay.id,
+        () => _openConfirmDialogUnguarded(stay, allStays: allStays),
+      );
+
+  Future<void> _reject(EstablishmentStayRequest stay) =>
+      _guardStayAction(stay.id, () => _rejectUnguarded(stay));
+
+  Future<void> _checkOutStay(EstablishmentStayRequest stay) =>
+      _guardStayAction(stay.id, () => _checkOutStayUnguarded(stay));
+
+  Future<void> _openConfirmDialogUnguarded(
     EstablishmentStayRequest stay, {
     required List<EstablishmentStayRequest> allStays,
   }) async {
@@ -742,7 +810,7 @@ class _EstablishmentDashboardScreenState
     }
   }
 
-  Future<void> _reject(EstablishmentStayRequest stay) async {
+  Future<void> _rejectUnguarded(EstablishmentStayRequest stay) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -880,16 +948,10 @@ class _EstablishmentDashboardScreenState
     }
 
     return StreamBuilder<List<EstablishmentStayRequest>>(
-      stream: _uid.isEmpty
-          ? const Stream.empty()
-          : EstablishmentStayService.watchForEstablishment(_uid),
+      stream: _staysStreamFor(_uid),
       builder: (context, snap) {
         final all = snap.data ?? const <EstablishmentStayRequest>[];
         final pending = all.where((s) => s.isPending).toList();
-        final recentConfirmed = all
-            .where((s) => s.countsForDae)
-            .take(12)
-            .toList();
         final kpis = _computeKpis(all);
         final dss = EstablishmentDssAggregates.build(all);
         final streamError = snap.hasError ? snap.error : null;
@@ -898,7 +960,6 @@ class _EstablishmentDashboardScreenState
         final dashboardData = _DashboardData(
           allStays: all,
           pending: pending,
-          recentConfirmed: recentConfirmed,
           kpis: kpis,
           dss: dss,
           streamError: streamError,
@@ -929,10 +990,11 @@ class _EstablishmentDashboardScreenState
               Expanded(
                 child: Column(
                   children: [
-                    _buildTopHeader(
-                      isMobile: isMobile,
-                      pendingCount: pending.length,
-                    ),
+                    if (isMobile)
+                      _buildTopHeader(
+                        isMobile: isMobile,
+                        pendingCount: pending.length,
+                      ),
                     Expanded(
                       child: RefreshIndicator(
                         color: AppTheme.brandOrange,
@@ -969,7 +1031,9 @@ class _EstablishmentDashboardScreenState
           _AeTab.home => 'Home',
           _AeTab.rooms => 'Rooms',
           _AeTab.insights => 'Insights',
+          _AeTab.reviews => 'Reviews',
           _AeTab.qr => 'QR & profile',
+          _AeTab.settings => 'Settings',
         },
     ];
     final title = titles[_selectedIndex.clamp(0, titles.length - 1)];
@@ -1010,20 +1074,14 @@ class _EstablishmentDashboardScreenState
                   ),
                   Text(
                     '${_copy.packLabel}'
-                    '${_category.isNotEmpty ? ' ? $_category' : ''}'
-                    '${pendingCount > 0 && _currentTab != _AeTab.home ? ' ? $pendingCount pending' : ''}',
+                    '${_category.isNotEmpty ? ' · $_category' : ''}'
+                    '${pendingCount > 0 && _currentTab != _AeTab.home ? ' · $pendingCount pending' : ''}',
                     style: AeDashTokens.body(size: 12),
                   ),
                 ],
               ),
             ),
             _statusPill(compact: true),
-            const SizedBox(width: 4),
-            IconButton(
-              tooltip: 'Log out',
-              onPressed: _logout,
-              icon: const Icon(Icons.logout_rounded, color: AeDashTokens.muted),
-            ),
           ],
         ),
       ),
@@ -1035,257 +1093,82 @@ class _EstablishmentDashboardScreenState
     required bool isDrawer,
     required int pendingCount,
   }) {
-    final bottomInset = MediaQuery.paddingOf(context).bottom;
-    final width = expanded
-        ? (isDrawer ? 280.0 : AeDashTokens.sidebarExpanded)
-        : AeDashTokens.sidebarCollapsed;
-
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
-      width: width,
-      decoration: const BoxDecoration(
-        color: AeDashTokens.sidebar,
-        border: Border(
-          right: BorderSide(color: Color(0xFF1E293B)),
-        ),
-      ),
-      child: SafeArea(
-        right: false,
-        child: Column(
-          children: [
-            if (expanded)
-              _sidebarProfileStrip(showCollapse: !isDrawer)
-            else
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-                child: IconButton(
-                  tooltip: 'Expand sidebar',
-                  onPressed: () => setState(() => _sidebarExpanded = true),
-                  icon: const Icon(Icons.menu_rounded, color: Colors.white70),
-                ),
+    final tabs = _tabs;
+    return EstablishmentSidebar(
+      businessName: _businessName,
+      subtitle: _municipality.isNotEmpty ? _municipality : _copy.packLabel,
+      expanded: expanded,
+      width: isDrawer ? 280 : null,
+      selectedIndex: _selectedIndex.clamp(0, tabs.length - 1),
+      onSelect: _selectTab,
+      onLogout: _logout,
+      onToggle: isDrawer
+          ? () => Navigator.of(context).maybePop()
+          : () => setState(() => _sidebarExpanded = !_sidebarExpanded),
+      items: [
+        for (final t in tabs)
+          switch (t) {
+            _AeTab.home => EstablishmentNavEntry(
+                icon: Icons.home_rounded,
+                label: 'Home',
+                badgeCount: pendingCount,
+                section: 'Operations',
               ),
-            Expanded(
-              child: _sidebarNav(
-                expanded: expanded,
-                pendingCount: pendingCount,
+            _AeTab.rooms => const EstablishmentNavEntry(
+                icon: Icons.bed_rounded,
+                label: 'Rooms',
               ),
-            ),
-            _sidebarLogout(expanded: expanded),
-            SizedBox(height: 12 + bottomInset),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _sidebarProfileStrip({required bool showCollapse}) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
-      child: Row(
-        children: [
-          const AtmosSquareLogo(height: 40, width: 40, padding: EdgeInsets.all(4)),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _businessName,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  _municipality.isNotEmpty
-                      ? _municipality
-                      : _copy.packLabel,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.82),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-          if (showCollapse)
-            IconButton(
-              tooltip: 'Collapse sidebar',
-              onPressed: () => setState(() => _sidebarExpanded = false),
-              icon: const Icon(Icons.close_rounded, color: Colors.white, size: 20),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _sidebarNav({
-    required bool expanded,
-    required int pendingCount,
-  }) {
-    final items = [
-      for (final t in _tabs)
-        switch (t) {
-          _AeTab.home => _NavItem(Icons.home_rounded, 'Home'),
-          _AeTab.rooms => _NavItem(Icons.meeting_room_rounded, 'Rooms'),
-          _AeTab.insights => _NavItem(Icons.insights_rounded, 'Insights'),
-          _AeTab.qr => _NavItem(Icons.qr_code_2_rounded, 'QR & profile'),
-        },
-    ];
-
-    return ListView(
-      padding: EdgeInsets.symmetric(
-        horizontal: expanded ? 12 : 8,
-        vertical: 8,
-      ),
-      children: [
-        for (var i = 0; i < items.length; i++)
-          _sidebarNavTile(
-            item: items[i],
-            index: i,
-            expanded: expanded,
-            badgeCount: _tabs[i] == _AeTab.home ? pendingCount : 0,
-          ),
+            _AeTab.insights => const EstablishmentNavEntry(
+                icon: Icons.insights_rounded,
+                label: 'Insights',
+                section: 'Performance',
+              ),
+            _AeTab.reviews => const EstablishmentNavEntry(
+                icon: Icons.star_rounded,
+                label: 'Reviews',
+              ),
+            _AeTab.qr => const EstablishmentNavEntry(
+                icon: Icons.qr_code_2_rounded,
+                label: 'QR & Profile',
+                section: 'Account',
+              ),
+            _AeTab.settings => const EstablishmentNavEntry(
+                icon: Icons.settings_rounded,
+                label: 'Settings',
+              ),
+          },
       ],
     );
   }
 
-  Widget _sidebarNavTile({
-    required _NavItem item,
-    required int index,
-    required bool expanded,
-    int badgeCount = 0,
-  }) {
-    final selected = _selectedIndex == index;
-    final showInlineBadge = expanded && badgeCount > 0;
-    final iconColor = selected ? AeDashTokens.accent : Colors.white70;
-    final iconWidget = (!expanded && badgeCount > 0)
-        ? Badge(
-            label: Text('$badgeCount'),
-            child: Icon(item.icon, color: iconColor, size: 22),
-          )
-        : Icon(item.icon, color: iconColor, size: 22);
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Material(
-        color: selected ? AeDashTokens.sidebarMuted : Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          onTap: () => _selectTab(index),
-          borderRadius: BorderRadius.circular(12),
-          child: Container(
-            decoration: selected
-                ? const BoxDecoration(
-                    border: Border(
-                      left: BorderSide(color: AeDashTokens.accent, width: 3),
-                    ),
-                  )
-                : null,
-            padding: EdgeInsets.symmetric(
-              horizontal: expanded ? 14 : 10,
-              vertical: 11,
-            ),
-            child: Row(
-              mainAxisAlignment:
-                  expanded ? MainAxisAlignment.start : MainAxisAlignment.center,
-              children: [
-                iconWidget,
-                if (expanded) ...[
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      item.label,
-                      style: TextStyle(
-                        color: selected ? Colors.white : Colors.white70,
-                        fontWeight:
-                            selected ? FontWeight.w700 : FontWeight.w500,
-                        fontSize: 13.5,
-                      ),
-                    ),
-                  ),
-                  if (showInlineBadge)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AeDashTokens.accent,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        '$badgeCount',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _sidebarLogout({required bool expanded}) {
-    return Padding(
-      padding: EdgeInsets.symmetric(horizontal: expanded ? 12 : 8),
-      child: Material(
-        color: Colors.white.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(14),
-        child: InkWell(
-          onTap: _logout,
-          borderRadius: BorderRadius.circular(14),
-          child: Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: expanded ? 14 : 10,
-              vertical: 12,
-            ),
-            child: Row(
-              mainAxisAlignment:
-                  expanded ? MainAxisAlignment.start : MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.logout_rounded, color: Colors.white, size: 20),
-                if (expanded) ...[
-                  const SizedBox(width: 12),
-                  const Text(
-                    'Log out',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  /// Daily-use tabs on the phone bar; the rest sit behind "More" (drawer).
+  static const _bottomBarTabs = [
+    _AeTab.home,
+    _AeTab.rooms,
+    _AeTab.insights,
+    _AeTab.reviews,
+  ];
 
   Widget _buildMobileBottomNav({required int pendingCount}) {
     final tabs = _tabs;
+    final barTabs = [
+      for (final t in tabs)
+        if (_bottomBarTabs.contains(t)) t,
+    ];
+    final current = barTabs.indexOf(_currentTab);
     return NavigationBar(
-      selectedIndex: _selectedIndex.clamp(0, tabs.length - 1),
-      onDestinationSelected: _selectTab,
+      selectedIndex: current >= 0 ? current : barTabs.length,
+      onDestinationSelected: (i) {
+        if (i >= barTabs.length) {
+          _scaffoldKey.currentState?.openDrawer();
+          return;
+        }
+        _selectTab(tabs.indexOf(barTabs[i]));
+      },
       indicatorColor: AeDashTokens.softOrange,
       backgroundColor: Colors.white,
       destinations: [
-        for (final t in tabs)
+        for (final t in barTabs)
           switch (t) {
             _AeTab.home => NavigationDestination(
                 icon: Badge(
@@ -1310,12 +1193,20 @@ class _EstablishmentDashboardScreenState
                 selectedIcon: Icon(Icons.insights_rounded),
                 label: 'Insights',
               ),
-            _AeTab.qr => const NavigationDestination(
-                icon: Icon(Icons.qr_code_2_outlined),
-                selectedIcon: Icon(Icons.qr_code_2_rounded),
-                label: 'QR',
+            _AeTab.reviews => const NavigationDestination(
+                icon: Icon(Icons.star_outline_rounded),
+                selectedIcon: Icon(Icons.star_rounded),
+                label: 'Reviews',
+              ),
+            _AeTab.qr || _AeTab.settings => const NavigationDestination(
+                icon: Icon(Icons.more_horiz_rounded),
+                label: 'More',
               ),
           },
+        const NavigationDestination(
+          icon: Icon(Icons.more_horiz_rounded),
+          label: 'More',
+        ),
       ],
     );
   }
@@ -1362,18 +1253,48 @@ class _EstablishmentDashboardScreenState
         return _roomsTab(data);
       case _AeTab.insights:
         return _insightsTab(data);
+      case _AeTab.reviews:
+        return EstablishmentReviewsBoard(
+          establishmentId: _uid,
+          isLodging: _isLodging,
+        );
       case _AeTab.qr:
         return _qrProfileTab(data);
+      case _AeTab.settings:
+        return _settingsTab(data);
       case _AeTab.home:
         return _homeTab(data);
     }
   }
 
-  Widget _scrollBody({required List<Widget> children}) {
-    return ListView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
-      children: children,
+  static double _pagePad(double width) =>
+      width < 600 ? 14.0 : (width < 1000 ? 18.0 : 24.0);
+
+  /// Page scroller; [header] is edge-to-edge (touches top + sidebar).
+  Widget _scrollBody({Widget? header, required List<Widget> children}) {
+    return LayoutBuilder(
+      builder: (context, c) {
+        final pad = _pagePad(c.maxWidth);
+        return ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.only(bottom: pad + 12),
+          children: [
+            if (header != null) header,
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                pad,
+                header == null ? pad : (c.maxWidth < 600 ? 12 : 18),
+                pad,
+                0,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: children,
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -1388,50 +1309,23 @@ class _EstablishmentDashboardScreenState
         : const <EstablishmentRoomSlot>[];
     final roomStats = EstablishmentRoomGrid.statsFor(roomSlots);
     final roomsTabIndex = _tabs.indexOf(_AeTab.rooms);
+    final insightsTabIndex = _tabs.indexOf(_AeTab.insights);
 
-    final pendingSection = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(_copy.queueTitle, style: AeDashTokens.section(size: 14)),
-        const SizedBox(height: 2),
-        Text(_copy.queueHint, style: AeDashTokens.body(size: 12)),
-        const SizedBox(height: 10),
-        if (data.pending.isEmpty)
-          _emptyCard(_copy.queueEmpty)
-        else
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 360),
-            child: ListView(
-              shrinkWrap: true,
-              children: [
-                for (final s in data.pending)
-                  _pendingCard(s, allStays: data.allStays),
-              ],
-            ),
-          ),
-      ],
-    );
+    final emptyParts = _copy.queueEmpty.split('. ');
+    final emptyTitle = '${emptyParts.first.replaceAll('.', '')} yet.';
+    final emptyHint = emptyParts.length > 1
+        ? emptyParts.sublist(1).join('. ')
+        : 'Print your QR and ask a tourist to scan it.';
 
-    final recentSection = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(_copy.recentTitle, style: AeDashTokens.section(size: 14)),
-        const SizedBox(height: 10),
-        if (data.recentConfirmed.isEmpty)
-          _emptyCard(_copy.recentEmpty)
-        else
-          _card(
-            child: Column(
-              children: [
-                for (var i = 0; i < data.recentConfirmed.length; i++) ...[
-                  if (i > 0)
-                    const Divider(height: 1, color: AeDashTokens.border),
-                  _recentTile(data.recentConfirmed[i]),
-                ],
-              ],
-            ),
-          ),
-      ],
+    final requestsSection = EstablishmentStayRequestTable(
+      title: _copy.queueTitle,
+      description: _copy.queueHint,
+      emptyTitle: emptyTitle,
+      emptyHint: emptyHint,
+      stays: data.allStays,
+      onConfirm: (s) => _openConfirmDialog(s, allStays: data.allStays),
+      onReject: _reject,
+      onCheckOut: _checkOutStay,
     );
 
     return EstablishmentHomeBoard(
@@ -1441,8 +1335,8 @@ class _EstablishmentDashboardScreenState
       pack: _pack,
       copy: _copy,
       categoryIcon: _categoryIcon,
-      statusPill: _statusPill(),
-      statusBanner: _statusBanner(),
+      statusPill: _heroStatusPill(),
+      statusBanner: _statusBannerDismissed ? null : _statusBanner(),
       kpis: EstablishmentHomeKpis(
         pending: data.kpis.pending,
         confirmedToday: data.kpis.confirmedToday,
@@ -1452,12 +1346,29 @@ class _EstablishmentDashboardScreenState
         peakDay: data.kpis.peakDay,
         peakDayGuests: data.kpis.peakDayGuests,
       ),
-      dss: data.dss,
       isLodging: _isLodging,
       roomStats: _isLodging ? roomStats : null,
-      pendingSection: pendingSection,
-      recentSection: recentSection,
+      requestsSection: requestsSection,
       onOpenRooms: roomsTabIndex >= 0 ? () => _selectTab(roomsTabIndex) : null,
+      onOpenInsights:
+          insightsTabIndex >= 0 ? () => _selectTab(insightsTabIndex) : null,
+    );
+  }
+
+  Widget _heroStatusPill() {
+    final color = _isRejected
+        ? AeDashTokens.danger
+        : _isPending
+            ? AeDashTokens.warning
+            : AeDashTokens.success;
+    final label = _isRejected
+        ? 'Rejected'
+        : _isPending
+            ? 'Pending'
+            : 'Active';
+    return Tooltip(
+      message: 'Account status: $label',
+      child: AeStatusPill(label: label, color: color),
     );
   }
 
@@ -1468,307 +1379,133 @@ class _EstablishmentDashboardScreenState
       stays: data.allStays,
       inventory: _roomInventory,
     );
-    return _scrollBody(
-      children: [
-        EstablishmentRoomsPanel(
-          slots: slots,
-          onToggleDisabled: (slot, disable) => _toggleRoomDisabled(
-            slot: slot,
-            disable: disable,
-          ),
-          onSaveRoomInfo: _saveRoomInfo,
-        ),
-      ],
+    return LayoutBuilder(
+      builder: (context, c) {
+        final pad = _pagePad(c.maxWidth);
+        return ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.only(bottom: pad + 12),
+          children: [
+            EstablishmentRoomsPanel(
+              slots: slots,
+              onToggleDisabled: (slot, disable) => _toggleRoomDisabled(
+                slot: slot,
+                disable: disable,
+              ),
+              onSaveRoomInfo: _saveRoomInfo,
+              setupCard: _roomCountSection(allStays: data.allStays),
+              flushHero: true,
+              contentPadding: EdgeInsets.fromLTRB(
+                pad,
+                c.maxWidth < 600 ? 12 : 18,
+                pad,
+                0,
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
   Widget _insightsTab(_DashboardData data) {
-    final roomSlots = _isLodging
-        ? EstablishmentRoomGrid.buildSlots(
-            roomCount: _roomCount,
-            disabledRooms: _disabledRooms,
-            stays: data.allStays,
-            inventory: _roomInventory,
-          )
-        : const <EstablishmentRoomSlot>[];
-    final roomStats = EstablishmentRoomGrid.statsFor(roomSlots);
-
     return EstablishmentInsightsBoard(
       establishmentId: _uid,
       copy: _copy,
       isLodging: _isLodging,
       dss: data.dss,
-      roomStats: _isLodging ? roomStats : null,
       allStays: data.allStays,
       roomCount: _isLodging ? _roomCount : 0,
       roomInventory: _isLodging ? _roomInventory : const {},
     );
   }
 
+  Widget _settingsTab(_DashboardData data) {
+    final demo = data.allStays.where((s) => s.isDemo).length;
+    return LayoutBuilder(
+      builder: (context, c) {
+        final pad = _pagePad(c.maxWidth);
+        return ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.only(bottom: pad + 12),
+          children: [
+            EstablishmentSettingsPanel(
+              establishmentName: _businessName,
+              municipality: _municipality,
+              municipalityId: _municipalityId,
+              category: _category,
+              roomCount: _isLodging ? _roomCount : 0,
+              disabledRooms: _disabledRooms,
+              demoStayCount: demo,
+              realStayCount: data.allStays.length - demo,
+              flushHero: true,
+              contentPadding: EdgeInsets.fromLTRB(
+                pad,
+                c.maxWidth < 600 ? 12 : 18,
+                pad,
+                0,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Widget _qrProfileTab(_DashboardData data) {
     return _scrollBody(
+      header: _qrSection(),
       children: [
-        _qrSection(),
-        const SizedBox(height: 24),
         _mapPinSection(),
-        const SizedBox(height: 24),
+        const SizedBox(height: 18),
         _gallerySection(),
         if (_isLodging) ...[
-          const SizedBox(height: 24),
+          const SizedBox(height: 18),
           _lodgingHoursSection(),
-          const SizedBox(height: 24),
-          _roomCountSection(allStays: data.allStays),
-        ] else if (_roomCount > 0) ...[
-          const SizedBox(height: 16),
-          _card(
-            child: Text(
-              'Stored room count on profile: $_roomCount '
-              '(not used for ${_copy.packLabel.toLowerCase()} ops).',
-              style: AeDashTokens.body(size: 13),
-            ),
-          ),
         ],
       ],
     );
   }
 
   Widget _gallerySection() {
-    final canAdd = _galleryUrls.length < EstablishmentGalleryService.maxImages;
-    return _card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Profile photos',
-            style: AeDashTokens.heading(size: 16),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Shown when tourists open your pin on Explore. '
-            'Up to ${EstablishmentGalleryService.maxImages} photos.',
-            style: AeDashTokens.body(size: 13),
-          ),
-          const SizedBox(height: 14),
-          if (_galleryUrls.isEmpty)
-            Text(
-              'No photos yet ? add your entrance, rooms, or amenities.',
-              style: AeDashTokens.body(
-                size: 13,
-                color: AeDashTokens.subtitle,
-              ),
-            )
-          else
-            SizedBox(
-              height: 108,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: _galleryUrls.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 10),
-                itemBuilder: (context, i) {
-                  final url = _galleryUrls[i];
-                  return Stack(
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: Image.network(
-                          url,
-                          width: 108,
-                          height: 108,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => Container(
-                            width: 108,
-                            height: 108,
-                            color: const Color(0xFFE2E8F0),
-                            child: const Icon(Icons.broken_image_outlined),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        top: 4,
-                        right: 4,
-                        child: Material(
-                          color: Colors.black.withValues(alpha: 0.55),
-                          shape: const CircleBorder(),
-                          child: InkWell(
-                            customBorder: const CircleBorder(),
-                            onTap:
-                                _galleryBusy ? null : () => _removeGalleryPhoto(i),
-                            child: const Padding(
-                              padding: EdgeInsets.all(4),
-                              child: Icon(
-                                Icons.close_rounded,
-                                size: 16,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      if (i == 0)
-                        Positioned(
-                          left: 6,
-                          bottom: 6,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.6),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: const Text(
-                              'Cover',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
-                  );
-                },
-              ),
-            ),
-          const SizedBox(height: 14),
-          OutlinedButton.icon(
-            onPressed: (!canAdd || _galleryBusy) ? null : _addGalleryPhoto,
-            icon: _galleryBusy
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.add_photo_alternate_outlined, size: 20),
-            label: Text(
-              _galleryBusy
-                  ? 'Uploading?'
-                  : canAdd
-                      ? 'Add photo'
-                      : 'Photo limit reached',
-            ),
-          ),
-        ],
-      ),
+    return EstablishmentPhotosCard(
+      urls: _galleryUrls,
+      maxImages: EstablishmentGalleryService.maxImages,
+      busy: _galleryBusy,
+      onAdd: _addGalleryPhoto,
+      onRemove: _removeGalleryPhoto,
     );
   }
 
   Widget _mapPinSection() {
-    return _card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Map pin',
-            style: AeDashTokens.heading(size: 16),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Tourists see your establishment on Explore after OPTACA approval. '
-            'Stand at the entrance, then tap Get location.',
-            style: AeDashTokens.body(size: 13),
-          ),
-          const SizedBox(height: 14),
-          EstablishmentLocationCapture(
-            latitude: _latitude,
-            longitude: _longitude,
-            busy: _locating,
-            required: false,
-            onBusyChanged: (b) {
-              if (mounted) setState(() => _locating = b);
-            },
-            onChanged: (pin) {
-              _saveMapPin(
-                latitude: pin.latitude,
-                longitude: pin.longitude,
-              );
-            },
-          ),
-          if (_savingLocation) ...[
-            const SizedBox(height: 12),
-            const LinearProgressIndicator(minHeight: 2),
-          ],
-        ],
-      ),
+    return EstablishmentMapPinCard(
+      latitude: _latitude,
+      longitude: _longitude,
+      locating: _locating,
+      saving: _savingLocation,
+      onBusyChanged: (b) {
+        if (mounted) setState(() => _locating = b);
+      },
+      onChanged: (pin) {
+        _saveMapPin(
+          latitude: pin.latitude,
+          longitude: pin.longitude,
+        );
+      },
     );
   }
 
   Widget _lodgingHoursSection() {
     final cin = EstablishmentLodgingHours.tryParse(_checkInTime);
     final cout = EstablishmentLodgingHours.tryParse(_checkOutTime);
-    return _card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Check-in / check-out times',
-            style: AeDashTokens.heading(size: 16),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Guests arriving before check-in may be charged an extra night. '
-            'Checkout is due by the check-out time on their last day.',
-            style: AeDashTokens.body(size: 13),
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _savingHours ? null : _pickAndSaveCheckInTime,
-                  icon: const Icon(Icons.login_rounded, size: 18),
-                  label: Text(
-                    cin == null
-                        ? 'Check-in'
-                        : 'In ${EstablishmentLodgingHours.displayLabel(cin)}',
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _savingHours ? null : _pickAndSaveCheckOutTime,
-                  icon: const Icon(Icons.logout_rounded, size: 18),
-                  label: Text(
-                    cout == null
-                        ? 'Check-out'
-                        : 'Out ${EstablishmentLodgingHours.displayLabel(cout)}',
-                  ),
-                ),
-              ),
-            ],
-          ),
-          if (_savingHours) ...[
-            const SizedBox(height: 12),
-            const LinearProgressIndicator(minHeight: 2),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _card({required Widget child, EdgeInsetsGeometry? padding}) {
-    return Container(
-      width: double.infinity,
-      padding: padding ?? const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: AeDashTokens.card,
-        borderRadius: BorderRadius.circular(AeDashTokens.radiusCard),
-        border: Border.all(color: AeDashTokens.border),
-        boxShadow: AeDashTokens.cardShadow,
-      ),
-      child: child,
-    );
-  }
-
-  Widget _emptyCard(String message) {
-    return _card(
-      child: Text(
-        message,
-        style: AeDashTokens.body(),
-      ),
+    return EstablishmentHoursCard(
+      checkInLabel:
+          cin == null ? null : EstablishmentLodgingHours.displayLabel(cin),
+      checkOutLabel:
+          cout == null ? null : EstablishmentLodgingHours.displayLabel(cout),
+      saving: _savingHours,
+      onPickCheckIn: _pickAndSaveCheckInTime,
+      onPickCheckOut: _pickAndSaveCheckOutTime,
     );
   }
 
@@ -1807,107 +1544,86 @@ class _EstablishmentDashboardScreenState
               : pillFg.withValues(alpha: 0.25),
         ),
       ),
-      child: Text(
-        pillLabel,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w800,
-          color: pillFg,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            _isRejected
+                ? Icons.cancel_rounded
+                : _isPending
+                    ? Icons.schedule_rounded
+                    : Icons.verified_rounded,
+            size: 14,
+            color: pillFg,
+          ),
+          const SizedBox(width: 5),
+          Text(
+            pillLabel,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: pillFg,
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _statusBanner() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _isPending
-            ? const Color(0xFFFFF7ED)
-            : _isRejected
-                ? const Color(0xFFFEF2F2)
-                : const Color(0xFFECFDF5),
-        borderRadius: BorderRadius.circular(AeDashTokens.radiusLg),
-        border: Border.all(
-          color: _isPending
-              ? const Color(0xFFFDBA74)
-              : _isRejected
-                  ? const Color(0xFFFECACA)
-                  : const Color(0xFF6EE7B7),
-        ),
-      ),
-      child: Text(
-        _isPending
-            ? 'Registration still pending LGU / Provincial approval ? '
-                'you can already print your QR and confirm ${_copy.opsNoun}s for testing.'
-            : _isRejected
-                ? 'Registration was rejected. Contact your LGU tourism office for next steps.'
-                : _copy.statusApproved,
-        style: TextStyle(
-          fontSize: 13.5,
-          height: 1.4,
-          fontWeight: FontWeight.w600,
-          color: _isPending
-              ? const Color(0xFF9A3412)
-              : _isRejected
-                  ? const Color(0xFF9F1239)
-                  : const Color(0xFF065F46),
-        ),
-      ),
+    void dismiss() => setState(() => _statusBannerDismissed = true);
+    if (_isPending) {
+      return AeAlertBanner(
+        title: 'Pending approval',
+        message: 'Registration still pending LGU / Provincial approval — '
+            'you can already print your QR and confirm ${_copy.opsNoun}s for testing.',
+        icon: Icons.schedule_rounded,
+        color: const Color(0xFFEA580C),
+        background: const Color(0xFFFFF7ED),
+        borderColor: const Color(0xFFFED7AA),
+        onClose: dismiss,
+      );
+    }
+    if (_isRejected) {
+      return AeAlertBanner(
+        title: 'Registration rejected',
+        message: 'Contact your LGU tourism office for next steps.',
+        icon: Icons.error_rounded,
+        color: AeDashTokens.danger,
+        background: const Color(0xFFFEF2F2),
+        borderColor: const Color(0xFFFECACA),
+        onClose: dismiss,
+      );
+    }
+    final approvedParts = _copy.statusApproved.split('. ');
+    final approvedDetail = approvedParts.length > 1
+        ? approvedParts.sublist(1).join('. ')
+        : _copy.statusApproved;
+    return AeAlertBanner(
+      title: 'Account approved!',
+      message: 'Your account is verified. $approvedDetail',
+      icon: Icons.check_circle_rounded,
+      color: AeDashTokens.success,
+      background: const Color(0xFFECFDF5),
+      borderColor: const Color(0xFFD1FAE5),
+      onClose: dismiss,
     );
   }
 
   Widget _qrSection() {
-    final payload = _qrPayload;
-    return _card(
-      padding: const EdgeInsets.all(18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Your establishment QR',
-            style: AeDashTokens.heading(size: 16),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            _copy.qrHint,
-            style: AeDashTokens.body(size: 13),
-          ),
-          const SizedBox(height: 16),
-          if (payload != null)
-            Center(
-              child: QrImageView(
-                data: payload,
-                size: 200,
-                backgroundColor: Colors.white,
-              ),
-            ),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              OutlinedButton.icon(
-                onPressed: () => downloadEstablishmentQrPng(
-                  establishmentId: _uid,
-                  businessName: _businessName,
-                  municipalityId: _municipalityId,
-                ),
-                icon: const Icon(Icons.image_outlined, size: 18),
-                label: const Text('Download PNG'),
-              ),
-              OutlinedButton.icon(
-                onPressed: () => downloadEstablishmentQrPdf(
-                  establishmentId: _uid,
-                  businessName: _businessName,
-                  municipalityId: _municipalityId,
-                ),
-                icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
-                label: const Text('Download PDF'),
-              ),
-            ],
-          ),
-        ],
+    return EstablishmentQrHero(
+      flush: true,
+      payload: _qrPayload,
+      hint: _copy.qrHint,
+      onDownloadPng: () => downloadEstablishmentQrPng(
+        establishmentId: _uid,
+        businessName: _businessName,
+        municipalityId: _municipalityId,
+      ),
+      onDownloadPdf: () => downloadEstablishmentQrPdf(
+        establishmentId: _uid,
+        businessName: _businessName,
+        municipalityId: _municipalityId,
       ),
     );
   }
@@ -1915,124 +1631,14 @@ class _EstablishmentDashboardScreenState
   Widget _roomCountSection({
     required List<EstablishmentStayRequest> allStays,
   }) {
-    return _card(
-      padding: const EdgeInsets.all(18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Total rooms',
-            style: AeDashTokens.heading(size: 16),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Defines Room 1?N for the Rooms grid and occupancy. '
-            'Changes require confirmation and cannot drop below occupied rooms.',
-            style: AeDashTokens.body(size: 13),
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _roomCountCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Room count',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              FilledButton(
-                onPressed: _savingRooms
-                    ? null
-                    : () => _saveRoomCount(allStays: allStays),
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppTheme.brandOrange,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                ),
-                child: _savingRooms
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Text('Save'),
-              ),
-            ],
-          ),
-        ],
-      ),
+    return EstablishmentRoomCountCard(
+      controller: _roomCountCtrl,
+      saving: _savingRooms,
+      onSave: () => _saveRoomCount(allStays: allStays),
     );
   }
 
-  Widget _pendingCard(
-    EstablishmentStayRequest s, {
-    required List<EstablishmentStayRequest> allStays,
-  }) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFFBEB),
-        borderRadius: BorderRadius.circular(AeDashTokens.radiusLg),
-        border: Border.all(color: const Color(0xFFFDE68A)),
-        boxShadow: AeDashTokens.cardShadow,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            s.touristName.isNotEmpty ? s.touristName : 'Tourist',
-            style: AeDashTokens.sectionTitle(size: 15),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Party ${s.partySize}'
-            '${s.touristEmail.isNotEmpty ? ' ? ${s.touristEmail}' : ''}',
-            style: AeDashTokens.body(size: 12.5),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: FilledButton(
-                  onPressed: () =>
-                      _openConfirmDialog(s, allStays: allStays),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppTheme.brandOrange,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                  child: const Text('Confirm'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton(
-                onPressed: () => _reject(s),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AeDashTokens.danger,
-                  side: const BorderSide(color: Color(0xFFFECACA)),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 14,
-                  ),
-                ),
-                child: const Text('Reject'),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _checkOutStay(EstablishmentStayRequest stay) async {
+  Future<void> _checkOutStayUnguarded(EstablishmentStayRequest stay) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -2079,44 +1685,12 @@ class _EstablishmentDashboardScreenState
     }
   }
 
-  Widget _recentTile(EstablishmentStayRequest s) {
-    final inHouse = EstablishmentRoomGrid.isInHouse(s);
-    final color = s.isCheckedOut
-        ? const Color(0xFF475569)
-        : s.isConfirmed
-            ? const Color(0xFF065F46)
-            : const Color(0xFF9F1239);
-    final lodgingBits = _isLodging
-        ? ' ? nights ${s.nightsStayed ?? '?'} ? rooms ${s.roomsOccupied ?? '?'}'
-        : ' ? party ${s.partySize}';
-    final statusLabel = s.isCheckedOut
-        ? 'checked out'
-        : (inHouse ? 'in house' : s.status);
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-      title: Text(
-        s.touristName.isNotEmpty ? s.touristName : 'Tourist',
-        style: AeDashTokens.sectionTitle(size: 14),
-      ),
-      subtitle: Text(
-        '$statusLabel$lodgingBits',
-        style: TextStyle(color: color, fontSize: 12.5),
-      ),
-      trailing: inHouse
-          ? TextButton(
-              onPressed: () => _checkOutStay(s),
-              child: const Text('Check out'),
-            )
-          : null,
-    );
-  }
 }
 
 class _DashboardData {
   const _DashboardData({
     required this.allStays,
     required this.pending,
-    required this.recentConfirmed,
     required this.kpis,
     required this.dss,
     required this.streamError,
@@ -2125,20 +1699,13 @@ class _DashboardData {
 
   final List<EstablishmentStayRequest> allStays;
   final List<EstablishmentStayRequest> pending;
-  final List<EstablishmentStayRequest> recentConfirmed;
   final _EstablishmentKpis kpis;
   final EstablishmentDssSnapshot dss;
   final Object? streamError;
   final bool streamLoading;
 }
 
-enum _AeTab { home, rooms, insights, qr }
-
-class _NavItem {
-  const _NavItem(this.icon, this.label);
-  final IconData icon;
-  final String label;
-}
+enum _AeTab { home, rooms, insights, reviews, qr, settings }
 
 class _EstablishmentKpis {
   const _EstablishmentKpis({

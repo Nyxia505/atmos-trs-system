@@ -2054,25 +2054,6 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
             ],
           ),
         ),
-        const SizedBox(height: 12),
-        _panel(
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('About', style: GovernorDashboardTokens.sectionTitle()),
-              Text(
-                'ATMOS TRS · Provincial Tourism Office\nMisamis Occidental',
-                style: GovernorDashboardTokens.body(),
-              ),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                onPressed: _logout,
-                icon: const Icon(Icons.logout_rounded),
-                label: const Text('Log out'),
-              ),
-            ],
-          ),
-        ),
       ],
     );
   }

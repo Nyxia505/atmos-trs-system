@@ -1,6 +1,7 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
+import 'package:atmos_trs_system/widgets/chart_transition.dart';
 import 'package:atmos_trs_system/widgets/establishment_dash_tokens.dart';
 
 /// Shared fl_chart panels for establishment DSS / Home glance charts.
@@ -11,6 +12,8 @@ abstract final class EstablishmentDssCharts {
     required Widget child,
     double height = 200,
     EdgeInsetsGeometry padding = const EdgeInsets.fromLTRB(16, 14, 16, 14),
+    IconData? icon,
+    Color iconColor = AeDashTokens.accent,
   }) {
     return Container(
       decoration: AeDashTokens.cardDecoration(),
@@ -18,9 +21,18 @@ abstract final class EstablishmentDssCharts {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(title, style: AeDashTokens.section(size: 14)),
-          const SizedBox(height: 2),
-          Text(subtitle, style: AeDashTokens.body(size: 11.5)),
+          if (icon != null)
+            AeSectionHeader(
+              title: title,
+              hint: subtitle,
+              icon: icon,
+              color: iconColor,
+            )
+          else ...[
+            Text(title, style: AeDashTokens.section(size: 14)),
+            const SizedBox(height: 2),
+            Text(subtitle, style: AeDashTokens.body(size: 11.5)),
+          ],
           const SizedBox(height: 12),
           SizedBox(height: height, child: child),
         ],
@@ -29,12 +41,10 @@ abstract final class EstablishmentDssCharts {
   }
 
   static Widget emptyChart(String message) {
-    return Center(
-      child: Text(
-        message,
-        textAlign: TextAlign.center,
-        style: AeDashTokens.body(size: 13),
-      ),
+    return AeEmptyState(
+      message: message,
+      icon: Icons.insert_chart_outlined_rounded,
+      boxed: false,
     );
   }
 
@@ -42,6 +52,7 @@ abstract final class EstablishmentDssCharts {
     required List<int> values,
     required List<String> labels,
     Color color = AeDashTokens.accent,
+    double progress = 1,
   }) {
     if (values.isEmpty || values.every((v) => v == 0)) {
       return emptyChart('No confirmed stays in this period yet.');
@@ -49,9 +60,11 @@ abstract final class EstablishmentDssCharts {
     final maxY = values.reduce((a, b) => a > b ? a : b).toDouble();
     final spots = <FlSpot>[
       for (var i = 0; i < values.length; i++)
-        FlSpot(i.toDouble(), values[i].toDouble()),
+        FlSpot(i.toDouble(), values[i] * progress),
     ];
     return LineChart(
+      duration: ChartTransition.chartDuration(progress),
+      curve: Curves.easeOutCubic,
       LineChartData(
         minY: 0,
         maxY: maxY < 2 ? 2 : maxY * 1.15,
@@ -74,6 +87,7 @@ abstract final class EstablishmentDssCharts {
             sideTitles: SideTitles(
               showTitles: true,
               reservedSize: 28,
+              interval: maxY <= 6 ? 1 : null,
               getTitlesWidget: (v, _) => Text(
                 v.toInt().toString(),
                 style: AeDashTokens.body(size: 10),
@@ -126,12 +140,21 @@ abstract final class EstablishmentDssCharts {
   static Widget staysTrendBars({
     required List<int> values,
     required List<String> labels,
+    double progress = 1,
   }) {
     if (values.isEmpty || values.every((v) => v == 0)) {
       return emptyChart('No confirmed stays in this period yet.');
     }
     final maxY = values.reduce((a, b) => a > b ? a : b).toDouble();
+    final labelStep = values.length <= 12 ? 1 : (values.length / 8).ceil();
+    final barWidth = values.length > 20
+        ? 6.0
+        : values.length > 10
+            ? 8.0
+            : 12.0;
     return BarChart(
+      duration: ChartTransition.chartDuration(progress),
+      curve: Curves.easeOutCubic,
       BarChartData(
         maxY: maxY < 2 ? 2 : maxY * 1.2,
         gridData: FlGridData(
@@ -152,10 +175,13 @@ abstract final class EstablishmentDssCharts {
             sideTitles: SideTitles(
               showTitles: true,
               reservedSize: 26,
-              getTitlesWidget: (v, _) => Text(
-                v.toInt().toString(),
-                style: AeDashTokens.body(size: 10),
-              ),
+              interval: maxY <= 6 ? 1 : null,
+              getTitlesWidget: (v, _) => v != v.roundToDouble()
+                  ? const SizedBox.shrink()
+                  : Text(
+                      v.toInt().toString(),
+                      style: AeDashTokens.body(size: 10),
+                    ),
             ),
           ),
           bottomTitles: AxisTitles(
@@ -164,6 +190,7 @@ abstract final class EstablishmentDssCharts {
               getTitlesWidget: (v, _) {
                 final i = v.toInt();
                 if (i < 0 || i >= labels.length) return const SizedBox.shrink();
+                if (i % labelStep != 0) return const SizedBox.shrink();
                 return Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(labels[i], style: AeDashTokens.body(size: 9)),
@@ -178,8 +205,8 @@ abstract final class EstablishmentDssCharts {
               x: i,
               barRods: [
                 BarChartRodData(
-                  toY: values[i].toDouble(),
-                  width: values.length > 10 ? 8 : 12,
+                  toY: values[i] * progress,
+                  width: barWidth,
                   borderRadius: const BorderRadius.vertical(
                     top: Radius.circular(4),
                   ),
@@ -208,6 +235,8 @@ abstract final class EstablishmentDssCharts {
       children: [
         Expanded(
           child: PieChart(
+            duration: const Duration(milliseconds: 450),
+            curve: Curves.easeOutCubic,
             PieChartData(
               sectionsSpace: 2,
               centerSpaceRadius: 36,
@@ -262,7 +291,7 @@ abstract final class EstablishmentDssCharts {
     required int total,
   }) {
     if (total <= 0) {
-      return emptyChart('Set your room count in QR & profile.');
+      return emptyChart('Set your room count on the Rooms tab.');
     }
     final pct = (occupied / total).clamp(0.0, 1.0);
     return Column(
@@ -272,6 +301,8 @@ abstract final class EstablishmentDssCharts {
             alignment: Alignment.center,
             children: [
               PieChart(
+                duration: const Duration(milliseconds: 450),
+                curve: Curves.easeOutCubic,
                 PieChartData(
                   startDegreeOffset: 270,
                   sectionsSpace: 0,
@@ -322,20 +353,26 @@ abstract final class EstablishmentDssCharts {
     );
   }
 
-  static Widget weekdayBars(List<int> weekdayGuests) {
+  static Widget weekdayBars(List<int> weekdayGuests, {double progress = 1}) {
     const labels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
     if (weekdayGuests.every((v) => v == 0)) {
       return emptyChart('No guest load recorded this month yet.');
     }
-    return staysTrendBars(values: weekdayGuests, labels: labels);
+    return staysTrendBars(
+      values: weekdayGuests,
+      labels: labels,
+      progress: progress,
+    );
   }
 
-  static Widget reviewStarsBars(List<int> buckets) {
+  static Widget reviewStarsBars(List<int> buckets, {double progress = 1}) {
     if (buckets.every((v) => v == 0)) {
       return emptyChart('No guest reviews yet.');
     }
     final maxY = buckets.reduce((a, b) => a > b ? a : b).toDouble();
     return BarChart(
+      duration: ChartTransition.chartDuration(progress),
+      curve: Curves.easeOutCubic,
       BarChartData(
         maxY: maxY < 2 ? 2 : maxY * 1.2,
         gridData: const FlGridData(show: false),
@@ -364,7 +401,7 @@ abstract final class EstablishmentDssCharts {
               x: i,
               barRods: [
                 BarChartRodData(
-                  toY: (i < buckets.length ? buckets[i] : 0).toDouble(),
+                  toY: (i < buckets.length ? buckets[i] : 0) * progress,
                   width: 16,
                   borderRadius:
                       const BorderRadius.vertical(top: Radius.circular(4)),
@@ -381,6 +418,7 @@ abstract final class EstablishmentDssCharts {
   static Widget roomRankingBars({
     required List<String> labels,
     required List<int> values,
+    double progress = 1,
   }) {
     if (labels.isEmpty || values.every((v) => v == 0)) {
       return emptyChart('No room assignments in this period yet.');
@@ -388,6 +426,8 @@ abstract final class EstablishmentDssCharts {
     final maxY = values.reduce((a, b) => a > b ? a : b).toDouble();
     final show = labels.length > 12 ? 12 : labels.length;
     return BarChart(
+      duration: ChartTransition.chartDuration(progress),
+      curve: Curves.easeOutCubic,
       BarChartData(
         maxY: maxY < 2 ? 2 : maxY * 1.2,
         gridData: FlGridData(
@@ -437,7 +477,7 @@ abstract final class EstablishmentDssCharts {
               x: i,
               barRods: [
                 BarChartRodData(
-                  toY: values[i].toDouble(),
+                  toY: values[i] * progress,
                   width: show > 8 ? 10 : 14,
                   borderRadius:
                       const BorderRadius.vertical(top: Radius.circular(4)),
@@ -455,15 +495,18 @@ abstract final class EstablishmentDssCharts {
   static Widget occupancyPctTrend({
     required List<double> pctValues,
     required List<String> labels,
+    double progress = 1,
   }) {
     if (pctValues.isEmpty || pctValues.every((v) => v <= 0)) {
       return emptyChart('No occupancy signal in this period yet.');
     }
     final spots = <FlSpot>[
       for (var i = 0; i < pctValues.length; i++)
-        FlSpot(i.toDouble(), pctValues[i]),
+        FlSpot(i.toDouble(), pctValues[i] * progress),
     ];
     return LineChart(
+      duration: ChartTransition.chartDuration(progress),
+      curve: Curves.easeOutCubic,
       LineChartData(
         minY: 0,
         maxY: 100,

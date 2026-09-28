@@ -19,11 +19,15 @@ class BottomNav extends StatelessWidget {
     required this.currentIndex,
     required this.onTap,
     this.unreadNotificationCount = 0,
+    this.itemKeys,
   });
 
   final int currentIndex;
   final ValueChanged<int> onTap;
   final int unreadNotificationCount;
+
+  /// Optional keys per tab (e.g. for the guided tour spotlight).
+  final List<Key?>? itemKeys;
 
   @override
   Widget build(BuildContext context) {
@@ -40,15 +44,19 @@ class BottomNav extends StatelessWidget {
           child: Row(
             children: List.generate(kBottomNavItems.length, (index) {
               final item = kBottomNavItems[index];
+              final keys = itemKeys;
               return Expanded(
-                child: _NavItem(
-                  icon: item.$1,
-                  label: item.$2,
-                  isSelected: index == currentIndex,
-                  isScanTab: index == 2,
-                  showLabel: showLabels,
-                  badgeCount: index == 3 ? unreadNotificationCount : 0,
-                  onTap: () => onTap(index),
+                child: KeyedSubtree(
+                  key: keys != null && index < keys.length ? keys[index] : null,
+                  child: _NavItem(
+                    icon: item.$1,
+                    label: item.$2,
+                    isSelected: index == currentIndex,
+                    isScanTab: index == 2,
+                    showLabel: showLabels,
+                    badgeCount: index == 3 ? unreadNotificationCount : 0,
+                    onTap: () => onTap(index),
+                  ),
                 ),
               );
             }),

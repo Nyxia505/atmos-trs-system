@@ -3,7 +3,10 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Holds tourist signup payloads until OTP verification succeeds.
-/// Nothing is written to `tourists` / `users` until [RegistrationCompletionService].
+///
+/// When [authDeferred] is true, Firebase Auth has **not** been created yet —
+/// [uid] is a local pending id used only for OTP cache keys. Auth + Firestore
+/// profiles are created after successful email OTP verification.
 class PendingRegistration {
   const PendingRegistration({
     required this.uid,
@@ -13,8 +16,11 @@ class PendingRegistration {
     required this.userData,
     this.localProfile,
     this.usedPhotoFirestoreFallback = false,
+    this.authDeferred = false,
+    this.password,
   });
 
+  /// Firebase Auth uid after create, or a local pending id when [authDeferred].
   final String uid;
   final String contactEmail;
   final String authEmail;
@@ -25,6 +31,41 @@ class PendingRegistration {
   final PendingLocalProfile? localProfile;
   final bool usedPhotoFirestoreFallback;
 
+  /// True until email OTP succeeds and [createUserWithEmailAndPassword] runs.
+  final bool authDeferred;
+
+  /// Temporary password for deferred Auth create (cleared after verify).
+  final String? password;
+
+  /// Key used for local OTP storage (same as [uid] while deferred).
+  String get otpKey => uid;
+
+  PendingRegistration copyWith({
+    String? uid,
+    String? contactEmail,
+    String? authEmail,
+    Map<String, dynamic>? touristData,
+    Map<String, dynamic>? userData,
+    PendingLocalProfile? localProfile,
+    bool? usedPhotoFirestoreFallback,
+    bool? authDeferred,
+    String? password,
+    bool clearPassword = false,
+  }) {
+    return PendingRegistration(
+      uid: uid ?? this.uid,
+      contactEmail: contactEmail ?? this.contactEmail,
+      authEmail: authEmail ?? this.authEmail,
+      touristData: touristData ?? this.touristData,
+      userData: userData ?? this.userData,
+      localProfile: localProfile ?? this.localProfile,
+      usedPhotoFirestoreFallback:
+          usedPhotoFirestoreFallback ?? this.usedPhotoFirestoreFallback,
+      authDeferred: authDeferred ?? this.authDeferred,
+      password: clearPassword ? null : (password ?? this.password),
+    );
+  }
+
   Map<String, dynamic> toJson() => {
         'uid': uid,
         'contactEmail': contactEmail,
@@ -32,6 +73,8 @@ class PendingRegistration {
         'touristData': touristData,
         'userData': userData,
         'usedPhotoFirestoreFallback': usedPhotoFirestoreFallback,
+        'authDeferred': authDeferred,
+        if (password != null && password!.isNotEmpty) 'password': password,
         if (localProfile != null) 'localProfile': localProfile!.toJson(),
       };
 
@@ -53,8 +96,9 @@ class PendingRegistration {
       touristData: Map<String, dynamic>.from(tourist),
       userData: Map<String, dynamic>.from(user),
       localProfile: local,
-      usedPhotoFirestoreFallback:
-          json['usedPhotoFirestoreFallback'] == true,
+      usedPhotoFirestoreFallback: json['usedPhotoFirestoreFallback'] == true,
+      authDeferred: json['authDeferred'] == true,
+      password: json['password']?.toString(),
     );
   }
 }
@@ -176,8 +220,20 @@ class PendingRegistrationCache {
     }
   }
 
+  /// Current unfinished tourist signup, if any.
+  static PendingRegistration? get current => _pending;
+
   static PendingRegistration? forUid(String uid) {
     if (_pending != null && _pending!.uid == uid) return _pending;
+    return null;
+  }
+
+  static PendingRegistration? forContactEmail(String email) {
+    final normalized = email.trim().toLowerCase();
+    if (normalized.isEmpty || _pending == null) return null;
+    if (_pending!.contactEmail.trim().toLowerCase() == normalized) {
+      return _pending;
+    }
     return null;
   }
 

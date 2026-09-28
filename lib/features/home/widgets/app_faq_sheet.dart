@@ -8,6 +8,7 @@ import 'package:atmos_trs_system/features/navigation/tourist_web_layout.dart';
 import 'package:atmos_trs_system/models/faq_chat_message_record.dart';
 import 'package:atmos_trs_system/services/faq_chat_store.dart';
 import 'package:atmos_trs_system/services/faq_chatbot_service.dart';
+import 'package:atmos_trs_system/widgets/tourist_full_page.dart';
 
 const Color _kDarkText = Color(0xFF111827);
 
@@ -226,6 +227,14 @@ class _FaqChatBodyState extends State<_FaqChatBody> {
 
   Future<void> _openFaqBrowse() async {
     final accent = widget.accent;
+    if (widget.fullScreen) {
+      final question = await pushTouristFullPage<String>(
+        context,
+        _FaqBrowsePage(accent: accent),
+      );
+      if (question != null && mounted) unawaited(_sendMessage(question));
+      return;
+    }
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -999,8 +1008,117 @@ class _TypingBubble extends StatelessWidget {
   }
 }
 
+/// Mobile full-screen FAQ browser; pops with the question to ask Tala.
+class _FaqBrowsePage extends StatefulWidget {
+  const _FaqBrowsePage({required this.accent});
+
+  final Color accent;
+
+  @override
+  State<_FaqBrowsePage> createState() => _FaqBrowsePageState();
+}
+
+class _FaqBrowsePageState extends State<_FaqBrowsePage> {
+  final _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  List<AppFaqItem> get _items {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return kAppFaqItems;
+    return kAppFaqItems
+        .where(
+          (i) =>
+              i.question.toLowerCase().contains(q) ||
+              i.answer.toLowerCase().contains(q),
+        )
+        .toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _items;
+    return TouristFullPage(
+      title: 'Frequently asked',
+      subtitle: 'Tap a question to see the answer, or ask Tala for more.',
+      icon: Icons.help_outline_rounded,
+      headerBottom: Container(
+        height: 46,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: TextField(
+          controller: _search,
+          onChanged: (v) => setState(() => _query = v),
+          textInputAction: TextInputAction.search,
+          style: const TextStyle(fontSize: 14.5, color: _kDarkText),
+          decoration: InputDecoration(
+            hintText: 'Search questions',
+            hintStyle: TextStyle(color: Colors.grey.shade500),
+            prefixIcon: Icon(Icons.search_rounded, color: Colors.grey.shade500),
+            suffixIcon: _query.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: 'Clear',
+                    icon: Icon(Icons.close_rounded, color: Colors.grey.shade500),
+                    onPressed: () {
+                      _search.clear();
+                      setState(() => _query = '');
+                    },
+                  ),
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(vertical: 13),
+          ),
+        ),
+      ),
+      child: items.isEmpty
+          ? const TouristEmptyState(
+              icon: Icons.search_off_rounded,
+              title: 'No matching questions',
+              message: 'Try another word, or go back and ask Tala directly.',
+            )
+          : ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 18, 16, 32),
+              itemCount: items.length + 1,
+              separatorBuilder: (_, i) => SizedBox(height: i == 0 ? 12 : 10),
+              itemBuilder: (context, index) {
+                if (index == 0) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Text(
+                      _query.isEmpty
+                          ? '${items.length} common questions'
+                          : '${items.length} ${items.length == 1 ? 'result' : 'results'}',
+                      style: AtmosBrandTypography.meaningTagline(
+                        color: AppTheme.unselectedMuted,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  );
+                }
+                final item = items[index - 1];
+                return _FaqBrowseTile(
+                  key: ValueKey(item.question),
+                  item: item,
+                  accent: widget.accent,
+                  onAsk: () => Navigator.of(context).pop(item.question),
+                );
+              },
+            ),
+    );
+  }
+}
+
 class _FaqBrowseTile extends StatefulWidget {
   const _FaqBrowseTile({
+    super.key,
     required this.item,
     required this.accent,
     required this.onAsk,
@@ -1019,84 +1137,154 @@ class _FaqBrowseTileState extends State<_FaqBrowseTile> {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: _expanded
-          ? widget.accent.withValues(alpha: 0.04)
-          : AppTheme.scaffoldBackground,
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: () => setState(() => _expanded = !_expanded),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+    final accent = widget.accent;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: _expanded
+              ? accent.withValues(alpha: 0.45)
+              : const Color(0xFFE2E8F0),
+          width: _expanded ? 1.4 : 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: _expanded
+                ? accent.withValues(alpha: 0.12)
+                : Colors.black.withValues(alpha: 0.03),
+            blurRadius: _expanded ? 16 : 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => setState(() => _expanded = !_expanded),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 10, 12),
+            child: AnimatedSize(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOutCubic,
+              alignment: Alignment.topCenter,
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 34,
-                    height: 34,
-                    decoration: BoxDecoration(
-                      color: widget.accent.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(widget.item.icon, size: 18, color: widget.accent),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              accent.withValues(alpha: 0.18),
+                              accent.withValues(alpha: 0.08),
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(widget.item.icon, size: 20, color: accent),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(
+                            widget.item.question,
+                            style: AtmosBrandTypography.meaningTagline(
+                              color: _kDarkText,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                              height: 1.35,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      AnimatedRotation(
+                        turns: _expanded ? 0.5 : 0,
+                        duration: const Duration(milliseconds: 200),
+                        child: Container(
+                          width: 30,
+                          height: 30,
+                          margin: const EdgeInsets.only(top: 4),
+                          decoration: BoxDecoration(
+                            color: _expanded
+                                ? accent.withValues(alpha: 0.12)
+                                : const Color(0xFFF1F5F9),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.expand_more_rounded,
+                            size: 20,
+                            color: _expanded ? accent : AppTheme.unselectedMuted,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 6),
+                  if (_expanded) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(left: 50, right: 4),
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF8FAFC),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border(
+                          left: BorderSide(color: accent, width: 3),
+                        ),
+                      ),
                       child: Text(
-                        widget.item.question,
+                        widget.item.answer,
                         style: AtmosBrandTypography.meaningTagline(
-                          color: _kDarkText,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          height: 1.35,
+                          color: const Color(0xFF475569),
+                          fontSize: 14,
+                          height: 1.5,
                         ),
                       ),
                     ),
-                  ),
-                  Icon(
-                    _expanded
-                        ? Icons.expand_less_rounded
-                        : Icons.expand_more_rounded,
-                    color: AppTheme.unselectedMuted,
-                  ),
-                ],
-              ),
-              if (_expanded) ...[
-                const SizedBox(height: 10),
-                Padding(
-                  padding: const EdgeInsets.only(left: 46),
-                  child: Text(
-                    widget.item.answer,
-                    style: AtmosBrandTypography.meaningTagline(
-                      color: AppTheme.unselectedMuted,
-                      fontSize: 14,
-                      height: 1.5,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton.icon(
-                    onPressed: widget.onAsk,
-                    icon: Icon(Icons.chat_bubble_outline, size: 18, color: widget.accent),
-                    label: Text(
-                      'Ask in chat',
-                      style: AtmosBrandTypography.meaningTagline(
-                        color: widget.accent,
-                        fontWeight: FontWeight.w600,
+                    const SizedBox(height: 10),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 50),
+                      child: FilledButton.icon(
+                        onPressed: widget.onAsk,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: accent,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          visualDensity: VisualDensity.compact,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                        ),
+                        icon: const Icon(Icons.chat_bubble_outline, size: 16),
+                        label: Text(
+                          'Ask Tala',
+                          style: AtmosBrandTypography.meaningTagline(
+                            color: Colors.white,
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ),
-              ],
-            ],
+                  ],
+                ],
+              ),
+            ),
           ),
         ),
       ),

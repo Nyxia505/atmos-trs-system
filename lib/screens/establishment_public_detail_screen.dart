@@ -29,6 +29,11 @@ class _EstablishmentPublicDetailScreenState
   late EstablishmentMapPin _pin;
   final _pageController = PageController();
   int _pageIndex = 0;
+  // Kept across gallery swipes (setState) so listeners are not re-created.
+  late final Stream<List<String>> _galleryStream =
+      EstablishmentGalleryService.watchUrls(widget.pin.id);
+  late final Stream<EstablishmentStayReviewSummary> _reviewsStream =
+      EstablishmentStayReviewService.watchForEstablishment(widget.pin.id);
 
   @override
   void initState() {
@@ -68,7 +73,7 @@ class _EstablishmentPublicDetailScreenState
     return Scaffold(
       backgroundColor: Colors.white,
       body: StreamBuilder<List<String>>(
-        stream: EstablishmentGalleryService.watchUrls(_pin.id),
+        stream: _galleryStream,
         builder: (context, gallerySnap) {
           final liveImages = gallerySnap.data;
           final urls = (liveImages != null && liveImages.isNotEmpty)
@@ -294,9 +299,7 @@ class _EstablishmentPublicDetailScreenState
               ),
               SliverToBoxAdapter(
                 child: StreamBuilder<EstablishmentStayReviewSummary>(
-                  stream: EstablishmentStayReviewService.watchForEstablishment(
-                    _pin.id,
-                  ),
+                  stream: _reviewsStream,
                   builder: (context, snap) {
                     final summary =
                         snap.data ?? EstablishmentStayReviewSummary.empty;

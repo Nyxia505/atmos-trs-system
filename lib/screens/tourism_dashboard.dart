@@ -53,6 +53,8 @@ import 'package:atmos_trs_system/services/dae3_auto_report_service.dart';
 import 'package:atmos_trs_system/widgets/lgu_events_panel.dart';
 import 'package:atmos_trs_system/services/lgu_event_service.dart';
 import 'package:atmos_trs_system/widgets/lgu_debug_data_dialogs.dart';
+import 'package:atmos_trs_system/widgets/chart_transition.dart';
+import 'package:atmos_trs_system/utils/trend_range.dart';
 
 class LguDashboard extends StatefulWidget {
   const LguDashboard({super.key});
@@ -66,9 +68,10 @@ class _LguDashboardState extends State<LguDashboard>
   int _selectedIndex = 0;
   bool _isSidebarExpanded = true;
   bool _didInitializeSidebarForViewport = false;
+  TrendRange _lguTrendRange = TrendRange.days14;
   late AnimationController _animationController;
 
-  // Theme â€” premium LGU tourism dashboard
+  // Theme — premium LGU tourism dashboard
   static const Color _primaryOrange = Color(0xFFF97316);
   static const Color _accentOrange = Color(0xFFFB923C);
   static const Color _darkBg = Color(0xFFFFF8F3);
@@ -102,7 +105,7 @@ class _LguDashboardState extends State<LguDashboard>
       'assets/images/capitol lp bg.png';
 
   /// Hero photos must match the logged-in LGU
-  /// (Oroquieta Plaza for Oroquieta â€” never Tangub/Ozamiz landmarks).
+  /// (Oroquieta Plaza for Oroquieta — never Tangub/Ozamiz landmarks).
   String get _dashboardHeroImageAsset {
     switch (normalizeMunicipalityId(_storedMunicipalityId)) {
       case 'oroquieta':
@@ -198,7 +201,7 @@ class _LguDashboardState extends State<LguDashboard>
 
   /// Large rounded UI (dashboard reference): main panel.
 
-  // Data states â€” staged loading for smooth post-login paint
+  // Data states — staged loading for smooth post-login paint
   bool _isBootstrapping = true;
   bool _isLoadingDetails = true;
   bool _hasCachedStats = false;
@@ -224,7 +227,7 @@ class _LguDashboardState extends State<LguDashboard>
   List<Map<String, dynamic>> _notifications = [];
   int _unreadNotifications = 0;
 
-  /// Province events stream â€” badge + snackbar for new posts from other LGUs.
+  /// Province events stream — badge + snackbar for new posts from other LGUs.
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
       _lguEventsSubscription;
   bool _lguEventsStreamPrimed = false;
@@ -232,7 +235,7 @@ class _LguDashboardState extends State<LguDashboard>
   List<Map<String, dynamic>> _lguEvents = [];
   final Set<String> _seenCrossLguEventIds = {};
   Set<String> _knownPublishedEventIds = {};
-  /// 0 Province Live, 1 My posts â€” for Events fragment tabs.
+  /// 0 Province Live, 1 My posts — for Events fragment tabs.
   int _eventsPanelTab = 0;
 
   /// For real-time check-in notifications: newest check-in doc id we've seen.
@@ -1733,7 +1736,7 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   Widget _buildVisitTouristIdChip(String id, {double? maxWidth}) {
-    final text = id.trim().isEmpty ? 'â€”' : id;
+    final text = id.trim().isEmpty ? '—' : id;
     final chip = Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
@@ -1787,7 +1790,7 @@ class _LguDashboardState extends State<LguDashboard>
     Map<String, dynamic> c, {
     double radius = 20,
   }) {
-    // Tourist Visits: privacy avatar only (same as Governor â€” no photo / initials).
+    // Tourist Visits: privacy avatar only (same as Governor — no photo / initials).
     return _buildVisitPrivacyAvatar(radius: radius);
   }
 
@@ -1931,19 +1934,10 @@ class _LguDashboardState extends State<LguDashboard>
     return '${parts[0]}\n${parts[1]}';
   }
 
-  List<double> get _lguAnalyticsTrendValues {
-    const days = 14;
-    final counts = List.filled(days, 0.0);
-    final today = DateTime.now();
-    for (final c in _realCheckIns) {
-      final d = _parseCheckInTimestamp(c);
-      if (d != null) {
-        final diff = today.difference(DateTime(d.year, d.month, d.day)).inDays;
-        if (diff >= 0 && diff < days) counts[days - 1 - diff] += 1;
-      }
-    }
-    return counts;
-  }
+  TrendSeries get _lguAnalyticsTrend => TrendBuckets.build(
+        _realCheckIns.map(_parseCheckInTimestamp),
+        _lguTrendRange,
+      );
 
   List<Map<String, dynamic>> get _lguAnalyticsTopSpots {
     final byLabel = <String, int>{};
@@ -2155,7 +2149,7 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
-  /// Profile row â€” logo, office name, and optional collapse control on one line.
+  /// Profile row — logo, office name, and optional collapse control on one line.
   Widget _buildSidebarProfileStrip({bool showCollapseButton = false}) {
     final city = _municipalityName?.trim() ?? '';
     final rawName = _profileName.trim();
@@ -2879,7 +2873,7 @@ class _LguDashboardState extends State<LguDashboard>
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '$cityLabel â€” live registrations, visits, and spots',
+                  '$cityLabel — live registrations, visits, and spots',
                   style: GoogleFonts.inter(
                     color: onHeader.withValues(alpha: 0.9),
                     fontSize: _isMobile ? 11.5 : 13,
@@ -3034,7 +3028,7 @@ class _LguDashboardState extends State<LguDashboard>
                               ),
                             ),
                             TextSpan(
-                              text: 'ðŸ§¡',
+                              text: '🧡',
                               style: TextStyle(
                                 fontSize: _isMobile ? 17 : 20,
                               ),
@@ -3256,7 +3250,7 @@ class _LguDashboardState extends State<LguDashboard>
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Newest sign-ups â€” names hidden for data privacy',
+                      'Newest sign-ups — names hidden for data privacy',
                       style: GoogleFonts.inter(
                         color: _textMuted,
                         fontSize: 13,
@@ -3282,7 +3276,7 @@ class _LguDashboardState extends State<LguDashboard>
                   ),
                 ),
                 child: Text(
-                  'View all â†’',
+                  'View all →',
                   style: GoogleFonts.inter(
                     fontWeight: FontWeight.w700,
                     fontSize: 12,
@@ -3868,8 +3862,8 @@ class _LguDashboardState extends State<LguDashboard>
         color: _kpiOrange,
         tint: _tintOrange,
         trendLabel: todayTrendPct >= 0
-            ? 'â†‘ $todayTrendPct% from yesterday'
-            : 'â†“ ${todayTrendPct.abs()}% from yesterday',
+            ? '↑ $todayTrendPct% from yesterday'
+            : '↓ ${todayTrendPct.abs()}% from yesterday',
         trendPositive: todayTrendPct >= 0,
       ),
       _StatCard(
@@ -3881,7 +3875,7 @@ class _LguDashboardState extends State<LguDashboard>
         icon: Icons.people_alt_rounded,
         color: _kpiBlue,
         tint: _tintBlue,
-        trendLabel: 'â†‘ +$touristTrendPct% from last month',
+        trendLabel: '↑ +$touristTrendPct% from last month',
         trendPositive: true,
         onTap: () => setState(() {
           _selectedIndex = _registeredTouristsIndex;
@@ -3898,8 +3892,8 @@ class _LguDashboardState extends State<LguDashboard>
         color: _kpiGreen,
         tint: _tintGreen,
         trendLabel: inactiveSpots > 0
-            ? 'â†’ $inactiveSpots need attention'
-            : 'âœ“ 100% operational',
+            ? '→ $inactiveSpots need attention'
+            : '✓ 100% operational',
         trendPositive: inactiveSpots == 0,
       ),
       _StatCard(
@@ -3916,10 +3910,10 @@ class _LguDashboardState extends State<LguDashboard>
         color: _kpiPurple,
         tint: _tintPurple,
         trendLabel: weekDelta == 0
-            ? 'â†’ No change'
+            ? '→ No change'
             : (weekDelta > 0
-                ? 'â†‘ +$weekDelta vs prior week'
-                : 'â†“ ${weekDelta.abs()} vs prior week'),
+                ? '↑ +$weekDelta vs prior week'
+                : '↓ ${weekDelta.abs()} vs prior week'),
         trendPositive: weekDelta >= 0,
         onTap: () => setState(() {
           _selectedIndex = 1;
@@ -5038,7 +5032,7 @@ class _LguDashboardState extends State<LguDashboard>
     setState(() => _isBackfillingSpotQr = true);
     try {
       // Non-destructive: seed missing defaults + backfill QR/images.
-      // Do NOT call enforceCanonicalSpotDocuments() here â€” that deletes
+      // Do NOT call enforceCanonicalSpotDocuments() here — that deletes
       // LGU-created spots (e.g. Ambak-Ambak Falls) on refresh.
       final result = await TouristSpotsFirestoreService.syncAllSpotQrData();
       if (!mounted || !showSnack) return;
@@ -6368,7 +6362,7 @@ class _LguDashboardState extends State<LguDashboard>
                     : const Icon(Icons.qr_code_2_rounded, size: 18),
                 label: Text(
                   saving
-                      ? 'Savingâ€¦'
+                      ? 'Saving…'
                       : (createNewSpot ? 'Create & Generate' : 'Generate'),
                 ),
                 style: ElevatedButton.styleFrom(
@@ -7407,7 +7401,7 @@ class _LguDashboardState extends State<LguDashboard>
                   ),
                 ),
                 const Text(
-                  'Unique people Â· names hidden',
+                  'Unique people · names hidden',
                   style: TextStyle(color: _textMuted, fontSize: 11),
                 ),
               ],
@@ -7471,7 +7465,7 @@ class _LguDashboardState extends State<LguDashboard>
       child: _buildFramedContentShell(
         title: 'Registered Tourists',
         subtitle: _storedMunicipalityId != null
-            ? '$munLabel â€” unique registrations, names hidden for data privacy'
+            ? '$munLabel — unique registrations, names hidden for data privacy'
             : 'Assign an LGU municipality to your account to see tourists who '
                 'registered here. Province-wide list is on the Governor dashboard.',
         body: SingleChildScrollView(
@@ -7494,7 +7488,7 @@ class _LguDashboardState extends State<LguDashboard>
                     iconColor: _primaryOrange,
                     subtitle: _storedMunicipalityId != null
                         ? 'Tourists who register via your municipality QR '
-                            '(or select this city) appear here â€” IDs only, '
+                            '(or select this city) appear here — IDs only, '
                             'same privacy as Governor.'
                         : 'Assign your LGU municipality to load registered tourists.',
                   )
@@ -8903,8 +8897,67 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
+  Widget _buildLguTrendRangePicker() {
+    return PopupMenuButton<TrendRange>(
+      tooltip: 'Change range',
+      initialValue: _lguTrendRange,
+      position: PopupMenuPosition.under,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      onSelected: (r) => setState(() => _lguTrendRange = r),
+      itemBuilder: (context) => [
+        for (final r in TrendRange.values)
+          PopupMenuItem<TrendRange>(
+            value: r,
+            height: 40,
+            child: Text(
+              r.label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight:
+                    r == _lguTrendRange ? FontWeight.w700 : FontWeight.w500,
+                color: r == _lguTrendRange ? _primaryOrange : _textDark,
+              ),
+            ),
+          ),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: _kAnalyticsSurfaceBorder),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.calendar_today_outlined,
+              size: 13,
+              color: _textMuted,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              _lguTrendRange.label,
+              style: const TextStyle(
+                color: _textDark,
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 16,
+              color: _textMuted,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildLguVisitorTrendsChart() {
-    final values = _lguAnalyticsTrendValues;
+    final series = _lguAnalyticsTrend;
+    final values = [for (final v in series.values) v.toDouble()];
     return Container(
       padding: EdgeInsets.all(_isMobile ? 14 : 18),
       decoration: BoxDecoration(
@@ -8925,11 +8978,11 @@ class _LguDashboardState extends State<LguDashboard>
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Expanded(
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
+                    const Text(
                       'Visitor trends',
                       style: TextStyle(
                         color: _textDark,
@@ -8937,10 +8990,11 @@ class _LguDashboardState extends State<LguDashboard>
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    SizedBox(height: 4),
+                    const SizedBox(height: 4),
                     Text(
-                      'Visits per day Â· last 14 days',
-                      style: TextStyle(
+                      'Visits per ${_lguTrendRange.bucketNoun} · '
+                      '${_lguTrendRange.label.toLowerCase()}',
+                      style: const TextStyle(
                         color: _textMuted,
                         fontSize: 12,
                         height: 1.35,
@@ -8949,6 +9003,8 @@ class _LguDashboardState extends State<LguDashboard>
                   ],
                 ),
               ),
+              _buildLguTrendRangePicker(),
+              const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
                 decoration: BoxDecoration(
@@ -8965,7 +9021,7 @@ class _LguDashboardState extends State<LguDashboard>
                     ),
                     const SizedBox(width: 5),
                     Text(
-                      'Total ${values.fold<double>(0, (a, b) => a + b).toStringAsFixed(0)}',
+                      'Total ${series.total}',
                       style: const TextStyle(
                         color: Color(0xFFC2410C),
                         fontSize: 11.5,
@@ -8978,7 +9034,16 @@ class _LguDashboardState extends State<LguDashboard>
             ],
           ),
           const SizedBox(height: 16),
-          _AnalyticsTrendChart(values: values, color: _primaryOrange),
+          _AnalyticsTrendChart(
+            values: values,
+            labels: _lguTrendRange == TrendRange.thisYear
+                ? series.labels
+                : series.tooltips,
+            tooltips: series.tooltips,
+            emptyMessage:
+                'No check-ins ${_lguTrendRange.label.toLowerCase()}',
+            color: _primaryOrange,
+          ),
         ],
       ),
     );
@@ -9166,7 +9231,7 @@ class _LguDashboardState extends State<LguDashboard>
         await SharePlus.instance.share(
           ShareParams(
             files: [xfile],
-            text: 'ATMOS-TRS â€” Analytics',
+            text: 'ATMOS-TRS — Analytics',
             title: 'Analytics screenshot',
           ),
         );
@@ -9190,7 +9255,7 @@ class _LguDashboardState extends State<LguDashboard>
             await SharePlus.instance.share(
               ShareParams(
                 files: [xfile],
-                text: 'ATMOS-TRS â€” Analytics',
+                text: 'ATMOS-TRS — Analytics',
                 title: 'Analytics screenshot',
               ),
             );
@@ -9268,7 +9333,7 @@ class _LguDashboardState extends State<LguDashboard>
       final date = e['date']?.toString().trim() ?? '';
       items.add({
         'title': 'New event from $from',
-        'message': date.isEmpty ? title : '$title Â· $date',
+        'message': date.isEmpty ? title : '$title · $date',
         'time': 'New',
       });
     }
@@ -9400,7 +9465,7 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
-  /// Sidebar brand mark â€” always ATMOS logo (not the account profile photo).
+  /// Sidebar brand mark — always ATMOS logo (not the account profile photo).
   Widget _buildSidebarBrandLogo({required double size}) {
     return AtmosSquareLogo(
       height: size,
@@ -9411,7 +9476,7 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
-  /// Header account chip â€” profile photo when set (same as Governor).
+  /// Header account chip — profile photo when set (same as Governor).
   Widget _buildHeaderProfileAvatar({required double size}) {
     if (_profilePhotoBytes != null) {
       return Container(
@@ -9937,19 +10002,19 @@ class _LguDashboardState extends State<LguDashboard>
                             hasLen,
                           ),
                           _tourismPasswordRequirementRow(
-                            'One uppercase letter (Aâ€“Z)',
+                            'One uppercase letter (A–Z)',
                             hasUpper,
                           ),
                           _tourismPasswordRequirementRow(
-                            'One lowercase letter (aâ€“z)',
+                            'One lowercase letter (a–z)',
                             hasLower,
                           ),
                           _tourismPasswordRequirementRow(
-                            'One number (0â€“9)',
+                            'One number (0–9)',
                             hasNumber,
                           ),
                           _tourismPasswordRequirementRow(
-                            'One special character (!@#\$%â€¦)',
+                            'One special character (!@#\$%…)',
                             hasSpecial,
                           ),
                         ],
@@ -10466,9 +10531,20 @@ class _LguDashboardState extends State<LguDashboard>
 
 /// Visitor trend chart with Y-axis gutter, X labels, and hover readout.
 class _AnalyticsTrendChart extends StatefulWidget {
-  const _AnalyticsTrendChart({required this.values, required this.color});
+  const _AnalyticsTrendChart({
+    required this.values,
+    required this.labels,
+    required this.tooltips,
+    required this.emptyMessage,
+    required this.color,
+  });
 
   final List<double> values;
+
+  /// Axis labels (first / middle / last are shown).
+  final List<String> labels;
+  final List<String> tooltips;
+  final String emptyMessage;
   final Color color;
 
   @override
@@ -10488,21 +10564,34 @@ class _AnalyticsTrendChartState extends State<_AnalyticsTrendChart> {
     return ((n - 1) * t).round().clamp(0, n - 1);
   }
 
-  String _dayLabel(int i) {
-    final d = DateTime.now().subtract(Duration(days: 13 - i));
-    return '${d.month}/${d.day}';
-  }
+  String _axisLabel(int i) =>
+      i >= 0 && i < widget.labels.length ? widget.labels[i] : '';
 
-  int get _maxY {
-    if (widget.values.isEmpty) return 1;
-    final m = widget.values.reduce(math.max);
-    return math.max(1, m.ceil());
+  String _tooltip(int i) =>
+      i >= 0 && i < widget.tooltips.length ? widget.tooltips[i] : '';
+
+  @override
+  void didUpdateWidget(covariant _AnalyticsTrendChart oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.values.length != widget.values.length) {
+      _hoverIndex = null;
+      _hoverX = null;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final maxY = _maxY;
+    return AnimatedSeries(
+      values: widget.values,
+      builder: (context, shown, animMax) => _buildChart(shown, animMax),
+    );
+  }
+
+  Widget _buildChart(List<double> shown, double animMax) {
+    final maxY = math.max(1, animMax.ceil());
     final midY = (maxY / 2).ceil();
+    final n = widget.values.length;
+    final isEmpty = widget.values.every((v) => v == 0);
     const axisStyle = TextStyle(
       color: Color(0xFF6B7280),
       fontSize: 11,
@@ -10572,12 +10661,16 @@ class _AnalyticsTrendChartState extends State<_AnalyticsTrendChart> {
                                 size: Size(cons.maxWidth, chartH),
                                 painter: _TourismAnalyticsChartPainter(
                                   color: widget.color,
-                                  values: widget.values,
-                                  maxVal: maxY.toDouble(),
+                                  values: shown,
+                                  maxVal: math.max(1.0, animMax),
                                   hoverX: _hoverX,
+                                  emptyMessage:
+                                      isEmpty ? widget.emptyMessage : null,
                                 ),
                               ),
-                              if (_hoverIndex != null && _hoverX != null)
+                              if (_hoverIndex != null &&
+                                  _hoverX != null &&
+                                  _hoverIndex! < n)
                                 Positioned(
                                   top: 8,
                                   left: (_hoverX!.clamp(
@@ -10594,7 +10687,7 @@ class _AnalyticsTrendChartState extends State<_AnalyticsTrendChart> {
                                         vertical: 8,
                                       ),
                                       child: Text(
-                                        '${_dayLabel(_hoverIndex!)} ? ${widget.values[_hoverIndex!].toStringAsFixed(0)} check-ins',
+                                        '${_tooltip(_hoverIndex!)} · ${widget.values[_hoverIndex!].toStringAsFixed(0)} check-ins',
                                         style: const TextStyle(
                                           fontSize: 12,
                                           fontWeight: FontWeight.w700,
@@ -10620,16 +10713,16 @@ class _AnalyticsTrendChartState extends State<_AnalyticsTrendChart> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(_dayLabel(0), style: axisStyle),
-              Text(_dayLabel(6), style: axisStyle),
-              Text(_dayLabel(13), style: axisStyle),
+              Text(_axisLabel(0), style: axisStyle),
+              Text(_axisLabel((n - 1) ~/ 2), style: axisStyle),
+              Text(_axisLabel(n - 1), style: axisStyle),
             ],
           ),
         ),
         const Padding(
           padding: EdgeInsets.only(left: 40, top: 2),
           child: Text(
-            'Date (oldest ? today)',
+            'Date (oldest → newest)',
             style: TextStyle(
               color: Color(0xFF9CA3AF),
               fontSize: 11,
@@ -10649,12 +10742,16 @@ class _TourismAnalyticsChartPainter extends CustomPainter {
     this.values = const [],
     this.maxVal,
     this.hoverX,
+    this.emptyMessage,
   });
 
   final Color color;
   final List<double> values;
   final double? maxVal;
   final double? hoverX;
+
+  /// Drawn centered when the period has no check-ins.
+  final String? emptyMessage;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -10682,10 +10779,10 @@ class _TourismAnalyticsChartPainter extends CustomPainter {
 
     double maxV = maxVal ?? 1;
     if (maxV <= 0) maxV = 1;
-    if (values.isEmpty) {
+    if (values.isEmpty || emptyMessage != null) {
       final tp = TextPainter(
         text: TextSpan(
-          text: 'No check-ins in the last 14 days',
+          text: emptyMessage ?? 'No check-ins in this period',
           style: TextStyle(
             color: Colors.grey.shade600,
             fontSize: 13,
@@ -10773,7 +10870,8 @@ class _TourismAnalyticsChartPainter extends CustomPainter {
   bool shouldRepaint(covariant _TourismAnalyticsChartPainter oldDelegate) {
     if (oldDelegate.color != color ||
         oldDelegate.maxVal != maxVal ||
-        oldDelegate.hoverX != hoverX) {
+        oldDelegate.hoverX != hoverX ||
+        oldDelegate.emptyMessage != emptyMessage) {
       return true;
     }
     if (oldDelegate.values.length != values.length) return true;

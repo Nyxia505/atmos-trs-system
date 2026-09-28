@@ -26,16 +26,18 @@ class ProfileAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent = ringColor ?? AppTheme.primary;
+    final ring = ringColor ?? AppTheme.primary;
+    // Badge must stay high-contrast even when the ring is white (orange header).
+    final badgeBg = AppTheme.primary;
     final avatar = Container(
       width: size + ringWidth * 2,
       height: size + ringWidth * 2,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        border: Border.all(color: accent, width: ringWidth),
+        border: Border.all(color: ring, width: ringWidth),
         boxShadow: [
           BoxShadow(
-            color: accent.withValues(alpha: 0.2),
+            color: ring.withValues(alpha: 0.2),
             blurRadius: 12,
             offset: const Offset(0, 4),
           ),
@@ -82,9 +84,16 @@ class ProfileAvatar extends StatelessWidget {
                 width: 26,
                 height: 26,
                 decoration: BoxDecoration(
-                  color: accent,
+                  color: badgeBg,
                   shape: BoxShape.circle,
                   border: Border.all(color: Colors.white, width: 2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.2),
+                      blurRadius: 4,
+                      offset: const Offset(0, 1),
+                    ),
+                  ],
                 ),
                 child: const Icon(
                   Icons.camera_alt_rounded,

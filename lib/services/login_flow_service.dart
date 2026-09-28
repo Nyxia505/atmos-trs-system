@@ -49,19 +49,28 @@ class LoginFlowService {
     if (roleFromEmail == UserRole.tourism) return '/lgu-dashboard';
 
     // 2) Pending signup OTP (local) — allow finish verification.
-    await PendingRegistrationCache.hydrate();
-    await PendingLguRegistrationCache.hydrate();
-    await PendingEstablishmentRegistrationCache.hydrate();
+    await Future.wait([
+      PendingRegistrationCache.hydrate(),
+      PendingLguRegistrationCache.hydrate(),
+      PendingEstablishmentRegistrationCache.hydrate(),
+    ]);
     if (PendingLguRegistrationCache.forUid(uid) != null ||
         PendingEstablishmentRegistrationCache.forUid(uid) != null ||
         PendingRegistrationCache.forUid(uid) != null) {
       return '/verify-otp';
     }
 
+    // Server profile is needed by most paths below; read it alongside the OTP check.
+    final profileFuture = UserDirectoryService.getProfileByUid(
+      uid,
+      preferServer: true,
+    );
+
     // Active signup OTP but no local pending payload — cannot finish profile here.
     // Treat as incomplete / removed registration (must sign up again).
     if (await OtpService.hasActiveOtp(uid) &&
         !await UserDirectoryService.hasDurableRegistrationRecord(uid)) {
+      profileFuture.ignore();
       await _setCachedTouristVerified(uid, false);
       return mustSignUpAgainRoute;
     }
@@ -70,21 +79,20 @@ class LoginFlowService {
     final storedUid = await SessionStorage.getStoredUser();
     final storedRole = await SessionStorage.getStoredRole();
     if (storedUid == uid && storedRole == UserRole.tourismEstablishment) {
-      final profile = await UserDirectoryService.getProfileByUid(
-        uid,
-        preferServer: true,
-      );
+      final profile = await profileFuture;
       if (profile != null && profile.isTourismEstablishment) {
         return '/establishment-dashboard';
       }
     }
     if (storedUid == uid && storedRole == UserRole.tourism) {
+      profileFuture.ignore();
       return '/lgu-dashboard';
     }
     if (storedUid == uid && storedRole == UserRole.tourist) {
       final cachedVerified = await _getCachedTouristVerified(uid);
       if (cachedVerified == true) {
         if (await UserDirectoryService.hasCompletedTouristAccount(uid)) {
+          profileFuture.ignore();
           return '/dashboard';
         }
         await _setCachedTouristVerified(uid, false);
@@ -92,10 +100,7 @@ class LoginFlowService {
     }
 
     // 4) Server profile (prefer server so deleted accounts are detected).
-    final profile = await UserDirectoryService.getProfileByUid(
-      uid,
-      preferServer: true,
-    );
+    final profile = await profileFuture;
     if (profile != null) {
       if (profile.isTourist) {
         if (!profile.isVerified) {

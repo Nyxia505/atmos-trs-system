@@ -199,14 +199,16 @@ const List<AppFaqItem> kAppFaqItems = [
     question: 'What is a VR Tour?',
     keywords: ['vr', 'virtual', '360'],
     answer:
-        'VR Tour lets you preview some destinations in 360° before visiting. Look for the '
-        'VR option on supported spot detail pages in Explore.',
+        'VR Tour lets you preview some destinations in 360° before visiting. On Home, '
+        'tap a card under Discover, then tap Start VR Tour on the spot page. You can '
+        'replay the app tour from Account > Settings > App tour.',
     answerFil:
         'Sa VR Tour, puwede mong i-preview ang ilang destinations sa 360° bago bumisita. '
-        'Hanapin ang VR option sa supported spot detail pages sa Explore.',
+        'Sa Home, i-tap ang card sa Discover, tapos i-tap ang Start VR Tour sa spot page.',
     answerCeb:
         'Sa VR Tour, puwede nimong i-preview ang ubang destinations sa 360° sa dili pa '
-        'mobisita. Pangitaa ang VR option sa supported spot detail pages sa Explore.',
+        'mobisita. Sa Home, i-tap ang card sa Discover, dayon i-tap ang Start VR Tour '
+        'sa spot page.',
   ),
   AppFaqItem(
     icon: Icons.route_rounded,

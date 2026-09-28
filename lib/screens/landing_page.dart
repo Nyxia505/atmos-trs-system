@@ -1595,7 +1595,7 @@ class _LandingPageState extends State<LandingPage> {
     final cards = const [
       (
         icon: Icons.vrpano_rounded,
-        title: '360Â° Previews',
+        title: '360° Previews',
         subtitle: 'See before you go',
       ),
       (
@@ -1804,7 +1804,7 @@ class _LandingPageState extends State<LandingPage> {
           _isMobile ? CrossAxisAlignment.center : CrossAxisAlignment.start,
       children: [
         Text(
-          'EXPLORE  â€¢  EXPERIENCE  â€¢  BELONG',
+          'EXPLORE  •  EXPERIENCE  •  BELONG',
           textAlign: align,
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.92),
@@ -1854,8 +1854,8 @@ class _LandingPageState extends State<LandingPage> {
         ),
         const SizedBox(height: 8),
         Text(
-          'Walk destinations in immersive 360Â°, map your dream itinerary, '
-          'and discover all 17 LGUs â€” before you even pack your bags.',
+          'Walk destinations in immersive 360°, map your dream itinerary, '
+          'and discover all 17 LGUs — before you even pack your bags.',
           textAlign: align,
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.92),
@@ -2382,11 +2382,15 @@ class _LandingPageState extends State<LandingPage> {
                   ? 'Unlocks on phone — get the ATMOS app'
                   : 'Explore destinations in immersive 360° preview',
               'icon': Icons.vrpano_rounded,
+              'cta': VrDownloadAppPrompt.blocksVrOnWeb
+                  ? 'Get the app'
+                  : 'Start tour',
             },
             {
               'title': 'Trip Planner',
               'subtitle': 'Build and organize your travel itinerary',
               'icon': Icons.map_rounded,
+              'cta': 'Start planning',
             },
             {
               'title': kIsWeb ? 'Continue on website' : 'Continue in the app',
@@ -2395,6 +2399,7 @@ class _LandingPageState extends State<LandingPage> {
                   : 'Open your tourist dashboard and Digital Tourist ID',
               'icon':
                   kIsWeb ? Icons.language_rounded : Icons.dashboard_rounded,
+              'cta': 'Continue',
             },
           ]
         : [
@@ -2404,16 +2409,21 @@ class _LandingPageState extends State<LandingPage> {
                   ? 'Get the ATMOS app to explore in immersive 360°'
                   : 'Explore destinations in immersive 360° preview',
               'icon': Icons.vrpano_rounded,
+              'cta': VrDownloadAppPrompt.blocksVrOnWeb
+                  ? 'Get the app'
+                  : 'Start tour',
             },
             {
               'title': 'Trip Planner',
               'subtitle': 'Plan and organize your travel itinerary',
               'icon': Icons.map_rounded,
+              'cta': 'Start planning',
             },
             {
               'title': 'QR Check-in',
               'subtitle': 'Scan QR codes and record visits',
               'icon': Icons.qr_code_scanner_rounded,
+              'cta': 'Check in now',
             },
           ];
 
@@ -2421,7 +2431,19 @@ class _LandingPageState extends State<LandingPage> {
       padding: EdgeInsets.symmetric(
         vertical: _sectionInnerVertical(viewport: viewport),
       ),
-      color: viewport ? Colors.transparent : _pageBackground,
+      decoration: BoxDecoration(
+        gradient: RadialGradient(
+          center: const Alignment(0, -0.35),
+          radius: 1.1,
+          colors: [
+            Color.alphaBlend(
+              _primaryOrange.withValues(alpha: 0.07),
+              viewport ? Colors.transparent : _pageBackground,
+            ),
+            viewport ? Colors.transparent : _pageBackground,
+          ],
+        ),
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -2434,6 +2456,7 @@ class _LandingPageState extends State<LandingPage> {
             badge: fromQrSignup
                 ? 'VR · Trip Planner · Website / App'
                 : 'VR · Itinerary · Check-in',
+            highlight: fromQrSignup ? 'do?' : 'Experience',
           ),
           if (_qrWelcomeMessage != null) ...[
             SizedBox(height: viewport ? 16 : (_isMobile ? 20 : 24)),
@@ -2451,6 +2474,7 @@ class _LandingPageState extends State<LandingPage> {
                           title: experienceCards[i]['title'] as String,
                           subtitle: experienceCards[i]['subtitle'] as String,
                           icon: experienceCards[i]['icon'] as IconData,
+                          cta: experienceCards[i]['cta'] as String,
                         ),
                       ),
                   ],
@@ -2466,6 +2490,7 @@ class _LandingPageState extends State<LandingPage> {
                           title: experienceCards[i]['title'] as String,
                           subtitle: experienceCards[i]['subtitle'] as String,
                           icon: experienceCards[i]['icon'] as IconData,
+                          cta: experienceCards[i]['cta'] as String,
                           expanded: true,
                         ),
                       ),
@@ -2531,10 +2556,34 @@ class _LandingPageState extends State<LandingPage> {
     required String title,
     required String subtitle,
     required IconData icon,
+    required String cta,
     bool expanded = false,
   }) {
     final isHovered = _hoveredExperienceIndex == index;
     final isHighlighted = _highlightExperienceSection;
+    final ctaRow = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          cta,
+          style: const TextStyle(
+            color: _primaryOrange,
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        AnimatedPadding(
+          duration: _motionDuration,
+          curve: Curves.easeOutCubic,
+          padding: EdgeInsets.only(left: isHovered ? 10 : 6),
+          child: const Icon(
+            Icons.arrow_forward_rounded,
+            color: _primaryOrange,
+            size: 18,
+          ),
+        ),
+      ],
+    );
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hoveredExperienceIndex = index),
@@ -2548,12 +2597,18 @@ class _LandingPageState extends State<LandingPage> {
           transform: Matrix4.identity()
             ..translateByDouble(0, isHovered ? -4.0 : 0.0, 0, 1),
           constraints: expanded
-              ? const BoxConstraints(minHeight: 168)
+              ? const BoxConstraints(minHeight: 200)
               : const BoxConstraints(),
           width: expanded ? double.infinity : null,
-          padding: EdgeInsets.all(expanded ? 22 : 18),
+          padding: EdgeInsets.all(expanded ? 24 : 18),
           decoration: BoxDecoration(
-            color: Colors.white,
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: isHovered
+                  ? const [Color(0xFFFFF7ED), Colors.white]
+                  : const [Colors.white, Colors.white],
+            ),
             borderRadius: BorderRadius.circular(_cardRadius),
             border: Border.all(
               color: isHighlighted || isHovered
@@ -2577,21 +2632,30 @@ class _LandingPageState extends State<LandingPage> {
                   children: [
                     Row(
                       children: [
-                        _landingIconTile(icon, size: 52),
+                        _landingIconTile(icon, size: 56),
                         const Spacer(),
-                        Icon(
-                          Icons.arrow_forward_rounded,
-                          color: _primaryOrange.withValues(alpha: 0.9),
-                          size: 22,
+                        Text(
+                          (index + 1).toString().padLeft(2, '0'),
+                          style: TextStyle(
+                            color: _primaryOrange.withValues(
+                              alpha: isHovered ? 0.35 : 0.18,
+                            ),
+                            fontSize: 34,
+                            fontWeight: FontWeight.w900,
+                            height: 1,
+                          ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 20),
                     Text(
                       title,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: _cardTitleStyle.copyWith(fontSize: 18),
+                      style: _cardTitleStyle.copyWith(
+                        fontSize: 19,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                     const SizedBox(height: 8),
                     Text(
@@ -2600,6 +2664,8 @@ class _LandingPageState extends State<LandingPage> {
                       overflow: TextOverflow.ellipsis,
                       style: _cardSubtitleStyle.copyWith(fontSize: 14),
                     ),
+                    const SizedBox(height: 18),
+                    ctaRow,
                   ],
                 )
               : Row(
@@ -2625,13 +2691,10 @@ class _LandingPageState extends State<LandingPage> {
                             overflow: TextOverflow.ellipsis,
                             style: _cardSubtitleStyle.copyWith(fontSize: 14),
                           ),
+                          const SizedBox(height: 10),
+                          ctaRow,
                         ],
                       ),
-                    ),
-                    Icon(
-                      Icons.arrow_forward_rounded,
-                      color: _primaryOrange.withValues(alpha: 0.85),
-                      size: 20,
                     ),
                   ],
                 ),
@@ -2654,6 +2717,7 @@ class _LandingPageState extends State<LandingPage> {
             'Smart registration, VR tours, itinerary planning & QR check-ins — all in one platform',
             icon: Icons.auto_awesome_rounded,
             badge: 'Official provincial platform',
+            highlight: 'ATMOS-TRS?',
           ),
           SizedBox(height: viewport ? 16 : (_isMobile ? 24 : 32)),
           LayoutBuilder(
@@ -2690,11 +2754,40 @@ class _LandingPageState extends State<LandingPage> {
     );
   }
 
+  /// [highlight] must be a substring of [title]; it is drawn in brand orange.
+  Widget _twoToneTitle(
+    String title,
+    String? highlight,
+    TextStyle style, {
+    TextAlign textAlign = TextAlign.center,
+  }) {
+    final i = (highlight == null || highlight.isEmpty)
+        ? -1
+        : title.lastIndexOf(highlight);
+    if (i < 0) return Text(title, textAlign: textAlign, style: style);
+    final end = i + highlight!.length;
+    return Text.rich(
+      TextSpan(
+        children: [
+          if (i > 0) TextSpan(text: title.substring(0, i)),
+          TextSpan(
+            text: highlight,
+            style: const TextStyle(color: _primaryOrange),
+          ),
+          if (end < title.length) TextSpan(text: title.substring(end)),
+        ],
+      ),
+      textAlign: textAlign,
+      style: style,
+    );
+  }
+
   Widget _buildSectionHeader(
     String title,
     String subtitle, {
     IconData? icon,
     String? badge,
+    String? highlight,
   }) {
     return Column(
       children: [
@@ -2741,10 +2834,10 @@ class _LandingPageState extends State<LandingPage> {
           ),
           const SizedBox(height: 12),
         ],
-        Text(
+        _twoToneTitle(
           title,
-          textAlign: TextAlign.center,
-          style: TextStyle(
+          highlight,
+          TextStyle(
             color: _darkBg,
             fontSize: _sectionTitleFontSize,
             fontWeight: FontWeight.w800,
@@ -2910,6 +3003,7 @@ class _LandingPageState extends State<LandingPage> {
                 : 'All 17 tourist destinations in Misamis Occidental — tap any card to explore in 360° or plan your trip',
             icon: Icons.location_city_rounded,
             badge: isFiltering ? '${filtered.length} found' : '17 LGUs',
+            highlight: isFiltering ? 'results' : 'Cities',
           ),
           if (isFiltering) ...[
             const SizedBox(height: 16),
@@ -3691,6 +3785,7 @@ class _LandingPageState extends State<LandingPage> {
             'Get started with ATMOS-TRS in 5 simple steps',
             icon: Icons.route_rounded,
             badge: '5 easy steps',
+            highlight: 'Works',
           ),
           SizedBox(height: viewport ? 16 : (_isMobile ? 24 : 32)),
           _isMobile
@@ -4007,6 +4102,7 @@ class _LandingPageState extends State<LandingPage> {
             'Growing smart tourism across Misamis Occidental',
             icon: Icons.insights_rounded,
             badge: 'Impact',
+            highlight: 'numbers',
           ),
           SizedBox(height: _isMobile ? 24 : 32),
           _isMobile
@@ -4215,14 +4311,16 @@ class _LandingPageState extends State<LandingPage> {
           ),
         ),
         const SizedBox(height: 12),
-        Text(
+        _twoToneTitle(
           'Advancing Tourism in\nMisamis Occidental',
-          style: AtmosBrandTypography.displayTitle(
+          'Misamis Occidental',
+          AtmosBrandTypography.displayTitle(
             color: _darkBg,
             fontSize: _isMobile ? 28 : 38,
             letterSpacing: 0.3,
             height: 1.15,
           ),
+          textAlign: TextAlign.start,
         ),
         const SizedBox(height: 20),
         Text(

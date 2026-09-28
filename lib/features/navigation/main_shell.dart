@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemNavigator;
 import 'dart:async' show unawaited;
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/app_theme_controller.dart';
@@ -18,7 +19,9 @@ import 'package:atmos_trs_system/features/home/home_screen.dart';
 import 'package:atmos_trs_system/features/explore/explore_screen.dart';
 import 'package:atmos_trs_system/features/navigation/placeholder_pages.dart';
 import 'package:atmos_trs_system/features/navigation/bottom_nav.dart';
+import 'package:atmos_trs_system/features/navigation/tourist_tutorial.dart';
 import 'package:atmos_trs_system/features/navigation/tourist_web_layout.dart';
+import 'package:atmos_trs_system/widgets/app_tutorial/coach_mark_overlay.dart';
 import 'package:atmos_trs_system/widgets/theme_reactive_scope.dart';
 import 'package:atmos_trs_system/screens/event_detail_screen.dart';
 
@@ -29,13 +32,28 @@ class MainShell extends StatefulWidget {
 
   final int initialIndex;
 
+  /// Opens the Home tab of the top-most shell and replays the guided tour.
+  static void replayTutorial() {
+    final shells = _MainShellState._mounted;
+    if (shells.isEmpty) return;
+    final state = shells.last;
+    if (!state.mounted) return;
+    state._onNavTap(0);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (state.mounted) TouristTutorial.start(state.context, state._tourKeys);
+    });
+  }
+
   @override
   State<MainShell> createState() => _MainShellState();
 }
 
 class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
+  static final List<_MainShellState> _mounted = [];
+
   late int _currentIndex;
   final _badge = NotificationBadgeNotifier.instance;
+  final _tourKeys = TouristTutorialKeys();
   @override
   void initState() {
     super.initState();
@@ -66,9 +84,18 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       );
     }
     _badge.refresh(userId: uid);
+    _mounted.add(this);
+    final hadPendingEvent = PendingEventOpen.eventId?.isNotEmpty ?? false;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) PendingEventOpen.consumeIfAny(context);
     });
+    if (_currentIndex == 0 && !hadPendingEvent) {
+      Future<void>.delayed(const Duration(milliseconds: 700), () {
+        if (mounted && _currentIndex == 0) {
+          unawaited(TouristTutorial.maybeStart(context, _tourKeys));
+        }
+      });
+    }
   }
 
   @override
@@ -80,6 +107,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _mounted.remove(this);
+    if (_mounted.isEmpty) CoachMarkOverlay.dismiss();
     WidgetsBinding.instance.removeObserver(this);
     _badge.removeListener(_onBadgeChanged);
     super.dispose();
@@ -89,10 +118,16 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
+  static const int _scanTabIndex = 2;
+
+  // Scanner is mounted only while its tab is open so the camera is not running
+  // (and holding the device camera) behind Home / Explore / Alerts / Account.
   List<Widget> _buildPages() => [
         const ThemeReactiveScope(child: HomeScreen()),
         const ThemeReactiveScope(child: ExploreScreen()),
-        const ThemeReactiveScope(child: ScanTabPage()),
+        _currentIndex == _scanTabIndex
+            ? const ThemeReactiveScope(child: ScanTabPage())
+            : const SizedBox.shrink(),
         const ThemeReactiveScope(child: AlertsTabPage()),
         const ThemeReactiveScope(child: ProfileTabPage()),
       ];
@@ -122,6 +157,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       currentIndex: _currentIndex,
       unreadNotificationCount: _badge.count,
       onTap: _onNavTap,
+      itemKeys: _tourKeys.navItems,
     );
   }
 
@@ -139,40 +175,61 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     // Tourist web always stays phone-sized; native apps/tablets get sidebar at ≥768px.
     final isMobile = kIsWeb || size.width < 768;
 
-    return ListenableBuilder(
-      listenable: AppThemeController.instance,
-      builder: (context, _) {
-        final pages = _buildPages();
-        if (isMobile) {
-          if (kIsWeb) {
-            // Bottom nav outside nested Navigator so taps always work on web.
-            return TouristWebMobileFrame(
-              bottomBar: _buildBottomNav(),
-              child: _buildMobileScaffold(pages, includeBottomNav: false),
-            );
-          }
-          return _buildMobileScaffold(pages);
+    return PopScope(
+      // Native: the root `/` login route sits under a cold-started `/dashboard`,
+      // so system back must never pop the shell.
+      canPop: kIsWeb,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_currentIndex != 0) {
+          _onNavTap(0);
+          return;
         }
-
-        return Scaffold(
-          backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-          body: Row(
-            children: [
-              _SidebarNav(
-                currentIndex: _currentIndex,
-                unreadNotificationCount: _badge.count,
-                onTap: _onNavTap,
-              ),
-              Expanded(
-                child: ColoredBox(
-                  color: Colors.white,
-                  child: _tabBody(pages),
-                ),
-              ),
-            ],
-          ),
-        );
+        SystemNavigator.pop();
       },
+      child: _buildShell(isMobile),
+    );
+  }
+
+  Widget _buildShell(bool isMobile) {
+    return TouristTutorialScope(
+      keys: _tourKeys,
+      child: ListenableBuilder(
+        listenable: AppThemeController.instance,
+        builder: (context, _) {
+          final pages = _buildPages();
+          if (isMobile) {
+            if (kIsWeb) {
+              // Bottom nav outside nested Navigator so taps always work on web.
+              return TouristWebMobileFrame(
+                bottomBar: _buildBottomNav(),
+                child: _buildMobileScaffold(pages, includeBottomNav: false),
+              );
+            }
+            return _buildMobileScaffold(pages);
+          }
+
+          return Scaffold(
+            backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+            body: Row(
+              children: [
+                _SidebarNav(
+                  currentIndex: _currentIndex,
+                  unreadNotificationCount: _badge.count,
+                  onTap: _onNavTap,
+                  itemKeys: _tourKeys.navItems,
+                ),
+                Expanded(
+                  child: ColoredBox(
+                    color: Colors.white,
+                    child: _tabBody(pages),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 }
@@ -181,11 +238,13 @@ class _SidebarNav extends StatelessWidget {
   const _SidebarNav({
     required this.currentIndex,
     required this.onTap,
+    required this.itemKeys,
     this.unreadNotificationCount = 0,
   });
 
   final int currentIndex;
   final ValueChanged<int> onTap;
+  final List<Key> itemKeys;
   final int unreadNotificationCount;
 
   @override
@@ -231,6 +290,7 @@ class _SidebarNav extends StatelessWidget {
                   final item = items[index];
                   final isSelected = index == currentIndex;
                   return _SidebarItem(
+                    key: itemKeys[index],
                     icon: item.$1,
                     label: item.$2,
                     isSelected: isSelected,
@@ -250,6 +310,7 @@ class _SidebarNav extends StatelessWidget {
 
 class _SidebarItem extends StatelessWidget {
   const _SidebarItem({
+    super.key,
     required this.icon,
     required this.label,
     required this.isSelected,

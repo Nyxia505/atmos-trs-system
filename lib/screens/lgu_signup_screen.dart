@@ -16,6 +16,8 @@ import 'package:atmos_trs_system/services/registration_rollback_service.dart';
 import 'package:atmos_trs_system/utils/email_utils.dart';
 import 'package:atmos_trs_system/utils/signup_field_validation.dart';
 import 'package:atmos_trs_system/widgets/dial_code_mobile_field.dart';
+import 'package:atmos_trs_system/widgets/signup_legal_consent.dart';
+import 'package:atmos_trs_system/widgets/tourist_signup_chrome.dart';
 import 'package:atmos_trs_system/widgets/web_glass_auth_scaffold.dart';
 
 /// Self-registration for municipal LGU tourism office accounts.
@@ -34,6 +36,11 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  final _contactPersonFocus = FocusNode();
+  final _contactFocus = FocusNode();
+  final _emailFocus = FocusNode();
+  final _passwordFocus = FocusNode();
+  final _confirmPasswordFocus = FocusNode();
 
   String _contactDialCode = '+63';
   String? _municipalityId;
@@ -73,6 +80,11 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
+    _contactPersonFocus.dispose();
+    _contactFocus.dispose();
+    _emailFocus.dispose();
+    _passwordFocus.dispose();
+    _confirmPasswordFocus.dispose();
     super.dispose();
   }
 
@@ -100,17 +112,6 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
 
   Color get _fieldIconColor =>
       _isDesktopGlass ? Colors.white : const Color(0xFF78716C);
-
-  Color get _legalTitleColor =>
-      _isDesktopGlass ? Colors.white : const Color(0xFF1C1917);
-
-  Color get _legalBodyColor => _isDesktopGlass
-      ? Colors.white.withValues(alpha: 0.92)
-      : const Color(0xFF44403C);
-
-  Color get _legalMutedColor => _isDesktopGlass
-      ? Colors.white.withValues(alpha: 0.7)
-      : const Color(0xFF78716C);
 
   InputDecoration _dec({
     required String hint,
@@ -330,7 +331,7 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
       case 'email-already-in-use':
         return 'This email is already registered. Log in, or use another email.';
       case 'weak-password':
-        return 'Password is too weak. Use 8+ characters with upper, lower, and a digit.';
+        return 'Password is too short. Use at least 6 characters.';
       case 'invalid-email':
         return 'Enter a valid email address.';
       case 'network-request-failed':
@@ -353,153 +354,15 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
     );
   }
 
-  Widget _buildLegalBullet(String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Container(
-              width: 6,
-              height: 6,
-              decoration: BoxDecoration(
-                color: _legalMutedColor,
-                shape: BoxShape.circle,
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              text,
-              style: TextStyle(
-                fontSize: 13,
-                color: _legalBodyColor,
-                height: 1.5,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLegalExpansionCard({
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    required Color accent,
-    required bool expanded,
-    required bool reviewed,
-    required ValueChanged<bool> onExpandedChanged,
-    required List<String> bullets,
-  }) {
-    return Material(
-      color: _isDesktopGlass
-          ? Colors.black.withValues(alpha: 0.28)
-          : Colors.white,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(
-          color: reviewed
-              ? accent.withValues(alpha: _isDesktopGlass ? 0.75 : 0.5)
-              : (_isDesktopGlass
-                  ? Colors.white.withValues(alpha: 0.22)
-                  : const Color(0xFFE7E5E4)),
-          width: reviewed ? 1.5 : 1,
-        ),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        children: [
-          InkWell(
-            onTap: () => onExpandedChanged(!expanded),
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(14, 14, 10, 14),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: _isDesktopGlass
-                      ? [
-                          accent.withValues(alpha: 0.62),
-                          Colors.black.withValues(alpha: 0.38),
-                        ]
-                      : [
-                          accent.withValues(alpha: 0.16),
-                          accent.withValues(alpha: 0.03),
-                        ],
-                ),
-              ),
-              child: Row(
-                children: [
-                  Icon(icon, color: _isDesktopGlass ? Colors.white : accent),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w800,
-                            color: _legalTitleColor,
-                          ),
-                        ),
-                        Text(
-                          subtitle,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: _legalMutedColor,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Icon(
-                    expanded
-                        ? Icons.expand_less_rounded
-                        : Icons.expand_more_rounded,
-                    color: _legalTitleColor,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (expanded)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-              child: Column(
-                children: bullets.map(_buildLegalBullet).toList(),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildLegalSection() {
-    const privacyBlue = Color(0xFF2563EB);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          'Please review before continuing',
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w800,
-            color: _legalTitleColor,
-          ),
-        ),
-        const SizedBox(height: 12),
-        _buildLegalExpansionCard(
-          title: 'Data Privacy Act (RA 10173)',
-          subtitle: 'Collection, use, and your rights',
+        SignupLegalExpansionCard(
+          onDark: _isDesktopGlass,
+          title: 'Data Privacy (RA 10173)',
+          subtitle: 'How we collect and use your information',
           icon: Icons.shield_outlined,
-          accent: privacyBlue,
           expanded: _privacyExpanded,
           reviewed: _privacyOpened,
           onExpandedChanged: (v) => setState(() {
@@ -515,12 +378,12 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
                 'Tourism Office.',
           ],
         ),
-        const SizedBox(height: 12),
-        _buildLegalExpansionCard(
+        const SizedBox(height: 10),
+        SignupLegalExpansionCard(
+          onDark: _isDesktopGlass,
           title: 'Terms and Conditions',
           subtitle: 'LGU tourism office responsibilities',
           icon: Icons.description_outlined,
-          accent: AppTheme.brandOrange,
           expanded: _termsExpanded,
           reviewed: _termsOpened,
           onExpandedChanged: (v) => setState(() {
@@ -535,78 +398,14 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
             'Misuse or false representation may result in restricted access.',
           ],
         ),
-        const SizedBox(height: 14),
-        Material(
-          color: _agreeToTerms
-              ? AppTheme.brandOrange.withValues(
-                  alpha: _isDesktopGlass ? 0.28 : 0.08,
-                )
-              : (_isDesktopGlass
-                  ? Colors.black.withValues(alpha: 0.28)
-                  : const Color(0xFFF8FAFC)),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-            side: BorderSide(
-              color: _agreeToTerms
-                  ? AppTheme.brandOrange
-                  : (_isDesktopGlass
-                      ? Colors.white.withValues(alpha: 0.28)
-                      : const Color(0xFFE7E5E4)),
-              width: _agreeToTerms ? 2 : 1,
-            ),
-          ),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(14),
-            onTap: !_legalReviewComplete || _submitting
-                ? null
-                : () => setState(() => _agreeToTerms = !_agreeToTerms),
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 24,
-                    height: 24,
-                    decoration: BoxDecoration(
-                      color: _agreeToTerms
-                          ? AppTheme.brandOrange
-                          : Colors.transparent,
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(
-                        color: _agreeToTerms
-                            ? AppTheme.brandOrange
-                            : (_isDesktopGlass
-                                ? Colors.white.withValues(alpha: 0.7)
-                                : const Color(0xFFA8A29E)),
-                        width: 2,
-                      ),
-                    ),
-                    child: _agreeToTerms
-                        ? const Icon(
-                            Icons.check_rounded,
-                            size: 16,
-                            color: Colors.white,
-                          )
-                        : null,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'I have read and agree to the Terms and Conditions and '
-                      'the Data Privacy Policy (RA 10173) of ATMOS-TRS.',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        height: 1.45,
-                        color: _legalBodyColor,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+        const SizedBox(height: 18),
+        SignupLegalAgreementCard(
+          onDark: _isDesktopGlass,
+          agreed: _agreeToTerms,
+          canAgree: _legalReviewComplete,
+          onChanged: _submitting
+              ? null
+              : (v) => setState(() => _agreeToTerms = v),
         ),
       ],
     );
@@ -685,6 +484,8 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
             style: _fieldTextStyle,
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             textCapitalization: TextCapitalization.words,
+            textInputAction: TextInputAction.next,
+            onFieldSubmitted: (_) => _contactPersonFocus.requestFocus(),
             decoration: _dec(
               hint: 'Enter your tourism office name',
               icon: Icons.account_balance_rounded,
@@ -696,9 +497,12 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
           _sectionLabel('Contact Person'),
           TextFormField(
             controller: _contactPersonController,
+            focusNode: _contactPersonFocus,
             style: _fieldTextStyle,
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             textCapitalization: TextCapitalization.words,
+            textInputAction: TextInputAction.next,
+            onFieldSubmitted: (_) => _contactFocus.requestFocus(),
             decoration: _dec(
               hint: 'Enter officer / staff full name',
               icon: Icons.badge_outlined,
@@ -710,6 +514,9 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
           _sectionLabel('Contact Number'),
           DialCodeMobileField(
             controller: _contactController,
+            focusNode: _contactFocus,
+            textInputAction: TextInputAction.next,
+            onFieldSubmitted: (_) => _emailFocus.requestFocus(),
             dialCode: _contactDialCode,
             onDialCodeChanged: (v) => setState(() => _contactDialCode = v),
             textStyle: _fieldTextStyle,
@@ -737,10 +544,13 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
           _sectionLabel('Email Address'),
           TextFormField(
             controller: _emailController,
+            focusNode: _emailFocus,
             style: _fieldTextStyle,
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             keyboardType: TextInputType.emailAddress,
             autocorrect: false,
+            textInputAction: TextInputAction.next,
+            onFieldSubmitted: (_) => _passwordFocus.requestFocus(),
             decoration: _dec(
               hint: 'Enter your email',
               icon: Icons.email,
@@ -769,11 +579,14 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
           _sectionLabel('Password'),
           TextFormField(
             controller: _passwordController,
+            focusNode: _passwordFocus,
             style: _fieldTextStyle,
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             obscureText: _obscurePassword,
+            textInputAction: TextInputAction.next,
+            onFieldSubmitted: (_) => _confirmPasswordFocus.requestFocus(),
             decoration: _dec(
-              hint: 'Enter your password',
+              hint: 'At least 6 characters',
               icon: Icons.lock_outline,
               suffix: IconButton(
                 icon: Icon(
@@ -786,15 +599,20 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
                     setState(() => _obscurePassword = !_obscurePassword),
               ),
             ),
-            validator: validateStrongPassword,
+            validator: validateSimplePassword,
           ),
           const SizedBox(height: 12),
           _sectionLabel('Confirm Password'),
           TextFormField(
             controller: _confirmPasswordController,
+            focusNode: _confirmPasswordFocus,
             style: _fieldTextStyle,
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             obscureText: _obscureConfirm,
+            textInputAction: TextInputAction.done,
+            onFieldSubmitted: (_) {
+              if (!_submitting) unawaited(_submit());
+            },
             decoration: _dec(
               hint: 'Confirm your password',
               icon: Icons.lock_outline,
@@ -850,47 +668,33 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
         ),
       ),
       child: _signupStep == 0
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Terms & Data Privacy',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w800,
-                    color: _isDesktopGlass
-                        ? Colors.white
-                        : const Color(0xFF1C1917),
+          ? SignupEnterToContinue(
+              onEnter: _submitting ? null : _continueFromLegal,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TouristSignupSectionHeader(
+                    title: 'Terms & Data Privacy',
+                    description:
+                        'Open both sections below, then agree to continue.',
+                    icon: Icons.verified_user_outlined,
+                    onDark: _isDesktopGlass,
                   ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Review how ATMOS-TRS handles your information, then agree to continue.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: _isDesktopGlass
-                        ? Colors.white
-                        : const Color(0xFF78716C),
+                  _buildLegalSection(),
+                  const SizedBox(height: 28),
+                  FilledButton(
+                    onPressed: _submitting ? null : _continueFromLegal,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppTheme.brandOrange,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
+                    child: const Text(
+                      'Continue to registration',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 20),
-                _buildLegalSection(),
-                const SizedBox(height: 16),
-                FilledButton(
-                  onPressed: _submitting ? null : _continueFromLegal,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppTheme.brandOrange,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                  child: const Text(
-                    'Continue to registration',
-                    style: TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                ),
-              ],
+                ],
+              ),
             )
           : formBody,
     );
@@ -940,7 +744,7 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
-          child: form,
+          child: _signupStep == 0 ? SignupLegalCard(child: form) : form,
         ),
       ),
     );

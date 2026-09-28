@@ -284,6 +284,20 @@ String? validateStrongPassword(String? value) {
   return null;
 }
 
+/// Firebase Auth rejects passwords shorter than this.
+const int kMinAuthPasswordLength = 6;
+
+/// LGU / establishment signup: any characters, only Firebase's minimum length.
+String? validateSimplePassword(String? value) {
+  if (value == null || value.isEmpty) {
+    return 'Please enter a password';
+  }
+  if (value.length < kMinAuthPasswordLength) {
+    return 'Password must be at least $kMinAuthPasswordLength characters';
+  }
+  return null;
+}
+
 /// Tourist signup only: length ≥ 8; no upper/lower/digit/special rules.
 String? validateTouristSignupPassword(String? value) {
   if (value == null || value.isEmpty) {

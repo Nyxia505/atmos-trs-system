@@ -95,7 +95,7 @@ class AuthService {
       case 'invalid-action-code':
         return 'This reset link is invalid or already used. Request a new one.';
       case 'weak-password':
-        return 'Password is too weak. Use at least 8 characters with uppercase, lowercase, and a number.';
+        return 'Password is too short. Use at least 6 characters.';
       default:
         if (raw != null && raw.isNotEmpty) return raw;
         return 'Could not send reset email. Please try again.';

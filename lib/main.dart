@@ -1,5 +1,6 @@
 import 'dart:async' show unawaited;
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
@@ -27,7 +28,6 @@ import 'package:atmos_trs_system/firebase_options.dart';
 import 'package:atmos_trs_system/utils/firebase_client_blocked_message.dart';
 import 'package:atmos_trs_system/navigation/root_navigator.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
-import 'package:atmos_trs_system/widgets/session_inactivity_guard.dart';
 import 'package:atmos_trs_system/services/qr_launch_bootstrap.dart';
 import 'package:atmos_trs_system/services/camera_qr_deep_link_service.dart';
 import 'package:atmos_trs_system/services/startup_route_resolver.dart';
@@ -59,6 +59,11 @@ void main() async {
       await Firebase.initializeApp(options: firebaseOptions);
     }
     if (kIsWeb) {
+      try {
+        await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
+      } catch (e) {
+        debugPrint('Auth persistence (web) not applied: $e');
+      }
       debugPrint(
         'Firebase initialized (Web): projectId=${firebaseOptions.projectId} '
         'appId=${firebaseOptions.appId} authDomain=${firebaseOptions.authDomain}',
@@ -166,15 +171,11 @@ class _MyAppState extends State<MyApp> {
             initialRoute: widget.initialRoute,
             builder: (context, child) {
               final loadingBg = Theme.of(context).scaffoldBackgroundColor;
-              return SessionInactivityGuard(
-                navigatorKey: rootNavigatorKey,
-                child:
-                    child ??
-                    ColoredBox(
-                      color: loadingBg,
-                      child: const Center(child: CircularProgressIndicator()),
-                    ),
-              );
+              return child ??
+                  ColoredBox(
+                    color: loadingBg,
+                    child: const Center(child: CircularProgressIndicator()),
+                  );
             },
             routes: {
           '/': (context) => kIsWeb ? const LandingPage() : const LoginScreen(),

@@ -14,11 +14,12 @@ import 'package:atmos_trs_system/services/registration_municipality_resolver.dar
 import 'package:atmos_trs_system/services/tourist_registration_service.dart';
 import 'package:atmos_trs_system/services/pending_registration_cache.dart';
 import 'package:atmos_trs_system/services/otp_delivery_service.dart';
-import 'package:atmos_trs_system/services/registration_rollback_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
+import 'package:uuid/uuid.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_barangays.dart';
 import 'package:atmos_trs_system/widgets/web_glass_auth_scaffold.dart';
 import 'package:atmos_trs_system/widgets/tourist_signup_chrome.dart';
+import 'package:atmos_trs_system/widgets/signup_legal_consent.dart';
 import 'package:atmos_trs_system/widgets/dial_code_mobile_field.dart';
 import 'package:atmos_trs_system/widgets/country_city_autocomplete_field.dart';
 import 'package:atmos_trs_system/data/signup_cities_by_country.dart';
@@ -33,7 +34,8 @@ bool _looksLikeFirebaseBillingDisabled(Object e) {
           text.contains('402'));
 }
 
-/// Capitalizes the first letter of each word (e.g. juan → Juan).
+/// Capitalizes the first letter of each word and each hyphenated part
+/// (e.g. juan → Juan, dago-oc → Dago-Oc).
 class _CapitalizeWordsFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(
@@ -42,28 +44,34 @@ class _CapitalizeWordsFormatter extends TextInputFormatter {
   ) {
     final text = newValue.text;
     if (text.isEmpty) return newValue;
-    final buffer = StringBuffer();
-    var capitalizeNext = true;
-    for (final rune in text.runes) {
-      final ch = String.fromCharCode(rune);
-      if (RegExp(r'\s|-').hasMatch(ch)) {
-        buffer.write(ch);
-        capitalizeNext = true;
-      } else if (capitalizeNext) {
-        buffer.write(ch.toUpperCase());
-        capitalizeNext = false;
-      } else {
-        buffer.write(ch);
-      }
+    // Rewriting text inside an active IME composition (Gboard treats
+    // "dago-oc" as one word) makes the keyboard revert or duplicate input.
+    if (newValue.composing.isValid && !newValue.composing.isCollapsed) {
+      return newValue;
     }
-    final formatted = buffer.toString();
+    final formatted = _capitalizeNameParts(text);
     if (formatted == text) return newValue;
-    return TextEditingValue(
-      text: formatted,
-      selection: newValue.selection,
-      composing: TextRange.empty,
-    );
+    return newValue.copyWith(text: formatted);
   }
+}
+
+String _capitalizeNameParts(String text) {
+  final buffer = StringBuffer();
+  var capitalizeNext = true;
+  for (final rune in text.runes) {
+    var ch = String.fromCharCode(rune);
+    if (ch == '\u2013' || ch == '\u2014') ch = '-';
+    if (ch == '-' || ch.trim().isEmpty) {
+      buffer.write(ch);
+      capitalizeNext = true;
+    } else if (capitalizeNext) {
+      buffer.write(ch.toUpperCase());
+      capitalizeNext = false;
+    } else {
+      buffer.write(ch);
+    }
+  }
+  return buffer.toString();
 }
 
 /// Single letter, always uppercase (middle initial).
@@ -91,11 +99,7 @@ class _MiddleInitialFormatter extends TextInputFormatter {
 String _capitalizeNameWords(String raw) {
   final trimmed = raw.trim();
   if (trimmed.isEmpty) return '';
-  return trimmed.split(RegExp(r'\s+')).map((word) {
-    if (word.isEmpty) return word;
-    if (word.length == 1) return word.toUpperCase();
-    return '${word[0].toUpperCase()}${word.substring(1)}';
-  }).join(' ');
+  return _capitalizeNameParts(trimmed.split(RegExp(r'\s+')).join(' '));
 }
 
 String _normalizeMiddleInitial(String raw) {
@@ -207,9 +211,6 @@ class _SignupScreenState extends State<SignupScreen> {
   }
 
   int get _displayStepNumber => _visualStepIndex + 1;
-
-  String get _stepSlogan =>
-      TouristSignupChrome.sloganForVisualStep(_visualStepIndex);
 
   String? _requiredField(String? value, String fieldLabel) {
     if (value == null || value.trim().isEmpty) {
@@ -699,8 +700,10 @@ class _SignupScreenState extends State<SignupScreen> {
 
   bool get _pendingEmailChanged {
     if (!_editingPendingSignup) return false;
+    final current = PendingRegistrationCache.current;
     final baseline = normalizeEmail(
       _pendingContactEmailBaseline ??
+          current?.contactEmail ??
           PendingRegistrationCache.forUid(
             FirebaseAuth.instance.currentUser?.uid ?? '',
           )?.contactEmail ??
@@ -720,14 +723,11 @@ class _SignupScreenState extends State<SignupScreen> {
     await PendingRegistrationCache.hydrate();
     if (!mounted) return;
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      _registrationSnack(
-        'Sign-in session missing. Please sign up again.',
-        background: Colors.red.shade700,
-      );
-      return;
-    }
-    final pending = PendingRegistrationCache.forUid(user.uid);
+    final pending = user != null
+        ? PendingRegistrationCache.forUid(user.uid)
+        : (PendingRegistrationCache.current?.authDeferred == true
+            ? PendingRegistrationCache.current
+            : null);
     if (pending == null) {
       _registrationSnack(
         'No unfinished signup found to edit.',
@@ -749,6 +749,10 @@ class _SignupScreenState extends State<SignupScreen> {
       _privacySectionExpanded = false;
       _termsSectionExpanded = false;
     });
+    if (pending.password != null && pending.password!.isNotEmpty) {
+      _passwordController.text = pending.password!;
+      _confirmPasswordController.text = pending.password!;
+    }
     _registrationSnack(
       'Review your details. Fix your email if needed, then continue.',
       background: Colors.green.shade700,
@@ -911,400 +915,35 @@ class _SignupScreenState extends State<SignupScreen> {
 
   int _accompanyingChildrenForSave() => 0;
 
-  Widget _buildLegalBullet(String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Container(
-              width: 6,
-              height: 6,
-              decoration: BoxDecoration(
-                color: _legalMutedColor,
-                shape: BoxShape.circle,
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              text,
-              style: TextStyle(
-                fontSize: 14,
-                color: _legalBodyColor,
-                height: 1.55,
-                fontWeight: _isDesktopGlass ? FontWeight.w500 : FontWeight.w400,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   bool get _legalReviewComplete => _hasReviewedPrivacy && _hasReviewedTerms;
-
-  Widget _buildLegalProgressChip({
-    required String label,
-    required bool done,
-    required IconData icon,
-    required Color accent,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: done
-            ? accent.withValues(alpha: _isDesktopGlass ? 0.38 : 0.1)
-            : (_isDesktopGlass
-                ? Colors.black.withValues(alpha: 0.38)
-                : const Color(0xFFF9FAFB)),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: done
-              ? accent.withValues(alpha: _isDesktopGlass ? 0.85 : 0.45)
-              : (_isDesktopGlass
-                  ? Colors.white.withValues(alpha: 0.28)
-                  : _inputBorder),
-        ),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            done ? Icons.check_circle_rounded : icon,
-            size: 16,
-            color: done
-                ? (_isDesktopGlass ? Colors.white : accent)
-                : _legalMutedColor,
-          ),
-          const SizedBox(width: 6),
-          Flexible(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: done
-                    ? (_isDesktopGlass ? Colors.white : accent)
-                    : _legalMutedColor,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _buildLegalExpansionCard({
     required String title,
     required String subtitle,
     required IconData icon,
-    required Color accent,
-    required Color surface,
-    required Color border,
     required bool expanded,
     required bool reviewed,
     required ValueChanged<bool> onExpandedChanged,
     required List<String> bullets,
   }) {
-    return Material(
-      color: _legalSurface(surface),
-      elevation: expanded ? 2 : 0,
-      shadowColor: accent.withValues(alpha: 0.12),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(
-          color: reviewed
-              ? accent.withValues(alpha: _isDesktopGlass ? 0.75 : 0.5)
-              : (_isDesktopGlass
-                  ? Colors.white.withValues(alpha: 0.22)
-                  : border),
-          width: reviewed ? 1.5 : 1,
-        ),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        children: [
-          InkWell(
-            onTap: () {
-              final next = !expanded;
-              onExpandedChanged(next);
-            },
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(14, 14, 10, 14),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: _isDesktopGlass
-                      ? [
-                          accent.withValues(alpha: 0.62),
-                          Colors.black.withValues(alpha: 0.38),
-                        ]
-                      : [
-                          accent.withValues(alpha: 0.16),
-                          accent.withValues(alpha: 0.03),
-                        ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: _isDesktopGlass
-                          ? Colors.white.withValues(alpha: 0.14)
-                          : Colors.white.withValues(alpha: 0.85),
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                          color: accent.withValues(alpha: 0.15),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Icon(
-                      icon,
-                      color: _isDesktopGlass ? Colors.white : accent,
-                      size: 22,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                title,
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w800,
-                                  color: _legalTitleColor,
-                                ),
-                              ),
-                            ),
-                            if (reviewed)
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 3,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: accent.withValues(
-                                    alpha: _isDesktopGlass ? 0.35 : 0.15,
-                                  ),
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: _isDesktopGlass
-                                      ? Border.all(
-                                          color: Colors.white
-                                              .withValues(alpha: 0.35),
-                                        )
-                                      : null,
-                                ),
-                                child: Text(
-                                  'Read',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w800,
-                                    color:
-                                        _isDesktopGlass ? Colors.white : accent,
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          subtitle,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: _legalMutedColor,
-                            height: 1.35,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Icon(
-                    expanded
-                        ? Icons.keyboard_arrow_up_rounded
-                        : Icons.keyboard_arrow_down_rounded,
-                    color: _isDesktopGlass ? Colors.white : accent,
-                    size: 28,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          AnimatedCrossFade(
-            firstChild: const SizedBox.shrink(),
-            secondChild: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 220),
-                child: Scrollbar(
-                  thumbVisibility: true,
-                  radius: const Radius.circular(8),
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: bullets.map(_buildLegalBullet).toList(),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            crossFadeState: expanded
-                ? CrossFadeState.showSecond
-                : CrossFadeState.showFirst,
-            duration: const Duration(milliseconds: 220),
-          ),
-        ],
-      ),
+    return SignupLegalExpansionCard(
+      title: title,
+      subtitle: subtitle,
+      icon: icon,
+      expanded: expanded,
+      reviewed: reviewed,
+      onExpandedChanged: onExpandedChanged,
+      bullets: bullets,
+      onDark: _isDesktopGlass,
     );
   }
 
   Widget _buildTermsConsentAgreementCard() {
-    final canAgree = _legalReviewComplete;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (!canAgree)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.touch_app_outlined,
-                  size: 16,
-                  color: Colors.amber.shade800,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Open and read both sections above before you can agree.',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.amber.shade900,
-                      fontWeight: FontWeight.w600,
-                      height: 1.35,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        Material(
-          color: _legalAgreementFill(agreed: _agreeToTerms),
-          elevation: _agreeToTerms ? 1 : 0,
-          shadowColor: AppTheme.brandOrange.withValues(alpha: 0.2),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: BorderSide(
-              color: _agreeToTerms
-                  ? AppTheme.brandOrange
-                  : (canAgree
-                      ? (_isDesktopGlass
-                          ? Colors.white.withValues(alpha: 0.28)
-                          : _inputBorder)
-                      : Colors.amber.shade200),
-              width: _agreeToTerms ? 2 : 1,
-            ),
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: canAgree
-                ? () => setState(() => _agreeToTerms = !_agreeToTerms)
-                : null,
-            child: Opacity(
-              opacity: canAgree ? 1 : 0.55,
-              child: Padding(
-                padding: const EdgeInsets.all(18),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      width: 28,
-                      height: 28,
-                      decoration: BoxDecoration(
-                        color: _agreeToTerms
-                            ? AppTheme.brandOrange
-                            : Colors.transparent,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: _agreeToTerms
-                              ? AppTheme.brandOrange
-                              : (_isDesktopGlass
-                                  ? Colors.white.withValues(alpha: 0.45)
-                                  : _inputBorder),
-                          width: 2,
-                        ),
-                      ),
-                      child: _agreeToTerms
-                          ? const Icon(
-                              Icons.check_rounded,
-                              size: 20,
-                              color: Colors.white,
-                            )
-                          : null,
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _agreeToTerms
-                                ? 'Agreed — you may continue registration'
-                                : canAgree
-                                ? 'I agree to continue'
-                                : 'Review required',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w800,
-                              color: _agreeToTerms
-                                  ? (_isDesktopGlass
-                                      ? Colors.white
-                                      : AppTheme.brandOrange)
-                                  : _legalTitleColor,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'I have read and agree to the Terms and Conditions '
-                            'and the Data Privacy Policy (Republic Act No. 10173) '
-                            'of ATMOS-TRS - Asenso Tourismo Misamis Occidental '
-                            'Smart Tourist Registration System.',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: _legalBodyColor,
-                              height: 1.55,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
+    return SignupLegalAgreementCard(
+      agreed: _agreeToTerms,
+      canAgree: _legalReviewComplete,
+      onDark: _isDesktopGlass,
+      onChanged: (v) => setState(() => _agreeToTerms = v),
     );
   }
 
@@ -1779,97 +1418,6 @@ class _SignupScreenState extends State<SignupScreen> {
     return '${local}+minor$ts@gmail.com';
   }
 
-  Future<void> _deleteAuthUserBestEffort() async {
-    try {
-      await FirebaseAuth.instance.currentUser?.delete();
-    } catch (e) {
-      debugPrint('[REG] deleteAuthUserBestEffort: $e');
-    }
-  }
-
-  /// When Auth still has an email but Firestore registration was deleted (or never
-  /// completed), sign in with the same password, wipe the remnant, so signup can
-  /// recreate the account. Returns true if Auth is clear for a new createUser.
-  Future<bool> _tryReclaimOrphanAuthEmail({
-    required String contactEmail,
-    required String authEmail,
-    required String password,
-  }) async {
-    final durable =
-        await UserDirectoryService.emailHasDurableRegistration(contactEmail);
-    if (durable) return false;
-
-    try {
-      try {
-        await FirebaseAuth.instance.signOut();
-      } catch (_) {}
-      final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: authEmail,
-        password: password,
-      );
-      final orphanUid = cred.user?.uid;
-      if (orphanUid == null || orphanUid.isEmpty) return false;
-      await RegistrationRollbackService.rollback(orphanUid);
-      try {
-        await FirebaseAuth.instance.signOut();
-      } catch (_) {}
-      debugPrint('[REG] reclaimed orphan Auth for $authEmail');
-      return true;
-    } on FirebaseAuthException catch (e) {
-      debugPrint('[REG] orphan reclaim failed: ${e.code} ${e.message}');
-      return false;
-    } catch (e, st) {
-      debugPrint('[REG] orphan reclaim error: $e\n$st');
-      return false;
-    }
-  }
-
-  Future<void> _handleEmailAlreadyInUseOnSignup({
-    required String contactEmail,
-    required String authEmail,
-    required String password,
-  }) async {
-    final durable =
-        await UserDirectoryService.emailHasDurableRegistration(contactEmail);
-    if (durable) {
-      if (mounted) {
-        _registrationSnack(
-          'This email is already registered. Please sign in instead.',
-          background: Colors.orange.shade800,
-        );
-        Navigator.pushReplacementNamed(context, '/login');
-      }
-      return;
-    }
-
-    if (mounted) {
-      _registrationSnack(
-        'This email was removed from the system. '
-        'Sign up again with the same password to recreate your account, '
-        'or use a different email.',
-        background: Colors.orange.shade800,
-      );
-    }
-    final reclaimed = await _tryReclaimOrphanAuthEmail(
-      contactEmail: contactEmail,
-      authEmail: authEmail,
-      password: password,
-    );
-    if (!mounted) return;
-    if (reclaimed) {
-      _registrationSnack(
-        'Previous account cleared. Tap Submit Registration again to continue.',
-        background: Colors.green.shade700,
-      );
-    } else {
-      _registrationSnack(
-        'Could not free this email automatically. Use the password from the '
-        'old signup and tap Submit again, or contact support.',
-        background: Colors.red.shade700,
-      );
-    }
-  }
-
   /// Ensures Firestore requests run with a fresh Auth token (fixes web permission-denied after sign-up).
   Future<void> _ensureAuthReadyForFirestore(String uid) async {
     final auth = FirebaseAuth.instance;
@@ -1967,18 +1515,16 @@ class _SignupScreenState extends State<SignupScreen> {
       }
 
       final user = FirebaseAuth.instance.currentUser;
-      if (user == null) {
-        _registrationSnack(
-          'Session expired. Please sign up again.',
-          background: Colors.red.shade700,
-        );
-        return;
-      }
       await PendingRegistrationCache.hydrate();
-      final existing = PendingRegistrationCache.forUid(user.uid);
+      final existingDeferred = PendingRegistrationCache.current;
+      final existing = user != null
+          ? PendingRegistrationCache.forUid(user.uid)
+          : (existingDeferred?.authDeferred == true ? existingDeferred : null);
       if (existing == null) {
         _registrationSnack(
-          'No unfinished signup found.',
+          user == null && existingDeferred == null
+              ? 'Session expired. Please sign up again.'
+              : 'No unfinished signup found.',
           background: Colors.red.shade700,
         );
         return;
@@ -1995,13 +1541,29 @@ class _SignupScreenState extends State<SignupScreen> {
           : (existing.authEmail.isNotEmpty
               ? existing.authEmail
               : contactEmail);
-      var regUid = user.uid;
+      var regUid = existing.uid;
       String? registrationOtp;
       var otpAlreadySent = true;
       var emailDeliveryFailed = false;
+      final password = _passwordController.text.isNotEmpty
+          ? _passwordController.text
+          : (existing.password ?? '');
 
-      if (emailChanged) {
-        final password = _passwordController.text;
+      // Deferred Auth: update local pending + OTP only (no Firebase Auth yet).
+      if (existing.authDeferred || user == null) {
+        if (emailChanged) {
+          try {
+            await OtpService.deleteOtp(existing.otpKey);
+          } catch (_) {}
+          registrationOtp = OtpService.generateSixDigitOtp();
+          await OtpService.saveOtpPreAuth(
+            pendingId: regUid,
+            email: contactEmail,
+            otp: registrationOtp,
+          );
+          otpAlreadySent = false;
+        }
+      } else if (emailChanged) {
         _updateSubmitPhase('Updating account email…');
         try {
           final oldAuthEmail = normalizeEmail(
@@ -2161,11 +1723,15 @@ class _SignupScreenState extends State<SignupScreen> {
         'isVerified': false,
       };
 
+      final stillDeferred = existing.authDeferred || user == null;
+
       await PendingRegistrationCache.save(
         PendingRegistration(
           uid: regUid,
           contactEmail: contactEmail,
           authEmail: authEmail,
+          authDeferred: stillDeferred,
+          password: stillDeferred ? password : null,
           touristData: TouristRegistrationService.jsonSafeMap(touristData),
           userData: TouristRegistrationService.jsonSafeMap(userData),
           usedPhotoFirestoreFallback: usedPhotoFirestoreFallback,
@@ -2191,15 +1757,19 @@ class _SignupScreenState extends State<SignupScreen> {
         ),
       );
 
-      AuthConfig.currentUserUid = regUid;
-      try {
-        await SessionStorage.saveSession(
-          regUid,
-          role: UserRole.tourist,
-          email: authEmail,
-        );
-      } catch (e, st) {
-        debugPrint('[REG] pending-edit session (non-fatal): $e\n$st');
+      if (stillDeferred) {
+        AuthConfig.currentUserUid = null;
+      } else {
+        AuthConfig.currentUserUid = regUid;
+        try {
+          await SessionStorage.saveSession(
+            regUid,
+            role: UserRole.tourist,
+            email: authEmail,
+          );
+        } catch (e, st) {
+          debugPrint('[REG] pending-edit session (non-fatal): $e\n$st');
+        }
       }
 
       if (emailChanged && registrationOtp != null) {
@@ -2220,17 +1790,19 @@ class _SignupScreenState extends State<SignupScreen> {
             emailSent: false,
             emailError: 'Delivery timed out',
             otpAlreadyInFirestore: true,
+            emailDeliveryPending: true,
           ),
         );
         emailDeliveryFailed = !delivery.canCompleteRegistration;
         if (!mounted) return;
+        final snackOk =
+            delivery.emailSent || delivery.emailDeliveryPending;
         _registrationSnack(
-          delivery.emailSent
-              ? 'We sent a new code to $contactEmail.'
+          snackOk
+              ? OtpDeliveryResult.deliveryPendingMessage(contactEmail)
               : delivery.messageForUser(contactEmail),
-          background: delivery.emailSent
-              ? Colors.green.shade700
-              : Colors.orange.shade800,
+          background:
+              snackOk ? Colors.green.shade700 : Colors.orange.shade800,
         );
       } else if (!mounted) {
         return;
@@ -2251,6 +1823,7 @@ class _SignupScreenState extends State<SignupScreen> {
           'fromSignup': true,
           'otpAlreadySent': otpAlreadySent || !emailChanged,
           'emailDeliveryFailed': emailDeliveryFailed,
+          'authDeferred': stillDeferred,
         },
       );
       debugPrint('[REG] ========== pending edit end ==========');
@@ -2293,7 +1866,7 @@ class _SignupScreenState extends State<SignupScreen> {
       // Decline OS/browser "save password?" prompts (esp. Chrome) for shared/public devices.
       TextInput.finishAutofillContext(shouldSave: false);
 
-      _setSubmitting(true, phase: 'Creating account…');
+      _setSubmitting(true, phase: 'Preparing verification…');
 
       if (Firebase.apps.isEmpty) {
         _registrationSnack(
@@ -2306,9 +1879,6 @@ class _SignupScreenState extends State<SignupScreen> {
     final contactEmail = normalizeEmail(_emailController.text);
     var authEmail = contactEmail;
     final password = _passwordController.text;
-    final ageYearsForAuth = _ageInYears();
-    final isMinorRegistrant =
-        ageYearsForAuth != null && ageYearsForAuth <= _minorMaxAgeYears;
 
     // Home LGU for Registered tourists = signup address (not QR scan place).
     final Future<String?> municipalityFuture = Future<String?>.value(
@@ -2319,110 +1889,55 @@ class _SignupScreenState extends State<SignupScreen> {
       ),
     );
 
-    // Firebase Auth 6 removed fetchSignInMethodsForEmail (email enumeration).
-    // For minors using a parent Gmail, try that address first; on conflict we
-    // retry with a protected alias below in the createUser catch path.
-    var minorAliasRetryEligible =
-        isMinorRegistrant && _isGmailAddress(contactEmail);
+    // Firebase Auth is created only after successful email OTP (verify screen).
+    // Minors using a parent Gmail may switch to a protected alias at Auth create.
 
-    UserCredential? userCredential;
-    String? uid;
     String? registrationOtp;
+    late final String pendingId;
 
-    // --- STEP 1: Firebase Auth + OTP save (must succeed before navigate) ---
+    // --- STEP 1: Pre-auth OTP only (no Firebase Auth / Firestore profile yet) ---
     try {
-      debugPrint('[REG] STEP 1: createUserWithEmailAndPassword');
+      debugPrint('[REG] STEP 1: deferred Auth — local OTP + pending cache');
       try {
         await FirebaseAuth.instance.signOut();
       } catch (_) {}
-      try {
-        userCredential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
-          email: authEmail,
-          password: password,
-        );
-      } on FirebaseAuthException catch (e) {
-        if (e.code == 'email-already-in-use' &&
-            minorAliasRetryEligible &&
-            authEmail == contactEmail) {
-          authEmail = _buildMinorGmailAlias(contactEmail);
-          minorAliasRetryEligible = false;
-          if (mounted) {
-            _registrationSnack(
-              'Parent/guardian Gmail is already used. Minor account will proceed using a protected alias.',
-              background: Colors.green.shade700,
-            );
-          }
-          userCredential =
-              await FirebaseAuth.instance.createUserWithEmailAndPassword(
-            email: authEmail,
-            password: password,
-          );
-        } else if (e.code == 'email-already-in-use') {
-          final reclaimed = await _tryReclaimOrphanAuthEmail(
-            contactEmail: contactEmail,
-            authEmail: authEmail,
-            password: password,
-          );
-          if (!reclaimed) rethrow;
-          userCredential =
-              await FirebaseAuth.instance.createUserWithEmailAndPassword(
-            email: authEmail,
-            password: password,
-          );
-        } else {
-          rethrow;
-        }
-      }
-      uid = userCredential.user?.uid;
-      debugPrint('[REG] STEP 1 OK: uid=$uid');
-      if (uid == null || uid.isEmpty) {
+
+      final alreadyRegistered =
+          await UserDirectoryService.emailHasDurableRegistration(contactEmail);
+      if (alreadyRegistered) {
         _setSubmitting(false);
-        _registrationSnack(
-          'Auth [internal]: user id missing after createUser.',
-          background: Colors.red.shade700,
-        );
+        if (mounted) {
+          _registrationSnack(
+            'This email is already registered. Please sign in instead.',
+            background: Colors.orange.shade800,
+          );
+          Navigator.pushReplacementNamed(context, '/login');
+        }
         return;
       }
-      await _ensureAuthReadyForFirestore(uid);
 
+      pendingId = const Uuid().v4();
       _updateSubmitPhase('Saving verification code…');
       registrationOtp = OtpService.generateSixDigitOtp();
-      debugPrint('[REG] STEP 3: email_otps save (immediately after auth)');
-      await OtpService.saveOtp(
-        uid: uid,
+      debugPrint('[REG] STEP 3: pre-auth OTP save pendingId=$pendingId');
+      await OtpService.saveOtpPreAuth(
+        pendingId: pendingId,
         email: contactEmail,
         otp: registrationOtp,
       );
       debugPrint('[REG] STEP 3 OK');
-    } on FirebaseAuthException catch (e, st) {
-      debugPrint('[REG] STEP 1 FAIL: code=${e.code} message=${e.message}\n$st');
-      _setSubmitting(false);
-      if (e.code == 'email-already-in-use') {
-        await _handleEmailAlreadyInUseOnSignup(
-          contactEmail: contactEmail,
-          authEmail: authEmail,
-          password: password,
-        );
-        return;
-      }
-      _registrationSnack(
-        _formatFirebaseAuthException(e),
-        background: Colors.red.shade700,
-      );
-      return;
     } on FirebaseException catch (e, st) {
       debugPrint(
         '[REG] STEP 3 FAIL: plugin=${e.plugin} code=${e.code} message=${e.message}\n$st',
       );
-      await _deleteAuthUserBestEffort();
+      _setSubmitting(false);
       _registrationSnack(
-        'Verification code could not be saved. Your account was not created. '
-        'Please try again. If this persists, contact support.',
+        'Verification code could not be saved. Please try again.',
         background: Colors.red.shade700,
       );
       return;
     } catch (e, st) {
-      debugPrint('[REG] STEP 1 FAIL (non-FirebaseAuth): $e\n$st');
+      debugPrint('[REG] STEP 1 FAIL: $e\n$st');
       _setSubmitting(false);
       _registrationSnack(
         _formatRegistrationError(e),
@@ -2431,8 +1946,8 @@ class _SignupScreenState extends State<SignupScreen> {
       return;
     }
 
-    // OTP is saved — never delete the Auth user from here on (keeps code intact).
-    final String regUid = uid;
+    // OTP is on-device — Auth is created only after verify succeeds.
+    final String regUid = pendingId;
     _updateSubmitPhase('Preparing your profile…');
 
     // Profile photo is optional and added later from Profile tab.
@@ -2512,6 +2027,7 @@ class _SignupScreenState extends State<SignupScreen> {
           emailSent: false,
           emailError: 'Delivery timed out',
           otpAlreadyInFirestore: true,
+          emailDeliveryPending: true,
         );
       },
     );
@@ -2591,6 +2107,8 @@ class _SignupScreenState extends State<SignupScreen> {
         uid: regUid,
         contactEmail: contactEmail,
         authEmail: authEmail,
+        authDeferred: true,
+        password: password,
         touristData: TouristRegistrationService.jsonSafeMap(touristData),
         userData: TouristRegistrationService.jsonSafeMap(userData),
         usedPhotoFirestoreFallback: false,
@@ -2616,28 +2134,22 @@ class _SignupScreenState extends State<SignupScreen> {
       ),
     );
 
-    AuthConfig.currentUserUid = regUid;
-    try {
-      await SessionStorage.saveSession(
-        regUid,
-        role: UserRole.tourist,
-        email: authEmail,
-      );
-    } catch (e, st) {
-      debugPrint('[REG] session save (non-fatal): $e\n$st');
-    }
+    // No Firebase Auth / session until OTP succeeds.
+    AuthConfig.currentUserUid = null;
 
     _setSubmitting(false);
     if (mounted) {
-      debugPrint('[REG] STEP 5 deferred — navigate to verify-otp');
-      final snackMsg = delivery.emailSent
-          ? 'We sent a 6-digit code to $contactEmail. Open your email Inbox and enter it below.'
+      debugPrint('[REG] STEP 5 deferred Auth — navigate to verify-otp');
+      final snackMsg = delivery.emailSent || delivery.emailDeliveryPending
+          ? OtpDeliveryResult.deliveryPendingMessage(contactEmail)
           : delivery.messageForUser(contactEmail);
+      final snackOk = delivery.emailSent ||
+          delivery.emailDeliveryPending ||
+          delivery.smsSent;
       _registrationSnack(
         snackMsg,
-        background: delivery.emailSent || delivery.smsSent
-            ? Colors.green.shade700
-            : Colors.orange.shade800,
+        background:
+            snackOk ? Colors.green.shade700 : Colors.orange.shade800,
       );
       if (!mounted) return;
       Navigator.pushReplacementNamed(
@@ -2647,7 +2159,9 @@ class _SignupScreenState extends State<SignupScreen> {
           'contactEmail': contactEmail,
           'fromSignup': true,
           'otpAlreadySent': true,
+          // Only true when OTP missing AND delivery failed — not for background send.
           'emailDeliveryFailed': !delivery.canCompleteRegistration,
+          'authDeferred': true,
         },
       );
     }
@@ -2817,7 +2331,7 @@ class _SignupScreenState extends State<SignupScreen> {
         return TouristSignupInfoBanner(
           icon: Icons.privacy_tip_outlined,
           child: Text(
-            'Please review Data Privacy and Terms before continuing. Required for a secure tourist account.',
+            'Please open Data Privacy and Terms, then agree before continuing.',
             style: TextStyle(
               fontSize: 12.5,
               height: 1.4,
@@ -2924,28 +2438,6 @@ class _SignupScreenState extends State<SignupScreen> {
 
   Color get _helperTextColor =>
       _isDesktopGlass ? Colors.white.withValues(alpha: 0.82) : _textMuted;
-
-  Color _legalSurface(Color lightSurface) =>
-      _isDesktopGlass ? Colors.black.withValues(alpha: 0.52) : lightSurface;
-
-  Color get _legalTitleColor => _isDesktopGlass ? Colors.white : _textDark;
-
-  Color get _legalBodyColor =>
-      _isDesktopGlass ? Colors.white.withValues(alpha: 0.94) : _textDark;
-
-  Color get _legalMutedColor =>
-      _isDesktopGlass ? Colors.white.withValues(alpha: 0.82) : _textMuted;
-
-  Color _legalAgreementFill({required bool agreed}) {
-    if (!_isDesktopGlass) {
-      return agreed
-          ? AppTheme.brandOrange.withValues(alpha: 0.07)
-          : _cardWhite;
-    }
-    return agreed
-        ? AppTheme.brandOrange.withValues(alpha: 0.3)
-        : Colors.black.withValues(alpha: 0.44);
-  }
 
   /// Opaque enough that white value text stays readable over light panels.
   Color get _formFillColor => _isDesktopGlass
@@ -3162,22 +2654,7 @@ class _SignupScreenState extends State<SignupScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Expanded(
-                        child: TouristSignupBrandRow(onDark: true),
-                      ),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: TouristSignupScriptSlogan(
-                          text: _stepSlogan,
-                          color: Colors.white,
-                          fontSize: 20,
-                        ),
-                      ),
-                    ],
-                  ),
+                  const TouristSignupBrandRow(onDark: true),
                   const SizedBox(height: 16),
                   Text(
                     'Step $_displayStepNumber',
@@ -3288,17 +2765,6 @@ class _SignupScreenState extends State<SignupScreen> {
                               const Expanded(
                                 child: TouristSignupBrandRow(onDark: true),
                               ),
-                              const SizedBox(width: 6),
-                              Flexible(
-                                child: Padding(
-                                  padding: const EdgeInsets.only(top: 4),
-                                  child: TouristSignupScriptSlogan(
-                                    text: _stepSlogan,
-                                    color: Colors.white,
-                                    fontSize: 20,
-                                  ),
-                                ),
-                              ),
                             ],
                           ),
                           const Spacer(),
@@ -3374,157 +2840,19 @@ class _SignupScreenState extends State<SignupScreen> {
     }
   }
 
-  void _setAllLegalSectionsExpanded(bool expanded) {
-    setState(() {
-      _privacySectionExpanded = expanded;
-      _termsSectionExpanded = expanded;
-      if (expanded) {
-        _hasReviewedPrivacy = true;
-        _hasReviewedTerms = true;
-      }
-    });
-  }
-
   Widget _buildTermsConsentSubStep() {
-    const privacyBlue = Color(0xFF1D4ED8);
-    const privacySurface = Color(0xFFEFF6FF);
-    const privacyBorder = Color(0xFF93C5FD);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildSubStepHeader(
           'Terms & Data Privacy',
-          'Review how ATMOS-TRS handles your information, then agree to continue.',
+          'Open both sections below, then agree to continue.',
           Icons.verified_user_outlined,
         ),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            gradient: LinearGradient(
-              colors: _isDesktopGlass
-                  ? [
-                      Colors.black.withValues(alpha: 0.55),
-                      AppTheme.brandOrange.withValues(alpha: 0.35),
-                    ]
-                  : [
-                      AppTheme.brandOrange.withValues(alpha: 0.14),
-                      privacyBlue.withValues(alpha: 0.08),
-                    ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            border: Border.all(
-              color: _isDesktopGlass
-                  ? Colors.white.withValues(alpha: 0.22)
-                  : AppTheme.brandOrange.withValues(alpha: 0.2),
-            ),
-          ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: _isDesktopGlass
-                      ? Colors.white.withValues(alpha: 0.14)
-                      : Colors.white.withValues(alpha: 0.9),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.lock_outline_rounded,
-                  color: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
-                  size: 26,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Your privacy matters',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: _legalTitleColor,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'ATMOS-TRS follows RA 10173 and provincial tourism policies. '
-                      'Please review both sections before registering.',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: _legalBodyColor,
-                        height: 1.45,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 14),
-        Row(
-          children: [
-            Expanded(
-              child: _buildLegalProgressChip(
-                label: 'Data Privacy',
-                done: _hasReviewedPrivacy,
-                icon: Icons.shield_outlined,
-                accent: privacyBlue,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _buildLegalProgressChip(
-                label: 'Terms',
-                done: _hasReviewedTerms,
-                icon: Icons.description_outlined,
-                accent: AppTheme.brandOrange,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton.icon(
-            onPressed: () {
-              final expandAll =
-                  !(_privacySectionExpanded && _termsSectionExpanded);
-              _setAllLegalSectionsExpanded(expandAll);
-            },
-            icon: Icon(
-              _privacySectionExpanded && _termsSectionExpanded
-                  ? Icons.unfold_less_rounded
-                  : Icons.unfold_more_rounded,
-              size: 18,
-            ),
-            label: Text(
-              _privacySectionExpanded && _termsSectionExpanded
-                  ? 'Collapse all'
-                  : 'Expand all',
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
-            style: TextButton.styleFrom(
-              foregroundColor: AppTheme.brandOrange,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-            ),
-          ),
-        ),
-        const SizedBox(height: 6),
         _buildLegalExpansionCard(
-          title: 'Data Privacy Act (RA 10173)',
-          subtitle: 'Collection, use, and your rights',
+          title: 'Data Privacy (RA 10173)',
+          subtitle: 'How we collect and use your information',
           icon: Icons.shield_outlined,
-          accent: privacyBlue,
-          surface: privacySurface,
-          border: privacyBorder,
           expanded: _privacySectionExpanded,
           reviewed: _hasReviewedPrivacy,
           onExpandedChanged: (v) => setState(() {
@@ -3544,14 +2872,11 @@ class _SignupScreenState extends State<SignupScreen> {
                 'through your municipal or provincial Tourism Office.',
           ],
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         _buildLegalExpansionCard(
           title: 'Terms and Conditions',
           subtitle: 'Your responsibilities as a registrant',
           icon: Icons.description_outlined,
-          accent: AppTheme.brandOrange,
-          surface: const Color(0xFFFFF7ED),
-          border: AppTheme.brandOrange.withValues(alpha: 0.28),
           expanded: _termsSectionExpanded,
           reviewed: _hasReviewedTerms,
           onExpandedChanged: (v) => setState(() {
@@ -3571,9 +2896,9 @@ class _SignupScreenState extends State<SignupScreen> {
                 'planning and public service reporting.',
           ],
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 18),
         _buildTermsConsentAgreementCard(),
-        const SizedBox(height: 32),
+        const SizedBox(height: 28),
         _buildPersonalDetailsNavButtons(showBack: false),
       ],
     );

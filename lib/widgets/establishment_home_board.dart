@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 
 import 'package:atmos_trs_system/utils/establishment_capability.dart';
-import 'package:atmos_trs_system/utils/establishment_dss_aggregates.dart';
 import 'package:atmos_trs_system/utils/establishment_room_grid.dart';
 import 'package:atmos_trs_system/widgets/establishment_dash_tokens.dart';
-import 'package:atmos_trs_system/widgets/establishment_dss_charts.dart';
+import 'package:atmos_trs_system/widgets/establishment_dashboard_components.dart';
 
-/// Dense Home command center: welcome, KPIs, glance charts, queue slots.
-class EstablishmentHomeBoard extends StatelessWidget {
+/// Home front desk: hero, approval notice, today's KPIs, guest requests.
+/// Room status lives on Rooms; charts on Insights; reviews on Reviews.
+class EstablishmentHomeBoard extends StatefulWidget {
   const EstablishmentHomeBoard({
     super.key,
     required this.businessName,
@@ -17,14 +17,13 @@ class EstablishmentHomeBoard extends StatelessWidget {
     required this.copy,
     required this.categoryIcon,
     required this.statusPill,
-    required this.statusBanner,
     required this.kpis,
-    required this.dss,
     required this.isLodging,
+    required this.requestsSection,
+    this.statusBanner,
     this.roomStats,
-    required this.pendingSection,
-    required this.recentSection,
     this.onOpenRooms,
+    this.onOpenInsights,
   });
 
   final String businessName;
@@ -34,268 +33,148 @@ class EstablishmentHomeBoard extends StatelessWidget {
   final EstablishmentPackCopy copy;
   final IconData categoryIcon;
   final Widget statusPill;
-  final Widget statusBanner;
+  final Widget? statusBanner;
   final EstablishmentHomeKpis kpis;
-  final EstablishmentDssSnapshot dss;
   final bool isLodging;
   final EstablishmentRoomStats? roomStats;
-  final Widget pendingSection;
-  final Widget recentSection;
+  final Widget requestsSection;
   final VoidCallback? onOpenRooms;
+  final VoidCallback? onOpenInsights;
+
+  @override
+  State<EstablishmentHomeBoard> createState() => _EstablishmentHomeBoardState();
+}
+
+class _EstablishmentHomeBoardState extends State<EstablishmentHomeBoard> {
+  final GlobalKey _requestsKey = GlobalKey();
+
+  void _scrollToRequests() {
+    final ctx = _requestsKey.currentContext;
+    if (ctx == null) return;
+    Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeOutCubic,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    final wide = MediaQuery.sizeOf(context).width >= 1100;
-
-    return ListView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
-      children: [
-        _welcomeRow(),
-        const SizedBox(height: 10),
-        statusBanner,
-        const SizedBox(height: 14),
-        _kpiStrip(),
-        if (isLodging && roomStats != null) ...[
-          const SizedBox(height: 12),
-          _roomSnapshot(roomStats!),
-        ],
-        const SizedBox(height: 14),
-        if (wide)
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(child: _miniTrend()),
-              const SizedBox(width: 12),
-              Expanded(child: _miniMixOrOccupancy()),
-            ],
-          )
-        else ...[
-          _miniTrend(),
-          const SizedBox(height: 12),
-          _miniMixOrOccupancy(),
-        ],
-        const SizedBox(height: 16),
-        pendingSection,
-        const SizedBox(height: 16),
-        recentSection,
-      ],
-    );
-  }
-
-  Widget _welcomeRow() {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      decoration: AeDashTokens.cardDecoration(),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: AeDashTokens.softAccent,
-              borderRadius: BorderRadius.circular(AeDashTokens.radiusSm),
-            ),
-            child: Icon(categoryIcon, color: AeDashTokens.accent, size: 24),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  businessName,
-                  style: AeDashTokens.heading(size: 18),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  [
-                    if (category.isNotEmpty) category,
-                    copy.packLabel,
-                    if (municipality.isNotEmpty) municipality,
-                  ].join(' · '),
-                  style: AeDashTokens.body(size: 12),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          statusPill,
-        ],
-      ),
-    );
-  }
-
-  Widget _kpiStrip() {
-    final fourth = switch (pack) {
-      EstablishmentPack.lodging => '${kpis.roomsMonth}',
-      EstablishmentPack.dining => kpis.avgPartySize == 0
-          ? '—'
-          : kpis.avgPartySize.toStringAsFixed(
-              kpis.avgPartySize == kpis.avgPartySize.roundToDouble() ? 0 : 1,
-            ),
-      EstablishmentPack.venue =>
-        kpis.peakDay == 0 ? '—' : 'Day ${kpis.peakDay}',
-    };
-
-    final items = [
-      _Kpi('Pending', '${kpis.pending}', Icons.hourglass_top_rounded),
-      _Kpi('Today', '${kpis.confirmedToday}', Icons.check_circle_outline),
-      _Kpi(copy.kpiGuestsLabel, '${kpis.guestsMonth}', Icons.groups_outlined),
-      _Kpi(copy.kpiFourthLabel, fourth, copy.kpiFourthIcon),
-    ];
-
     return LayoutBuilder(
       builder: (context, c) {
-        final tight = c.maxWidth < 640;
-        if (tight) {
-          return Column(
-            children: [
-              Row(
-                children: [
-                  Expanded(child: _kpiTile(items[0])),
-                  const SizedBox(width: 8),
-                  Expanded(child: _kpiTile(items[1])),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(child: _kpiTile(items[2])),
-                  const SizedBox(width: 8),
-                  Expanded(child: _kpiTile(items[3])),
-                ],
-              ),
-            ],
-          );
-        }
-        return Row(
+        final w = c.maxWidth;
+        final pad = w < 600 ? 14.0 : (w < 1000 ? 18.0 : 24.0);
+        final gap = w < 600 ? 12.0 : 16.0;
+
+        return ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.only(bottom: pad + 12),
           children: [
-            for (var i = 0; i < items.length; i++) ...[
-              if (i > 0) const SizedBox(width: 8),
-              Expanded(child: _kpiTile(items[i])),
-            ],
+            _hero(),
+            Padding(
+              padding: EdgeInsets.fromLTRB(pad, gap, pad, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: _body(gap),
+              ),
+            ),
           ],
         );
       },
     );
   }
 
-  Widget _kpiTile(_Kpi item) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-      decoration: AeDashTokens.cardDecoration(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(item.icon, size: 18, color: AeDashTokens.accent),
-          const SizedBox(height: 8),
-          Text(item.value, style: AeDashTokens.number(size: 22)),
-          const SizedBox(height: 2),
-          Text(
-            item.label,
-            style: AeDashTokens.body(size: 11),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
-      ),
+  List<Widget> _body(double gap) {
+    return [
+      if (widget.statusBanner != null) ...[
+        widget.statusBanner!,
+        SizedBox(height: gap),
+      ],
+      _summaryCards(gap),
+      SizedBox(height: gap),
+      KeyedSubtree(key: _requestsKey, child: widget.requestsSection),
+    ];
+  }
+
+  Widget _hero() {
+    return EstablishmentHeroHeader(
+      greeting: AeDashTokens.greetingForNow(),
+      businessName: widget.businessName,
+      tags: [
+        if (widget.category.isNotEmpty)
+          EstablishmentHeroTag(widget.categoryIcon, widget.category),
+        EstablishmentHeroTag(Icons.apartment_rounded, widget.copy.packLabel),
+        if (widget.municipality.isNotEmpty)
+          EstablishmentHeroTag(Icons.location_on_outlined, widget.municipality),
+      ],
+      trailing: widget.statusPill,
+      flush: true,
     );
   }
 
-  Widget _roomSnapshot(EstablishmentRoomStats stats) {
-    Widget chip(String label, String value, Color color) {
-      return Expanded(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-          decoration: BoxDecoration(
-            color: AeDashTokens.surface,
-            borderRadius: BorderRadius.circular(AeDashTokens.radiusSm),
-            border: Border.all(color: color.withValues(alpha: 0.35)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(value, style: AeDashTokens.number(size: 18, color: color)),
-              Text(label, style: AeDashTokens.body(size: 10.5)),
-            ],
-          ),
-        ),
-      );
+  Widget _summaryCards(double gap) {
+    final k = widget.kpis;
+    final stats = widget.roomStats;
+
+    final String fourthValue;
+    final String fourthSubtitle;
+    VoidCallback? fourthTap = widget.onOpenInsights;
+    switch (widget.pack) {
+      case EstablishmentPack.lodging:
+        fourthValue = '${stats?.occupied ?? 0}';
+        fourthSubtitle = 'Occupied right now';
+        fourthTap = widget.onOpenRooms ?? widget.onOpenInsights;
+      case EstablishmentPack.dining:
+        fourthValue = k.avgPartySize == 0
+            ? '—'
+            : k.avgPartySize.toStringAsFixed(
+                k.avgPartySize == k.avgPartySize.roundToDouble() ? 0 : 1,
+              );
+        fourthSubtitle = 'Per confirmed visit';
+      case EstablishmentPack.venue:
+        fourthValue = k.peakDay == 0 ? '—' : 'Day ${k.peakDay}';
+        fourthSubtitle = 'Busiest day this month';
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    return AeResponsiveGrid(
+      spacing: gap,
+      minItemWidth: 230,
       children: [
-        Row(
-          children: [
-            Text('Room snapshot', style: AeDashTokens.section()),
-            const Spacer(),
-            if (onOpenRooms != null)
-              TextButton(
-                onPressed: onOpenRooms,
-                child: const Text('Open Rooms'),
-              ),
-          ],
+        AeSummaryCard(
+          title: 'Pending',
+          subtitle: 'Awaiting confirmation',
+          value: '${k.pending}',
+          icon: Icons.hourglass_top_rounded,
+          color: AeDashTokens.accent,
+          onTap: _scrollToRequests,
         ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            chip('Total', '${stats.total}', AeDashTokens.accent),
-            const SizedBox(width: 8),
-            chip('Occupied', '${stats.occupied}', AeDashTokens.danger),
-            const SizedBox(width: 8),
-            chip('Free', '${stats.free}', AeDashTokens.success),
-            const SizedBox(width: 8),
-            chip('Off', '${stats.disabled}', const Color(0xFFEA580C)),
-          ],
+        AeSummaryCard(
+          title: 'Confirmed today',
+          subtitle: 'Guests checked in',
+          value: '${k.confirmedToday}',
+          icon: Icons.check_circle_rounded,
+          color: AeDashTokens.success,
+          onTap: widget.onOpenInsights,
+        ),
+        AeSummaryCard(
+          title: widget.copy.kpiGuestsLabel,
+          subtitle: 'Total guests this month',
+          value: '${k.guestsMonth}',
+          icon: Icons.groups_rounded,
+          color: AeDashTokens.purple,
+          onTap: widget.onOpenInsights,
+        ),
+        AeSummaryCard(
+          title: widget.copy.kpiFourthLabel,
+          subtitle: fourthSubtitle,
+          value: fourthValue,
+          icon: widget.isLodging
+              ? Icons.meeting_room_rounded
+              : widget.copy.kpiFourthIcon,
+          color: AeDashTokens.blue,
+          onTap: fourthTap,
         ),
       ],
-    );
-  }
-
-  Widget _miniTrend() {
-    return EstablishmentDssCharts.panel(
-      title: 'Last 7 days',
-      subtitle: copy.chartSubtitle,
-      height: 160,
-      child: EstablishmentDssCharts.staysTrendLine(
-        values: dss.staysTrend7,
-        labels: dss.dayLabels7,
-      ),
-    );
-  }
-
-  Widget _miniMixOrOccupancy() {
-    if (isLodging && roomStats != null) {
-      return EstablishmentDssCharts.panel(
-        title: 'Live occupancy',
-        subtitle: 'Rooms in house right now',
-        height: 160,
-        child: EstablishmentDssCharts.occupancyGauge(
-          occupied: roomStats!.occupied,
-          free: roomStats!.free,
-          total: roomStats!.total,
-        ),
-      );
-    }
-    final d = dss.demographics;
-    return EstablishmentDssCharts.panel(
-      title: 'Guests this month',
-      subtitle: 'Filipino vs foreign',
-      height: 160,
-      child: EstablishmentDssCharts.mixPie(
-        aLabel: 'Filipino',
-        aValue: d.filipino,
-        aColor: AeDashTokens.accent,
-        bLabel: 'Foreign',
-        bValue: d.foreign,
-        bColor: AeDashTokens.chartSecondary,
-      ),
     );
   }
 }
@@ -318,11 +197,4 @@ class EstablishmentHomeKpis {
   final double avgPartySize;
   final int peakDay;
   final int peakDayGuests;
-}
-
-class _Kpi {
-  const _Kpi(this.label, this.value, this.icon);
-  final String label;
-  final String value;
-  final IconData icon;
 }

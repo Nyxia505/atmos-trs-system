@@ -1,4 +1,5 @@
 import 'package:atmos_trs_system/features/governor/theme/governor_dashboard_tokens.dart';
+import 'package:atmos_trs_system/widgets/chart_transition.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
@@ -33,6 +34,13 @@ class GovernorAgeBarChart extends StatelessWidget {
     final maxY =
         totals.reduce((a, b) => a > b ? a : b).toDouble().clamp(1.0, 1e9);
 
+    return ChartTransition(
+      swapKey: Object.hashAll([for (final r in series) r.label]),
+      builder: (context, progress) => _chart(totals, maxY, progress),
+    );
+  }
+
+  Widget _chart(List<int> totals, double maxY, double progress) {
     return BarChart(
       BarChartData(
         maxY: maxY * 1.2,
@@ -109,7 +117,11 @@ class GovernorAgeBarChart extends StatelessWidget {
             ),
         ],
       ),
-      duration: const Duration(milliseconds: 500),
+      duration: ChartTransition.chartDuration(
+        progress,
+        const Duration(milliseconds: 500),
+      ),
+      curve: Curves.easeOutCubic,
     );
   }
 }

@@ -15,6 +15,7 @@ import 'package:atmos_trs_system/services/tourist_activity_firestore_sync.dart';
 import 'package:atmos_trs_system/services/tourist_profile_photo_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
+import 'package:atmos_trs_system/features/navigation/main_shell.dart';
 import 'package:atmos_trs_system/features/navigation/tourist_web_layout.dart';
 import 'package:atmos_trs_system/screens/forgot_password_screen.dart';
 import 'package:atmos_trs_system/navigation/post_logout_navigation.dart';
@@ -679,6 +680,8 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
                 ThemeColorPickerSheet.show(context);
               case 'reset_password':
                 _openResetPassword(context);
+              case 'app_tour':
+                MainShell.replayTutorial();
               case 'privacy':
                 _showPrivacyInfo(context);
               case 'about':
@@ -701,6 +704,13 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
                 icon: Icons.lock_outline_rounded,
                 title: 'Reset password',
                 subtitle: 'Change your sign-in password',
+                accent: menuAccent,
+              ),
+              _settingsMenuRow(
+                value: 'app_tour',
+                icon: Icons.school_outlined,
+                title: 'App tour',
+                subtitle: 'Replay the beginner guide',
                 accent: menuAccent,
               ),
               _settingsMenuRow(

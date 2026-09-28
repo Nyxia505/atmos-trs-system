@@ -126,18 +126,42 @@ class _LguDebugDataScreenState extends State<LguDebugDataScreen>
       appBar: AppBar(
         backgroundColor: _card,
         foregroundColor: _text,
+        surfaceTintColor: _card,
         elevation: 0,
-        leading: IconButton(
-          tooltip: 'Back',
-          icon: const Icon(Icons.arrow_back_rounded),
-          onPressed: () => Navigator.of(context).maybePop(),
+        centerTitle: false,
+        iconTheme: const IconThemeData(color: _text),
+        actionsIconTheme: const IconThemeData(color: _text),
+        leadingWidth: 104,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 12, top: 10, bottom: 10),
+          child: OutlinedButton.icon(
+            onPressed: () => Navigator.of(context).maybePop(),
+            icon: const Icon(Icons.arrow_back_rounded, size: 18),
+            label: const Text('Back'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: _text,
+              side: const BorderSide(color: Color(0xFFCBD5E1)),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              textStyle: const TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
+            ),
+          ),
         ),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
               'Debug data',
-              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+              style: TextStyle(
+                color: _text,
+                fontWeight: FontWeight.w700,
+                fontSize: 18,
+              ),
             ),
             Text(
               titleMun,

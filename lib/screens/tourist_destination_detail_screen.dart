@@ -22,10 +22,14 @@ class TouristDestinationDetailScreen extends StatefulWidget {
     super.key,
     required this.destination,
     this.firestoreSpot,
+    this.vrSectionKey,
   });
 
   final TouristDestinationDetail destination;
   final TouristSpotFirestore? firestoreSpot;
+
+  /// Attached to the VR block so the guided tour can spotlight it.
+  final Key? vrSectionKey;
 
   @override
   State<TouristDestinationDetailScreen> createState() =>
@@ -214,7 +218,10 @@ class _TouristDestinationDetailScreenState
                           _buildQuickActions(accent),
                           if (d.hasVrTour) ...[
                             const SizedBox(height: 20),
-                            _buildVrSection(accent),
+                            KeyedSubtree(
+                              key: widget.vrSectionKey,
+                              child: _buildVrSection(accent),
+                            ),
                           ],
                           if (d.nearbyRestaurants.isNotEmpty) ...[
                             const SizedBox(height: 24),

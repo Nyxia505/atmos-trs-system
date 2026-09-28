@@ -20,6 +20,7 @@ class DialCodeMobileField extends StatelessWidget {
     this.textInputAction,
     this.onFieldSubmitted,
     this.onEditingComplete,
+    this.focusNode,
   });
 
   final TextEditingController controller;
@@ -35,6 +36,7 @@ class DialCodeMobileField extends StatelessWidget {
   final TextInputAction? textInputAction;
   final ValueChanged<String>? onFieldSubmitted;
   final VoidCallback? onEditingComplete;
+  final FocusNode? focusNode;
 
   List<String> get _options => dialCodeOptionsFor(dialCode);
 
@@ -106,6 +108,7 @@ class DialCodeMobileField extends StatelessWidget {
         Expanded(
           child: TextFormField(
             controller: controller,
+            focusNode: focusNode,
             enabled: enabled,
             keyboardType: TextInputType.phone,
             textInputAction: textInputAction,

@@ -42,6 +42,12 @@ class _ExploreScreenState extends State<ExploreScreen> {
 
   bool get _isMobileLayout => MediaQuery.sizeOf(context).width < 600;
 
+  // Created once: streams built inside build() re-subscribe on every setState.
+  late final Stream<List<TouristSpotFirestore>> _spotsStream =
+      TouristSpotsRepository.streamTouristSpots();
+  late final Stream<List<EstablishmentMapPin>> _pinsStream =
+      EstablishmentMapPinsService.watchActivePins();
+
   @override
   void initState() {
     super.initState();
@@ -214,10 +220,11 @@ class _ExploreScreenState extends State<ExploreScreen> {
         ? _municipalitySpots
         : MisamisOccidentalDisplaySpots.fromSeeds();
     final isMobile = MediaQuery.sizeOf(context).width < 600;
+    final fullMapPinsStream = EstablishmentMapPinsService.watchActivePins();
 
     Widget mapBody({required void Function(TouristSpotFirestore) onSpotTap}) {
       return StreamBuilder<List<EstablishmentMapPin>>(
-        stream: EstablishmentMapPinsService.watchActivePins(),
+        stream: fullMapPinsStream,
         builder: (context, aeSnap) {
           return MisamisOccidentalExploreMap(
             key: const ValueKey('explore-fullscreen-map'),
@@ -538,7 +545,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
           SizedBox(
             height: misamisEmbeddedMapHeight(context),
             child: StreamBuilder<List<TouristSpotFirestore>>(
-              stream: TouristSpotsRepository.streamTouristSpots(),
+              stream: _spotsStream,
               builder: (context, snapshot) {
                 final firestoreSpots = snapshot.data ?? [];
                 final baseSpots =
@@ -549,7 +556,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                 final visibleCount = baseSpots.length;
 
                 return StreamBuilder<List<EstablishmentMapPin>>(
-                  stream: EstablishmentMapPinsService.watchActivePins(),
+                  stream: _pinsStream,
                   builder: (context, aeSnap) {
                     final aePins = aeSnap.data ?? const <EstablishmentMapPin>[];
                     return Stack(

@@ -33,6 +33,18 @@ class _LguEstablishmentRegistryPanelState
   String _filter = 'all';
   final _search = TextEditingController();
 
+  // Kept across search / filter rebuilds so typing does not re-subscribe.
+  Stream<List<EstablishmentRegistryEntry>>? _registryStream;
+  String _registryStreamMid = '';
+
+  Stream<List<EstablishmentRegistryEntry>> _registryStreamFor(String mid) {
+    if (_registryStream == null || _registryStreamMid != mid) {
+      _registryStreamMid = mid;
+      _registryStream = EstablishmentApprovalService.watchForMunicipality(mid);
+    }
+    return _registryStream!;
+  }
+
   @override
   void dispose() {
     _search.dispose();
@@ -105,7 +117,7 @@ class _LguEstablishmentRegistryPanelState
         ),
         const SizedBox(height: 12),
         StreamBuilder<List<EstablishmentRegistryEntry>>(
-          stream: EstablishmentApprovalService.watchForMunicipality(mid),
+          stream: _registryStreamFor(mid),
           builder: (context, snap) {
             if (snap.hasError) {
               return Text(

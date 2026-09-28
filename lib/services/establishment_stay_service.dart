@@ -59,6 +59,7 @@ class EstablishmentStayRequest {
     this.confirmedByStaffUid,
     this.checkedOutAt,
     this.checkedOutByUid,
+    this.isDemo = false,
   });
 
   final String id;
@@ -95,6 +96,9 @@ class EstablishmentStayRequest {
   final String? confirmedByStaffUid;
   final DateTime? checkedOutAt;
   final String? checkedOutByUid;
+
+  /// Created by the establishment demo seeder (`seed == 'demo'`).
+  final bool isDemo;
 
   bool get isPending => status == EstablishmentStayStatus.pending;
   bool get isConfirmed => status == EstablishmentStayStatus.confirmed;
@@ -148,6 +152,7 @@ class EstablishmentStayRequest {
       checkedOutAt:
           _asDate(d['checkedOutAt']) ?? _asDate(d['clientCheckedOutAt']),
       checkedOutByUid: d['checkedOutByUid']?.toString(),
+      isDemo: d['seed'] == 'demo',
     );
   }
 
@@ -273,14 +278,12 @@ class EstablishmentStayService {
     int? maleCount,
     int? filipinoCount,
     int? foreignCount,
+    Map<String, dynamic>? preloadedEstablishment,
   }) async {
     final user = FirebaseAuth.instance.currentUser;
     final uid = user?.uid;
     if (user == null || uid == null || uid.isEmpty) {
-      throw StateError(
-        'Sign in as a tourist to request a stay. '
-        '(Firebase Auth required — local session alone is not enough.)',
-      );
+      throw StateError('Sign in as a tourist to request a stay.');
     }
 
     final tokenOk = await FirestoreAuthGate.ensureFreshIdToken(
@@ -295,8 +298,31 @@ class EstablishmentStayService {
       throw StateError('Invalid establishment QR (missing id).');
     }
 
-    final est = await loadEstablishment(eid)
-        .timeout(const Duration(seconds: 8), onTimeout: () => null);
+    final fallbackProfile = <String, dynamic>{
+      'name': user.displayName?.trim().isNotEmpty == true
+          ? user.displayName!.trim()
+          : 'Tourist',
+      'email': user.email?.trim() ?? '',
+      'sex': '',
+      'nationality': '',
+      'country': '',
+      'province': '',
+      'city': '',
+      'isLocal': null,
+      'localOrForeign': '',
+    };
+    final loaded = await Future.wait<Map<String, dynamic>?>([
+      preloadedEstablishment != null
+          ? Future<Map<String, dynamic>?>.value(preloadedEstablishment)
+          : loadEstablishment(eid)
+              .timeout(const Duration(seconds: 8), onTimeout: () => null),
+      loadTouristProfile(uid).timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => fallbackProfile,
+      ),
+    ]);
+    final est = loaded[0];
+    final profile = loaded[1] ?? fallbackProfile;
     final establishmentName = (est?['businessName'] ??
             est?['name'] ??
             businessNameHint ??
@@ -315,23 +341,6 @@ class EstablishmentStayService {
     final roomsAvailable = roomRaw is int
         ? roomRaw
         : int.tryParse(roomRaw?.toString() ?? '');
-
-    final profile = await loadTouristProfile(uid).timeout(
-      const Duration(seconds: 5),
-      onTimeout: () => <String, dynamic>{
-        'name': user.displayName?.trim().isNotEmpty == true
-            ? user.displayName!.trim()
-            : 'Tourist',
-        'email': user.email?.trim() ?? '',
-        'sex': '',
-        'nationality': '',
-        'country': '',
-        'province': '',
-        'city': '',
-        'isLocal': null,
-        'localOrForeign': '',
-      },
-    );
 
     final party = partySize < 1 ? 1 : partySize;
     // Party of 1: prefill demographics from tourist registration.
@@ -425,16 +434,23 @@ class EstablishmentStayService {
       debugPrint('[EstStay] set FirebaseException ${e.code}: ${e.message}');
       if (e.code == 'permission-denied') {
         throw StateError(
-          'Firestore blocked creating the stay (permission-denied). '
-          'Sign out as tourist, sign in again, then rescan.',
+          'Your sign-in could not be verified. Sign out, sign in again, '
+          'then scan the QR again.',
         );
       }
-      throw StateError('Could not save stay: ${e.code} ${e.message}');
+      if (e.code == 'unavailable' || e.code == 'deadline-exceeded') {
+        throw StateError(
+          'No internet connection. Connect to Wi-Fi or mobile data, '
+          'then scan again.',
+        );
+      }
+      throw StateError(
+        'Could not send your stay request. Please scan the QR again.',
+      );
     } on TimeoutException {
       throw StateError(
-        'Stay write timed out. Usually means Firestore rejected the create '
-        '(auth/rules) or the device is offline. '
-        'Sign out/in as tourist, confirm Wi‑Fi, then scan again.',
+        'The connection timed out. Check your Wi-Fi or mobile data, '
+        'then scan again.',
       );
     }
 
@@ -532,9 +548,10 @@ class EstablishmentStayService {
     final today = DateTime(now.year, now.month, now.day);
 
     try {
-      // Single-equality query avoids a composite index; filter AE client-side.
+      // Equality-only filters need no composite index; day/status filtered client-side.
       final snap = await _col
           .where('touristId', isEqualTo: tid)
+          .where('establishmentId', isEqualTo: eid)
           .get()
           .timeout(const Duration(seconds: 8));
 

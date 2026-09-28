@@ -241,18 +241,23 @@ class UserActivityService {
   ) async {
     final db = FirebaseFirestore.instance;
     final byDocId = <String, Map<String, dynamic>>{};
-    for (final field in ['userId', 'tourist_id', 'user_id']) {
-      try {
-        final snap = await db
+    final snaps = await Future.wait([
+      for (final field in ['userId', 'tourist_id', 'user_id'])
+        db
             .collection(collection)
             .where(field, isEqualTo: uid)
             .limit(300)
-            .get();
-        for (final doc in snap.docs) {
-          byDocId[doc.id] = doc.data();
-        }
-      } catch (e) {
-        debugPrint('[UserActivity] $collection where $field skipped: $e');
+            .get()
+            .then<QuerySnapshot<Map<String, dynamic>>?>((s) => s)
+            .catchError((Object e) {
+          debugPrint('[UserActivity] $collection where $field skipped: $e');
+          return null;
+        }),
+    ]);
+    for (final snap in snaps) {
+      if (snap == null) continue;
+      for (final doc in snap.docs) {
+        byDocId[doc.id] = doc.data();
       }
     }
     return byDocId.values.toList();
@@ -269,9 +274,11 @@ class UserActivityService {
     try {
       final bySpot = <String, VisitRecord>{};
       var firestoreQueried = false;
+      final qrFuture = _queryUserRows('qr_checkins', uid);
+      final checkinsFuture = _queryUserRows('checkins', uid);
 
       try {
-        final qrRows = await _queryUserRows('qr_checkins', uid);
+        final qrRows = await qrFuture;
         firestoreQueried = true;
         for (final row in CheckInDedupe.oneVisitPerUserSpotDay(qrRows)) {
           _mergeCheckInRowIntoBySpot(bySpot, row);
@@ -281,7 +288,7 @@ class UserActivityService {
       }
 
       try {
-        final checkinRows = await _queryUserRows('checkins', uid);
+        final checkinRows = await checkinsFuture;
         firestoreQueried = true;
         for (final row in checkinRows) {
           final spotId = CheckInDedupe.spotId(row);

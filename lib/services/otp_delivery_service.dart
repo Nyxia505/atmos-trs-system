@@ -96,14 +96,17 @@ class OtpDeliveryService {
       }
     }
 
-    // Prefer EmailJS for verification mail. Cloud Function sendOtpEmail is
-    // inbox-only (must never FCM-push OTP — that leaked to stale fcmTokens).
+    // Prefer EmailJS (works without Auth). Cloud Function needs signed-in user
+    // and is inbox-only (must never FCM-push OTP — that leaked to stale tokens).
     final emailJsErr = await tryEmailJs();
     if (emailJsErr == null) {
       debugPrint('[OTP] Email sent via client EmailJS to=$deliverTo');
       return null;
     }
     debugPrint('[OTP] EmailJS failed: $emailJsErr — trying Cloud Function');
+    if (FirebaseAuth.instance.currentUser == null) {
+      return emailJsErr;
+    }
     final cfErr = await tryCloudFunction();
     if (cfErr == null) return null;
     return emailJsErr;
@@ -196,6 +199,7 @@ class OtpDeliveryService {
     }
 
     if (emailInBackground) {
+      // Fire-and-forget for snappy navigation — do NOT treat as delivery failure.
       unawaited(() async {
         final err = await sendOtpToUserEmail(
           toEmail: email,
@@ -212,9 +216,9 @@ class OtpDeliveryService {
         emailSent: false,
         emailError: null,
         notificationShown: notificationShown,
-        // Never surface the code on-screen for signup — user must open email.
         otpForDisplay: null,
         otpAlreadyInFirestore: otpAlreadyInFirestore,
+        emailDeliveryPending: true,
       );
     }
 
@@ -271,6 +275,7 @@ class OtpDeliveryResult {
     this.notificationShown = false,
     this.otpForDisplay,
     this.otpAlreadyInFirestore = false,
+    this.emailDeliveryPending = false,
   });
 
   final bool emailSent;
@@ -284,9 +289,16 @@ class OtpDeliveryResult {
   final String? otpForDisplay;
   final bool otpAlreadyInFirestore;
 
-  /// Signup can continue when email arrived, or OTP is already stored (Resend on next screen).
+  /// True when email send was started in the background (not a failure).
+  final bool emailDeliveryPending;
+
+  /// Signup can continue when email arrived, OTP stored, or send is in flight.
   bool get canCompleteRegistration =>
-      emailSent || otpAlreadyInFirestore || smsSent || notificationShown;
+      emailSent ||
+      otpAlreadyInFirestore ||
+      smsSent ||
+      notificationShown ||
+      emailDeliveryPending;
 
   /// Hard failure only when no OTP was stored and delivery fully failed.
   static String emailDoesNotExistMessage(String email) {
@@ -300,6 +312,13 @@ class OtpDeliveryResult {
     final shown = email.trim().isEmpty ? 'your email' : email.trim();
     return 'We couldn\'t confirm email delivery to $shown. Check Inbox/Spam, '
         'or tap Resend if the code doesn\'t arrive.';
+  }
+
+  /// Neutral copy while background send is in flight (not an error).
+  static String deliveryPendingMessage(String email) {
+    final shown = email.trim().isEmpty ? 'your email' : email.trim();
+    return 'We are sending a 6-digit code to $shown. Open your Inbox and enter '
+        'it below (check Spam only if it is missing).';
   }
 
   String messageForUser(String email) {
@@ -324,7 +343,9 @@ class OtpDeliveryResult {
       return 'Code sent to $email. Open your email Inbox and enter the 6-digit code '
           '(check Spam only if it is missing).';
     }
-    // OTP stored (or recoverable) but email not confirmed — soft warning, not "does not exist".
+    if (emailDeliveryPending && otpAlreadyInFirestore) {
+      return OtpDeliveryResult.deliveryPendingMessage(email);
+    }
     if (otpAlreadyInFirestore || canCompleteRegistration) {
       return OtpDeliveryResult.deliveryUnconfirmedMessage(email);
     }

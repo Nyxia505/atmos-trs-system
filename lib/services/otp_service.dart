@@ -45,6 +45,48 @@ class OtpService {
     await user.getIdToken(true);
   }
 
+  /// Device-local OTP before Firebase Auth exists (deferred tourist signup).
+  static Future<void> saveOtpPreAuth({
+    required String pendingId,
+    required String email,
+    required String otp,
+  }) async {
+    if (pendingId.isEmpty) {
+      throw StateError('pendingId is required for pre-auth OTP');
+    }
+    final expires = DateTime.now().add(const Duration(minutes: otpExpiryMinutes));
+    await OtpLocalFallbackCache.save(
+      uid: pendingId,
+      email: email,
+      otp: otp,
+      expiresAt: expires,
+    );
+    debugPrint('[OTP] saved pre-auth local OTP for pendingId=$pendingId');
+  }
+
+  /// Verifies OTP against device-local cache (no Auth / Firestore).
+  static Future<OtpVerifyOutcome> verifyOtpPreAuth({
+    required String pendingId,
+    required String enteredOtp,
+  }) async {
+    final entered = _digitsOnly(enteredOtp);
+    if (entered.length != 6) {
+      return OtpVerifyOutcome.invalidCode();
+    }
+    if (!await OtpLocalFallbackCache.hasActive(pendingId)) {
+      return OtpVerifyOutcome.notFound();
+    }
+    final ok = await OtpLocalFallbackCache.verify(
+      uid: pendingId,
+      enteredOtp: entered,
+    );
+    if (ok) {
+      debugPrint('[OTP] verified pre-auth local OTP');
+      return OtpVerifyOutcome.success();
+    }
+    return OtpVerifyOutcome.invalidCode();
+  }
+
   /// Persists OTP and expiry; overwrites any previous OTP for this [uid].
   /// Falls back to Cloud Function, then same-device local storage if Firestore rules
   /// are not deployed yet.
@@ -66,6 +108,19 @@ class OtpService {
       'expiresAt': Timestamp.fromDate(expires),
       'createdAt': FieldValue.serverTimestamp(),
     };
+
+    final signedIn = FirebaseAuth.instance.currentUser?.uid == uid;
+    if (!signedIn) {
+      // Deferred signup / no Auth yet — local only.
+      await OtpLocalFallbackCache.save(
+        uid: uid,
+        email: email,
+        otp: otp,
+        expiresAt: expires,
+      );
+      debugPrint('[OTP] saved local-only (no Auth session) uid=$uid');
+      return;
+    }
 
     for (var attempt = 0; attempt < 2; attempt++) {
       try {

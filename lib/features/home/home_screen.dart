@@ -38,6 +38,9 @@ import 'package:atmos_trs_system/widgets/tourist_stays_sheet.dart';
 import 'package:atmos_trs_system/utils/visit_record_image_resolver.dart';
 import 'package:atmos_trs_system/services/tourist_activity_firestore_sync.dart';
 import 'package:atmos_trs_system/features/home/widgets/app_faq_sheet.dart';
+import 'package:atmos_trs_system/features/home/widgets/earned_badges_page.dart';
+import 'package:atmos_trs_system/widgets/tourist_full_page.dart';
+import 'package:atmos_trs_system/features/navigation/tourist_tutorial.dart';
 import 'package:atmos_trs_system/utils/maps_directions_launcher.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 
@@ -681,8 +684,73 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  TouristTutorialKeys? _tourKeys;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final keys = TouristTutorialScope.maybeOf(context);
+    if (keys != _tourKeys) {
+      _unregisterTourCallbacks();
+      _tourKeys = keys;
+      keys?.showVrCard = _showVrCardForTour;
+      keys?.openVrSpot = _openVrSpotForTour;
+    }
+  }
+
+  void _unregisterTourCallbacks() {
+    final keys = _tourKeys;
+    if (keys == null) return;
+    if (keys.showVrCard == _showVrCardForTour) keys.showVrCard = null;
+    if (keys.openVrSpot == _openVrSpotForTour) keys.openVrSpot = null;
+  }
+
+  TouristDestinationDetail _featuredDetail(Map<String, dynamic> destination) =>
+      TouristDestinationDetail.fromFeaturedMap(
+        destination,
+        resolvedImage: _featuredImageForDestination(destination),
+      );
+
+  /// Slides the Discover carousel to the first card that has a VR tour.
+  void _showVrCardForTour() {
+    final filtered = _filteredFeaturedDestinations;
+    final index = filtered.indexWhere((d) => _featuredDetail(d).hasVrTour);
+    if (index < 0 || index == _currentFeaturedIndex) return;
+    if (!_featuredController.hasClients) return;
+    _featuredController.animateToPage(
+      index,
+      duration: const Duration(milliseconds: 520),
+      curve: Curves.easeInOutCubic,
+    );
+  }
+
+  /// Opens the visible Discover card if it has a VR tour, otherwise the first
+  /// featured spot that does.
+  void _openVrSpotForTour() {
+    final keys = _tourKeys;
+    if (keys == null) return;
+    final filtered = _filteredFeaturedDestinations;
+    final candidates = [
+      if (_currentFeaturedIndex < filtered.length)
+        filtered[_currentFeaturedIndex],
+      ...filtered,
+      ...kFeaturedDestinations,
+    ];
+    for (final destination in candidates) {
+      final detail = _featuredDetail(destination);
+      if (!detail.hasVrTour) continue;
+      _openDestinationDetail(
+        detail: detail,
+        firestoreSpot: _spotFromFeatured(destination),
+        vrSectionKey: keys.vrSection,
+      );
+      return;
+    }
+  }
+
   @override
   void dispose() {
+    _unregisterTourCallbacks();
     activity.UserActivityService.visitedSpotsRevision
         .removeListener(_onVisitedSpotsChanged);
     _featuredController.dispose();
@@ -859,6 +927,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildQuickActionsRow() {
     final accent = AppTheme.primary;
+    final tourKeys = TouristTutorialScope.maybeOf(context);
     return Align(
       alignment: Alignment.center,
       child: ConstrainedBox(
@@ -870,11 +939,14 @@ class _HomeScreenState extends State<HomeScreen> {
               Row(
                 children: [
                   Expanded(
-                    child: _quickActionTile(
-                      icon: Icons.help_outline_rounded,
-                      label: 'Ask Tala',
-                      accent: accent,
-                      onTap: () => _showFaq(context),
+                    child: KeyedSubtree(
+                      key: tourKeys?.askTala,
+                      child: _quickActionTile(
+                        icon: Icons.help_outline_rounded,
+                        label: 'Ask Tala',
+                        accent: accent,
+                        onTap: () => _showFaq(context),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -901,6 +973,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(height: 8),
               Row(
+                key: tourKeys?.statsRow,
                 children: [
                   Expanded(
                     child: _buildStatCard(
@@ -1574,53 +1647,106 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _showVisitedPlacesDialog() async {
     if (!mounted) return;
 
-    Future<List<activity.VisitRecord>> loadVisits() async {
-      // Always re-sync from QR check-ins so Visited matches places you checked in.
-      final visits = await _syncAndEnrichVisits(skipSync: false);
-      if (!mounted) return visits;
-      final stats = await activity.UserActivityService.getUserStatsCached();
-      if (!mounted) return visits;
-      setState(() {
-        _recentVisits = visits;
-        _userStats = stats;
-      });
-      return visits;
+    // Show what we already have instantly; the QR check-in sync refreshes it.
+    final visitsNotifier = ValueNotifier<List<activity.VisitRecord>?>(
+      _recentVisits.isNotEmpty ? _recentVisits : null,
+    );
+    final syncing = ValueNotifier<bool>(true);
+    var closed = false;
+
+    Future<void> loadVisits() async {
+      try {
+        if (visitsNotifier.value == null) {
+          var local = await activity.UserActivityService.getVisitedSpots();
+          if (_cachedFirestoreSpots.isNotEmpty) {
+            local = await VisitRecordImageResolver.enrichAndPersist(
+              local,
+              spots: _spotsForVisitImages,
+            );
+          }
+          if (local.isNotEmpty && !closed) visitsNotifier.value = local;
+        }
+        final visits = await _syncAndEnrichVisits(skipSync: false);
+        if (!closed) visitsNotifier.value = visits;
+        if (!mounted) return;
+        final stats = await activity.UserActivityService.getUserStatsCached();
+        if (!mounted) return;
+        setState(() {
+          _recentVisits = visits;
+          _userStats = stats;
+        });
+      } catch (e) {
+        debugPrint('[Home] visited sync failed: $e');
+        if (!closed) visitsNotifier.value ??= const <activity.VisitRecord>[];
+      } finally {
+        if (!closed) syncing.value = false;
+      }
     }
 
-    Widget visitedBody(Future<List<activity.VisitRecord>> future) {
-      return FutureBuilder<List<activity.VisitRecord>>(
-        future: future,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final visits = snapshot.data ?? const <activity.VisitRecord>[];
-          return _buildVisitedPlacesBody(visits);
+    Widget visitedBody() {
+      return ValueListenableBuilder<List<activity.VisitRecord>?>(
+        valueListenable: visitsNotifier,
+        builder: (context, visits, _) {
+          return ValueListenableBuilder<bool>(
+            valueListenable: syncing,
+            builder: (context, isSyncing, _) {
+              if (visits == null) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              return Column(
+                children: [
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 200),
+                    child: isSyncing
+                        ? LinearProgressIndicator(
+                            minHeight: 2,
+                            color: AppTheme.primary,
+                            backgroundColor: AppTheme.primary.withValues(
+                              alpha: 0.12,
+                            ),
+                          )
+                        : const SizedBox(width: double.infinity),
+                  ),
+                  Expanded(
+                    child: visits.isEmpty && isSyncing
+                        ? const Center(child: CircularProgressIndicator())
+                        : _buildVisitedPlacesBody(visits),
+                  ),
+                ],
+              );
+            },
+          );
         },
       );
     }
 
-    final visitsFuture = loadVisits();
+    unawaited(loadVisits());
 
-    if (_isMobileLayout) {
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(
-          fullscreenDialog: true,
-          builder: (ctx) => Scaffold(
-            backgroundColor: AppTheme.cardBackground,
-            appBar: _mobileSheetAppBar(ctx, title: 'Visited Places'),
-            body: visitedBody(visitsFuture),
+    try {
+      if (_isMobileLayout) {
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            fullscreenDialog: true,
+            builder: (ctx) => Scaffold(
+              backgroundColor: AppTheme.cardBackground,
+              appBar: _mobileSheetAppBar(ctx, title: 'Visited Places'),
+              body: visitedBody(),
+            ),
           ),
-        ),
-      );
-      return;
-    }
+        );
+        return;
+      }
 
-    await _showCenteredHomePanel(
-      title: 'Visited Places',
-      icon: Icons.place_rounded,
-      body: visitedBody(visitsFuture),
-    );
+      await _showCenteredHomePanel(
+        title: 'Visited Places',
+        icon: Icons.place_rounded,
+        body: visitedBody(),
+      );
+    } finally {
+      closed = true;
+      visitsNotifier.dispose();
+      syncing.dispose();
+    }
   }
 
   Widget _buildVisitListItem(activity.VisitRecord visit) {
@@ -1720,144 +1846,11 @@ class _HomeScreenState extends State<HomeScreen> {
   void _showBadgesDialog() async {
     final badges = await activity.UserActivityService.getEarnedBadges();
     if (!mounted) return;
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (context) => Container(
-        height: MediaQuery.of(context).size.height * 0.5,
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: Column(
-          children: [
-            Container(
-              margin: const EdgeInsets.only(top: 12),
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade300,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: AppTheme.primary.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Icon(
-                      Icons.emoji_events_rounded,
-                      color: AppTheme.primary,
-                      size: 24,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    'Earned Badges',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: AppTheme.textPrimary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: badges.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.emoji_events_outlined,
-                            size: 64,
-                            color: Colors.grey.shade300,
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'No badges yet',
-                            style: TextStyle(
-                              color: Colors.grey.shade500,
-                              fontSize: 16,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Visit tourist spots to earn badges!',
-                            style: TextStyle(
-                              color: Colors.grey.shade400,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  : GridView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 2,
-                            childAspectRatio: 1.2,
-                            crossAxisSpacing: 12,
-                            mainAxisSpacing: 12,
-                          ),
-                      itemCount: badges.length,
-                      itemBuilder: (context, index) {
-                        final badge = badges[index];
-                        return _buildBadgeCard(badge);
-                      },
-                    ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBadgeCard(activity.Badge badge) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            AppTheme.primary.withOpacity(0.2),
-            AppTheme.primary.withOpacity(0.08),
-          ],
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.primary.withOpacity(0.4)),
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.emoji_events_rounded, color: AppTheme.primary, size: 32),
-          const SizedBox(height: 8),
-          Text(
-            badge.name,
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: AppTheme.textPrimary,
-              fontSize: 14,
-            ),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            badge.description,
-            style: TextStyle(color: Colors.grey.shade600, fontSize: 10),
-            textAlign: TextAlign.center,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
+    await pushTouristFullPage<void>(
+      context,
+      EarnedBadgesPage(
+        earned: badges,
+        visitedCount: _userStats.placesVisited,
       ),
     );
   }
@@ -2215,6 +2208,7 @@ class _HomeScreenState extends State<HomeScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
+          key: _tourKeys?.discover,
           height: _compactSpotImages ? 168 : 228,
           child: LayoutBuilder(
             builder: (context, constraints) {
@@ -2300,6 +2294,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void _openDestinationDetail({
     required TouristDestinationDetail detail,
     TouristSpotFirestore? firestoreSpot,
+    Key? vrSectionKey,
   }) {
     Navigator.of(context)
         .push<void>(
@@ -2307,6 +2302,7 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (_) => TouristDestinationDetailScreen(
           destination: detail,
           firestoreSpot: firestoreSpot,
+          vrSectionKey: vrSectionKey,
         ),
       ),
     )
@@ -2675,7 +2671,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         );
                       },
                       icon: const Icon(Icons.map_rounded, size: 18),
-                      label: Text('Open map Â· ${spot.name}'),
+                      label: Text('Open map · ${spot.name}'),
                       style: FilledButton.styleFrom(
                         backgroundColor: AppTheme.primary,
                         foregroundColor: Colors.white,
@@ -2898,7 +2894,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         const SizedBox(width: 16),
                         Expanded(
                           child: Text(
-                            'Open any spot from All places or your lists â€” it will show up here.',
+                            'Open any spot from All places or your lists — it will show up here.',
                             style: TextStyle(
                               color: AppTheme.unselectedMuted,
                               fontSize: 13,
@@ -4038,7 +4034,7 @@ class _NearbySummaryCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  primary.isEmpty ? 'â€”' : primary,
+                  primary.isEmpty ? '—' : primary,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -4117,7 +4113,7 @@ class _InfoChip extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    v.isEmpty ? 'â€”' : v,
+                    v.isEmpty ? '—' : v,
                     maxLines: label == 'Location' ? 2 : 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(

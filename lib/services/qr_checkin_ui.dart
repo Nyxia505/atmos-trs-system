@@ -1,6 +1,7 @@
-import 'dart:async' show unawaited;
+import 'dart:async' show TimeoutException, unawaited;
 
 import 'package:atmos_trs_system/features/navigation/tourist_web_layout.dart';
+import 'package:firebase_core/firebase_core.dart' show FirebaseException;
 import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/app_theme_controller.dart';
@@ -9,6 +10,37 @@ import 'package:atmos_trs_system/services/notification_firestore_service.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart';
 import 'package:atmos_trs_system/utils/visit_record_image_resolver.dart';
+
+/// Tourist-facing message for a failed scan / check-in step (no raw exceptions).
+String friendlyQrScanError(Object error) {
+  if (error is TimeoutException) {
+    return 'The connection is slow. Check your internet and scan again.';
+  }
+  if (error is FirebaseException) {
+    switch (error.code) {
+      case 'unavailable':
+      case 'network-request-failed':
+      case 'deadline-exceeded':
+        return 'No internet connection. Connect to Wi-Fi or mobile data, '
+            'then scan again.';
+      case 'permission-denied':
+      case 'unauthenticated':
+        return 'Your session could not be verified. Sign in again, then scan.';
+    }
+  }
+  final text = error.toString().toLowerCase();
+  if (text.contains('network') ||
+      text.contains('socket') ||
+      text.contains('failed host lookup') ||
+      text.contains('offline')) {
+    return 'No internet connection. Connect to Wi-Fi or mobile data, '
+        'then scan again.';
+  }
+  if (error is StateError && error.message.trim().isNotEmpty) {
+    return error.message;
+  }
+  return 'Something went wrong while reading this QR. Please scan again.';
+}
 
 /// Shows a success dialog after a QR check-in is saved.
 /// Call after [QRCheckInService.saveCheckIn] returns [QRCheckInSuccess].

@@ -152,7 +152,7 @@ abstract final class EstablishmentCapability {
               'No pending requests. Print your QR and ask a tourist to scan it.',
           recentTitle: 'Recent confirmed',
           recentEmpty: 'No confirmed stays yet.',
-          chartTitle: 'Bookings · last 14 days',
+          chartTitle: 'Bookings',
           chartSubtitle: 'Confirmed stays per day',
           calendarSubtitle: 'Days with confirmed stays',
           qrHint:
@@ -183,7 +183,7 @@ abstract final class EstablishmentCapability {
               'No pending visits. Print your QR and ask guests to scan it.',
           recentTitle: 'Recent confirmed',
           recentEmpty: 'No confirmed visits yet.',
-          chartTitle: 'Visits · last 14 days',
+          chartTitle: 'Visits',
           chartSubtitle: 'Confirmed guest visits per day',
           calendarSubtitle: 'Days with confirmed visits',
           qrHint:
@@ -215,7 +215,7 @@ abstract final class EstablishmentCapability {
               'No pending check-ins. Print your QR and ask visitors to scan it.',
           recentTitle: 'Recent confirmed',
           recentEmpty: 'No confirmed visits yet.',
-          chartTitle: 'Visits · last 14 days',
+          chartTitle: 'Visits',
           chartSubtitle: 'Confirmed visits per day',
           calendarSubtitle: 'Days with confirmed visits',
           qrHint:

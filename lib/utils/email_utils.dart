@@ -5,7 +5,8 @@ String normalizeEmail(String email) => email.trim().toLowerCase();
 bool isValidEmailFormat(String email) {
   final s = email.trim();
   if (s.isEmpty) return false;
-  return RegExp(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$').hasMatch(s);
+  return RegExp(r"^[a-zA-Z0-9._%+'-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+      .hasMatch(s);
 }
 
 /// Masks an email for read-only profile display (e.g. `g***@m***.ph`).

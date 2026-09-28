@@ -1,4 +1,5 @@
 ﻿import 'package:atmos_trs_system/features/governor/theme/governor_dashboard_tokens.dart';
+import 'package:atmos_trs_system/widgets/chart_transition.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
@@ -57,10 +58,18 @@ class GovernorArrivalsAreaChart extends StatelessWidget {
       );
     }
 
+    return ChartTransition(
+      swapKey: Object.hash(values.length, Object.hashAll(labels)),
+      builder: (context, progress) => _chart(progress),
+    );
+  }
+
+  Widget _chart(double progress) {
     final maxV =
         values.reduce((a, b) => a > b ? a : b).clamp(1.0, double.infinity);
     final spots = <FlSpot>[
-      for (var i = 0; i < values.length; i++) FlSpot(i.toDouble(), values[i]),
+      for (var i = 0; i < values.length; i++)
+        FlSpot(i.toDouble(), values[i] * progress),
     ];
 
     String labelAt(int i) {
@@ -209,7 +218,11 @@ class GovernorArrivalsAreaChart extends StatelessWidget {
           ),
         ],
       ),
-      duration: const Duration(milliseconds: 550),
+      duration: ChartTransition.chartDuration(
+        progress,
+        const Duration(milliseconds: 550),
+      ),
+      curve: Curves.easeOutCubic,
     );
   }
 }

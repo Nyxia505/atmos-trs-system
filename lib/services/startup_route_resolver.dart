@@ -29,10 +29,14 @@ class StartupRouteResolver {
       return _applyQrWelcomeIfNeeded(route, firebaseUser: null);
     }
 
-    final firebaseUser = await _waitForRestoredFirebaseUser();
+    final storedUidBeforeRestore = await SessionStorage.getStoredUser();
+    final firebaseUser = await _waitForRestoredFirebaseUser(
+      hasStoredSession:
+          storedUidBeforeRestore != null && storedUidBeforeRestore.isNotEmpty,
+    );
 
     if (firebaseUser == null) {
-      final storedUid = await SessionStorage.getStoredUser();
+      final storedUid = storedUidBeforeRestore;
       if (storedUid != null) {
         debugPrint('Startup: clearing stale session (no Firebase Auth user).');
         await SessionStorage.clearSession();
@@ -300,13 +304,20 @@ class StartupRouteResolver {
   }
 
   /// Waits for Firebase Auth persistence to restore the signed-in user after restart.
-  static Future<User?> _waitForRestoredFirebaseUser() async {
+  ///
+  /// With a saved session we wait longer so a slow restore (cold start, weak
+  /// network, web IndexedDB) does not wipe the session and bounce to login.
+  static Future<User?> _waitForRestoredFirebaseUser({
+    bool hasStoredSession = false,
+  }) async {
     var user = FirebaseAuth.instance.currentUser;
     if (user != null) return user;
 
-    final timeout = kIsWeb
-        ? const Duration(seconds: 3)
-        : const Duration(milliseconds: 1500);
+    final timeout = hasStoredSession
+        ? const Duration(seconds: 8)
+        : kIsWeb
+            ? const Duration(seconds: 3)
+            : const Duration(milliseconds: 1500);
 
     try {
       user = await FirebaseAuth.instance

@@ -59,6 +59,12 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
   static const Color _textMuted = Color(0xFF78716C);
 
   String _deliveryEmailFor(User? user) {
+    final deferred = PendingRegistrationCache.current;
+    if (deferred != null &&
+        deferred.authDeferred &&
+        deferred.contactEmail.isNotEmpty) {
+      return deferred.contactEmail;
+    }
     final pending =
         user != null ? PendingRegistrationCache.forUid(user.uid) : null;
     if (pending != null && pending.contactEmail.isNotEmpty) {
@@ -79,6 +85,18 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
       return _contactEmail!;
     }
     return normalizeEmail(user?.email ?? '');
+  }
+
+  /// Unfinished tourist signup (including Auth-deferred).
+  PendingRegistration? _pendingTourist() {
+    final deferred = PendingRegistrationCache.current;
+    if (deferred != null && deferred.authDeferred) return deferred;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) return PendingRegistrationCache.forUid(user.uid);
+    if (_contactEmail != null) {
+      return PendingRegistrationCache.forContactEmail(_contactEmail!);
+    }
+    return PendingRegistrationCache.current;
   }
 
   @override
@@ -117,7 +135,20 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
     await PendingRegistrationCache.hydrate();
     await PendingEstablishmentRegistrationCache.hydrate();
     await PendingLguRegistrationCache.hydrate();
+    final pendingTourist = _pendingTourist();
     final u = FirebaseAuth.instance.currentUser;
+
+    // Deferred Auth: no Firebase user yet — stay on OTP with local pending.
+    if (u == null && pendingTourist != null && pendingTourist.authDeferred) {
+      await ensureEmailOtpNotificationSupport();
+      if (!mounted) return;
+      await _ensureActiveOtpOnEntry();
+      if (mounted && _digitFocusNodes.isNotEmpty) {
+        _digitFocusNodes.first.requestFocus();
+      }
+      return;
+    }
+
     if (u != null) {
       // Preserve signup OTP ASAP — do not wait on announcement sync first.
       if (_otpAlreadySentFromSignup) {
@@ -154,8 +185,8 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
     if (_autoResendAttempted) return;
     _autoResendAttempted = true;
 
+    final deferred = _pendingTourist();
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
 
     final routeArgs = ModalRoute.of(context)?.settings.arguments;
     final forceResend = _forceResendOnEntry ||
@@ -166,6 +197,46 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
         (routeArgs is Map &&
             (routeArgs['otpAlreadySent'] == true ||
                 routeArgs['fromSignup'] == true));
+
+    // --- Deferred Auth path (no Firebase user yet) ---
+    if (user == null && deferred != null && deferred.authDeferred) {
+      final otpKey = deferred.otpKey;
+      var hasActive = forceResend
+          ? false
+          : await OtpService.hasActiveOtp(otpKey);
+      if (!hasActive && !forceResend && otpAlreadySent) {
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        if (!mounted) return;
+        hasActive = await OtpService.hasActiveOtp(otpKey);
+      }
+      if (!mounted) return;
+      final inbox = deferred.contactEmail;
+      if (hasActive) {
+        setState(() {
+          _statusBanner = _emailDeliveryFailed
+              ? OtpDeliveryResult.deliveryUnconfirmedMessage(inbox)
+              : OtpDeliveryResult.deliveryPendingMessage(inbox);
+        });
+        _startCooldown(60);
+        await _syncExpiryFromStore(otpKey);
+        return;
+      }
+      final deliveryOk = await _resend(
+        isAuto: true,
+        showDeliverySnack: false,
+      );
+      if (!mounted) return;
+      setState(() {
+        _emailDeliveryFailed = !deliveryOk;
+        _statusBanner = deliveryOk
+            ? OtpDeliveryResult.deliveryPendingMessage(inbox)
+            : OtpDeliveryResult.deliveryUnconfirmedMessage(inbox);
+      });
+      if (deliveryOk) _startCooldown(60);
+      return;
+    }
+
+    if (user == null) return;
 
     if (await UserDirectoryService.touristEmailVerificationComplete(user.uid)) {
       return;
@@ -453,7 +524,80 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
       return;
     }
 
+    final deferredPending = _pendingTourist();
     final user = FirebaseAuth.instance.currentUser;
+
+    // --- Deferred Auth: verify local OTP, then create Firebase Auth + profile ---
+    if (user == null &&
+        deferredPending != null &&
+        deferredPending.authDeferred) {
+      setState(() => _submitting = true);
+      try {
+        final outcome = await OtpService.verifyOtpPreAuth(
+          pendingId: deferredPending.otpKey,
+          enteredOtp: code,
+        );
+        if (!outcome.ok) {
+          setState(() => _submitting = false);
+          _snack(outcome.message ?? 'Verification failed.', isError: true);
+          return;
+        }
+
+        final createdUser =
+            await RegistrationCompletionService.createAuthAndCompleteAfterOtp(
+          pending: deferredPending,
+        );
+        debugPrint('[OTP] verified + Auth created uid=${createdUser.uid}');
+
+        final email = deferredPending.contactEmail;
+        final loaded = await UserDirectoryService.getProfileByUid(
+          createdUser.uid,
+          preferServer: true,
+        );
+        final profileForRoute = loaded == null
+            ? AppUserProfile(
+                uid: createdUser.uid,
+                email: email,
+                roleRaw: 'tourist',
+                isVerified: true,
+              )
+            : AppUserProfile(
+                uid: loaded.uid,
+                email: loaded.email,
+                roleRaw: loaded.roleRaw,
+                fullName: loaded.fullName,
+                municipality: loaded.municipality,
+                municipalityId: loaded.municipalityId,
+                isVerified: true,
+                status: loaded.status,
+              );
+
+        AuthConfig.currentUserUid = createdUser.uid;
+        await SessionStorage.saveSession(
+          createdUser.uid,
+          role: UserRole.tourist,
+          email: deferredPending.authEmail,
+        );
+
+        final route = await RoleRouter.persistSessionAndGetRoute(
+          profile: profileForRoute,
+          firebaseUid: createdUser.uid,
+        );
+        if (!mounted) return;
+        await _navigateAfterTouristVerification(route);
+      } catch (e) {
+        debugPrint('[OTP] deferred Auth complete failed: $e');
+        if (mounted) {
+          setState(() => _submitting = false);
+          _snack(
+            e is StateError ? e.message : 'Could not finish signup: $e',
+            isError: true,
+          );
+        }
+      }
+      return;
+    }
+
     if (user == null) {
       _snack('Session expired. Please log in again.', isError: true);
       return;
@@ -747,7 +891,74 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
     bool showDeliverySnack = true,
   }) async {
     if (!isAuto && _cooldown > 0) return false;
+
+    final deferred = _pendingTourist();
     final user = FirebaseAuth.instance.currentUser;
+
+    // Deferred Auth: local OTP + EmailJS only (no Cloud Function Auth).
+    if (user == null && deferred != null && deferred.authDeferred) {
+      final email = deferred.contactEmail;
+      if (email.isEmpty) {
+        if (showDeliverySnack) {
+          _snack('No email on pending signup.', isError: true);
+        }
+        return false;
+      }
+      if (mounted) setState(() => _resending = true);
+      try {
+        final otp = OtpService.generateSixDigitOtp();
+        await OtpService.saveOtpPreAuth(
+          pendingId: deferred.otpKey,
+          email: email,
+          otp: otp,
+        );
+        final name =
+            deferred.touristData['fullName']?.toString().trim().isNotEmpty ==
+                    true
+                ? deferred.touristData['fullName'].toString().trim()
+                : email.split('@').first;
+        final mobile = deferred.touristData['mobile']?.toString().trim() ?? '';
+        final delivery = await OtpDeliveryService.deliverVerificationCode(
+          uid: deferred.otpKey,
+          email: email,
+          displayName: name,
+          otp: otp,
+          mobile: mobile,
+          notifyOnThisDevice: false,
+          trySms: false,
+          otpAlreadyInFirestore: true,
+        );
+        if (mounted) {
+          final ok = delivery.canCompleteRegistration;
+          setState(() {
+            _emailDeliveryFailed =
+                !delivery.emailSent && !delivery.emailDeliveryPending;
+            _statusBanner = delivery.emailSent || delivery.emailDeliveryPending
+                ? OtpDeliveryResult.deliveryPendingMessage(email)
+                : (ok
+                    ? OtpDeliveryResult.deliveryUnconfirmedMessage(email)
+                    : OtpDeliveryResult.emailDoesNotExistMessage(email));
+          });
+          if (showDeliverySnack) {
+            _snack(
+              delivery.messageForUser(email),
+              isError: !ok,
+            );
+          }
+          if (!isAuto) _startCooldown(60);
+          await _syncExpiryFromStore(deferred.otpKey);
+        }
+        return delivery.canCompleteRegistration;
+      } catch (e) {
+        if (mounted && showDeliverySnack) {
+          _snack('Could not resend code: $e', isError: true);
+        }
+        return false;
+      } finally {
+        if (mounted) setState(() => _resending = false);
+      }
+    }
+
     if (user == null) {
       if (showDeliverySnack) {
         _snack('Session expired. Please log in again.', isError: true);
@@ -816,7 +1027,13 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
       }
 
       if (mounted) {
-        if (!delivery.emailSent && deliveryOk) {
+        if (delivery.emailDeliveryPending || delivery.emailSent) {
+          setState(() {
+            _emailDeliveryFailed = false;
+            _statusBanner =
+                'Check your email Inbox for the 6-digit code, then enter it below.';
+          });
+        } else if (!delivery.emailSent && deliveryOk) {
           setState(() {
             _emailDeliveryFailed = true;
             _statusBanner =
@@ -892,10 +1109,9 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
   }
 
   Future<void> _onEditSignupDetails() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
     await PendingRegistrationCache.hydrate();
-    if (!PendingRegistrationCache.hasPendingFor(user.uid)) {
+    final pending = _pendingTourist();
+    if (pending == null) {
       if (mounted) {
         _snack('No unfinished signup to edit.', isError: true);
       }
@@ -910,9 +1126,8 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
   }
 
   Future<bool> _onCancelRegistration() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return true;
-    final pending = PendingRegistrationCache.forUid(user.uid);
+    await PendingRegistrationCache.hydrate();
+    final pending = _pendingTourist();
     if (pending == null) return true;
 
     final confirmed = await showDialog<bool>(
@@ -920,7 +1135,7 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Cancel registration?'),
         content: const Text(
-          'Your unfinished account will be removed. You can sign up again anytime.\n\n'
+          'Your unfinished signup will be discarded. You can sign up again anytime.\n\n'
           'If you only mistyped your email, use “Edit details” instead.',
         ),
         actions: [
@@ -940,7 +1155,14 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
     );
     if (confirmed != true || !mounted) return false;
 
-    await RegistrationRollbackService.rollback(user.uid);
+    if (pending.authDeferred) {
+      try {
+        await OtpService.deleteOtp(pending.otpKey);
+      } catch (_) {}
+      await PendingRegistrationCache.clear();
+    } else {
+      await RegistrationRollbackService.rollback(pending.uid);
+    }
     await SessionStorage.clearSession();
     AuthConfig.currentUserUid = null;
     if (mounted) {
@@ -954,8 +1176,8 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
     final user = FirebaseAuth.instance.currentUser;
     final emailText = _deliveryEmailFor(user);
     final masked = _maskedEmail(emailText);
-    final hasPendingSignup =
-        user != null && PendingRegistrationCache.hasPendingFor(user.uid);
+    final pendingTourist = _pendingTourist();
+    final hasPendingSignup = pendingTourist != null;
     final width = MediaQuery.sizeOf(context).width;
     final cardMaxWidth = width >= 900 ? 440.0 : (width >= 600 ? 420.0 : 400.0);
 

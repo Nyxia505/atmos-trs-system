@@ -19,17 +19,6 @@ abstract final class TouristSignupChrome {
     'Personal Info',
     'Contact & Address',
   ];
-
-  static String sloganForVisualStep(int visualStepIndex) {
-    switch (visualStepIndex.clamp(0, 2)) {
-      case 0:
-        return 'Start Your Journey';
-      case 1:
-        return 'More Than Registration';
-      default:
-        return 'Discover More Together';
-    }
-  }
 }
 
 class TouristSignupHeroWaveClipper extends CustomClipper<Path> {

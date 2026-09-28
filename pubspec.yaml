@@ -3,7 +3,7 @@ description: "ATMOS TRS"
 
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.2+3
 
 environment:
   sdk: ^3.11.0
@@ -107,6 +107,11 @@ flutter:
     - assets/images/misamis_occidental_official_seal.png
     - assets/images/login_hero_bg.png
     - assets/images/landing page.png
+    - assets/images/ae_hero_hotel_room.png
+    - assets/images/ae_sidebar_hotel_art.png
+    - assets/images/ae_empty_rooms_bed.png
+    - assets/images/ae_qr_scan_phone.png
+    - assets/images/ae_photos_collage.png
     # Municipality / destination heroes for Visited place thumbnails
     - assets/images/oroquieta City plaza.jpeg
     - assets/images/ozamis city.webp

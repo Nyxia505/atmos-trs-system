@@ -1,5 +1,8 @@
 import 'package:atmos_trs_system/models/establishment_stay_review.dart';
 import 'package:atmos_trs_system/services/establishment_stay_service.dart';
+import 'package:atmos_trs_system/utils/trend_range.dart';
+
+export 'package:atmos_trs_system/utils/trend_range.dart';
 
 /// Pure DSS aggregates from establishment stay / review lists (no I/O).
 abstract final class EstablishmentDssAggregates {
@@ -39,6 +42,23 @@ abstract final class EstablishmentDssAggregates {
       final d = start.add(Duration(days: i));
       return names[(d.weekday - 1) % 7];
     });
+  }
+
+  /// Confirmed stays bucketed for [range]: rolling days, the current
+  /// calendar week (Mon–Sun) / month (per day), or year (per month).
+  static TrendSeries trend(
+    List<EstablishmentStayRequest> all,
+    TrendRange range, {
+    DateTime? now,
+  }) {
+    return TrendBuckets.build(
+      [
+        for (final s in all)
+          if (s.countsForDae) stayDay(s),
+      ],
+      range,
+      now: now,
+    );
   }
 
   /// Guests by weekday (Mon=0 … Sun=6) for confirmed stays this month.

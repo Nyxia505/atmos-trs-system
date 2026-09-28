@@ -14,6 +14,7 @@ import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/services/registration_rollback_service.dart';
 import 'package:atmos_trs_system/navigation/login_route_args.dart';
 import 'package:atmos_trs_system/navigation/pending_checkin_navigation.dart';
+import 'package:atmos_trs_system/services/pending_establishment_stay_storage.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/landing_intent_service.dart';
@@ -80,7 +81,7 @@ class _LoginScreenState extends State<LoginScreen> {
   /// or we surface a wrong-password style error.
   ///
   /// Demo governor/tourism: Settings may store a new password in SharedPreferences
-  /// without updating Firebase Auth â€” we sync Auth from known prior passwords.
+  /// without updating Firebase Auth — we sync Auth from known prior passwords.
   Future<UserCredential> _signInOrProvisionDemoStaff({
     required String email,
     required String password,
@@ -275,6 +276,7 @@ class _LoginScreenState extends State<LoginScreen> {
         await LoginFlowService.persistStaffSessionQuick(uid: uid, email: email);
         await PendingSpotCheckInStorage.clear();
         await PendingLguCheckInStorage.clear();
+        await PendingEstablishmentStayStorage.clear();
         await LandingIntentService.clear();
         if (!mounted) return;
         Navigator.pushReplacementNamed(context, route);
@@ -401,7 +403,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
     final pendingSpot = await PendingSpotCheckInStorage.peek();
     final pendingLgu = await PendingLguCheckInStorage.peek();
-    if (pendingSpot != null || pendingLgu != null) {
+    final pendingEst = await PendingEstablishmentStayStorage.peek();
+    if (pendingSpot != null || pendingLgu != null || pendingEst != null) {
       return false;
     }
 
@@ -532,14 +535,14 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Widget _buildHeaderBranding() {
+  Widget _buildHeaderBranding({bool compact = false}) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        _buildFloatingLogoCircle(),
-        const SizedBox(height: 16),
-        const AtmosBrandTitle(
-          fontSize: 28,
+        _buildFloatingLogoCircle(size: compact ? 82 : _logoCircleSize),
+        SizedBox(height: compact ? 10 : 16),
+        AtmosBrandTitle(
+          fontSize: compact ? 24 : 28,
           letterSpacing: 1.5,
           solidWhite: true,
           shadows: [
@@ -550,7 +553,7 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ],
         ),
-        const SizedBox(height: 10),
+        SizedBox(height: compact ? 6 : 10),
         Text(
           _systemName,
           textAlign: TextAlign.center,
@@ -645,7 +648,7 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  /// Desktop/tablet wide (â‰¥1024px): glassmorphism card over full-screen background.
+  /// Desktop/tablet wide (≥1024px): glassmorphism card over full-screen background.
   Widget _buildDesktopGlassLayout(BuildContext context) {
     final loginOnly = _loginRouteArgs?.loginOnly == true;
 
@@ -839,8 +842,8 @@ class _LoginScreenState extends State<LoginScreen> {
     final topPad = media.padding.top;
     final bottomPad = media.padding.bottom;
     final screenH = media.size.height;
-    // Hero fills roughly the upper half like the mock, with room for the wave.
-    final heroHeight = (screenH * 0.46).clamp(300.0, 420.0);
+    // Compact hero (~⅓ of the screen) so the sign-in card sits higher.
+    final heroHeight = (screenH * 0.34).clamp(240.0, 300.0);
 
     return Stack(
       children: [
@@ -880,7 +883,7 @@ class _LoginScreenState extends State<LoginScreen> {
         children: [
           // Solid warm orange base (#F97316)
           const ColoredBox(color: _heroOrange),
-          // Coastal landscape â€” visible mainly on the RIGHT
+          // Coastal landscape — visible mainly on the RIGHT
           Align(
             alignment: Alignment.centerRight,
             child: FractionallySizedBox(
@@ -894,7 +897,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
           ),
-          // Leftâ†’right sunset wash: branding stays primary, photo secondary
+          // Left→right sunset wash: branding stays primary, photo secondary
           DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -934,7 +937,7 @@ class _LoginScreenState extends State<LoginScreen> {
               painter: _FlightPathPainter(),
             ),
           ),
-          // Back control â€” absolute so branding stays centered like the mock
+          // Back control — absolute so branding stays centered like the mock
           Positioned(
             top: topPad + 2,
             left: 4,
@@ -951,10 +954,13 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
           // Centered logo + titles
           Padding(
-            padding: EdgeInsets.fromLTRB(24, topPad + 36, 24, 56),
+            padding: EdgeInsets.fromLTRB(24, topPad + 14, 24, 60),
             child: Align(
               alignment: Alignment.center,
-              child: _buildHeaderBranding(),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: _buildHeaderBranding(compact: true),
+              ),
             ),
           ),
         ],
@@ -1190,7 +1196,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
-/// Soft organic wave â€” orange hero â†’ white bottom (matches mock).
+/// Soft organic wave — orange hero → white bottom (matches mock).
 class _LoginHeroWaveClipper extends CustomClipper<Path> {
   const _LoginHeroWaveClipper();
 

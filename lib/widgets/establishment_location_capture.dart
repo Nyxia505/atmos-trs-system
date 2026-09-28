@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/widgets/atmos_osm_tile_layer.dart';
+import 'package:atmos_trs_system/widgets/establishment_dash_tokens.dart';
 
 /// Captures establishment map pin via device GPS ("Get location")
 /// and lets staff open a map preview to verify the pin.
@@ -19,6 +20,7 @@ class EstablishmentLocationCapture extends StatelessWidget {
     this.onBusyChanged,
     this.required = true,
     this.accentColor,
+    this.dashboardStyle = false,
   });
 
   final double? latitude;
@@ -28,6 +30,9 @@ class EstablishmentLocationCapture extends StatelessWidget {
   final ValueChanged<bool>? onBusyChanged;
   final bool required;
   final Color? accentColor;
+
+  /// Establishment dashboard layout: tinted status row + filled action.
+  final bool dashboardStyle;
 
   bool get _hasPin {
     final lat = latitude;
@@ -137,9 +142,201 @@ class EstablishmentLocationCapture extends StatelessWidget {
     );
   }
 
+  Widget _pinPreview(
+    BuildContext context,
+    Color accent,
+    double lat,
+    double lng,
+  ) {
+    return GestureDetector(
+      onTap: () => _openMapPreview(
+        context,
+        latitude: lat,
+        longitude: lng,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: SizedBox(
+          height: 160,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              IgnorePointer(
+                child: _EstablishmentPinMap(
+                  latitude: lat,
+                  longitude: lng,
+                  accent: accent,
+                  interactive: false,
+                ),
+              ),
+              Positioned(
+                right: 8,
+                bottom: 8,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.95),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: accent.withValues(alpha: 0.35),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.open_in_full_rounded, size: 14, color: accent),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Adjust pin',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: accent,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _dashboardLayout(BuildContext context, Color accent) {
+    final lat = latitude;
+    final lng = longitude;
+    final status = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFFED7AA)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.14),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.location_on_rounded, color: accent, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              _hasPin
+                  ? 'Pin: ${lat!.toStringAsFixed(5)}, ${lng!.toStringAsFixed(5)}'
+                  : required
+                      ? 'Map pin required — tourists will see you on Explore.'
+                      : 'No map pin yet.',
+              style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w600,
+                color: _hasPin
+                    ? const Color(0xFF334155)
+                    : const Color(0xFFC2410C),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    final getButton = FilledButton.icon(
+      onPressed: busy ? null : () => _capture(context),
+      icon: busy
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white,
+              ),
+            )
+          : const Icon(Icons.my_location_rounded, size: 19),
+      label: Text(busy ? 'Getting location…' : 'Get location'),
+      style: FilledButton.styleFrom(
+        backgroundColor: accent,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        textStyle: AeDashTokens.body(
+          size: 13.5,
+          color: Colors.white,
+          weight: FontWeight.w700,
+        ),
+      ),
+    );
+    final adjustButton = !_hasPin
+        ? null
+        : OutlinedButton.icon(
+            onPressed: () => _openMapPreview(
+              context,
+              latitude: lat!,
+              longitude: lng!,
+            ),
+            icon: Icon(Icons.tune_rounded, color: accent, size: 19),
+            label: const Text('Adjust pin'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: accent,
+              side: BorderSide(color: accent.withValues(alpha: 0.55)),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          );
+    return LayoutBuilder(
+      builder: (context, c) {
+        final narrow = c.maxWidth < 560;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (narrow) ...[
+              status,
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(child: getButton),
+                  if (adjustButton != null) ...[
+                    const SizedBox(width: 8),
+                    Expanded(child: adjustButton),
+                  ],
+                ],
+              ),
+            ] else
+              Row(
+                children: [
+                  Expanded(child: status),
+                  const SizedBox(width: 12),
+                  getButton,
+                  if (adjustButton != null) ...[
+                    const SizedBox(width: 8),
+                    adjustButton,
+                  ],
+                ],
+              ),
+            if (_hasPin) ...[
+              const SizedBox(height: 12),
+              _pinPreview(context, accent, lat!, lng!),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final accent = accentColor ?? AppTheme.brandOrange;
+    if (dashboardStyle) return _dashboardLayout(context, accent);
     final lat = latitude;
     final lng = longitude;
     return Column(
@@ -160,65 +357,7 @@ class EstablishmentLocationCapture extends StatelessWidget {
         ),
         if (_hasPin) ...[
           const SizedBox(height: 10),
-          GestureDetector(
-            onTap: () => _openMapPreview(
-              context,
-              latitude: lat!,
-              longitude: lng!,
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: SizedBox(
-                height: 160,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    IgnorePointer(
-                      child: _EstablishmentPinMap(
-                        latitude: lat!,
-                        longitude: lng!,
-                        accent: accent,
-                        interactive: false,
-                      ),
-                    ),
-                    Positioned(
-                      right: 8,
-                      bottom: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.95),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: accent.withValues(alpha: 0.35),
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.open_in_full_rounded,
-                                size: 14, color: accent),
-                            const SizedBox(width: 4),
-                            Text(
-                              'Adjust pin',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                color: accent,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+          _pinPreview(context, accent, lat!, lng!),
         ],
         const SizedBox(height: 10),
         Row(

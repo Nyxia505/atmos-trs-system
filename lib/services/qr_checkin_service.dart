@@ -7,6 +7,7 @@ import 'package:atmos_trs_system/config/beta_testing_config.dart';
 import 'package:atmos_trs_system/config/user_profile_storage.dart';
 import 'package:atmos_trs_system/config/qr_scan_geofence_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
+import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
 import 'package:atmos_trs_system/services/qr_scan_demo_guard.dart';
 import 'package:atmos_trs_system/services/qr_scan_location_guard.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
@@ -56,6 +57,8 @@ class SpotInfo {
     required this.municipalityId,
     this.latitude,
     this.longitude,
+    this.imageUrl,
+    this.category,
   });
   final String spotId;
   final String spotName;
@@ -65,6 +68,10 @@ class SpotInfo {
   /// From Firestore `tourist_spots` (used for proximity check).
   final double? latitude;
   final double? longitude;
+
+  /// From Firestore `tourist_spots`; shown on the check-in screen header.
+  final String? imageUrl;
+  final String? category;
 }
 
 /// Saves QR check-ins to Firestore "qr_checkins" collection for municipality-based dashboards.
@@ -348,6 +355,8 @@ class QRCheckInService {
             : getMunicipalityIdFromName(municipality),
         latitude: lat,
         longitude: lng,
+        imageUrl: TouristSpotFirestore.readImageUrl(d),
+        category: d['category'] as String?,
       );
     } catch (_) {
       return null;

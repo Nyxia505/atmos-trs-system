@@ -2163,6 +2163,9 @@ exports.clearAllTouristData = onCall(
       tourist_activity: 0,
       establishment_stay_requests: 0,
       establishment_stay_reviews: 0,
+      email_otps: 0,
+      password_reset_otps: 0,
+      tourist_qr_codes: 0,
     };
 
     if (municipalityId) {
@@ -2211,6 +2214,12 @@ exports.clearAllTouristData = onCall(
       deleted.establishment_stay_reviews +=
         await deleteCollectionInBatches('establishment_stay_reviews');
       deleted.users += await deleteAllTouristRoleUsers();
+      // OTP / QR leftovers (Auth users stay — delete manually in Console)
+      deleted.email_otps = await deleteCollectionInBatches('email_otps');
+      deleted.password_reset_otps =
+        await deleteCollectionInBatches('password_reset_otps');
+      deleted.tourist_qr_codes =
+        await deleteCollectionInBatches('tourist_qr_codes');
     }
 
     return {ok: true, municipalityId: municipalityId || null, deleted};

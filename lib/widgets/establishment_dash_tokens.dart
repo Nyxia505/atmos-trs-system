@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 /// Sleek establishment dashboard visual tokens (orange accent, cool slate chrome).
 abstract final class AeDashTokens {
-  static const Color background = Color(0xFFF4F6F8);
+  static const Color background = Color(0xFFF5F7FA);
   static const Color surface = Color(0xFFFFFFFF);
   static const Color card = surface;
   static const Color sidebar = Color(0xFF0F172A);
@@ -27,8 +27,32 @@ abstract final class AeDashTokens {
   static const double radiusMd = 14;
   static const double radiusLg = 14;
   static const double radiusCard = 14;
-  static const double sidebarExpanded = 248;
-  static const double sidebarCollapsed = 72;
+  static const double radiusXl = 18;
+  static const double sidebarExpanded = 240;
+  static const double sidebarCollapsed = 76;
+
+  static const Color secondary = Color(0xFFFB923C);
+  static const Color cream = Color(0xFFFFF7ED);
+  static const Color warning = Color(0xFFF59E0B);
+  static const Color purple = Color(0xFF8B5CF6);
+  static const Color blue = Color(0xFF3B82F6);
+  static const Color slate = Color(0xFF64748B);
+  static const Color softBorder = Color(0xFFEEF2F6);
+
+  static List<BoxShadow> get softShadow => [
+        BoxShadow(
+          color: const Color(0xFF0F172A).withValues(alpha: 0.05),
+          blurRadius: 18,
+          offset: const Offset(0, 6),
+        ),
+      ];
+
+  static BoxDecoration panelDecoration({Color? color}) => BoxDecoration(
+        color: color ?? surface,
+        borderRadius: BorderRadius.circular(radiusXl),
+        border: Border.all(color: softBorder),
+        boxShadow: softShadow,
+      );
 
   static List<BoxShadow> get cardShadow => [
         BoxShadow(
@@ -86,5 +110,139 @@ abstract final class AeDashTokens {
     if (h < 12) return 'Good morning';
     if (h < 17) return 'Good afternoon';
     return 'Good evening';
+  }
+
+  static const LinearGradient sidebarGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFFFB923C), Color(0xFFF97316), Color(0xFFEA580C)],
+    stops: [0.0, 0.55, 1.0],
+  );
+
+  static const LinearGradient heroGradient = LinearGradient(
+    colors: [Color(0xFFF97316), Color(0xFFEA580C), Color(0xFFC2410C)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
+  /// Dashboard banner: same palette as [sidebarRichGradient] so the left edge
+  /// continues the sidebar's top color.
+  static const LinearGradient bannerGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFFFB923C), Color(0xFFF97316), Color(0xFFEA580C)],
+    stops: [0.0, 0.45, 1.0],
+  );
+
+  /// Sidebar: warm top-left fading into burnt orange at the bottom.
+  static const LinearGradient sidebarRichGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFFFB923C), Color(0xFFF97316), Color(0xFFEA580C), Color(0xFFC2410C)],
+    stops: [0.0, 0.35, 0.75, 1.0],
+  );
+
+  static Widget iconChip(IconData icon, Color color, {double size = 34}) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(radiusSm),
+      ),
+      child: Icon(icon, color: color, size: size * 0.53),
+    );
+  }
+}
+
+/// Section title with icon chip, optional hint and trailing action.
+class AeSectionHeader extends StatelessWidget {
+  const AeSectionHeader({
+    super.key,
+    required this.title,
+    required this.icon,
+    this.hint,
+    this.color = AeDashTokens.accent,
+    this.trailing,
+  });
+
+  final String title;
+  final IconData icon;
+  final String? hint;
+  final Color color;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          AeDashTokens.iconChip(icon, color, size: 30),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: AeDashTokens.section(size: 14)),
+                if (hint != null && hint!.isNotEmpty) ...[
+                  const SizedBox(height: 1),
+                  Text(hint!, style: AeDashTokens.body(size: 11.5)),
+                ],
+              ],
+            ),
+          ),
+          if (trailing != null) trailing!,
+        ],
+      ),
+    );
+  }
+}
+
+/// Friendly empty state: icon bubble + message.
+class AeEmptyState extends StatelessWidget {
+  const AeEmptyState({
+    super.key,
+    required this.message,
+    this.icon = Icons.inbox_outlined,
+    this.boxed = true,
+  });
+
+  final String message;
+  final IconData icon;
+  final bool boxed;
+
+  @override
+  Widget build(BuildContext context) {
+    final content = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: const BoxDecoration(
+              color: AeDashTokens.mutedSurface,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: AeDashTokens.muted, size: 22),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: AeDashTokens.body(size: 12.5),
+          ),
+        ],
+      ),
+    );
+    if (!boxed) return Center(child: content);
+    return Container(
+      width: double.infinity,
+      decoration: AeDashTokens.cardDecoration(),
+      child: content,
+    );
   }
 }
