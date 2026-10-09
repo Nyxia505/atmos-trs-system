@@ -63,7 +63,7 @@ dependencies:
   fl_chart: ^0.69.0
 
   trip_plan:
-    path: lib/tripplan/main
+    path: linontripplanner-main
   google_fonts: ^8.2.1
   pointer_interceptor: ^0.10.1+2
   app_links: ^7.2.1
