@@ -1,0 +1,121 @@
+rules_version = '2';
+// Deploy: firebase deploy --only storage --project atmos-trs-system
+//
+// Public read for tourism images.
+// Catalog uploads: staff (JWT claims and/or users/{uid} admin|manager role).
+// Profile photos: signed-in owner only.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isStaffFromToken() {
+      return isSignedIn() && (
+        request.auth.token.staff == true
+        || request.auth.token.staff == 'true'
+        || request.auth.token.admin == true
+        || request.auth.token.admin == 'true'
+        || (
+          request.auth.token.role is string
+          && request.auth.token.role in [
+            'admin', 'Admin', 'administrator', 'Administrator', 'governor', 'Governor',
+            'municipal_manager', 'Municipal Manager', 'municipal manager',
+            'municipalmanager', 'manager', 'Manager'
+          ]
+        )
+      );
+    }
+
+    function userDocPath() {
+      return /databases/(default)/documents/users/$(request.auth.uid);
+    }
+
+    function isStaffFromProfile() {
+      return isSignedIn()
+        && firestore.exists(userDocPath())
+        && firestore.get(userDocPath()).data.role in [
+          'admin', 'Admin', 'administrator', 'Administrator', 'governor', 'Governor',
+          'municipal_manager', 'Municipal Manager', 'municipal manager',
+          'municipalmanager', 'manager', 'Manager'
+        ];
+    }
+
+    function isPermanentStaffFromProfile() {
+      return isSignedIn()
+        && firestore.exists(userDocPath())
+        && firestore.get(userDocPath()).data.rolePermanent == true
+        && firestore.get(userDocPath()).data.role in [
+          'admin', 'Admin', 'administrator', 'Administrator', 'governor', 'Governor',
+          'municipal_manager', 'Municipal Manager', 'municipal manager',
+          'municipalmanager', 'manager', 'Manager'
+        ];
+    }
+
+    function canManageCatalogMedia() {
+      return isStaffFromToken()
+        || isStaffFromProfile()
+        || isPermanentStaffFromProfile();
+    }
+
+    function isReasonableImage() {
+      return request.resource != null
+        && request.resource.size < 15 * 1024 * 1024
+        && (
+          request.resource.contentType == null
+          || request.resource.contentType.matches('image/.*')
+        );
+    }
+
+    function catalogWriteOk() {
+      return canManageCatalogMedia()
+        && (request.resource == null || isReasonableImage());
+    }
+
+    function isCatalogRoot(folder) {
+      return folder in [
+        'Tourist Spots Image',
+        'tourist_spots_image',
+        'municipalities',
+        'events',
+        'announcements',
+        'featured_spots',
+        'spots'
+      ];
+    }
+
+    // Own face / profile photo (path-specific; wins over catch-all via OR).
+    match /user_profiles/{userId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isSignedIn()
+        && request.auth.uid == userId
+        && (request.resource == null || isReasonableImage());
+    }
+
+    match /profile_photos/{fileName} {
+      allow read: if true;
+      allow write: if isSignedIn()
+        && (
+          fileName == request.auth.uid + '.jpg'
+          || fileName == request.auth.uid + '.jpeg'
+          || fileName == request.auth.uid + '.png'
+          || fileName == request.auth.uid + '.webp'
+        )
+        && (request.resource == null || isReasonableImage());
+    }
+
+    // Catalog folders (including "Tourist Spots Image" via {folder} wildcard).
+    match /{folder}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isCatalogRoot(folder) && catalogWriteOk();
+    }
+
+    // Any other single-segment or nested path: staff only.
+    match /{allPaths=**} {
+      allow read: if true;
+      allow write: if catalogWriteOk();
+    }
+  }
+}

@@ -1,0 +1,9 @@
+# TripPlan Supabase — Edge Functions (FCM push without Firebase Blaze)
+#
+# Project ref: cgpjqkbbmyxvitwpkikn
+
+[project]
+id = "cgpjqkbbmyxvitwpkikn"
+
+[functions.notify-tourism-event]
+verify_jwt = false

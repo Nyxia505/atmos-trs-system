@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "TripPlan (Chrome) - icons work",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "args": ["--web-renderer", "html"],
+      "flutterMode": "profile"
+    },
+    {
+      "name": "TripPlan (Chrome) - debug",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "args": ["--web-renderer", "html"],
+      "flutterMode": "debug"
+    }
+  ]
+}
