@@ -14,6 +14,7 @@ import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
 import 'package:atmos_trs_system/services/tourist_spots_repository.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart'
     as activity;
+import 'package:atmos_trs_system/screens/laag_with_friends_screen.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
 import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
 import 'package:atmos_trs_system/screens/municipality_map_and_spots_screen.dart';
@@ -29,12 +30,12 @@ import 'package:atmos_trs_system/config/atmos_brand_typography.dart';
 import 'package:atmos_trs_system/services/weather_service.dart';
 import 'package:atmos_trs_system/services/qr_checkin_service.dart';
 import 'package:atmos_trs_system/services/qr_checkin_ui.dart';
+import 'package:atmos_trs_system/services/qr_location_prompt.dart';
 import 'package:atmos_trs_system/data/featured_destinations.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_display_spots.dart';
 import 'package:atmos_trs_system/data/tourist_spot_image_catalog.dart';
 import 'package:atmos_trs_system/widgets/recent_reviews_section.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
-import 'package:atmos_trs_system/widgets/tourist_stays_sheet.dart';
 import 'package:atmos_trs_system/utils/visit_record_image_resolver.dart';
 import 'package:atmos_trs_system/services/tourist_activity_firestore_sync.dart';
 import 'package:atmos_trs_system/features/home/widgets/app_faq_sheet.dart';
@@ -638,6 +639,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final lat = firestoreSpot?.latitude ?? spot.latitude;
     final lng = firestoreSpot?.longitude ?? spot.longitude;
 
+    if (!mounted) return;
+    if (!await ensureQrLocationReady(context, spotLabel: spot.name)) return;
+
     final locationError = await QRCheckInService.verifyProximityToTouristSpot(
       latitude: lat,
       longitude: lng,
@@ -969,6 +973,19 @@ class _HomeScreenState extends State<HomeScreen> {
                       onTap: _showSavedSpotsDialog,
                     ),
                   ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _quickActionTile(
+                      icon: Icons.groups_rounded,
+                      label: 'Laag with Friends',
+                      accent: accent,
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const LaagWithFriendsScreen(),
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 8),
@@ -992,16 +1009,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       Icons.emoji_events_rounded,
                       accent,
                       onTap: _showBadgesDialog,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _buildStatCard(
-                      'Stays',
-                      '›',
-                      Icons.hotel_rounded,
-                      accent,
-                      onTap: () => TouristStaysSheet.show(context),
                     ),
                   ),
                 ],
@@ -1594,7 +1601,7 @@ class _HomeScreenState extends State<HomeScreen> {
             subtitle: 'Six priority destinations for virtual tours',
             icon: Icons.auto_awesome_rounded,
             trailing: TextButton(
-              onPressed: _showAllDestinationsDialog,
+              onPressed: _showPriorityDestinationsDialog,
               child: Text(
                 'See all',
                 style: TextStyle(
@@ -2762,6 +2769,165 @@ class _HomeScreenState extends State<HomeScreen> {
         itemBuilder: (context, index) {
           return _buildDestinationListItem(spots[index]);
         },
+      ),
+    );
+  }
+
+  /// Discover "See all": only the priority virtual-tour destinations.
+  void _showPriorityDestinationsDialog() {
+    const destinations = kFeaturedDestinations;
+    final countLabel = '${destinations.length} destinations';
+    if (_isMobileLayout) {
+      Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          fullscreenDialog: true,
+          builder: (ctx) => Scaffold(
+            backgroundColor: AppTheme.cardBackground,
+            appBar: _mobileSheetAppBar(
+              ctx,
+              title: 'Priority Destinations',
+              subtitle: countLabel,
+            ),
+            body: ListView.builder(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+              itemCount: destinations.length,
+              itemBuilder: (context, index) => _buildPriorityDestinationItem(
+                destinations[index],
+                listContext: ctx,
+              ),
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
+    _showCenteredHomePanel(
+      title: 'Priority Destinations',
+      icon: Icons.auto_awesome_rounded,
+      trailingLabel: countLabel,
+      heightFraction: 0.82,
+      body: ListView.builder(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+        itemCount: destinations.length,
+        itemBuilder: (context, index) =>
+            _buildPriorityDestinationItem(destinations[index]),
+      ),
+    );
+  }
+
+  Widget _buildPriorityDestinationItem(
+    Map<String, dynamic> destination, {
+    BuildContext? listContext,
+  }) {
+    final navContext = listContext ?? context;
+    final spot = _spotFromFeatured(destination);
+    final isSaved = _savedSpotIds.contains(spot.id);
+    final hasVr = _featuredDetail(destination).hasVrTour;
+    final location = destination['location']?.toString() ?? '';
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.pop(navContext);
+        _showFeaturedDestinationDetail(destination);
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade50,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: _buildSpotImage(
+                _featuredImageForDestination(destination),
+                width: 70,
+                height: 70,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    destination['name']?.toString() ?? '',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textPrimary,
+                      fontSize: 15,
+                    ),
+                  ),
+                  if (location.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      location,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.grey.shade600,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: [
+                      _priorityTag(
+                        destination['category']?.toString() ?? 'Destination',
+                      ),
+                      if (hasVr)
+                        _priorityTag('360° Virtual Tour',
+                            icon: Icons.vrpano_rounded),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: Icon(
+                isSaved ? Icons.bookmark : Icons.bookmark_border,
+                color: isSaved ? AppTheme.primary : Colors.grey.shade400,
+              ),
+              onPressed: () async {
+                await _toggleSaveSpot(spot);
+                setState(() {});
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _priorityTag(String label, {IconData? icon}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppTheme.primary.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 12, color: AppTheme.primary),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            label,
+            style: TextStyle(
+              color: AppTheme.primary,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }

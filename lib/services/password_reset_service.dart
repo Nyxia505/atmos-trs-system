@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:atmos_trs_system/services/auth_service.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
 import 'package:atmos_trs_system/utils/email_utils.dart';
+import 'package:atmos_trs_system/utils/qr_launch_query.dart';
 import 'package:atmos_trs_system/utils/signup_field_validation.dart';
 
 /// Password reset: OTP + push/SMS/email (Cloud Functions) with Firebase email-link fallback.
@@ -28,11 +29,74 @@ class PasswordResetService {
     return false;
   }
 
-  /// Sends Firebase's password-reset email (link). Works without Cloud Functions.
+  /// Emails a reset link that opens the ATMOS web app's own new-password form
+  /// (Cloud Function `sendPasswordResetLinkEmail`). Falls back to Firebase's
+  /// built-in reset email when the function is not deployed or cannot send.
   static Future<PasswordResetOtpRequestResult> requestEmailResetLink(
     String email,
   ) async {
-    return _sendEmailLinkFallback(normalizeEmail(email));
+    final normalized = normalizeEmail(email);
+    if (!isValidEmailFormat(normalized)) {
+      throw ArgumentError('Please enter a valid email address.');
+    }
+    try {
+      final payload = <String, dynamic>{'email': normalized};
+      if (kIsWeb) {
+        payload['continueOrigin'] = Uri.base.origin;
+      }
+      final result = await _functions
+          .httpsCallable('sendPasswordResetLinkEmail')
+          .call<Map<String, dynamic>>(payload)
+          .timeout(_callableTimeout);
+      final data = Map<String, dynamic>.from(result.data);
+      if (data['accountFound'] != true) {
+        return PasswordResetOtpRequestResult(
+          email: normalized,
+          accountFound: false,
+          pushSent: false,
+          emailSent: false,
+        );
+      }
+      if (data['emailSent'] == true) {
+        return PasswordResetOtpRequestResult(
+          email: normalized,
+          accountFound: true,
+          pushSent: false,
+          emailSent: true,
+          emailLinkSent: true,
+        );
+      }
+      debugPrint('[PasswordReset] link email not delivered; using Firebase email.');
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint('[PasswordReset] link callable failed: ${e.code} ${e.message}');
+      if (!_shouldUseEmailLinkFallbackOnRequest(e)) rethrow;
+    } on TimeoutException catch (e) {
+      debugPrint('[PasswordReset] link callable timeout: $e');
+    }
+    return _sendEmailLinkFallback(normalized);
+  }
+
+  /// `oobCode` when the web app was opened from a Firebase password-reset link.
+  static String? emailResetOobCodeFromLaunchUrl() {
+    if (!kIsWeb) return null;
+    final params = mergedLaunchQueryParameters(Uri.base);
+    if (params['mode']?.trim() != 'resetPassword') return null;
+    final code = params['oobCode']?.trim();
+    if (code == null || code.isEmpty) return null;
+    return code;
+  }
+
+  /// Account email for a reset link; throws [FirebaseAuthException] if the
+  /// link is expired, invalid, or already used.
+  static Future<String> verifyEmailResetLink(String oobCode) async {
+    try {
+      return await AuthService.verifyPasswordResetCode(oobCode);
+    } on FirebaseAuthException catch (e) {
+      throw FirebaseAuthException(
+        code: e.code,
+        message: AuthService.passwordResetErrorMessage(e),
+      );
+    }
   }
 
   /// Completes reset from a Firebase email link (`oobCode` query param on web).

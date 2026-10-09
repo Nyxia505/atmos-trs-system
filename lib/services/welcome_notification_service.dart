@@ -29,9 +29,9 @@ class WelcomeNotificationService {
     return (
       title: 'Welcome, $name! 👋',
       message:
-          'Salamat sa pag-register sa ATMOS-TRS! Explore destinations sa '
-          'Misamis Occidental, gamita ang imong QR code para mag-check in, '
-          'ug i-enjoy ang imong digital tourist ID. Happy travels!',
+          'Thank you for registering with ATMOS-TRS! Explore destinations in '
+          'Misamis Occidental, use your QR code to check in, and enjoy your '
+          'digital tourist ID. Happy travels!',
     );
   }
 

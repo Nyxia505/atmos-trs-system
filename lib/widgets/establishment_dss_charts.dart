@@ -55,7 +55,7 @@ abstract final class EstablishmentDssCharts {
     double progress = 1,
   }) {
     if (values.isEmpty || values.every((v) => v == 0)) {
-      return emptyChart('No confirmed stays in this period yet.');
+      return emptyChart('No register entries in this period yet.');
     }
     final maxY = values.reduce((a, b) => a > b ? a : b).toDouble();
     final spots = <FlSpot>[
@@ -143,7 +143,7 @@ abstract final class EstablishmentDssCharts {
     double progress = 1,
   }) {
     if (values.isEmpty || values.every((v) => v == 0)) {
-      return emptyChart('No confirmed stays in this period yet.');
+      return emptyChart('No register entries in this period yet.');
     }
     final maxY = values.reduce((a, b) => a > b ? a : b).toDouble();
     final labelStep = values.length <= 12 ? 1 : (values.length / 8).ceil();
@@ -291,7 +291,7 @@ abstract final class EstablishmentDssCharts {
     required int total,
   }) {
     if (total <= 0) {
-      return emptyChart('Set your room count on the Rooms tab.');
+      return emptyChart('Set your total rooms in Profile.');
     }
     final pct = (occupied / total).clamp(0.0, 1.0);
     return Column(
@@ -365,52 +365,234 @@ abstract final class EstablishmentDssCharts {
     );
   }
 
-  static Widget reviewStarsBars(List<int> buckets, {double progress = 1}) {
-    if (buckets.every((v) => v == 0)) {
-      return emptyChart('No guest reviews yet.');
+  /// Decimal bars (percent, pesos, averages) with a value suffix/prefix on the axis.
+  static Widget valueBars({
+    required List<double> values,
+    required List<String> labels,
+    Color color = AeDashTokens.accent,
+    String prefix = '',
+    String suffix = '',
+    double? maxY,
+    String emptyMessage = 'No data in this period yet.',
+    double progress = 1,
+    int? highlightIndex,
+  }) {
+    if (values.isEmpty || values.every((v) => v <= 0)) {
+      return emptyChart(emptyMessage);
     }
-    final maxY = buckets.reduce((a, b) => a > b ? a : b).toDouble();
+    final peak = values.reduce((a, b) => a > b ? a : b);
+    final top = maxY ?? (peak <= 0 ? 1 : peak * 1.2);
+    final labelStep = values.length <= 12 ? 1 : (values.length / 8).ceil();
+    final barWidth = values.length > 20 ? 6.0 : (values.length > 10 ? 9.0 : 14.0);
+    String axis(double v) {
+      final s = v >= 1000 ? '${(v / 1000).toStringAsFixed(v >= 10000 ? 0 : 1)}k' : v.toStringAsFixed(0);
+      return '$prefix$s$suffix';
+    }
+
     return BarChart(
       duration: ChartTransition.chartDuration(progress),
       curve: Curves.easeOutCubic,
       BarChartData(
-        maxY: maxY < 2 ? 2 : maxY * 1.2,
-        gridData: const FlGridData(show: false),
+        maxY: top,
+        minY: 0,
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          getDrawingHorizontalLine: (_) => FlLine(color: AeDashTokens.border, strokeWidth: 1),
+        ),
         borderData: FlBorderData(show: false),
+        barTouchData: BarTouchData(
+          touchTooltipData: BarTouchTooltipData(
+            getTooltipItem: (group, _, rod, __) => BarTooltipItem(
+              '${labels[group.x]}\n$prefix${values[group.x].toStringAsFixed(values[group.x] >= 100 ? 0 : 1)}$suffix',
+              AeDashTokens.body(size: 11, color: Colors.white, weight: FontWeight.w700),
+            ),
+          ),
+        ),
         titlesData: FlTitlesData(
-          topTitles:
-              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          rightTitles:
-              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          leftTitles:
-              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 40,
+              getTitlesWidget: (v, meta) => v == meta.max
+                  ? const SizedBox.shrink()
+                  : Text(axis(v), style: AeDashTokens.body(size: 9)),
+            ),
+          ),
           bottomTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
+              reservedSize: 24,
               getTitlesWidget: (v, _) {
                 final i = v.toInt();
-                if (i < 0 || i > 4) return const SizedBox.shrink();
-                return Text('${i + 1}★', style: AeDashTokens.body(size: 10));
+                if (i < 0 || i >= labels.length || i % labelStep != 0) {
+                  return const SizedBox.shrink();
+                }
+                return Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(labels[i], style: AeDashTokens.body(size: 9)),
+                );
               },
             ),
           ),
         ),
         barGroups: [
-          for (var i = 0; i < 5; i++)
+          for (var i = 0; i < values.length; i++)
             BarChartGroupData(
               x: i,
               barRods: [
                 BarChartRodData(
-                  toY: (i < buckets.length ? buckets[i] : 0) * progress,
-                  width: 16,
-                  borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(4)),
-                  color: AeDashTokens.accent,
+                  toY: values[i].clamp(0, top) * progress,
+                  width: barWidth,
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                  color: highlightIndex == null || highlightIndex == i
+                      ? color
+                      : color.withValues(alpha: 0.45),
                 ),
               ],
             ),
         ],
       ),
+    );
+  }
+
+  /// Several decimal series on one axis (e.g. ALOS vs persons per room).
+  static Widget multiLine({
+    required List<({String label, List<double?> values, Color color})> series,
+    required List<String> labels,
+    String suffix = '',
+    double? maxY,
+    String emptyMessage = 'No data in this period yet.',
+    double progress = 1,
+  }) {
+    final all = [
+      for (final s in series)
+        for (final v in s.values)
+          if (v != null) v,
+    ];
+    if (all.isEmpty || all.every((v) => v <= 0)) return emptyChart(emptyMessage);
+    final peak = all.reduce((a, b) => a > b ? a : b);
+    final top = maxY ?? (peak <= 0 ? 1 : peak * 1.2);
+    return Column(
+      children: [
+        Expanded(
+          child: LineChart(
+            duration: ChartTransition.chartDuration(progress),
+            curve: Curves.easeOutCubic,
+            LineChartData(
+              minY: 0,
+              maxY: top,
+              gridData: FlGridData(
+                show: true,
+                drawVerticalLine: false,
+                getDrawingHorizontalLine: (_) => FlLine(color: AeDashTokens.border, strokeWidth: 1),
+              ),
+              borderData: FlBorderData(show: false),
+              titlesData: FlTitlesData(
+                topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                leftTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 34,
+                    getTitlesWidget: (v, meta) => v == meta.max
+                        ? const SizedBox.shrink()
+                        : Text(
+                            '${v.toStringAsFixed(top <= 5 ? 1 : 0)}$suffix',
+                            style: AeDashTokens.body(size: 9),
+                          ),
+                  ),
+                ),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    interval: labels.length > 14 ? (labels.length / 7).ceilToDouble() : 1,
+                    getTitlesWidget: (v, _) {
+                      final i = v.toInt();
+                      if (i < 0 || i >= labels.length) return const SizedBox.shrink();
+                      return Text(labels[i], style: AeDashTokens.body(size: 9));
+                    },
+                  ),
+                ),
+              ),
+              lineBarsData: [
+                for (final s in series)
+                  LineChartBarData(
+                    spots: [
+                      for (var i = 0; i < s.values.length; i++)
+                        if (s.values[i] != null) FlSpot(i.toDouble(), s.values[i]! * progress),
+                    ],
+                    isCurved: true,
+                    preventCurveOverShooting: true,
+                    color: s.color,
+                    barWidth: 2.5,
+                    dotData: FlDotData(show: labels.length <= 14),
+                    belowBarData: BarAreaData(
+                      show: series.length == 1,
+                      color: s.color.withValues(alpha: 0.12),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        if (series.length > 1) ...[
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 14,
+            runSpacing: 4,
+            alignment: WrapAlignment.center,
+            children: [for (final s in series) _legendDot(s.color, s.label)],
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Donut with any number of slices plus a legend.
+  static Widget multiPie({
+    required List<({String label, int value, Color color})> slices,
+    String emptyMessage = 'No data for this month yet.',
+  }) {
+    final shown = slices.where((s) => s.value > 0).toList();
+    final total = shown.fold<int>(0, (a, s) => a + s.value);
+    if (total <= 0) return emptyChart(emptyMessage);
+    return Row(
+      children: [
+        Expanded(
+          child: PieChart(
+            duration: const Duration(milliseconds: 450),
+            curve: Curves.easeOutCubic,
+            PieChartData(
+              sectionsSpace: 2,
+              centerSpaceRadius: 34,
+              sections: [
+                for (final s in shown)
+                  PieChartSectionData(
+                    value: s.value.toDouble(),
+                    color: s.color,
+                    title: s.value / total >= 0.07 ? '${(s.value / total * 100).round()}%' : '',
+                    titleStyle: AeDashTokens.body(size: 11, color: Colors.white, weight: FontWeight.w700),
+                    radius: 42,
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            for (final s in slices) ...[
+              _legendDot(s.color, '${s.label} · ${s.value}'),
+              const SizedBox(height: 7),
+            ],
+          ],
+        ),
+      ],
     );
   }
 
@@ -421,7 +603,7 @@ abstract final class EstablishmentDssCharts {
     double progress = 1,
   }) {
     if (labels.isEmpty || values.every((v) => v == 0)) {
-      return emptyChart('No room assignments in this period yet.');
+      return emptyChart('No room numbers in the register for this period yet.');
     }
     final maxY = values.reduce((a, b) => a > b ? a : b).toDouble();
     final show = labels.length > 12 ? 12 : labels.length;

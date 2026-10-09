@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:ui' show Color;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -15,6 +16,13 @@ import 'package:atmos_trs_system/screens/event_detail_screen.dart';
 
 /// FCM topic all tourist apps subscribe to — must match [functions/index.js].
 const String kGovernorAnnouncementsTopic = 'governor_announcements';
+
+/// Status-bar icon must be a white-on-transparent silhouette (Android draws it
+/// from alpha only). Regenerate with `dart run tools/gen_notification_icons.dart`.
+const String _kNotificationSmallIcon = 'ic_stat_atmos';
+const AndroidBitmap<String> _kNotificationLargeIcon =
+    DrawableResourceAndroidBitmap('ic_notification_logo');
+const Color _kNotificationColor = Color(0xFFF97316);
 
 /// Android channel for admin / Tourism Office announcements — must match [functions/index.js] `android.notification.channelId`.
 const String kAndroidAnnouncementChannelId = 'atmos_announcement_heads_up';
@@ -54,6 +62,15 @@ const AndroidNotificationChannel _androidCheckInChannel =
   'ATMOS Check-ins',
   description: 'Check-in confirmations after QR scans',
   importance: Importance.max,
+);
+
+/// "QR near you" alerts when the app opens close to a tourist spot.
+const AndroidNotificationChannel _androidNearbySpotChannel =
+    AndroidNotificationChannel(
+  'atmos_nearby_spot',
+  'ATMOS Nearby spots',
+  description: 'Alerts when a tourist spot QR is near you',
+  importance: Importance.high,
 );
 
 StreamSubscription<RemoteMessage>? _passwordResetForegroundSubscription;
@@ -167,11 +184,12 @@ Future<void> _ensureLocalNotificationsCore() async {
     await androidPlugin?.createNotificationChannel(_androidAnnouncementHeadsUpChannel);
     await androidPlugin?.createNotificationChannel(_androidOtpChannel);
     await androidPlugin?.createNotificationChannel(_androidCheckInChannel);
+    await androidPlugin?.createNotificationChannel(_androidNearbySpotChannel);
     await androidPlugin?.requestNotificationsPermission();
   }
 
   if (!_localNotificationsReady) {
-    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidInit = AndroidInitializationSettings(_kNotificationSmallIcon);
     const iosInit = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
@@ -293,9 +311,10 @@ Future<void> showCheckInLocalNotification(String spotName) async {
       styleInformation: BigTextStyleInformation(
         body,
         contentTitle: title,
-        summaryText: 'ATMOS-TRS',
       ),
-      icon: '@mipmap/ic_launcher',
+      icon: _kNotificationSmallIcon,
+      largeIcon: _kNotificationLargeIcon,
+      color: _kNotificationColor,
     );
     const ios = DarwinNotificationDetails(
       presentAlert: true,
@@ -317,6 +336,55 @@ Future<void> showCheckInLocalNotification(String spotName) async {
     await NotificationBadgeNotifier.instance.refresh();
   } catch (e, st) {
     debugPrint('[Push] showCheckInLocalNotification: $e\n$st');
+  }
+}
+
+/// Shows "{spot} QR near you!" when the app opens within the nearby radius.
+Future<void> showNearbySpotLocalNotification({
+  required String spotId,
+  required String spotName,
+}) async {
+  if (kIsWeb || Firebase.apps.isEmpty) return;
+  final place = spotName.trim().isNotEmpty ? spotName.trim() : 'A tourist spot';
+  final title = '$place QR near you!';
+  const body =
+      'You\'re nearby. Find the official QR code at the spot and scan it to '
+      'check in.';
+
+  try {
+    await _ensureLocalNotificationsCore();
+    if (!_localNotificationsReady) return;
+
+    final android = AndroidNotificationDetails(
+      _androidNearbySpotChannel.id,
+      _androidNearbySpotChannel.name,
+      channelDescription: _androidNearbySpotChannel.description,
+      importance: Importance.high,
+      priority: Priority.high,
+      visibility: NotificationVisibility.public,
+      category: AndroidNotificationCategory.recommendation,
+      ticker: title,
+      styleInformation: BigTextStyleInformation(body, contentTitle: title),
+      icon: _kNotificationSmallIcon,
+      largeIcon: _kNotificationLargeIcon,
+      color: _kNotificationColor,
+    );
+    const ios = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: false,
+      presentSound: true,
+      presentBanner: true,
+      presentList: true,
+      interruptionLevel: InterruptionLevel.active,
+    );
+    await _localNotifications.show(
+      id: 2100000 + (spotId.hashCode.abs() % 99991),
+      title: title,
+      body: body,
+      notificationDetails: NotificationDetails(android: android, iOS: ios),
+    );
+  } catch (e, st) {
+    debugPrint('[Push] showNearbySpotLocalNotification: $e\n$st');
   }
 }
 
@@ -357,9 +425,10 @@ Future<bool> showEmailOtpLocalNotification(
       styleInformation: BigTextStyleInformation(
         bigText,
         contentTitle: 'ATMOS-TRS verification code',
-        summaryText: 'ATMOS-TRS',
       ),
-      icon: '@mipmap/ic_launcher',
+      icon: _kNotificationSmallIcon,
+      largeIcon: _kNotificationLargeIcon,
+      color: _kNotificationColor,
     );
     final ios = DarwinNotificationDetails(
       presentAlert: true,
@@ -474,9 +543,10 @@ Future<bool> showPasswordResetOtpLocalNotification(
       styleInformation: BigTextStyleInformation(
         bigText,
         contentTitle: 'ATMOS-TRS password reset',
-        summaryText: 'ATMOS-TRS',
       ),
-      icon: '@mipmap/ic_launcher',
+      icon: _kNotificationSmallIcon,
+      largeIcon: _kNotificationLargeIcon,
+      color: _kNotificationColor,
     );
     const ios = DarwinNotificationDetails(
       presentAlert: true,
@@ -553,9 +623,10 @@ Future<void> _showAnnouncementHeadsUpLocal({
     styleInformation: BigTextStyleInformation(
       bigBody.isEmpty ? trimmedTitle : bigBody,
       contentTitle: trimmedTitle,
-      summaryText: 'ATMOS-TRS',
     ),
-    icon: '@mipmap/ic_launcher',
+    icon: _kNotificationSmallIcon,
+    largeIcon: _kNotificationLargeIcon,
+    color: _kNotificationColor,
   );
   const ios = DarwinNotificationDetails(
     presentAlert: true,
@@ -639,7 +710,9 @@ Future<void> _showForegroundNotification(RemoteMessage message) async {
     channelDescription: 'Governor & tourism promos, events, and alerts',
     importance: Importance.high,
     priority: Priority.high,
-    icon: '@mipmap/ic_launcher',
+    icon: _kNotificationSmallIcon,
+    largeIcon: _kNotificationLargeIcon,
+    color: _kNotificationColor,
   );
   const details = NotificationDetails(android: android);
 

@@ -1,10 +1,15 @@
 import 'dart:async' show unawaited;
 
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
+import 'package:atmos_trs_system/models/tourist_group.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/qr_checkin_service.dart';
 import 'package:atmos_trs_system/services/qr_checkin_ui.dart';
+import 'package:atmos_trs_system/services/qr_location_prompt.dart';
+import 'package:atmos_trs_system/services/tourist_group_service.dart';
+import 'package:atmos_trs_system/widgets/laag_group_checkin_toggle.dart';
 import 'package:atmos_trs_system/widgets/party_demographic_fields.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 
@@ -13,9 +18,13 @@ class SpotCheckInScreen extends StatefulWidget {
   const SpotCheckInScreen({
     super.key,
     required this.spotInfo,
+    this.isDemoQr = false,
   });
 
   final SpotInfo spotInfo;
+
+  /// Dummy QR: skips the on-site GPS check.
+  final bool isDemoQr;
 
   @override
   State<SpotCheckInScreen> createState() => _SpotCheckInScreenState();
@@ -24,7 +33,7 @@ class SpotCheckInScreen extends StatefulWidget {
 class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
   static const Color _textDark = Color(0xFF111827);
   bool _submitting = false;
-  final _demoKey = GlobalKey<PartyDemographicFieldsState>();
+  var _demoKey = GlobalKey<PartyDemographicFieldsState>();
   PartyDemographicValue _demo = const PartyDemographicValue(
     partySize: 1,
     maleCount: 0,
@@ -32,6 +41,39 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
     filipinoCount: 1,
     foreignCount: 0,
   );
+  TouristGroup? _group;
+  bool _useGroup = true;
+
+  bool get _groupMode =>
+      _useGroup &&
+      _group != null &&
+      _group!.isLeader(FirebaseAuth.instance.currentUser?.uid ?? '');
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadGroup());
+  }
+
+  Future<void> _loadGroup() async {
+    final g = await TouristGroupService.myActiveGroup();
+    if (!mounted || g == null) return;
+    setState(() {
+      _group = g;
+      if (_groupMode) {
+        _demo = kNoCompanions;
+        _demoKey = GlobalKey<PartyDemographicFieldsState>();
+      }
+    });
+  }
+
+  void _setUseGroup(bool v) {
+    setState(() {
+      _useGroup = v;
+      _demo = _groupMode ? kNoCompanions : kSoloParty;
+      _demoKey = GlobalKey<PartyDemographicFieldsState>();
+    });
+  }
 
   void _clearSubmitting() {
     if (mounted && _submitting) {
@@ -65,17 +107,20 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
 
       final lat = s.latitude;
       final lng = s.longitude;
-      final hasCoords = lat != null &&
-          lng != null &&
-          lat.abs() > 1e-7 &&
-          lng.abs() > 1e-7;
-      if (hasCoords) {
-        final locationError =
-            await QRCheckInService.verifyProximityToTouristSpot(
-          latitude: lat,
-          longitude: lng,
+      final hasCoords =
+          lat != null && lng != null && lat.abs() > 1e-7 && lng.abs() > 1e-7;
+      if (hasCoords && !widget.isDemoQr) {
+        final ready = await ensureQrLocationReady(
+          context,
           spotLabel: s.spotName.isNotEmpty ? s.spotName : s.spotId,
         );
+        if (!ready || !mounted) return;
+        final locationError =
+            await QRCheckInService.verifyProximityToTouristSpot(
+              latitude: lat,
+              longitude: lng,
+              spotLabel: s.spotName.isNotEmpty ? s.spotName : s.spotId,
+            );
         if (!mounted) return;
         if (locationError != null) {
           showQRCheckInErrorDialog(context, locationError);
@@ -92,6 +137,10 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
         partySize: demo.partySize,
         femaleCount: demo.femaleCount,
         maleCount: demo.maleCount,
+        filipinoCount: demo.filipinoCount,
+        foreignCount: demo.foreignCount,
+        group: _groupMode ? _group : null,
+        isDemoQr: widget.isDemoQr,
         onBeforeDialog: _clearSubmitting,
       );
       if (ok && mounted) {
@@ -114,13 +163,13 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
   @override
   Widget build(BuildContext context) {
     final s = widget.spotInfo;
-    final title =
-        s.spotName.isNotEmpty ? s.spotName : s.spotId.replaceAll('_', ' ');
+    final title = s.spotName.isNotEmpty
+        ? s.spotName
+        : s.spotId.replaceAll('_', ' ');
     final barBg = AppTheme.cardBackground;
-    final barFg =
-        ThemeData.estimateBrightnessForColor(barBg) == Brightness.dark
-            ? Colors.white
-            : _textDark;
+    final barFg = ThemeData.estimateBrightnessForColor(barBg) == Brightness.dark
+        ? Colors.white
+        : _textDark;
     return Scaffold(
       backgroundColor: AppTheme.scaffoldBackground,
       appBar: AppBar(
@@ -151,9 +200,20 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _buildSpotHeader(s, title),
+                    if (_group != null) ...[
+                      const SizedBox(height: 16),
+                      LaagGroupCheckInToggle(
+                        group: _group!,
+                        isLeader: _group!.isLeader(
+                          FirebaseAuth.instance.currentUser?.uid ?? '',
+                        ),
+                        enabled: _useGroup,
+                        onChanged: _setUseGroup,
+                      ),
+                    ],
                     const SizedBox(height: 24),
                     Text(
-                      'Party size',
+                      _groupMode ? 'Companions without the app' : 'Party size',
                       style: TextStyle(
                         color: _textDark,
                         fontSize: 15,
@@ -162,8 +222,10 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Enter total guests, then gender and Filipino/Foreign. '
-                      'One side auto-fills the other. Include yourself.',
+                      _groupMode
+                          ? kCompanionsHelpText
+                          : 'Enter total guests, then gender and Filipino/Foreign. '
+                              'One side auto-fills the other. Include yourself.',
                       style: TextStyle(
                         color: AppTheme.unselectedMuted,
                         fontSize: 13,
@@ -172,11 +234,16 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
                     const SizedBox(height: 12),
                     PartyDemographicFields(
                       key: _demoKey,
-                      initialPartySize: 1,
-                      initialMale: 0,
-                      initialFemale: 1,
-                      initialFilipino: 1,
-                      initialForeign: 0,
+                      initialPartySize: _demo.partySize,
+                      initialMale: _demo.maleCount,
+                      initialFemale: _demo.femaleCount,
+                      initialFilipino: _demo.filipinoCount,
+                      initialForeign: _demo.foreignCount,
+                      minPartySize: _groupMode ? 0 : 1,
+                      partyLabel: _groupMode ? 'Companions' : 'Party size',
+                      partyHelperText: _groupMode
+                          ? 'People with you who don\'t have the app (0 if none)'
+                          : 'Total guests in this stay / visit',
                       onChanged: (v) => setState(() => _demo = v),
                     ),
                   ],

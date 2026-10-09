@@ -231,6 +231,8 @@ class UserDirectoryService {
     }
     final mun = (municipalityId ?? '').trim();
     try {
+      // Web SDK retries RESOURCE_EXHAUSTED (write quota) forever; never block
+      // the dashboard on this best-effort profile refresh.
       await _db.collection(collectionId).doc(uid).set({
         'firebaseUid': uid,
         'email': email.trim(),
@@ -241,7 +243,7 @@ class UserDirectoryService {
         'isVerified': true,
         'updatedAt': FieldValue.serverTimestamp(),
         'createdAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      }, SetOptions(merge: true)).timeout(const Duration(seconds: 8));
       return true;
     } catch (e) {
       debugPrint('UserDirectoryService.ensureStaffUserDoc: $e');

@@ -1,5 +1,7 @@
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/user_profile_storage.dart';
+import 'package:atmos_trs_system/data/featured_destinations.dart';
+import 'package:atmos_trs_system/data/misamis_occidental_display_spots.dart';
 import 'package:atmos_trs_system/models/spot_review.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -116,13 +118,37 @@ class SpotReviewService {
     });
   }
 
+  /// Canonical destination id, so legacy / featured / municipality aliases of the
+  /// same place compare equal. LGU desk visits (`lgu_*`) never alias a spot.
+  static String _canonicalSpotId(String spotId) {
+    final id = spotId.trim();
+    if (id.isEmpty || id.toLowerCase().startsWith('lgu_')) {
+      return id.toLowerCase();
+    }
+    final known = MisamisOccidentalDisplaySpots.findByAnyId(
+      id,
+      featuredDestinations: kFeaturedDestinations,
+    );
+    return (known?.id ?? id).trim().toLowerCase();
+  }
+
+  static bool _visitsInclude(List<VisitRecord> visits, String spotId) {
+    final target = spotId.trim().toLowerCase();
+    final canonicalTarget = _canonicalSpotId(spotId);
+    return visits.any((v) {
+      final id = v.spotId.trim().toLowerCase();
+      if (id.isEmpty) return false;
+      return id == target || _canonicalSpotId(id) == canonicalTarget;
+    });
+  }
+
   /// Whether the signed-in user checked in at [spotId] via QR.
   static Future<bool> hasCheckedInAtSpot(String spotId) async {
     if (spotId.trim().isEmpty) return false;
-    await UserActivityService.syncVisitedSpotsFromQrCheckins();
-    final visits = await UserActivityService.getVisitedSpots();
-    final target = spotId.trim().toLowerCase();
-    return visits.any((v) => v.spotId.trim().toLowerCase() == target);
+    final local = await UserActivityService.getVisitedSpots();
+    if (_visitsInclude(local, spotId)) return true;
+    final synced = await UserActivityService.syncVisitedSpotsFromQrCheckins();
+    return _visitsInclude(synced, spotId);
   }
 
   static Future<SpotReview?> getUserReview(String spotId) async {

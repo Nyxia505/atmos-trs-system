@@ -38,7 +38,7 @@ class DotReportEntityOption {
   }
 }
 
-/// Filters check-ins / stays for spot- or establishment-specific DOT forms.
+/// Filters check-ins for spot- or municipality-specific DOT forms.
 abstract final class DotReportEntityScope {
   static bool checkInMatchesSpot(
     Map<String, dynamic> checkIn, {
@@ -78,57 +78,12 @@ abstract final class DotReportEntityScope {
     ];
   }
 
-  static List<Map<String, dynamic>> filterStaysForEstablishment(
-    List<Map<String, dynamic>> stays, {
-    required String establishmentId,
-  }) {
-    final target = establishmentId.trim().toLowerCase();
-    if (target.isEmpty) return stays;
-    return [
-      for (final s in stays)
-        if ((s['establishmentId'] ?? '').toString().trim().toLowerCase() ==
-            target)
-          s,
-    ];
-  }
-
-  /// Keep stays in one LGU (provincial pickers may narrow first).
-  static List<Map<String, dynamic>> filterStaysForMunicipality(
-    List<Map<String, dynamic>> stays, {
-    required String municipalityId,
-  }) {
-    final mid = normalizeMunicipalityId(municipalityId);
-    if (mid.isEmpty) return stays;
-    final aliases = municipalityIdsForQuery(mid).map((e) => e.toLowerCase()).toSet();
-    final display = _displayName(mid).toLowerCase();
-    return [
-      for (final s in stays)
-        if (_stayInMunicipality(s, aliases, display)) s,
-    ];
-  }
-
   static String _displayName(String municipalityId) {
     final id = normalizeMunicipalityId(municipalityId);
     for (final m in getMisamisOccidentalMunicipalities()) {
       if (normalizeMunicipalityId(m.id) == id) return m.name;
     }
     return id;
-  }
-
-  static bool _stayInMunicipality(
-    Map<String, dynamic> s,
-    Set<String> aliases,
-    String displayName,
-  ) {
-    final id = normalizeMunicipalityId(s['municipalityId']?.toString());
-    if (id.isNotEmpty && aliases.contains(id)) return true;
-    final mun = (s['municipality'] ?? '').toString().trim().toLowerCase();
-    if (displayName.isNotEmpty && mun == displayName) return true;
-    if (mun.isNotEmpty) {
-      final fromName = normalizeMunicipalityId(getMunicipalityIdFromName(mun));
-      if (fromName.isNotEmpty && aliases.contains(fromName)) return true;
-    }
-    return false;
   }
 
   static List<Map<String, dynamic>> filterCheckInsForMunicipality(

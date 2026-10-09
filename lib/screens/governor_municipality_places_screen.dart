@@ -212,7 +212,7 @@ class GovernorMunicipalityPlacesScreen extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                'Approved AEs · confirmed stays feed DAE analytics',
+                'Approved AEs · monthly DOT registers feed DAE analytics',
                 style: GovernorDashboardTokens.body(size: 12.5),
               ),
               const SizedBox(height: 10),

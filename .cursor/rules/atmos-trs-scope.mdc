@@ -34,7 +34,7 @@ Canonical profile shape: `lib/services/user_directory_service.dart`, `lib/config
 
 ## Whole-app surfaces (edit when user asks; otherwise ask-first)
 
-Tourist UI, QR check-in, provincial chrome, Governor, Establishment dashboard, Auth/signup/OTP — see workflow doc. **Establishment QR / stay confirmation** exists in app code; extend when asked, following `docs/atmos-forms-and-establishment-qr.md` (deploy `firestore.rules` for client writes).
+Tourist UI, QR check-in, provincial chrome, Governor, Establishment dashboard, Auth/signup/OTP — see workflow doc. **Establishment DOT register (DAE-1B)** lives in `lib/widgets/ae_register/`, `ae_register_service`, `ae_register_calculator`; extend when asked, following `docs/atmos-forms-and-establishment-qr.md` (deploy `firestore.rules` for client writes).
 
 **Off limits unless user explicitly asks:** drive-by refactors; role→route changes without confirmation; second report/PDF/email stack; committing secrets; tourist VR/Governor polish as side effects of LGU/report tasks.
 
@@ -45,12 +45,12 @@ Tourist UI, QR check-in, provincial chrome, Governor, Establishment dashboard, A
 - **Every form** in Analytics gets a **filled preview** from current ATMOS data (best effort).
 - Cells we cannot derive yet are **gaps** (shown in preview / `ATMOS_GAPS`) — not a blank official file as the main CTA.
 - Primary downloads: **Excel** and **PDF** of the same filled content. Official empty template is advanced/secondary only.
-- One pipeline: aggregate → preview → Excel writer → PDF writer. When new fields or establishment stays land, extend fillers — do not invent parallel exporters.
-- **Attraction / LGU QR** → VAR-family. **Confirmed establishment stays** → DAE-family. Do not mix without labeling proxies.
+- One pipeline: aggregate → preview → Excel writer → PDF writer. When new register fields land, extend fillers — do not invent parallel exporters.
+- **Attraction / LGU QR** → VAR-family. **Hotel DOT registers** (`ae_monthly_reports`) → DAE-family. Do not mix without labeling proxies.
 
-## Establishment stay QR (locked product model)
+## Establishment DOT register (locked product model)
 
-Tourist scans establishment QR → **pending** stay request → staff on establishment dashboard enters fields + **confirms** → tourist gets **receipt/history** → DOT/DAE counts **confirmed** stays only. Same-day attraction check-in + hotel stay = **separate** records.
+Hotels log in and type the DAE-1B **Daily Register** (one row = one occupied room-night: room, residence, guests, F/M, checked-in day, rate, optional Charges A/B). Monthly Record, DAE-2 summary and By Country are **computed** (occupancy = rooms occupied ÷ rooms available; ALOS = guest-nights ÷ check-ins; guest-nights = guests × nights). Hotel submits the month → LGU / OPTACA / Governor read it. Columns adapt by establishment type (lodging first; schema is extensible). **Retired:** establishment QR stay requests, staff guest confirm, rooms tab, establishment reviews.
 
 ## Cross-module policy
 

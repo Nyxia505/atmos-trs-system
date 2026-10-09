@@ -1,57 +1,17 @@
 import 'package:flutter/material.dart';
 
-/// Capability packs for tourism establishments (drive confirm UI + DAE fields).
+/// Capability packs for tourism establishments (drive register columns + DAE fields).
 enum EstablishmentPack {
   lodging,
   dining,
   venue,
 }
 
-/// UI copy / labels for an [EstablishmentPack].
+/// UI labels for an [EstablishmentPack].
 class EstablishmentPackCopy {
-  const EstablishmentPackCopy({
-    required this.packLabel,
-    required this.opsNoun,
-    required this.queueTitle,
-    required this.queueHint,
-    required this.queueEmpty,
-    required this.recentTitle,
-    required this.recentEmpty,
-    required this.chartTitle,
-    required this.chartSubtitle,
-    required this.calendarSubtitle,
-    required this.qrHint,
-    required this.confirmTitle,
-    required this.confirmHint,
-    required this.confirmNonLodgingNote,
-    required this.confirmedSnack,
-    required this.rejectTitle,
-    required this.statusApproved,
-    required this.kpiGuestsLabel,
-    required this.kpiFourthLabel,
-    required this.kpiFourthIcon,
-  });
+  const EstablishmentPackCopy({required this.packLabel});
 
   final String packLabel;
-  final String opsNoun;
-  final String queueTitle;
-  final String queueHint;
-  final String queueEmpty;
-  final String recentTitle;
-  final String recentEmpty;
-  final String chartTitle;
-  final String chartSubtitle;
-  final String calendarSubtitle;
-  final String qrHint;
-  final String confirmTitle;
-  final String confirmHint;
-  final String confirmNonLodgingNote;
-  final String confirmedSnack;
-  final String rejectTitle;
-  final String statusApproved;
-  final String kpiGuestsLabel;
-  final String kpiFourthLabel;
-  final IconData kpiFourthIcon;
 }
 
 abstract final class EstablishmentCapability {
@@ -80,6 +40,16 @@ abstract final class EstablishmentCapability {
   }
 
   static bool showsRooms(String? category) => isLodging(category);
+
+  /// Categories that host MICE events by default (others opt in on Profile).
+  static const miceDefaultCategories = {'events place'};
+
+  static bool defaultHostsMice(String? category) =>
+      miceDefaultCategories.contains(_norm(category));
+
+  /// Establishment field `hostsMice`; unset → category default.
+  static bool hostsMice(String? category, Object? hostsMiceField) =>
+      hostsMiceField is bool ? hostsMiceField : defaultHostsMice(category);
 
   /// DOT-ish type/class label for DAE-3 (best-effort from signup category).
   static String typeClassFor(String? category) {
@@ -137,103 +107,11 @@ abstract final class EstablishmentCapability {
     }
   }
 
-  static EstablishmentPackCopy copyFor(String? category) {
-    switch (packFor(category)) {
-      case EstablishmentPack.lodging:
-        return const EstablishmentPackCopy(
-          packLabel: 'Lodging',
-          opsNoun: 'stay',
-          queueTitle: 'Stay requests',
-          queueHint:
-              'When a tourist scans your QR, the request appears here. '
-              'Enter guest counts (Male/Female, Filipino/Foreign) '
-              'plus nights/rooms, then confirm — they get a receipt.',
-          queueEmpty:
-              'No pending requests. Print your QR and ask a tourist to scan it.',
-          recentTitle: 'Recent confirmed',
-          recentEmpty: 'No confirmed stays yet.',
-          chartTitle: 'Bookings',
-          chartSubtitle: 'Confirmed stays per day',
-          calendarSubtitle: 'Days with confirmed stays',
-          qrHint:
-              'Tourists scan this to start a stay request for your front desk.',
-          confirmTitle: 'Confirm stay',
-          confirmHint:
-              'Guest counts feed DAE forms. Type one side — the other '
-              'auto-fills from party size.',
-          confirmNonLodgingNote: '',
-          confirmedSnack: 'Stay confirmed — tourist receipt updated.',
-          rejectTitle: 'Reject stay?',
-          statusApproved:
-              'Account approved. Use your QR for tourist stay confirmation.',
-          kpiGuestsLabel: 'Guests (month)',
-          kpiFourthLabel: 'Rooms occupied',
-          kpiFourthIcon: Icons.meeting_room_outlined,
-        );
-      case EstablishmentPack.dining:
-        return const EstablishmentPackCopy(
-          packLabel: 'Dining',
-          opsNoun: 'visit',
-          queueTitle: 'Guest visits',
-          queueHint:
-              'When a tourist scans your QR, the visit appears here. '
-              'Enter guest counts (Male/Female, Filipino/Foreign), '
-              'then confirm — they get a receipt.',
-          queueEmpty:
-              'No pending visits. Print your QR and ask guests to scan it.',
-          recentTitle: 'Recent confirmed',
-          recentEmpty: 'No confirmed visits yet.',
-          chartTitle: 'Visits',
-          chartSubtitle: 'Confirmed guest visits per day',
-          calendarSubtitle: 'Days with confirmed visits',
-          qrHint:
-              'Tourists scan this to start a visit request for your staff.',
-          confirmTitle: 'Confirm visit',
-          confirmHint:
-              'Guest counts feed DAE forms. Type one side — the other '
-              'auto-fills from party size.',
-          confirmNonLodgingNote:
-              'Dining visit: nights/rooms are not required.',
-          confirmedSnack: 'Visit confirmed — tourist receipt updated.',
-          rejectTitle: 'Reject visit?',
-          statusApproved:
-              'Account approved. Use your QR for guest visit confirmation.',
-          kpiGuestsLabel: 'Guests (month)',
-          kpiFourthLabel: 'Avg party size',
-          kpiFourthIcon: Icons.dining_outlined,
-        );
-      case EstablishmentPack.venue:
-        return const EstablishmentPackCopy(
-          packLabel: 'Venue',
-          opsNoun: 'visit',
-          queueTitle: 'Visitor check-ins',
-          queueHint:
-              'When a tourist scans your QR, the check-in appears here. '
-              'Enter visitor counts (Male/Female, Filipino/Foreign), '
-              'then confirm — they get a receipt.',
-          queueEmpty:
-              'No pending check-ins. Print your QR and ask visitors to scan it.',
-          recentTitle: 'Recent confirmed',
-          recentEmpty: 'No confirmed visits yet.',
-          chartTitle: 'Visits',
-          chartSubtitle: 'Confirmed visits per day',
-          calendarSubtitle: 'Days with confirmed visits',
-          qrHint:
-              'Tourists scan this to start a visitor check-in for your staff.',
-          confirmTitle: 'Confirm visit',
-          confirmHint:
-              'Visitor counts feed DAE forms. Type one side — the other '
-              'auto-fills from party size.',
-          confirmNonLodgingNote:
-              'Venue visit: nights/rooms are not required.',
-          confirmedSnack: 'Visit confirmed — tourist receipt updated.',
-          rejectTitle: 'Reject visit?',
-          statusApproved:
-              'Account approved. Use your QR for visitor check-in confirmation.',
-          kpiGuestsLabel: 'Visitors (month)',
-          kpiFourthLabel: 'Peak day',
-          kpiFourthIcon: Icons.trending_up_rounded,
-        );
-    }
-  }
+  static EstablishmentPackCopy copyFor(String? category) => EstablishmentPackCopy(
+        packLabel: switch (packFor(category)) {
+          EstablishmentPack.lodging => 'Lodging',
+          EstablishmentPack.dining => 'Dining',
+          EstablishmentPack.venue => 'Venue',
+        },
+      );
 }

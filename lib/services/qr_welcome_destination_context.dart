@@ -1,7 +1,6 @@
 import 'package:atmos_trs_system/data/featured_destinations.dart';
 import 'package:atmos_trs_system/data/tourist_spot_image_catalog.dart';
 import 'package:atmos_trs_system/data/tourist_spots_default_seed.dart';
-import 'package:atmos_trs_system/services/pending_establishment_stay_storage.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -17,7 +16,6 @@ class QrWelcomeDestinationContext {
     this.spotId,
     this.municipalityId,
     this.isMunicipalityScan = false,
-    this.isEstablishmentScan = false,
   });
 
   final String name;
@@ -27,7 +25,6 @@ class QrWelcomeDestinationContext {
   final String? spotId;
   final String? municipalityId;
   final bool isMunicipalityScan;
-  final bool isEstablishmentScan;
 }
 
 /// Resolves destination details from a pending QR scan.
@@ -60,32 +57,6 @@ class QrWelcomeDestinationResolver {
   }
 
   static Future<QrWelcomeDestinationContext?> resolveFromPendingScan() async {
-    final est = await PendingEstablishmentStayStorage.peek();
-    if (est != null) {
-      final name = est.businessName?.trim().isNotEmpty == true
-          ? est.businessName!.trim()
-          : 'Tourism establishment';
-      final municipality = est.municipality?.trim().isNotEmpty == true
-          ? est.municipality!.trim()
-          : 'Misamis Occidental';
-      return QrWelcomeDestinationContext(
-        name: name,
-        municipality: municipality,
-        description:
-            'Sign in or create a tourist account so front desk can confirm your stay '
-            'at $name. You will get a digital receipt after they confirm.',
-        imageUrl: TouristSpotImageCatalog.displayUrl(
-          preferred: null,
-          spotId: null,
-          municipalityId: est.municipalityId,
-          spotName: name,
-          category: 'Establishment',
-        ),
-        municipalityId: est.municipalityId,
-        isEstablishmentScan: true,
-      );
-    }
-
     final spot = await PendingSpotCheckInStorage.peek();
     final lgu = await PendingLguCheckInStorage.peek();
     if (spot == null && lgu == null) return null;

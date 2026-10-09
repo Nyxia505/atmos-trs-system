@@ -1,6 +1,7 @@
 import 'package:excel/excel.dart';
 
 import 'package:atmos_trs_system/utils/checkin_report_summary_csv.dart';
+import 'package:atmos_trs_system/utils/checkin_visitor_expansion.dart';
 
 /// Sex bucket for DOT VAR 2 columns (Male / Female / Total).
 class Var2SexCounts {
@@ -361,24 +362,30 @@ DotVar2VisitorRecordResult buildDotVar2VisitorRecordReport({
     namesBySpot[entry.spotId] = entry.name;
   }
 
-  var processed = 0;
-  for (final c in checkIns) {
-    if (isExcludedFromOfficialReports(c)) continue;
-    processed++;
+  final reportable =
+      checkIns.where((c) => !isExcludedFromOfficialReports(c)).toList();
+  final processed = reportable.length;
+  for (final entry in expandCheckInsToVisitors(reportable)) {
+    final c = entry.checkIn;
+    final unit = entry.unit;
     final key = _spotKeyFromCheckIn(c);
     final spotName = c['spot_name']?.toString().trim() ?? key;
     namesBySpot[key] = spotName.isNotEmpty ? spotName : key;
 
-    final profile = c['touristProfile'] is Map
-        ? Map<String, dynamic>.from(c['touristProfile'] as Map)
-        : null;
+    final profile = unit.hasProfile ? unit.profile : null;
     final sex = profile?['sex']?.toString();
     final hasSex = _normalizeSex(sex) != Var2Sex.unknown;
 
-    final residence = classifyVar2Residence(
-      profile: profile,
-      reportingMunicipalityName: municipalityName,
-    );
+    // Companions whose city / province is unknown: foreign column when the
+    // scan said foreign, otherwise Grand Total only (no "unknown PH" column).
+    final residence = (unit.isProxy && unit.residenceUnknown)
+        ? (profile?['localOrForeign'] == 'Foreign'
+            ? Var2ResidenceBucket.foreign
+            : Var2ResidenceBucket.profileMissing)
+        : classifyVar2Residence(
+            profile: profile,
+            reportingMunicipalityName: municipalityName,
+          );
 
     final existing = rowsBySpot[key] ??
         _emptyRow(
@@ -397,7 +404,7 @@ DotVar2VisitorRecordResult buildDotVar2VisitorRecordReport({
       grand = _applyVisit(
         current: grand,
         sex: sex,
-        countSexColumns: false,
+        countSexColumns: unit.isProxy && hasSex,
       );
     } else {
       final bucketUpdate = (Var2SexCounts current) => _applyVisit(
@@ -455,8 +462,11 @@ DotVar2VisitorRecordResult buildDotVar2VisitorRecordReport({
   }
 
   const note =
-      'Each QR check-in counts as one visitor. Sex and residence use tourist '
-      'profile at signup; missing profile counts in Grand Total only. '
+      'Each person counts as one visitor: the scanning tourist, every Laag with '
+      'Friends group member, and companions entered at scan. Sex and residence '
+      'use each tourist profile; companions use the counts entered at scan with '
+      'the party lead\'s residence (proxy). Missing profile or unknown residence '
+      'counts in Grand Total only. '
       'Total number must be recorded; sex and residence entries are optional.';
 
   final csv = buildVar2Csv(

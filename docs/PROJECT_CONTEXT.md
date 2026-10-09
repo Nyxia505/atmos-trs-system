@@ -10,7 +10,7 @@ Use this when starting on a **new Cursor account** or a cold chat. Prefer this +
 
 ## Purpose
 
-Register tourists, capture visits via QR, let LGU tourism offices analyze and export DOT forms, submit packages to OPTACA (provincial), and surface aggregates for the Governor. Accommodation establishments confirm hotel stays that feed DAE-family reports.
+Register tourists, capture visits via QR, let LGU tourism offices analyze and export DOT forms, submit packages to OPTACA (provincial), and surface aggregates for the Governor. Accommodation establishments fill a monthly DOT register (DAE-1B) that feeds DAE-family reports and LGU / OPTACA / Governor insights.
 
 ## Tech stack
 
@@ -25,7 +25,7 @@ Register tourists, capture visits via QR, let LGU tourism offices analyze and ex
 
 | Role | Keys | Primary UI |
 |------|------|------------|
-| Tourist | `tourist` | Home / QR / stays history |
+| Tourist | `tourist` | Home / QR / visit history |
 | LGU municipal tourism | `tourism` / `tourism_office` | `lib/screens/tourism_dashboard.dart` |
 | OPTACA / Provincial | `provincial_tourism` / `tourism_province` | Provincial dashboard + `optaca_report_review_panel` |
 | Governor | `governor` | Governor dashboard |
@@ -44,7 +44,7 @@ Canonical profile shape: `lib/services/user_directory_service.dart`, `lib/config
 | LGU | `tourism_dashboard.dart`, `lib/widgets/lgu_*`, LGU services |
 | DOT | `lib/utils/dot_*`, `dae3_*`, `provincial_report_*`, `checkin_report_*`, `lib/widgets/dot_*`, `supabase_report_*` |
 | LGU → OPTACA | `lgu_report_submission_service`, `lgu_submit_report_to_optaca_panel`, `optaca_report_review_panel` |
-| AE stays | `establishment_stay_service.dart`, establishment dashboard, stay pending screens |
+| AE register | `ae_register_service.dart`, `ae_register_calculator.dart`, `lib/widgets/ae_register/`, establishment dashboard, `ae_register_report_query.dart` (DAE) |
 | Seeds | `tools/seed_*.js`, `lgu_debug_data_*`, cleanup tools |
 
 ### Data flow
@@ -52,7 +52,7 @@ Canonical profile shape: `lib/services/user_directory_service.dart`, `lib/config
 ```
 Tourist signup
   → Attraction / LGU QR check-in          → VAR-family DOT forms
-  → Establishment QR (pending → confirm)  → DAE-family DOT forms
+Hotel DOT register (DAE-1B, monthly)     → DAE-family DOT forms + AE insights
   → LGU Analytics (preview + Excel/PDF)
   → optional OPTACA submission package
   → Governor aggregates
@@ -66,13 +66,14 @@ Tourist signup
 - **Do not** invent a second XLSX/PDF/email stack
 - Blank official template = advanced/secondary only
 
-### Establishment stay model (locked)
+### Establishment register model (locked)
 
-1. Tourist scans establishment QR → Firestore **pending** stay request  
-2. Staff on establishment dashboard enters fields → **Confirm** (or reject)  
-3. Tourist gets receipt / history  
-4. DOT/DAE counts **confirmed** only  
-5. Same calendar day: attraction check-in + hotel stay = **separate** records  
+1. Hotel logs in → Register tab = DAE-1B Daily Register (one row = one occupied room-night)  
+2. Monthly Record / DAE-2 / By Country are computed (occupancy = rooms occupied ÷ rooms available; ALOS = guest-nights ÷ check-ins)  
+3. Data: `ae_monthly_reports/{aeId}_{yyyy}_{mm}` header (saved totals) + `rows` subcollection; hotel submits the month  
+4. LGU / OPTACA see submitted / draft / missing per AE; Governor drills into Insights; DAE forms read registers (drafts flagged)  
+5. Retired: establishment QR stay requests, staff guest confirm, rooms tab, establishment reviews  
+6. Venues with “We host events (MICE)” on log events (Events tab) → `mice_monthly_reports` + `events` → CUS MICE form (CUS SUMMARY + one CUS BY EST per venue)  
 
 Deploy `firestore.rules` for client writes. Spec: `docs/atmos-forms-and-establishment-qr.md`.
 
@@ -85,15 +86,16 @@ Deploy `firestore.rules` for client writes. Spec: `docs/atmos-forms-and-establis
 - LGU dashboard: tourists, analytics, DOT export panels, debug seed UI
 - DOT filled preview + Excel + PDF pipeline (`dot_report_*`)
 - LGU → OPTACA submit panel + OPTACA review panel (extend; file attachments may still be incomplete)
-- Establishment stay QR slice in app (`establishment_stay_service`, pending UI, staff confirm on dashboard)
+- Establishment DOT register (DAE-1B) + Insights; LGU/OPTACA compliance table; DAE forms filled from registers
+- Hotel Reports tab (own DAE forms) + venue MICE log (Events tab) → CUS MICE preview / Excel / PDF; MICE status in the compliance table
 - Seed / cleanup tooling for demos (`seed_dashboard_analytics.js`, `seed_dummy_data.js`, etc.)
 
 ### Still evolving / typical next work
 
-- Richer DAE fill from **confirmed** stays (nights, rooms, AE-ID) vs attraction proxies
+- Register columns for non-lodging establishment types (schema is extensible; lodging done first)
 - PSA / DOT country–region mapping tables for cleaner VAR/DAE cells
 - OPTACA packages attaching the same generated Excel/PDF
-- MICE / event utilization forms (later)
+- Upload the CUS template to the Supabase “Report template” bucket (the app falls back to the bundled copy)
 - Deploy/verify Firestore rules + Functions wherever environments lag local code
 
 ### Demo / seed

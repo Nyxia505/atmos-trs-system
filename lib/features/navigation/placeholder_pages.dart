@@ -3,13 +3,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'dart:async';
 import 'dart:convert';
-import 'package:geolocator/geolocator.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
 import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart' show FirebaseAuth;
 import 'package:atmos_trs_system/config/app_theme.dart';
+import 'package:atmos_trs_system/models/tourist_group.dart';
+import 'package:atmos_trs_system/screens/laag_with_friends_screen.dart';
+import 'package:atmos_trs_system/services/tourist_group_service.dart';
 import 'package:atmos_trs_system/widgets/ui_skeleton.dart';
 import 'package:atmos_trs_system/config/app_theme_controller.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
@@ -18,20 +20,20 @@ import 'package:atmos_trs_system/config/vr_tour_config.dart';
 import 'package:atmos_trs_system/features/navigation/tourist_web_layout.dart';
 import 'package:atmos_trs_system/services/qr_checkin_ui.dart';
 import 'package:atmos_trs_system/services/qr_checkin_service.dart';
+import 'package:atmos_trs_system/services/qr_location_prompt.dart';
+import 'package:atmos_trs_system/services/nearby_spot_service.dart';
 import 'package:atmos_trs_system/services/qr_scan_demo_guard.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
-import 'package:atmos_trs_system/services/pending_establishment_stay_storage.dart';
-import 'package:atmos_trs_system/services/establishment_stay_service.dart';
 import 'package:atmos_trs_system/screens/spot_checkin_screen.dart';
 import 'package:atmos_trs_system/screens/lgu_checkin_screen.dart';
-import 'package:atmos_trs_system/screens/establishment_stay_pending_screen.dart';
 import 'package:atmos_trs_system/screens/event_detail_screen.dart';
 import 'package:atmos_trs_system/services/announcement_notification_sync.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:atmos_trs_system/services/notification_badge_notifier.dart';
 import 'package:atmos_trs_system/services/notification_firestore_service.dart';
-import 'package:atmos_trs_system/services/user_activity_service.dart' as activity;
+import 'package:atmos_trs_system/services/user_activity_service.dart'
+    as activity;
 import 'package:atmos_trs_system/models/notification_item.dart';
 import 'package:atmos_trs_system/config/beta_testing_config.dart';
 import 'package:atmos_trs_system/config/qr_scan_geofence_config.dart';
@@ -187,9 +189,7 @@ class VrTourPlaceholderPage extends StatelessWidget {
         title: 'Oroquieta City Plaza',
       );
     });
-    return const Scaffold(
-      body: Center(child: CircularProgressIndicator()),
-    );
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
   }
 }
 
@@ -247,8 +247,7 @@ class ScanTabPage extends StatefulWidget {
   State<ScanTabPage> createState() => _ScanTabPageState();
 }
 
-class _ScanTabPageState extends State<ScanTabPage>
-    with WidgetsBindingObserver {
+class _ScanTabPageState extends State<ScanTabPage> with WidgetsBindingObserver {
   static const String _kAllowedMunicipalityId = 'oroquieta';
 
   final MobileScannerController _controller = MobileScannerController(
@@ -260,6 +259,7 @@ class _ScanTabPageState extends State<ScanTabPage>
 
   /// Cooldown to avoid duplicate scans (e.g. same code detected many times in a few seconds).
   static const Duration _scanCooldown = Duration(seconds: 3);
+
   /// Same QR text is ignored for longer so one code never creates two records.
   static const Duration _sameCodeCooldown = Duration(seconds: 6);
   DateTime? _lastScanAt;
@@ -274,7 +274,7 @@ class _ScanTabPageState extends State<ScanTabPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _startCamera();
-    _warmLocationForScan();
+    unawaited(_warmLocationForScan());
   }
 
   @override
@@ -317,25 +317,15 @@ class _ScanTabPageState extends State<ScanTabPage>
     }
   }
 
+  /// Reads GPS while the camera starts so the scan itself doesn't wait for it.
   Future<void> _warmLocationForScan() async {
+    if (QrScanLocationGuard.isBypassed || !QrScanLocationGuard.isPhone) return;
     try {
-      final enabled = await Geolocator.isLocationServiceEnabled();
-      if (!enabled) return;
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        return;
-      }
-      await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.medium,
-          timeLimit: Duration(seconds: 8),
-        ),
-      );
-    } catch (_) {}
+      if (await QrScanLocationGuard.checkReadiness() != null) return;
+    } catch (_) {
+      return;
+    }
+    await QrScanLocationGuard.prewarm();
   }
 
   Future<void> _startCamera({bool restart = false}) async {
@@ -402,12 +392,20 @@ class _ScanTabPageState extends State<ScanTabPage>
         return;
       }
 
-      final establishmentPayload = parseEstablishmentQrPayload(raw);
-      if (establishmentPayload != null) {
-        if (mounted) {
-          setState(() => _processingLabel = 'Creating stay request…');
-        }
-        await _handleEstablishmentQrScanned(establishmentPayload);
+      final groupQr = TouristGroup.parseQrPayload(raw);
+      if (groupQr != null) {
+        await _handleGroupQrScanned(groupQr.groupId, groupQr.code);
+        return;
+      }
+
+      if (isScreenPreviewQr(raw)) {
+        if (mounted) _showError(QrScanMessages.screenQr);
+        return;
+      }
+      final isDemoQr = isDemoQrPayload(raw);
+
+      if (parseEstablishmentQrPayload(raw) != null) {
+        if (mounted) _showError(kRetiredEstablishmentQrMessage);
         return;
       }
 
@@ -416,7 +414,7 @@ class _ScanTabPageState extends State<ScanTabPage>
         if (mounted) {
           setState(() => _processingLabel = 'Saving check-in…');
         }
-        await _handleLguQrScanned(lguPayload);
+        await _handleLguQrScanned(lguPayload, isDemoQr: isDemoQr);
         return;
       }
 
@@ -451,17 +449,13 @@ class _ScanTabPageState extends State<ScanTabPage>
       }
 
       if (spotId.isEmpty || !_looksLikeSpotId(spotId)) {
-        if (mounted) {
-          _showError(
-            'This is not an ATMOS check-in QR. Scan the QR code posted at a '
-            'tourist spot, LGU office, or accommodation establishment.',
-          );
-        }
+        if (mounted) _showError(QrScanMessages.notCheckInQr);
         return;
       }
 
-      // Temporary: allow check-ins in Oroquieta City only (disabled in beta).
-      if (!BetaTestingGuard.bypassValidation &&
+      if (kQrCheckInOroquietaOnly &&
+          !BetaTestingGuard.bypassValidation &&
+          !isDemoQr &&
           municipalityIdFromQr != null &&
           municipalityIdFromQr!.trim().isNotEmpty &&
           normalizeMunicipalityId(municipalityIdFromQr!) !=
@@ -489,6 +483,7 @@ class _ScanTabPageState extends State<ScanTabPage>
           municipalityIdFromQr ?? _kAllowedMunicipalityId,
         );
         if (!BetaTestingGuard.bypassValidation &&
+            !isDemoQr &&
             mid != _kAllowedMunicipalityId) {
           if (mounted) {
             _showError(
@@ -502,10 +497,10 @@ class _ScanTabPageState extends State<ScanTabPage>
           spotName: spotId.replaceAll('_', ' ').trim(),
           municipality: BetaTestingGuard.isActive
               ? BetaTestingGuard.dashboardMunicipalityName
-              : 'Oroquieta City',
+              : _municipalityDisplayName(mid),
           municipalityId: BetaTestingGuard.isActive
               ? BetaTestingGuard.dashboardMunicipalityId
-              : _kAllowedMunicipalityId,
+              : mid,
         );
       }
       // Continue existing spot flow below — inlined continuation via goto pattern.
@@ -515,6 +510,7 @@ class _ScanTabPageState extends State<ScanTabPage>
         qrEmbedLat: qrEmbedLat,
         qrEmbedLng: qrEmbedLng,
         spotId: spotId,
+        isDemoQr: isDemoQr,
       );
     } catch (e, st) {
       debugPrint('[Scan] payload failed: $e\n$st');
@@ -529,12 +525,31 @@ class _ScanTabPageState extends State<ScanTabPage>
 
   bool _looksLikeSpotId(String id) => _spotIdPattern.hasMatch(id.trim());
 
+  /// Re-reads a device-cached spot from Firestore and returns it only when the
+  /// LGU has since moved its coordinates, so a stale copy never blocks a scan.
+  Future<SpotInfo?> _freshSpotIfMoved(SpotInfo spot) async {
+    final oldLat = spot.latitude;
+    final oldLng = spot.longitude;
+    if (!spot.fromCache || oldLat == null || oldLng == null) return null;
+    final fresh = await QRCheckInService.getSpotById(
+      spot.spotId,
+      preferCache: false,
+    ).timeout(const Duration(seconds: 8), onTimeout: () => null);
+    final lat = fresh?.latitude;
+    final lng = fresh?.longitude;
+    if (fresh == null || lat == null || lng == null) return null;
+    final moved =
+        QrScanLocationGuard.distanceMeters(lat, lng, oldLat, oldLng) > 1;
+    return moved ? fresh : null;
+  }
+
   Future<void> _finishSpotCheckInFromScan({
     required SpotInfo spot,
     required String spotId,
     String? municipalityIdFromQr,
     double? qrEmbedLat,
     double? qrEmbedLng,
+    bool isDemoQr = false,
   }) async {
     final municipalityId = spot.municipalityId;
     final spotName = spot.spotName;
@@ -548,8 +563,9 @@ class _ScanTabPageState extends State<ScanTabPage>
       return;
     }
 
-    final demoSpotMsg =
-        QrScanDemoGuard.municipalityRestrictionMessage(municipalityId);
+    final demoSpotMsg = QrScanDemoGuard.municipalityRestrictionMessage(
+      municipalityId,
+    );
     if (demoSpotMsg != null) {
       if (mounted) _showDemoRestrictionSnack(demoSpotMsg);
       return;
@@ -557,32 +573,63 @@ class _ScanTabPageState extends State<ScanTabPage>
 
     final slat = spot.latitude;
     final slng = spot.longitude;
-    final hasCoords = slat != null &&
-        slng != null &&
-        slat.abs() > 1e-7 &&
-        slng.abs() > 1e-7;
+    final hasCoords =
+        slat != null && slng != null && slat.abs() > 1e-7 && slng.abs() > 1e-7;
     final uid = await QRCheckInService.getCurrentUserId();
     final isGuestSpotScan = uid == null || uid.isEmpty;
 
-    if (hasCoords && !isGuestSpotScan && !BetaTestingGuard.bypassValidation) {
-      final qrMismatchError = QRCheckInService.verifyQrCoordinatesMatchFirestore(
-        qrLat: qrEmbedLat,
-        qrLng: qrEmbedLng,
-        firestoreLat: slat,
-        firestoreLng: slng,
-      );
+    if (hasCoords &&
+        !isGuestSpotScan &&
+        !isDemoQr &&
+        !BetaTestingGuard.bypassValidation) {
+      final qrMismatchError =
+          QRCheckInService.verifyQrCoordinatesMatchFirestore(
+            qrLat: qrEmbedLat,
+            qrLng: qrEmbedLng,
+            firestoreLat: slat,
+            firestoreLng: slng,
+          );
       if (qrMismatchError != null) {
+        final fresh = await _freshSpotIfMoved(spot);
+        if (fresh != null) {
+          return _finishSpotCheckInFromScan(
+            spot: fresh,
+            spotId: spotId,
+            municipalityIdFromQr: municipalityIdFromQr,
+            qrEmbedLat: qrEmbedLat,
+            qrEmbedLng: qrEmbedLng,
+            isDemoQr: isDemoQr,
+          );
+        }
         if (mounted) _showError(qrMismatchError);
         return;
       }
 
+      final label = spotName.isNotEmpty ? spotName : spotId;
+      if (!mounted) return;
+      if (!await ensureQrLocationReady(context, spotLabel: label)) return;
+      if (mounted) {
+        setState(() => _processingLabel = 'Checking your location…');
+      }
+
       final spotLocationError =
           await QRCheckInService.verifyProximityToTouristSpot(
-        latitude: slat,
-        longitude: slng,
-        spotLabel: spotName.isNotEmpty ? spotName : spotId,
-      );
+            latitude: slat,
+            longitude: slng,
+            spotLabel: spotName.isNotEmpty ? spotName : spotId,
+          );
       if (spotLocationError != null) {
+        final fresh = await _freshSpotIfMoved(spot);
+        if (fresh != null) {
+          return _finishSpotCheckInFromScan(
+            spot: fresh,
+            spotId: spotId,
+            municipalityIdFromQr: municipalityIdFromQr,
+            qrEmbedLat: qrEmbedLat,
+            qrEmbedLng: qrEmbedLng,
+            isDemoQr: isDemoQr,
+          );
+        }
         if (mounted) _showError(spotLocationError);
         return;
       }
@@ -601,19 +648,53 @@ class _ScanTabPageState extends State<ScanTabPage>
         spotId: routed.spotId,
         spotName: routed.spotName,
         municipality: routed.municipality,
+        isDemoQr: isDemoQr,
       );
       if (!mounted) return;
-      Navigator.of(context, rootNavigator: true)
-          .pushReplacementNamed('/qr-welcome');
+      Navigator.of(
+        context,
+        rootNavigator: true,
+      ).pushReplacementNamed('/qr-welcome');
       return;
     }
 
     if (!mounted) return;
-    await _pushResult<void>(SpotCheckInScreen(spotInfo: spot));
+    await _pushResult<void>(
+      SpotCheckInScreen(spotInfo: spot, isDemoQr: isDemoQr),
+    );
   }
 
   void _showError(String message) {
     showQRCheckInErrorDialog(context, message);
+  }
+
+  /// Friend's "Laag with Friends" group QR → confirm and join.
+  Future<void> _handleGroupQrScanned(String groupId, String code) async {
+    if (FirebaseAuth.instance.currentUser == null) {
+      if (mounted) {
+        _showError('Please log in first, then scan your friend\'s group QR.');
+      }
+      return;
+    }
+    if (mounted) setState(() => _processingLabel = 'Finding group…');
+    final group = await TouristGroupService.findByQr(groupId, code);
+    if (!mounted) return;
+    if (group == null || !group.isActive) {
+      _showError(
+        'This group QR has ended or is not valid. Ask your friend to show '
+        'their current group QR.',
+      );
+      return;
+    }
+    _clearProcessing();
+    await confirmJoinTouristGroup(context, group);
+  }
+
+  String _municipalityDisplayName(String municipalityId) {
+    for (final m in getMisamisOccidentalMunicipalities()) {
+      if (m.id == municipalityId) return m.name;
+    }
+    return municipalityId;
   }
 
   void _showDemoRestrictionSnack(String message) {
@@ -628,158 +709,15 @@ class _ScanTabPageState extends State<ScanTabPage>
     );
   }
 
-  Future<void> _handleEstablishmentQrScanned(
-    EstablishmentQrPayload payload,
-  ) async {
-    final eid = payload.establishmentId.trim();
-    if (eid.isEmpty) {
-      if (mounted) _showError('Invalid establishment QR.');
-      return;
-    }
-
-    debugPrint('[Scan] establishment QR id=$eid');
-
-    // Stay create requires Firebase Auth (not SessionStorage-only).
-    final authUid = FirebaseAuth.instance.currentUser?.uid;
-    final signedIn = authUid != null && authUid.isNotEmpty;
-
-    if (mounted) {
-      setState(() => _processingLabel = 'Opening establishment…');
-    }
-    final estFuture = EstablishmentStayService.loadEstablishment(eid)
-        .timeout(const Duration(seconds: 10), onTimeout: () => null);
-    final existingFuture = signedIn
-        ? EstablishmentStayService.findTodaysStayForTourist(
-            touristId: authUid,
-            establishmentId: eid,
-          )
-        : Future<EstablishmentStayRequest?>.value(null);
-    final est = await estFuture;
-    final businessName = (est?['businessName'] ??
-            est?['name'] ??
-            payload.businessName ??
-            'Establishment')
-        .toString();
-    final municipalityId = (est?['municipalityId'] ??
-            payload.municipalityId ??
-            '')
-        .toString();
-    final municipality = (est?['municipality'] ?? '').toString();
-
-    if (est == null) {
-      debugPrint('[Scan] establishment doc missing for $eid — using QR hints');
-    }
-
-    if (!signedIn) {
-      await PendingSpotCheckInStorage.clear();
-      await PendingLguCheckInStorage.clear();
-      await PendingEstablishmentStayStorage.save(
-        establishmentId: eid,
-        municipalityId: municipalityId.isEmpty ? null : municipalityId,
-        businessName: businessName,
-        municipality: municipality.isEmpty ? null : municipality,
-      );
-      if (!mounted) return;
-      Navigator.of(context, rootNavigator: true)
-          .pushReplacementNamed('/qr-welcome');
-      return;
-    }
-
-    try {
-      if (mounted) {
-        setState(() => _processingLabel = "Checking today's bookings…");
-      }
-      final existing = await existingFuture;
-
-      var bookAgain = true;
-      if (existing != null && mounted) {
-        bookAgain = await _confirmBookAgainToday(
-              businessName: businessName,
-              existing: existing,
-            ) ??
-            false;
-        if (!bookAgain) {
-          await _openExistingEstablishmentStay(existing);
-          return;
-        }
-      }
-
-      if (mounted) {
-        setState(() => _processingLabel = 'Sending stay request…');
-      }
-      final stay = await EstablishmentStayService.createPendingStay(
-        establishmentId: eid,
-        municipalityId: municipalityId.isEmpty ? null : municipalityId,
-        businessNameHint: businessName,
-        municipalityHint: municipality.isEmpty ? null : municipality,
-        preloadedEstablishment: est,
-      );
-      if (!mounted) return;
-      debugPrint(
-        '[Scan] stay pending ${stay.id} for AE $eid — opening wait screen',
-      );
-      // Await push so _isProcessing stays true (blocks camera re-detect).
-      await _pushResult<void>(
-        EstablishmentStayPendingScreen(stayId: stay.id),
-      );
-    } catch (e) {
-      debugPrint('[Scan] createPendingStay failed: $e');
-      if (mounted) _showError(friendlyQrScanError(e));
-    }
-  }
-
-  /// Same-day AE rescan: null = dismissed, false = Not now, true = Book again.
-  Future<bool?> _confirmBookAgainToday({
-    required String businessName,
-    required EstablishmentStayRequest existing,
+  Future<void> _handleLguQrScanned(
+    LguQrPayload payload, {
+    bool isDemoQr = false,
   }) async {
-    final statusLine = existing.isConfirmed
-        ? 'Your stay was already confirmed today.'
-        : 'You already have a pending stay request today.';
-    return showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Already booked today'),
-        content: Text(
-          'You already booked with $businessName for today.\n\n'
-          '$statusLine\n\n'
-          'Book again for another transaction?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Not now'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(
-              backgroundColor: AppTheme.brandOrange,
-            ),
-            child: const Text('Book again'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _openExistingEstablishmentStay(
-    EstablishmentStayRequest existing,
-  ) async {
-    if (!mounted) return;
-    if (existing.isConfirmed) {
-      await _pushResult<void>(EstablishmentStayReceiptScreen(stay: existing));
-    } else {
-      await _pushResult<void>(
-        EstablishmentStayPendingScreen(stayId: existing.id),
-      );
-    }
-  }
-
-  Future<void> _handleLguQrScanned(LguQrPayload payload) async {
     final municipalityId = payload.municipalityId;
 
-    if (!BetaTestingGuard.bypassValidation &&
+    if (kQrCheckInOroquietaOnly &&
+        !BetaTestingGuard.bypassValidation &&
+        !isDemoQr &&
         normalizeMunicipalityId(municipalityId) != _kAllowedMunicipalityId) {
       if (mounted) {
         _showError(
@@ -791,8 +729,9 @@ class _ScanTabPageState extends State<ScanTabPage>
       return;
     }
 
-    final demoLguMsg =
-        QrScanDemoGuard.municipalityRestrictionMessage(municipalityId);
+    final demoLguMsg = QrScanDemoGuard.municipalityRestrictionMessage(
+      municipalityId,
+    );
     if (demoLguMsg != null) {
       if (mounted) _showDemoRestrictionSnack(demoLguMsg);
       _clearProcessing();
@@ -830,13 +769,19 @@ class _ScanTabPageState extends State<ScanTabPage>
 
     final uid = await QRCheckInService.getCurrentUserId();
     final isGuestScan = uid == null || uid.isEmpty;
-    // Registration flow: guests may scan on any device without GPS.
-    // Logged-in users still need on-site GPS on mobile for a real check-in.
-    if (!isGuestScan && !BetaTestingGuard.bypassValidation) {
+    // Guests register from anywhere; their location is checked after sign-up
+    // (PendingCheckinCompletionService). Logged-in users are checked now.
+    if (!isGuestScan && !isDemoQr && !BetaTestingGuard.bypassValidation) {
+      if (!mounted) return;
+      if (!await ensureQrLocationReady(context, spotLabel: displayName)) {
+        _clearProcessing();
+        return;
+      }
       final lguLocationError = await QrScanLocationGuard.verifyNearAnchor(
         anchorLat: anchorLat,
         anchorLng: anchorLng,
         maxDistanceMeters: maxDistanceMeters,
+        spotLabel: displayName,
       );
       if (lguLocationError != null) {
         if (mounted) _showError(lguLocationError);
@@ -854,6 +799,7 @@ class _ScanTabPageState extends State<ScanTabPage>
         LguCheckInScreen(
           municipalityId: routedLguId,
           displayName: routedLguName,
+          isDemoQr: isDemoQr,
         ),
       );
       return;
@@ -863,10 +809,16 @@ class _ScanTabPageState extends State<ScanTabPage>
     await PendingLguCheckInStorage.save(
       municipalityId: routedLguId,
       displayName: routedLguName,
+      anchorLat: payload.hasEmbeddedAnchor ? payload.anchorLat : null,
+      anchorLng: payload.hasEmbeddedAnchor ? payload.anchorLng : null,
+      isDemoQr: isDemoQr,
     );
 
     if (!mounted) return;
-    Navigator.of(context, rootNavigator: true).pushReplacementNamed('/qr-welcome');
+    Navigator.of(
+      context,
+      rootNavigator: true,
+    ).pushReplacementNamed('/qr-welcome');
   }
 
   /// Parses JSON tourist QR payload. Returns tourist_id if type is "tourist", else null.
@@ -905,7 +857,9 @@ class _ScanTabPageState extends State<ScanTabPage>
       final mobile = data['mobile'] as String? ?? '';
       final country = data['country'] as String? ?? '';
       final city = data['city'] as String? ?? '';
-      String fullName = '$firstName ${middleName != null && middleName.isNotEmpty ? '${middleName[0]}.' : ''} $lastName'.trim();
+      String fullName =
+          '$firstName ${middleName != null && middleName.isNotEmpty ? '${middleName[0]}.' : ''} $lastName'
+              .trim();
       if (fullName.isEmpty) fullName = email.isNotEmpty ? email : 'Unknown';
       showTouristDialog<void>(
         context: context,
@@ -916,10 +870,22 @@ class _ScanTabPageState extends State<ScanTabPage>
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('$fullName', style: const TextStyle(fontWeight: FontWeight.bold)),
-                if (email.isNotEmpty) ...[const SizedBox(height: 4), Text(email, style: TextStyle(color: Colors.grey.shade700))],
-                if (mobile.isNotEmpty) ...[const SizedBox(height: 2), Text(mobile)],
-                if (city.isNotEmpty || country.isNotEmpty) ...[const SizedBox(height: 2), Text('${city.isNotEmpty ? '$city, ' : ''}$country')],
+                Text(
+                  '$fullName',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                if (email.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(email, style: TextStyle(color: Colors.grey.shade700)),
+                ],
+                if (mobile.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(mobile),
+                ],
+                if (city.isNotEmpty || country.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text('${city.isNotEmpty ? '$city, ' : ''}$country'),
+                ],
               ],
             ),
           ),
@@ -953,7 +919,10 @@ class _ScanTabPageState extends State<ScanTabPage>
                     children: [
                       if (widget.guestMode)
                         IconButton(
-                          icon: const Icon(Icons.arrow_back_rounded, color: Color(0xFF111827)),
+                          icon: const Icon(
+                            Icons.arrow_back_rounded,
+                            color: Color(0xFF111827),
+                          ),
                           onPressed: () => Navigator.of(context).pop(),
                           tooltip: 'Back',
                         ),
@@ -973,7 +942,9 @@ class _ScanTabPageState extends State<ScanTabPage>
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
-                          widget.guestMode ? 'Scan LGU or spot QR' : 'QR Check-in',
+                          widget.guestMode
+                              ? 'Scan LGU or spot QR'
+                              : 'QR Check-in',
                           style: const TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,
@@ -988,14 +959,17 @@ class _ScanTabPageState extends State<ScanTabPage>
             ),
             Expanded(
               child: ClipRRect(
-                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
+                borderRadius: const BorderRadius.vertical(
+                  bottom: Radius.circular(16),
+                ),
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
                     MobileScanner(
                       controller: _controller,
                       onDetect: _onDetect,
-                      errorBuilder: (context, error) => _buildCameraError(error),
+                      errorBuilder: (context, error) =>
+                          _buildCameraError(error),
                     ),
                     Center(
                       child: Container(
@@ -1018,7 +992,9 @@ class _ScanTabPageState extends State<ScanTabPage>
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              CircularProgressIndicator(color: AppTheme.primary),
+                              CircularProgressIndicator(
+                                color: AppTheme.primary,
+                              ),
                               const SizedBox(height: 16),
                               Text(
                                 _processingLabel,
@@ -1040,16 +1016,19 @@ class _ScanTabPageState extends State<ScanTabPage>
               child: Text(
                 widget.guestMode
                     ? 'Scan a municipality QR (e.g. Oroquieta) or a spot QR. '
-                        'You will register or sign in, then finish check-in.'
+                          'You will register or sign in, then finish check-in.'
                     : QrScanDemoGuard.isDemoActive
                     ? 'Demo: use Oroquieta City spot or LGU QR (camera or laptop webcam).'
+                    : NearbySpotService.nearby.firstOrNull?.spot.name
+                              .trim()
+                              .isNotEmpty ==
+                          true
+                    ? 'You\'re near ${NearbySpotService.nearby.first.spot.name.trim()}. '
+                          'Scan its official QR code to check in.'
                     : 'Align the QR inside the frame to check in. '
-                        'Stay at the tourist spot with Location on — '
-                        'photos or prints scanned from far away will not work.',
-                style: TextStyle(
-                  color: AppTheme.unselectedMuted,
-                  fontSize: 14,
-                ),
+                          'Keep Location on — check-in works only at the '
+                          'tourist spot.',
+                style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 14),
                 textAlign: TextAlign.center,
               ),
             ),
@@ -1060,23 +1039,24 @@ class _ScanTabPageState extends State<ScanTabPage>
   }
 
   Widget _buildCameraError(MobileScannerException error) {
-    final isPermission = error.errorCode == MobileScannerErrorCode.permissionDenied;
+    final isPermission =
+        error.errorCode == MobileScannerErrorCode.permissionDenied;
     final isUnsupported = error.errorCode == MobileScannerErrorCode.unsupported;
     final title = isPermission
         ? 'Camera permission required'
         : isUnsupported
-            ? 'Camera not available'
-            : 'Camera could not start';
+        ? 'Camera not available'
+        : 'Camera could not start';
     final body = isPermission
         ? (kIsWeb
-            ? 'Allow camera access in your browser (tap the camera icon in the '
-                'address bar), then tap Try again.'
-            : 'Allow camera access for ATMOS in your phone Settings, then tap '
-                'Try again.')
+              ? 'Allow camera access in your browser (tap the camera icon in the '
+                    'address bar), then tap Try again.'
+              : 'Allow camera access for ATMOS in your phone Settings, then tap '
+                    'Try again.')
         : isUnsupported
-            ? 'This device or browser has no usable camera. Try another device, '
-                'or scan the QR with your phone camera app.'
-            : 'Close other apps that may be using the camera, then tap Try again.';
+        ? 'This device or browser has no usable camera. Try another device, '
+              'or scan the QR with your phone camera app.'
+        : 'Close other apps that may be using the camera, then tap Try again.';
     return Container(
       color: AppTheme.scaffoldBackground,
       child: Center(
@@ -1114,7 +1094,10 @@ class _ScanTabPageState extends State<ScanTabPage>
                 style: FilledButton.styleFrom(
                   backgroundColor: AppTheme.primary,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 14,
+                  ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(24),
                   ),
@@ -1224,6 +1207,58 @@ IconData _filterIcon(_AlertsFilter f) {
 class AlertsTabPage extends StatefulWidget {
   const AlertsTabPage({super.key});
 
+  /// Last loaded list, kept across rebuilds (web remounts the tab on every
+  /// switch) so reopening the tab paints instantly while it refreshes quietly.
+  static String? _cacheUid;
+  static List<NotificationItem>? _cache;
+  static String? _inflightUid;
+  static Future<List<NotificationItem>>? _inflight;
+
+  static List<NotificationItem>? _cachedFor(String? uid) =>
+      uid != null && uid == _cacheUid ? _cache : null;
+
+  static void _remember(String? uid, List<NotificationItem> items) {
+    if (uid == null || uid.isEmpty) return;
+    _cacheUid = uid;
+    _cache = List<NotificationItem>.from(items);
+  }
+
+  /// Single shared fetch so a prefetch and the tab opening do not both hit
+  /// Firestore.
+  static Future<List<NotificationItem>> _fetch(String? uid) {
+    final running = _inflight;
+    if (running != null && _inflightUid == uid) return running;
+    final future = _runFetch(uid);
+    _inflightUid = uid;
+    _inflight = future;
+    return future;
+  }
+
+  static Future<List<NotificationItem>> _runFetch(String? uid) async {
+    try {
+      final list = await AnnouncementNotificationSync.loadAlertItems(
+        userId: uid,
+      );
+      _remember(uid, list);
+      return list;
+    } finally {
+      _inflight = null;
+      _inflightUid = null;
+    }
+  }
+
+  /// Warms the notifications list in the background after sign-in.
+  static Future<void> prefetch() async {
+    try {
+      final uid =
+          AuthConfig.currentUserUid ?? await SessionStorage.getStoredUser();
+      if (uid == null || uid.isEmpty) return;
+      await _fetch(uid);
+    } catch (e) {
+      debugPrint('AlertsTabPage.prefetch: $e');
+    }
+  }
+
   @override
   State<AlertsTabPage> createState() => _AlertsTabPageState();
 }
@@ -1237,11 +1272,20 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
   Timer? _refreshTimer;
   bool _tabVisible = true;
   bool _quietLoadInFlight = false;
+  String? _itemsUid;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    final uid = AuthConfig.currentUserUid;
+    final cached = AlertsTabPage._cachedFor(uid);
+    if (cached != null) {
+      _items = List<NotificationItem>.from(cached);
+      _itemsUid = uid;
+      _load(quiet: true);
+    } else {
+      _load();
+    }
     _refreshTimer = Timer.periodic(const Duration(seconds: 20), (_) {
       if (!mounted || !_tabVisible) return;
       _load(quiet: true);
@@ -1261,6 +1305,7 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    if (_errorMessage == null) AlertsTabPage._remember(_itemsUid, _items);
     super.dispose();
   }
 
@@ -1278,7 +1323,10 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
     return list.toSet();
   }
 
-  Future<void> _persistDismissedAnnouncementIds(String uid, Set<String> ids) async {
+  Future<void> _persistDismissedAnnouncementIds(
+    String uid,
+    Set<String> ids,
+  ) async {
     if (uid.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
     final sorted = ids.toList()..sort();
@@ -1326,13 +1374,12 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
     }
     try {
       final uid = await _resolveUid();
-      final list = await AnnouncementNotificationSync.loadAlertItems(
-        userId: uid,
-      );
-      await NotificationBadgeNotifier.instance.refresh(userId: uid);
+      final list = await AlertsTabPage._fetch(uid);
+      unawaited(NotificationBadgeNotifier.instance.refresh(userId: uid));
       if (mounted) {
         setState(() {
           _items = list;
+          _itemsUid = uid;
           _loading = false;
           _errorMessage = null;
         });
@@ -1402,8 +1449,7 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
   static const Color _kNotifMuted = Color(0xFF6B7280);
 
   Widget _buildNotificationsHeader(BuildContext context) {
-    final showActions =
-        !_loading && _errorMessage == null && _items.isNotEmpty;
+    final showActions = !_loading && _errorMessage == null && _items.isNotEmpty;
     final accent = AppTheme.primary;
     final onHeader = AppTheme.onPrimary;
     final topInset = MediaQuery.paddingOf(context).top;
@@ -1438,9 +1484,7 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
                 decoration: BoxDecoration(
                   color: onHeader.withValues(alpha: 0.14),
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: onHeader.withValues(alpha: 0.45),
-                  ),
+                  border: Border.all(color: onHeader.withValues(alpha: 0.45)),
                 ),
                 child: Icon(
                   Icons.notifications_active_rounded,
@@ -1523,9 +1567,7 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
             decoration: BoxDecoration(
               color: onHeader.withValues(alpha: 0.14),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: onHeader.withValues(alpha: 0.45),
-              ),
+              border: Border.all(color: onHeader.withValues(alpha: 0.45)),
             ),
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
             child: Row(
@@ -1541,11 +1583,7 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
                     ),
                   )
                 else
-                  Icon(
-                    Icons.done_all_rounded,
-                    size: 16,
-                    color: onHeader,
-                  ),
+                  Icon(Icons.done_all_rounded, size: 16, color: onHeader),
                 const SizedBox(width: 4),
                 Text(
                   _markingAll ? '…' : 'Read all',
@@ -1567,7 +1605,9 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
       decoration: BoxDecoration(
         color: const Color(0xFFECFDF5),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF6EE7B7).withValues(alpha: 0.6)),
+        border: Border.all(
+          color: const Color(0xFF6EE7B7).withValues(alpha: 0.6),
+        ),
       ),
       child: const Row(
         mainAxisSize: MainAxisSize.min,
@@ -1590,9 +1630,7 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
   Widget _buildFilterPillsRow() {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      child: Row(
-        children: _AlertsFilter.values.map(_buildFilterPill).toList(),
-      ),
+      child: Row(children: _AlertsFilter.values.map(_buildFilterPill).toList()),
     );
   }
 
@@ -1618,9 +1656,7 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
                   : Colors.white,
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
-                color: selected
-                    ? AppTheme.primary
-                    : const Color(0xFFE5E7EB),
+                color: selected ? AppTheme.primary : const Color(0xFFE5E7EB),
                 width: selected ? 1.5 : 1,
               ),
             ),
@@ -1643,7 +1679,10 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
                 ),
                 const SizedBox(width: 5),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: selected
                         ? AppTheme.primary.withValues(alpha: 0.18)
@@ -1670,10 +1709,14 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
   Future<void> _markAsRead(NotificationItem item) async {
     if (item.isRead) return;
     if (item.isAnnouncement) {
-      await activity.UserActivityService.markNotificationAsRead('ann_${item.id}');
+      await activity.UserActivityService.markNotificationAsRead(
+        'ann_${item.id}',
+      );
       if (mounted) {
         setState(() {
-          final i = _items.indexWhere((x) => x.id == item.id && x.isAnnouncement);
+          final i = _items.indexWhere(
+            (x) => x.id == item.id && x.isAnnouncement,
+          );
           if (i >= 0) _items[i] = item.copyWith(isRead: true);
         });
       }
@@ -1694,7 +1737,9 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
     await NotificationFirestoreService.markAsRead(item.id);
     if (mounted) {
       setState(() {
-        final i = _items.indexWhere((x) => x.id == item.id && x.userId == item.userId);
+        final i = _items.indexWhere(
+          (x) => x.id == item.id && x.userId == item.userId,
+        );
         if (i >= 0) _items[i] = item.copyWith(isRead: true);
       });
     }
@@ -1712,7 +1757,9 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
       await activity.UserActivityService.markAllNotificationsAsRead();
       for (final item in _items) {
         if (item.isAnnouncement) {
-          await activity.UserActivityService.markNotificationAsRead('ann_${item.id}');
+          await activity.UserActivityService.markNotificationAsRead(
+            'ann_${item.id}',
+          );
         }
       }
       if (mounted) {
@@ -1735,7 +1782,10 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
         title: const Text('Delete notification?'),
         content: const Text('This removes the notification from your list.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Delete'),
@@ -1779,7 +1829,10 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
           'This hides the announcement from your notifications. It does not delete the announcement for other users.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Remove'),
@@ -1876,7 +1929,10 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
                           Chip(
                             label: Text(
                               item.isAnnouncement ? 'Announcement' : 'Activity',
-                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                             backgroundColor: AppTheme.primary.withOpacity(0.12),
                             side: BorderSide.none,
@@ -1885,7 +1941,10 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
                           Chip(
                             label: Text(
                               typeLabel,
-                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                             backgroundColor: Colors.grey.shade100,
                             side: BorderSide.none,
@@ -1895,7 +1954,9 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
                       ),
                       const SizedBox(height: 16),
                       SelectableText(
-                        item.message.trim().isEmpty ? '(No message)' : item.message.trim(),
+                        item.message.trim().isEmpty
+                            ? '(No message)'
+                            : item.message.trim(),
                         style: const TextStyle(
                           fontSize: 15,
                           height: 1.45,
@@ -1920,7 +1981,10 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
                                   Navigator.pop(ctx);
                                   _confirmDismissAnnouncement(item);
                                 },
-                                icon: const Icon(Icons.hide_source_outlined, size: 18),
+                                icon: const Icon(
+                                  Icons.hide_source_outlined,
+                                  size: 18,
+                                ),
                                 label: const Text('Remove from list'),
                               ),
                             )
@@ -1931,7 +1995,10 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
                                   Navigator.pop(ctx);
                                   _deleteUserNotification(item);
                                 },
-                                icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                                icon: const Icon(
+                                  Icons.delete_outline_rounded,
+                                  size: 18,
+                                ),
                                 label: const Text('Delete'),
                               ),
                             ),
@@ -1963,7 +2030,7 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
                 child: SafeArea(
                   top: false,
                   child: RefreshIndicator(
-                    onRefresh: _load,
+                    onRefresh: () => _load(quiet: _items.isNotEmpty),
                     color: AppTheme.primary,
                     child: CustomScrollView(
                       physics: const AlwaysScrollableScrollPhysics(),
@@ -2022,7 +2089,9 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
                                           vertical: 12,
                                         ),
                                         shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(24),
+                                          borderRadius: BorderRadius.circular(
+                                            24,
+                                          ),
                                         ),
                                       ),
                                     ),
@@ -2053,23 +2122,23 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
                           SliverPadding(
                             padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
                             sliver: SliverList(
-                              delegate: SliverChildBuilderDelegate(
-                                (context, index) {
-                                  final item = _filteredItems[index];
-                                  return _NotificationCard(
-                                    item: item,
-                                    onOpen: () => _openNotificationDetail(item),
-                                    onRemove: () {
-                                      if (item.isAnnouncement) {
-                                        _confirmDismissAnnouncement(item);
-                                      } else {
-                                        _deleteUserNotification(item);
-                                      }
-                                    },
-                                  );
-                                },
-                                childCount: _filteredItems.length,
-                              ),
+                              delegate: SliverChildBuilderDelegate((
+                                context,
+                                index,
+                              ) {
+                                final item = _filteredItems[index];
+                                return _NotificationCard(
+                                  item: item,
+                                  onOpen: () => _openNotificationDetail(item),
+                                  onRemove: () {
+                                    if (item.isAnnouncement) {
+                                      _confirmDismissAnnouncement(item);
+                                    } else {
+                                      _deleteUserNotification(item);
+                                    }
+                                  },
+                                );
+                              }, childCount: _filteredItems.length),
                             ),
                           ),
                       ],
@@ -2160,9 +2229,7 @@ class _NotificationCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           child: Ink(
             decoration: BoxDecoration(
-              color: hasUnread
-                  ? accent.withValues(alpha: 0.06)
-                  : Colors.white,
+              color: hasUnread ? accent.withValues(alpha: 0.06) : Colors.white,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color: hasUnread

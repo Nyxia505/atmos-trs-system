@@ -133,8 +133,8 @@ class _LguEventsPanelState extends State<LguEventsPanel>
       final both = await _service.loadMineAndProvince(municipalityId);
       if (!mounted) return;
       setState(() {
-        _myEvents = both.mine;
-        _provinceEvents = both.province;
+        _myEvents = _mergeWithLocal(both.mine, _myEvents);
+        _provinceEvents = _mergeWithLocal(both.province, _provinceEvents);
         _loading = false;
         _didLoadOnce = true;
       });
@@ -145,25 +145,191 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     }
   }
 
+  /// Keeps optimistic (still publishing) posts and their local photo bytes
+  /// when a Firestore reload lands, so cards never flicker or vanish.
+  List<Map<String, dynamic>> _mergeWithLocal(
+    List<Map<String, dynamic>> fetched,
+    List<Map<String, dynamic>> local,
+  ) {
+    final localById = {
+      for (final e in local)
+        if ((e['id']?.toString() ?? '').isNotEmpty) e['id'].toString(): e,
+    };
+    final fetchedIds = <String>{};
+    final merged = <Map<String, dynamic>>[];
+    for (final e in fetched) {
+      final id = e['id']?.toString() ?? '';
+      fetchedIds.add(id);
+      final prev = localById[id];
+      if (prev != null && prev[_kPendingKey] == true) {
+        merged.add(prev);
+      } else if (prev != null && prev[_kLocalImageKey] is Uint8List) {
+        merged.add({...e, _kLocalImageKey: prev[_kLocalImageKey]});
+      } else {
+        merged.add(e);
+      }
+    }
+    final pendingNew = local.where(
+      (e) =>
+          e[_kPendingKey] == true &&
+          !fetchedIds.contains(e['id']?.toString() ?? ''),
+    );
+    return [...pendingNew, ...merged];
+  }
+
+  void _upsertLocal(Map<String, dynamic> event) {
+    final id = event['id']?.toString() ?? '';
+    List<Map<String, dynamic>> apply(List<Map<String, dynamic>> list) {
+      final next = List<Map<String, dynamic>>.from(list);
+      final i = next.indexWhere((e) => e['id']?.toString() == id);
+      if (i >= 0) {
+        next[i] = event;
+      } else {
+        next.insert(0, event);
+      }
+      return next;
+    }
+
+    _myEvents = apply(_myEvents);
+    _provinceEvents = apply(_provinceEvents);
+  }
+
+  void _removeLocal(String id) {
+    _myEvents = _myEvents.where((e) => e['id']?.toString() != id).toList();
+    _provinceEvents =
+        _provinceEvents.where((e) => e['id']?.toString() != id).toList();
+  }
+
+  /// Saves in the background after the dialog has already closed. The card
+  /// shows "Publishing…" immediately and flips to Live when Firestore confirms.
+  Future<void> _submitDraft(
+    _PostDraft draft, {
+    Map<String, dynamic>? original,
+  }) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final municipalityId = widget.municipalityId?.trim() ?? '';
+    final munName = (widget.municipalityName?.trim().isNotEmpty ?? false)
+        ? widget.municipalityName!.trim()
+        : municipalityId;
+
+    final optimistic = <String, dynamic>{
+      ...?original,
+      'id': draft.eventId,
+      'title': draft.title,
+      'content': draft.content,
+      'type': draft.type,
+      'status': 'approved',
+      'published': true,
+      'municipalityId': original?['municipalityId'] ?? municipalityId,
+      'municipalityName': original?['municipalityName'] ?? munName,
+      'date': original?['date'] ??
+          DateTime.now().toIso8601String().split('T').first,
+      _kPendingKey: true,
+    };
+    if (draft.imageBytes != null) {
+      optimistic[_kLocalImageKey] = draft.imageBytes;
+    } else if (draft.removeImage) {
+      optimistic
+        ..remove('imageUrl')
+        ..remove('imageBase64')
+        ..remove(_kLocalImageKey);
+    }
+    if (mounted) setState(() => _upsertLocal(optimistic));
+
+    try {
+      if (draft.isNew) {
+        final id = await _service.createEvent(
+          eventId: draft.eventId,
+          municipalityId: municipalityId,
+          municipalityName: munName,
+          title: draft.title,
+          content: draft.content,
+          type: draft.type,
+          imageBytes: draft.preparedImage == null ? draft.imageBytes : null,
+          imageContentType: draft.imageContentType,
+          preparedImageFields: draft.preparedImage,
+        );
+        if (id == null) throw StateError('Could not save post.');
+      } else {
+        await _service.updateEvent(
+          eventId: draft.eventId,
+          municipalityId: municipalityId,
+          title: draft.title,
+          content: draft.content,
+          type: draft.type,
+          imageBytes: draft.preparedImage == null ? draft.imageBytes : null,
+          imageContentType: draft.imageContentType,
+          preparedImageFields: draft.preparedImage,
+          removeImage: draft.removeImage,
+        );
+      }
+      LguEventService.invalidateEventsCache();
+      if (mounted) {
+        setState(() => _upsertLocal({...optimistic, _kPendingKey: false}));
+      }
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            draft.isNew
+                ? 'Published (${draft.type}). Tourists, LGUs, and Governor are notified.'
+                : 'Updated (${draft.type}). Still live for everyone.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      if (mounted) unawaited(_load(silent: true));
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          if (original == null) {
+            _removeLocal(draft.eventId);
+          } else {
+            _upsertLocal(original);
+          }
+        });
+      }
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Could not publish "${draft.title}": $e'),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 8),
+          action: SnackBarAction(
+            label: 'Retry',
+            onPressed: () {
+              if (!mounted) return;
+              unawaited(
+                _submitDraft(draft.withoutPreparedImage(), original: original),
+              );
+            },
+          ),
+        ),
+      );
+    }
+  }
+
   Future<void> _showEventDialog({Map<String, dynamic>? existing}) async {
+    final municipalityId = widget.municipalityId?.trim() ?? '';
     final titleController = TextEditingController(
       text: existing?['title']?.toString() ?? '',
     );
     final contentController = TextEditingController(
       text: existing?['content']?.toString() ?? '',
     );
+    final existingId = existing?['id']?.toString() ?? '';
+    final eventId = existingId.isNotEmpty ? existingId : _service.newEventId();
     Uint8List? pickedBytes;
     String? pickedContentType;
+    Future<Map<String, dynamic>>? preparedImage;
+    var photoUpload = _PhotoUploadState.none;
+    var dialogOpen = true;
     bool removeImage = false;
-    var submitting = false;
     final existingImage = LguEventService.resolveDisplayImage(existing);
     var selectedType = LguEventService.normalizeType(
       existing?['type']?.toString(),
     );
 
-    await showDialog<void>(
+    final draft = await showDialog<_PostDraft>(
       context: context,
-      barrierDismissible: !submitting,
       builder: (dialogContext) {
         final maxW = MediaQuery.sizeOf(dialogContext).width;
         return StatefulBuilder(
@@ -178,7 +344,12 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                   children: [
                     TextField(
                       controller: titleController,
-                      enabled: !submitting,
+                      autofocus: existing == null,
+                      textInputAction: TextInputAction.next,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                      ),
                       decoration: const InputDecoration(
                         labelText: 'Title',
                         border: OutlineInputBorder(),
@@ -201,9 +372,8 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                         return ChoiceChip(
                           label: Text(type),
                           selected: selected,
-                          onSelected: submitting
-                              ? null
-                              : (_) => setDialogState(() => selectedType = type),
+                          onSelected: (_) =>
+                              setDialogState(() => selectedType = type),
                           selectedColor: widget.primaryColor,
                           labelStyle: TextStyle(
                             color: selected ? Colors.white : Colors.black87,
@@ -217,7 +387,6 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                     const SizedBox(height: 12),
                     TextField(
                       controller: contentController,
-                      enabled: !submitting,
                       maxLines: 5,
                       decoration: const InputDecoration(
                         labelText: 'Details',
@@ -235,51 +404,88 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                           fit: BoxFit.contain,
                         ),
                       ),
-                    if (pickedBytes != null)
+                    if (pickedBytes != null) ...[
                       _EventPhotoFrame(
                         child: Image.memory(
                           pickedBytes!,
                           fit: BoxFit.contain,
                         ),
                       ),
+                      const SizedBox(height: 6),
+                      _PhotoUploadStatus(
+                        state: photoUpload,
+                        color: widget.primaryColor,
+                      ),
+                    ],
                     const SizedBox(height: 10),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
                       children: [
                         OutlinedButton.icon(
-                          onPressed: submitting
-                              ? null
-                              : () async {
-                                  final file = await _picker.pickImage(
-                                    source: ImageSource.gallery,
-                                    imageQuality: 82,
-                                    maxWidth: 1600,
+                          onPressed: () async {
+                            final file = await _picker.pickImage(
+                              source: ImageSource.gallery,
+                              imageQuality: 82,
+                              maxWidth: 1600,
+                            );
+                            if (file == null) return;
+                            final bytes = await file.readAsBytes();
+                            final ct = (file.mimeType?.trim().isNotEmpty ??
+                                    false)
+                                ? file.mimeType!.trim()
+                                : 'image/jpeg';
+                            if (!dialogOpen) return;
+                            final upload = _service.prepareImageFields(
+                              eventId: eventId,
+                              municipalityId: municipalityId,
+                              bytes: bytes,
+                              contentType: ct,
+                            )..ignore();
+                            upload.then(
+                              (_) {
+                                if (dialogOpen && preparedImage == upload) {
+                                  setDialogState(
+                                    () => photoUpload = _PhotoUploadState.ready,
                                   );
-                                  if (file == null) return;
-                                  final bytes = await file.readAsBytes();
-                                  setDialogState(() {
-                                    pickedBytes = bytes;
-                                    pickedContentType =
-                                        (file.mimeType?.trim().isNotEmpty ??
-                                                false)
-                                            ? file.mimeType!.trim()
-                                            : 'image/jpeg';
-                                    removeImage = false;
-                                  });
-                                },
+                                }
+                              },
+                              onError: (Object _) {
+                                if (dialogOpen && preparedImage == upload) {
+                                  setDialogState(
+                                    () =>
+                                        photoUpload = _PhotoUploadState.failed,
+                                  );
+                                }
+                              },
+                            );
+                            setDialogState(() {
+                              pickedBytes = bytes;
+                              pickedContentType = ct;
+                              preparedImage = upload;
+                              photoUpload = _PhotoUploadState.uploading;
+                              removeImage = false;
+                            });
+                          },
                           icon: const Icon(Icons.photo_library_outlined, size: 18),
-                          label: const Text('Add photo'),
+                          label: Text(
+                            pickedBytes != null ||
+                                    (!removeImage &&
+                                        (existingImage?.isNotEmpty ?? false))
+                                ? 'Change photo'
+                                : 'Add photo',
+                          ),
                         ),
-                        if ((existingImage?.isNotEmpty ?? false) ||
+                        if ((!removeImage &&
+                                (existingImage?.isNotEmpty ?? false)) ||
                             pickedBytes != null)
                           TextButton(
-                            onPressed: submitting
-                                ? null
-                                : () => setDialogState(() {
-                                      pickedBytes = null;
-                                      removeImage = true;
-                                    }),
+                            onPressed: () => setDialogState(() {
+                              pickedBytes = null;
+                              preparedImage = null;
+                              photoUpload = _PhotoUploadState.none;
+                              removeImage = true;
+                            }),
                             child: const Text('Remove photo'),
                           ),
                       ],
@@ -290,107 +496,71 @@ class _LguEventsPanelState extends State<LguEventsPanel>
             ),
             actions: [
               TextButton(
-                onPressed: submitting
-                    ? null
-                    : () => Navigator.pop(dialogContext),
+                onPressed: () => Navigator.pop(dialogContext),
                 child: const Text('Cancel'),
               ),
-              FilledButton(
-                onPressed: submitting
-                    ? null
-                    : () async {
-                        final municipalityId =
-                            widget.municipalityId?.trim() ?? '';
-                        if (municipalityId.isEmpty) {
-                          ScaffoldMessenger.of(this.context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Municipality is not set. Open Settings first.',
-                              ),
-                            ),
-                          );
-                          return;
-                        }
-                        if (titleController.text.trim().isEmpty) {
-                          ScaffoldMessenger.of(this.context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Please enter a title.'),
-                            ),
-                          );
-                          return;
-                        }
-                        setDialogState(() => submitting = true);
-                        try {
-                          if (existing == null) {
-                            final id = await _service.createEvent(
-                              municipalityId: municipalityId,
-                              municipalityName:
-                                  widget.municipalityName ?? municipalityId,
-                              title: titleController.text,
-                              content: contentController.text,
-                              type: selectedType,
-                              imageBytes: pickedBytes,
-                              imageContentType: pickedContentType,
-                            );
-                            if (id == null) {
-                              throw StateError('Could not save post.');
-                            }
-                          } else {
-                            final eventId = existing['id']?.toString() ?? '';
-                            if (eventId.isEmpty) {
-                              throw StateError('Missing post id.');
-                            }
-                            await _service.updateEvent(
-                              eventId: eventId,
-                              municipalityId: municipalityId,
-                              title: titleController.text,
-                              content: contentController.text,
-                              type: selectedType,
-                              imageBytes: pickedBytes,
-                              imageContentType: pickedContentType,
-                              removeImage: removeImage,
-                              resubmitForApproval: false,
-                            );
-                          }
-                          if (dialogContext.mounted) {
-                            Navigator.pop(dialogContext);
-                          }
-                          LguEventService.invalidateEventsCache();
-                          await _load(silent: false);
-                          if (!mounted) return;
-                          ScaffoldMessenger.of(this.context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                existing == null
-                                    ? 'Published ($selectedType). Tourists, LGUs, and Governor are notified.'
-                                    : 'Updated ($selectedType). Still live for everyone.',
-                              ),
-                            ),
-                          );
-                        } catch (e) {
-                          setDialogState(() => submitting = false);
-                          if (!dialogContext.mounted) return;
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            SnackBar(content: Text('Could not submit: $e')),
-                          );
-                        }
-                      },
-                child: submitting
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Text(existing == null ? 'Publish' : 'Save'),
+              FilledButton.icon(
+                onPressed: () {
+                  if (municipalityId.isEmpty) {
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Municipality is not set. Open Settings first.',
+                        ),
+                      ),
+                    );
+                    return;
+                  }
+                  final title = titleController.text.trim();
+                  if (title.isEmpty) {
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      const SnackBar(content: Text('Please enter a title.')),
+                    );
+                    return;
+                  }
+                  Navigator.pop(
+                    dialogContext,
+                    _PostDraft(
+                      eventId: eventId,
+                      isNew: existing == null,
+                      title: title,
+                      content: contentController.text.trim(),
+                      type: selectedType,
+                      imageBytes: pickedBytes,
+                      imageContentType: pickedContentType,
+                      // A failed pre-upload is retried from the bytes.
+                      preparedImage: photoUpload == _PhotoUploadState.failed
+                          ? null
+                          : preparedImage,
+                      removeImage: removeImage && pickedBytes == null,
+                    ),
+                  );
+                },
+                style: FilledButton.styleFrom(
+                  backgroundColor: widget.primaryColor,
+                ),
+                icon: Icon(
+                  existing == null ? Icons.send_rounded : Icons.check_rounded,
+                  size: 18,
+                ),
+                label: Text(existing == null ? 'Publish' : 'Save'),
               ),
             ],
           ),
         );
       },
     );
+    dialogOpen = false;
 
-    titleController.dispose();
-    contentController.dispose();
+    // The route keeps building during its exit transition; dispose after it.
+    Future<void>.delayed(const Duration(milliseconds: 600), () {
+      titleController.dispose();
+      contentController.dispose();
+    });
+
+    if (draft != null && mounted) {
+      unawaited(_submitDraft(draft, original: existing));
+    }
   }
 
   Future<void> _deleteEvent(Map<String, dynamic> event) async {
@@ -651,6 +821,8 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     final fromLabel = LguEventService.sourceMunicipalityLabel(event);
     final isOwn = _isOwnEvent(event);
     final dateLabel = event['date']?.toString().trim() ?? '';
+    final pending = event[_kPendingKey] == true;
+    final localImage = event[_kLocalImageKey];
 
     return Container(
       decoration: BoxDecoration(
@@ -677,7 +849,20 @@ class _LguEventsPanelState extends State<LguEventsPanel>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (imageUrl != null && imageUrl.isNotEmpty)
+          if (localImage is Uint8List)
+            SizedBox(
+              height: 156,
+              width: double.infinity,
+              child: ColoredBox(
+                color: const Color(0xFF1E2530),
+                child: Image.memory(
+                  localImage,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                ),
+              ),
+            )
+          else if (imageUrl != null && imageUrl.isNotEmpty)
             SizedBox(
               height: 156,
               width: double.infinity,
@@ -690,6 +875,12 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                   height: double.infinity,
                 ),
               ),
+            ),
+          if (pending)
+            LinearProgressIndicator(
+              minHeight: 3,
+              color: widget.primaryColor,
+              backgroundColor: widget.primaryColor.withValues(alpha: 0.15),
             ),
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
@@ -704,8 +895,8 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                       child: Text(
                         title,
                         style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16.5,
                           height: 1.25,
                         ),
                         maxLines: 2,
@@ -719,13 +910,16 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: statusColor.withValues(alpha: 0.12),
+                        color: (pending ? widget.primaryColor : statusColor)
+                            .withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
-                        LguEventService.displayStatus(event),
+                        pending
+                            ? 'Publishing…'
+                            : LguEventService.displayStatus(event),
                         style: TextStyle(
-                          color: statusColor,
+                          color: pending ? widget.primaryColor : statusColor,
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
                         ),
@@ -812,12 +1006,14 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                     runSpacing: 8,
                     children: [
                       OutlinedButton.icon(
-                        onPressed: () => _showEventDialog(existing: event),
+                        onPressed: pending
+                            ? null
+                            : () => _showEventDialog(existing: event),
                         icon: const Icon(Icons.edit_outlined, size: 16),
                         label: const Text('Edit'),
                       ),
                       OutlinedButton.icon(
-                        onPressed: () => _deleteEvent(event),
+                        onPressed: pending ? null : () => _deleteEvent(event),
                         icon: const Icon(Icons.delete_outline, size: 16),
                         label: const Text('Delete'),
                         style: OutlinedButton.styleFrom(
@@ -832,6 +1028,98 @@ class _LguEventsPanelState extends State<LguEventsPanel>
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Local-only keys on optimistic event maps (never written to Firestore).
+const _kPendingKey = '_pending';
+const _kLocalImageKey = '_localImageBytes';
+
+enum _PhotoUploadState { none, uploading, ready, failed }
+
+class _PostDraft {
+  const _PostDraft({
+    required this.eventId,
+    required this.isNew,
+    required this.title,
+    required this.content,
+    required this.type,
+    this.imageBytes,
+    this.imageContentType,
+    this.preparedImage,
+    this.removeImage = false,
+  });
+
+  final String eventId;
+  final bool isNew;
+  final String title;
+  final String content;
+  final String type;
+  final Uint8List? imageBytes;
+  final String? imageContentType;
+  final Future<Map<String, dynamic>>? preparedImage;
+  final bool removeImage;
+
+  _PostDraft withoutPreparedImage() => _PostDraft(
+        eventId: eventId,
+        isNew: isNew,
+        title: title,
+        content: content,
+        type: type,
+        imageBytes: imageBytes,
+        imageContentType: imageContentType,
+        removeImage: removeImage,
+      );
+}
+
+class _PhotoUploadStatus extends StatelessWidget {
+  const _PhotoUploadStatus({required this.state, required this.color});
+
+  final _PhotoUploadState state;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final (Widget icon, String label, Color tone) = switch (state) {
+      _PhotoUploadState.uploading => (
+          SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(strokeWidth: 2, color: color),
+          ),
+          'Uploading photo while you type…',
+          color,
+        ),
+      _PhotoUploadState.ready => (
+          const Icon(Icons.check_circle_rounded,
+              size: 14, color: Color(0xFF16A34A)),
+          'Photo ready — Publish is instant',
+          const Color(0xFF16A34A),
+        ),
+      _PhotoUploadState.failed => (
+          const Icon(Icons.refresh_rounded, size: 14, color: Color(0xFFD97706)),
+          'Upload interrupted — it will retry when you publish',
+          const Color(0xFFD97706),
+        ),
+      _PhotoUploadState.none => (const SizedBox.shrink(), '', color),
+    };
+    if (state == _PhotoUploadState.none) return const SizedBox.shrink();
+    return Row(
+      children: [
+        icon,
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            label,
+            style: TextStyle(
+              color: tone,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

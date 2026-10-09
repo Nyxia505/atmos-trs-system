@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/user_profile_storage.dart';
@@ -14,6 +15,7 @@ class ProfileAvatar extends StatelessWidget {
     this.onTap,
     this.showEditBadge = false,
     this.isBusy = false,
+    this.previewBytes,
   });
 
   final UserProfile? profile;
@@ -23,6 +25,9 @@ class ProfileAvatar extends StatelessWidget {
   final VoidCallback? onTap;
   final bool showEditBadge;
   final bool isBusy;
+
+  /// Just-picked photo shown while it uploads (takes priority over [profile]).
+  final Uint8List? previewBytes;
 
   @override
   Widget build(BuildContext context) {
@@ -50,13 +55,18 @@ class ProfileAvatar extends StatelessWidget {
             _buildImage(),
             if (isBusy)
               ColoredBox(
-                color: Colors.black.withValues(alpha: 0.35),
-                child: const Center(
-                  child: SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.2,
+                color: Colors.black.withValues(alpha: 0.18),
+                child: Center(
+                  child: Container(
+                    width: 26,
+                    height: 26,
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.35),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const CircularProgressIndicator(
+                      strokeWidth: 2,
                       color: Colors.white,
                     ),
                   ),
@@ -108,6 +118,17 @@ class ProfileAvatar extends StatelessWidget {
   }
 
   Widget _buildImage() {
+    final preview = previewBytes;
+    if (preview != null && preview.isNotEmpty) {
+      return Image.memory(
+        preview,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        errorBuilder: (_, __, ___) => _placeholder(),
+      );
+    }
     final url = profile?.profilePhotoUrl?.trim();
     if (url != null && url.isNotEmpty) {
       return Image.network(

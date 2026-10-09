@@ -17,10 +17,10 @@ import 'package:atmos_trs_system/services/otp_delivery_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:uuid/uuid.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_barangays.dart';
+import 'package:atmos_trs_system/navigation/auth_navigation.dart';
 import 'package:atmos_trs_system/widgets/web_glass_auth_scaffold.dart';
 import 'package:atmos_trs_system/widgets/tourist_signup_chrome.dart';
 import 'package:atmos_trs_system/widgets/signup_legal_consent.dart';
-import 'package:atmos_trs_system/widgets/dial_code_mobile_field.dart';
 import 'package:atmos_trs_system/widgets/country_city_autocomplete_field.dart';
 import 'package:atmos_trs_system/data/signup_cities_by_country.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -132,6 +132,8 @@ class _SignupScreenState extends State<SignupScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  final _confirmPasswordFocus = FocusNode();
+  final _confirmPasswordFieldKey = GlobalKey<FormFieldState<String>>();
   final _barangayController = TextEditingController();
   final _foreignCityController = TextEditingController();
   final _foreignRegionController = TextEditingController();
@@ -219,7 +221,6 @@ class _SignupScreenState extends State<SignupScreen> {
     return null;
   }
 
-  final List<String> _suffixes = ['None', 'Jr.', 'Sr.', 'II', 'III', 'IV', 'V'];
   final List<String> _sexOptions = [
     'Male',
     'Female',
@@ -868,6 +869,7 @@ class _SignupScreenState extends State<SignupScreen> {
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
+    _confirmPasswordFocus.dispose();
     _barangayController.dispose();
     _foreignCityController.dispose();
     _foreignRegionController.dispose();
@@ -949,6 +951,9 @@ class _SignupScreenState extends State<SignupScreen> {
 
   void _nextStep() {
     if (!_formKey.currentState!.validate()) {
+      if (_personalDetailsSubStep == 3 && _passwordsMismatch) {
+        _focusConfirmPasswordMismatch();
+      }
       return;
     }
 
@@ -1028,6 +1033,45 @@ class _SignupScreenState extends State<SignupScreen> {
     FocusScope.of(context).nextFocus();
   }
 
+  static const _passwordMismatchMessage =
+      'Password and confirm password do not match.';
+
+  bool get _passwordsMismatch =>
+      _passwordController.text != _confirmPasswordController.text;
+
+  /// Brings the user back to Confirm Password (Contact & Address sub-step)
+  /// with the error inline and the text selected so it can be retyped in place.
+  void _focusConfirmPasswordMismatch() {
+    if (_personalDetailsSubStep != 3) {
+      setState(() => _personalDetailsSubStep = 3);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final field = _confirmPasswordFieldKey.currentState;
+      field?.validate();
+      final fieldContext = _confirmPasswordFieldKey.currentContext;
+      if (fieldContext != null) {
+        Scrollable.ensureVisible(
+          fieldContext,
+          alignment: 0.3,
+          duration: const Duration(milliseconds: 250),
+        );
+      }
+      _confirmPasswordFocus.requestFocus();
+      _confirmPasswordController.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _confirmPasswordController.text.length,
+      );
+    });
+  }
+
+  void _onPasswordFieldsChanged() {
+    ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
+    if (_confirmPasswordController.text.isNotEmpty) {
+      _confirmPasswordFieldKey.currentState?.validate();
+    }
+  }
+
   void _submitCurrentStepFromKeyboard() {
     if (_isSubmitting || _registrationInFlight) return;
     if (_currentStep == 0) {
@@ -1037,6 +1081,8 @@ class _SignupScreenState extends State<SignupScreen> {
       if (lastAdult || lastMinor) {
         if (_formKey.currentState?.validate() ?? false) {
           unawaited(_submitForm());
+        } else if (_passwordsMismatch) {
+          _focusConfirmPasswordMismatch();
         }
         return;
       }
@@ -1343,11 +1389,6 @@ class _SignupScreenState extends State<SignupScreen> {
             _selectedYear == null)) {
       return 'Please select your complete date of birth (Step 1).';
     }
-    final mobileErr = validateMobileForDialCode(
-      _mobileController.text,
-      _mobileDialCode,
-    );
-    if (mobileErr != null) return mobileErr;
     if (_selectedCountry == null) {
       return 'Please select your country (Step 1).';
     }
@@ -1366,9 +1407,7 @@ class _SignupScreenState extends State<SignupScreen> {
         if (regionErr != null) return regionErr;
       }
     }
-    if (_passwordController.text != _confirmPasswordController.text) {
-      return 'Password and confirm password do not match.';
-    }
+    if (_passwordsMismatch) return _passwordMismatchMessage;
     return _validateRegistrationExtra();
   }
 
@@ -1392,7 +1431,7 @@ class _SignupScreenState extends State<SignupScreen> {
         return 'Password must be at least 8 characters.';
       }
       if (_confirmPasswordController.text != pw) {
-        return 'Password and confirm password do not match.';
+        return _passwordMismatchMessage;
       }
     }
     if (_firstNameController.text.trim().isEmpty) {
@@ -1504,6 +1543,9 @@ class _SignupScreenState extends State<SignupScreen> {
       final snapshotError = _validateRegistrationSnapshot();
       if (snapshotError != null) {
         _registrationSnack(snapshotError, background: Colors.red.shade700);
+        if (snapshotError == _passwordMismatchMessage) {
+          _focusConfirmPasswordMismatch();
+        }
         return;
       }
       if (_formKey.currentState != null && !_formKey.currentState!.validate()) {
@@ -1850,6 +1892,9 @@ class _SignupScreenState extends State<SignupScreen> {
       if (snapshotError != null) {
         debugPrint('[REG] validation failed: $snapshotError');
         _registrationSnack(snapshotError, background: Colors.red.shade700);
+        if (snapshotError == _passwordMismatchMessage) {
+          _focusConfirmPasswordMismatch();
+        }
         return;
       }
 
@@ -2302,7 +2347,7 @@ class _SignupScreenState extends State<SignupScreen> {
               alignment: PlaceholderAlignment.baseline,
               baseline: TextBaseline.alphabetic,
               child: GestureDetector(
-                onTap: () => Navigator.pushReplacementNamed(context, '/login'),
+                onTap: () => openLoginFromSignup(context),
                 child: const Text(
                   'Log in',
                   style: TextStyle(
@@ -2387,8 +2432,7 @@ class _SignupScreenState extends State<SignupScreen> {
                   alignment: PlaceholderAlignment.baseline,
                   baseline: TextBaseline.alphabetic,
                   child: GestureDetector(
-                    onTap: () =>
-                        Navigator.pushReplacementNamed(context, '/login'),
+                    onTap: () => openLoginFromSignup(context),
                     child: const Text(
                       'Log in',
                       style: TextStyle(
@@ -2981,27 +3025,6 @@ class _SignupScreenState extends State<SignupScreen> {
           ),
         ),
 
-        _buildFormField(
-          label: 'Suffix',
-          child: DropdownButtonFormField<String>(
-            value: _selectedSuffix,
-            dropdownColor: Colors.white,
-            icon: const SizedBox.shrink(),
-            iconSize: 0,
-            borderRadius: BorderRadius.circular(12),
-            style: _formValueTextStyle,
-            selectedItemBuilder: (context) =>
-                _stringSelectedLabels(_suffixes),
-            hint: _dropdownHint('e.g. Jr., Sr., III'),
-            decoration: _inputDecoration(
-              hint: 'e.g. Jr., Sr., III',
-              prefixIcon: Icons.label_outline_rounded,
-            ),
-            items: _stringDropdownItems(_suffixes),
-            onChanged: (v) => setState(() => _selectedSuffix = v),
-          ),
-        ),
-
         _buildPersonalDetailsNavButtons(showBack: true),
       ],
     );
@@ -3216,37 +3239,6 @@ class _SignupScreenState extends State<SignupScreen> {
         ),
 
         _buildFormField(
-          label: 'Primary Mobile No.',
-          required: true,
-          child: DialCodeMobileField(
-            controller: _mobileController,
-            dialCode: _mobileDialCode,
-            onDialCodeChanged: (v) => setState(() => _mobileDialCode = v),
-            textStyle: _formValueTextStyle,
-            dialTextStyle: _formValueTextStyle.copyWith(
-              fontSize: 15,
-              height: 1.2,
-              fontWeight: FontWeight.w700,
-            ),
-            menuItemTextStyle: _dropdownMenuTextStyle(fontSize: 14),
-            textInputAction: TextInputAction.next,
-            onFieldSubmitted: (_) => _focusNextFormField(),
-            onEditingComplete: _focusNextFormField,
-            dialDecoration: _inputDecoration(
-              hint: '+63',
-              compact: true,
-            ),
-            numberDecoration: _inputDecoration(
-              hint: _mobileDialCode == '+63'
-                  ? '9XXXXXXXXX'
-                  : 'enter your number',
-              prefixIcon: Icons.phone_outlined,
-            ),
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        _buildFormField(
           label: 'Email Address',
           required: true,
           child: TextFormField(
@@ -3304,6 +3296,7 @@ class _SignupScreenState extends State<SignupScreen> {
             controller: _passwordController,
             obscureText: _obscurePassword,
             textInputAction: TextInputAction.next,
+            onChanged: (_) => _onPasswordFieldsChanged(),
             onFieldSubmitted: (_) => _focusNextFormField(),
             onEditingComplete: _focusNextFormField,
             autofillHints: const [],
@@ -3349,9 +3342,13 @@ class _SignupScreenState extends State<SignupScreen> {
           label: 'Confirm Password',
           required: !_editingPendingSignup,
           child: TextFormField(
+            key: _confirmPasswordFieldKey,
             controller: _confirmPasswordController,
+            focusNode: _confirmPasswordFocus,
             obscureText: _obscureConfirmPassword,
+            autovalidateMode: AutovalidateMode.onUserInteraction,
             textInputAction: TextInputAction.next,
+            onChanged: (_) => _onPasswordFieldsChanged(),
             onFieldSubmitted: (_) => _focusNextFormField(),
             onEditingComplete: _focusNextFormField,
             autofillHints: const [],
@@ -3390,7 +3387,9 @@ class _SignupScreenState extends State<SignupScreen> {
                 }
                 return 'Required';
               }
-              if (v != _passwordController.text) return 'No match';
+              if (v != _passwordController.text) {
+                return 'Passwords do not match';
+              }
               return null;
             },
           ),

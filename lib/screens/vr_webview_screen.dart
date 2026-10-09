@@ -1,13 +1,11 @@
-// VR tour launcher — bundled Marzipano (mobile), in-app WebView for hosted tours.
+// VR tour launcher — in-app WebView for hosted tours (Clear Pano, Teleport360).
 
 import 'package:flutter/material.dart';
-import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/vr_tour_config.dart';
 import 'package:atmos_trs_system/screens/hosted_vr_tour_screen.dart';
 import 'package:atmos_trs_system/screens/simple_image_vr_screen.dart';
 import 'package:atmos_trs_system/services/vr_tour_firestore_service.dart';
 import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 // -----------------------------------------------------------------------------
 // Helper: open VR tour (all platforms)
@@ -19,7 +17,6 @@ import 'package:url_launcher/url_launcher.dart';
 /// true (tourism dashboard staff preview only — option B).
 Future<void> openVrTour(
   BuildContext context, {
-  bool useLocalTour = false,
   String? url,
   String title = 'VR Tour',
   bool allowWeb = false,
@@ -28,17 +25,11 @@ Future<void> openVrTour(
   if (!await VrDownloadAppPrompt.ensureAllowed(context, allowWeb: allowWeb)) {
     return;
   }
+  if (!context.mounted) return;
 
-  final configured = url ?? kVrTourUrl;
-  final hosted = hostedVrUrlForLaunch(useLocalTour ? null : configured);
-
-  if (hosted == null || useLocalTour || useBundledTourForUrl(hosted)) {
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        fullscreenDialog: true,
-        builder: (_) => BundledVrTourScreen(title: title),
-      ),
-    );
+  final hosted = hostedVrUrlForLaunch(url ?? kVrTourUrl);
+  if (hosted == null) {
+    _showError(context, 'No VR tour is available for this destination yet.');
     return;
   }
 
@@ -48,16 +39,6 @@ Future<void> openVrTour(
     return;
   }
   if (!context.mounted) return;
-
-  if (isClearPanoTourUrl(hosted)) {
-    await _openVrTourExternally(
-      context,
-      uri,
-      title: title,
-      reason: 'clearpano',
-    );
-    return;
-  }
 
   await Navigator.of(context).push<void>(
     MaterialPageRoute<void>(
@@ -98,6 +79,7 @@ Future<void> openVrForTouristSpot(
       spotName: spotName,
     );
   }
+  if (!context.mounted) return;
 
   final hosted = resolveVrTourUrl(
     vrLink: effectiveLink,
@@ -147,49 +129,6 @@ Future<void> openVrForTouristSpot(
       'No VR tour is available for this destination yet. '
       'Ask your LGU to add a VR link in the Tourism dashboard.',
     );
-  }
-}
-
-Future<void> _openVrTourExternally(
-  BuildContext context,
-  Uri uri, {
-  required String title,
-  String reason = 'browser',
-}) async {
-  if (!context.mounted) return;
-
-  final message = reason == 'clearpano'
-      ? 'Opening 360° tour in your browser (password may be required)…'
-      : 'Opening 360° tour in your browser…';
-
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: Row(
-        children: [
-          const Icon(Icons.open_in_new, color: Colors.white, size: 20),
-          const SizedBox(width: 12),
-          Expanded(child: Text(message)),
-        ],
-      ),
-      backgroundColor: AppTheme.cardBackground,
-      duration: const Duration(seconds: 3),
-      behavior: SnackBarBehavior.floating,
-    ),
-  );
-
-  try {
-    final launched = await launchUrl(
-      uri,
-      mode: LaunchMode.externalApplication,
-      webOnlyWindowName: '_blank',
-    );
-    if (!launched && context.mounted) {
-      _showError(context, 'Could not open VR tour. Check your internet connection.');
-    }
-  } catch (e) {
-    if (context.mounted) {
-      _showError(context, 'Could not open VR tour: $e');
-    }
   }
 }
 

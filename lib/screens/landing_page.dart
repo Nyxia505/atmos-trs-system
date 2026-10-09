@@ -1,9 +1,10 @@
-import 'dart:async' show Timer, unawaited;
+import 'dart:async' show StreamSubscription, Timer, unawaited;
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderAbstractViewport;
+import 'package:atmos_trs_system/data/app_faq_content.dart';
 import 'package:atmos_trs_system/features/navigation/placeholder_pages.dart'
     show ScanTabPage;
 import 'package:atmos_trs_system/navigation/landing_intent_navigation.dart';
@@ -20,6 +21,7 @@ import 'package:atmos_trs_system/config/atmos_brand_typography.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/config/supabase_storage_config.dart';
 import 'package:atmos_trs_system/services/landing_intent_service.dart';
+import 'package:atmos_trs_system/services/landing_public_stats_service.dart';
 import 'package:atmos_trs_system/services/login_flow_service.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
 import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
@@ -58,6 +60,7 @@ class _LandingPageState extends State<LandingPage> {
 
   /// Municipality / About photos wait until the hero has painted (or user scrolls).
   bool _heavyImagesEnabled = false;
+
   /// First batch of destination cards (above the fold once Destinations is near).
   int _destinationImageBudget = 0;
 
@@ -239,13 +242,37 @@ class _LandingPageState extends State<LandingPage> {
     },
   ];
 
+  User? _authUser = FirebaseAuth.instance.currentUser;
+  StreamSubscription<User?>? _authSub;
+  LandingPublicStats? _publicStats;
+
+  Future<void> _loadPublicStats() async {
+    final stats = await LandingPublicStatsService.load();
+    if (mounted) setState(() => _publicStats = stats);
+  }
+
+  String _formatStatCount(int? value) {
+    if (value == null) return _publicStats == null ? '…' : '—';
+    return value.toString().replaceAllMapped(
+      RegExp(r'\B(?=(\d{3})+(?!\d))'),
+      (_) => ',',
+    );
+  }
+
   @override
   void initState() {
     super.initState();
     _pageScrollController = ScrollController();
+    // currentUser can still be the old account right after a dashboard logout
+    // on web; follow auth events so header/hero actions update without restart.
+    _authSub = FirebaseAuth.instance.authStateChanges().listen((user) {
+      if (!mounted || user?.uid == _authUser?.uid) return;
+      setState(() => _authUser = user);
+    });
 
     _heroSearchController.addListener(_onHeroSearchTextChanged);
     _heroSearchFocusNode.addListener(_onHeroSearchFocusChanged);
+    unawaited(_loadPublicStats());
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -257,9 +284,7 @@ class _LandingPageState extends State<LandingPage> {
       precacheImage(
         ResizeImage(
           NetworkImage(
-            SupabaseStorageConfig.resolve(
-              'assets/images/landing page.png',
-            ),
+            SupabaseStorageConfig.resolve('assets/images/landing page.png'),
           ),
           width: cacheW,
         ),
@@ -278,8 +303,9 @@ class _LandingPageState extends State<LandingPage> {
     final fromQr = mapArgs['fromQrRegistration'] == true;
     final fromQrGuest = mapArgs['fromQrWelcomeGuest'] == true;
     final welcome = mapArgs['welcomeMessage'];
-    final welcomeText =
-        welcome is String && welcome.trim().isNotEmpty ? welcome.trim() : null;
+    final welcomeText = welcome is String && welcome.trim().isNotEmpty
+        ? welcome.trim()
+        : null;
 
     if ((fromQr || fromQrGuest) && welcomeText != null) {
       setState(() {
@@ -329,12 +355,12 @@ class _LandingPageState extends State<LandingPage> {
 
   Future<T?> _pushAuthRoute<T>(String route, {Object? arguments}) {
     _pauseHeroVideoForAuthNavigation();
-    return Navigator.of(context)
-        .pushNamed<T>(route, arguments: arguments)
-        .then((result) {
-      if (mounted) _resumeHeroVideoAfterAuthNavigation();
-      return result;
-    });
+    return Navigator.of(context).pushNamed<T>(route, arguments: arguments).then(
+      (result) {
+        if (mounted) _resumeHeroVideoAfterAuthNavigation();
+        return result;
+      },
+    );
   }
 
   void _navigateToLogin() {
@@ -383,10 +409,7 @@ class _LandingPageState extends State<LandingPage> {
     if (!mounted) return;
     await LandingIntentNavigation.executeIntent(
       context,
-      LandingIntent(
-        feature: returnFeature,
-        municipalityName: municipalityName,
-      ),
+      LandingIntent(feature: returnFeature, municipalityName: municipalityName),
     );
   }
 
@@ -394,9 +417,8 @@ class _LandingPageState extends State<LandingPage> {
     final heroController = OnboardingHeroVideo.read(context)?.controller;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (context) => TripPlanEntryScreen(
-          sharedHeroController: heroController,
-        ),
+        builder: (context) =>
+            TripPlanEntryScreen(sharedHeroController: heroController),
       ),
     );
   }
@@ -416,6 +438,32 @@ class _LandingPageState extends State<LandingPage> {
     }
     await LandingIntentService.clear();
     _pushTripPlanEntry();
+  }
+
+  void _openVrOrLogin() {
+    if (_isLoggedIn) {
+      unawaited(_openVrTourFromLanding());
+    } else {
+      _navigateToLoginForFeature(returnFeature: LoginRouteArgs.featureVr);
+    }
+  }
+
+  void _openTripPlannerOrLogin() {
+    if (_isLoggedIn) {
+      unawaited(_openPlanItinerary());
+    } else {
+      _navigateToLoginForFeature(
+        returnFeature: LoginRouteArgs.featureItinerary,
+      );
+    }
+  }
+
+  void _openLandingFaq() {
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      builder: (_) => const _LandingFaqDialog(),
+    );
   }
 
   Future<void> _openVrTourFromLanding({String? municipalityName}) async {
@@ -444,8 +492,8 @@ class _LandingPageState extends State<LandingPage> {
   }
 
   String get _landingVrButtonLabel => VrDownloadAppPrompt.ctaLabel(
-        mobileLabel: _isMobile ? 'VR Tour' : 'Start VR Tour',
-      );
+    mobileLabel: _isMobile ? 'VR Tour' : 'Start VR Tour',
+  );
 
   String get _landingVrQuickActionLabel =>
       VrDownloadAppPrompt.ctaLabel(mobileLabel: 'VR Tour');
@@ -498,7 +546,8 @@ class _LandingPageState extends State<LandingPage> {
     final screenH = MediaQuery.sizeOf(context).height;
 
     // Start loading destination photos once the user is near that section.
-    if (!_heavyImagesEnabled || _destinationImageBudget < _destinations.length) {
+    if (!_heavyImagesEnabled ||
+        _destinationImageBudget < _destinations.length) {
       if (offset > screenH * 0.55) {
         _enableHeavyImages(budget: _destinations.length);
       }
@@ -588,6 +637,7 @@ class _LandingPageState extends State<LandingPage> {
 
   @override
   void dispose() {
+    _authSub?.cancel();
     _scrollUiThrottle?.cancel();
     _heavyImageWarmTimer?.cancel();
     _heroSearchController.removeListener(_onHeroSearchTextChanged);
@@ -604,7 +654,7 @@ class _LandingPageState extends State<LandingPage> {
   /// Hero image height on municipality / city destination cards.
   double get _destinationCardImageHeight => _isMobile ? 176.0 : 200.0;
 
-  bool get _isLoggedIn => FirebaseAuth.instance.currentUser != null;
+  bool get _isLoggedIn => _authUser != null;
   bool get _isTablet =>
       MediaQuery.of(context).size.width >= 768 &&
       MediaQuery.of(context).size.width < 1024;
@@ -732,26 +782,26 @@ class _LandingPageState extends State<LandingPage> {
   }
 
   TextStyle get _sectionBodyStyle => TextStyle(
-        color: _bodyText,
-        fontSize: _isMobile ? 15 : 16,
-        height: 1.6,
-        fontWeight: FontWeight.w400,
-      );
+    color: _bodyText,
+    fontSize: _isMobile ? 15 : 16,
+    height: 1.6,
+    fontWeight: FontWeight.w400,
+  );
 
   TextStyle get _cardTitleStyle => TextStyle(
-        color: _darkBg,
-        fontSize: _isMobile ? 16 : 17,
-        fontWeight: FontWeight.w700,
-        height: 1.25,
-        letterSpacing: -0.2,
-      );
+    color: _darkBg,
+    fontSize: _isMobile ? 16 : 17,
+    fontWeight: FontWeight.w700,
+    height: 1.25,
+    letterSpacing: -0.2,
+  );
 
   TextStyle get _cardSubtitleStyle => TextStyle(
-        color: _bodyText,
-        fontSize: _isMobile ? 14 : 15,
-        height: 1.45,
-        fontWeight: FontWeight.w400,
-      );
+    color: _bodyText,
+    fontSize: _isMobile ? 14 : 15,
+    height: 1.45,
+    fontWeight: FontWeight.w400,
+  );
 
   static const List<({String label, String sectionId, IconData icon})>
   _landingNavItems = [
@@ -923,8 +973,9 @@ class _LandingPageState extends State<LandingPage> {
   Widget _buildAppBarBrandText() {
     final width = MediaQuery.sizeOf(context).width;
     final narrow = width < 520;
-    final titleSize =
-        _isMobile ? (narrow ? 18.0 : 20.0) : (_useDrawerNav ? 20.0 : 22.0);
+    final titleSize = _isMobile
+        ? (narrow ? 18.0 : 20.0)
+        : (_useDrawerNav ? 20.0 : 22.0);
     final meaningSize = narrow ? 8.5 : (_isMobile ? 9.0 : 9.5);
 
     return Column(
@@ -969,17 +1020,13 @@ class _LandingPageState extends State<LandingPage> {
             duration: _motionDuration,
             curve: Curves.easeOutCubic,
             decoration: BoxDecoration(
-              color: Colors.white.withValues(
-                alpha: _isScrolled ? 0.97 : 0.92,
-              ),
+              color: Colors.white.withValues(alpha: _isScrolled ? 0.97 : 0.92),
               borderRadius: const BorderRadius.only(
                 bottomLeft: Radius.circular(28),
                 bottomRight: Radius.circular(28),
               ),
               border: Border(
-                bottom: BorderSide(
-                  color: Colors.white.withValues(alpha: 0.7),
-                ),
+                bottom: BorderSide(color: Colors.white.withValues(alpha: 0.7)),
               ),
               boxShadow: [
                 BoxShadow(
@@ -1189,10 +1236,7 @@ class _LandingPageState extends State<LandingPage> {
     bool emphasized = false,
   }) {
     return Padding(
-      padding: EdgeInsets.only(
-        left: compact ? 3 : 5,
-        right: compact ? 3 : 4,
-      ),
+      padding: EdgeInsets.only(left: compact ? 3 : 5, right: compact ? 3 : 4),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -1409,7 +1453,8 @@ class _LandingPageState extends State<LandingPage> {
 
   Widget _buildHeroSection() {
     final h = MediaQuery.sizeOf(context).height;
-    final topInset = MediaQuery.paddingOf(context).top +
+    final topInset =
+        MediaQuery.paddingOf(context).top +
         _landingAppBarHeight +
         (_isMobile ? 8 : 12);
 
@@ -1592,155 +1637,160 @@ class _LandingPageState extends State<LandingPage> {
   }
 
   Widget _buildHeroGlassFeatureCards() {
-    final cards = const [
+    final cards = [
       (
         icon: Icons.vrpano_rounded,
         title: '360° Previews',
         subtitle: 'See before you go',
+        onTap: _openVrOrLogin,
       ),
       (
         icon: Icons.map_rounded,
         title: 'Trip Planner',
         subtitle: 'Plan your adventure',
+        onTap: _openTripPlannerOrLogin,
       ),
       (
         icon: Icons.groups_rounded,
         title: '17 LGUs',
         subtitle: 'Explore all municipalities',
-      ),
-      (
-        icon: Icons.qr_code_scanner_rounded,
-        title: 'QR Check-in',
-        subtitle: 'Travel made easy',
+        onTap: () => _onNavTap('destinations'),
       ),
     ];
 
     Widget buildCard(
       int index,
-      ({IconData icon, String title, String subtitle}) c,
+      ({IconData icon, String title, String subtitle, VoidCallback onTap}) c,
     ) {
       final hovered = _hoveredHeroGlassIndex == index;
       return MouseRegion(
+        cursor: SystemMouseCursors.click,
         onEnter: (_) => setState(() => _hoveredHeroGlassIndex = index),
         onExit: (_) => setState(() => _hoveredHeroGlassIndex = null),
-        child: AnimatedContainer(
-          duration: _motionDuration,
-          curve: Curves.easeOutCubic,
-          transform: Matrix4.identity()
-            ..translateByDouble(0, hovered ? -4.0 : 0.0, 0, 1),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(18),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
-              child: AnimatedContainer(
-                duration: _motionDuration,
-                padding: EdgeInsets.symmetric(
-                  horizontal: _isMobile ? 12 : 12,
-                  vertical: _isMobile ? 10 : 10,
-                ),
-                decoration: BoxDecoration(
-                  color: Color(hovered ? 0x660F172A : 0x4D0F172A),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: Colors.white.withValues(
-                      alpha: hovered ? 0.28 : 0.16,
-                    ),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: c.onTap,
+          child: AnimatedContainer(
+            duration: _motionDuration,
+            curve: Curves.easeOutCubic,
+            transform: Matrix4.identity()
+              ..translateByDouble(0, hovered ? -4.0 : 0.0, 0, 1),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(18),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+                child: AnimatedContainer(
+                  duration: _motionDuration,
+                  padding: EdgeInsets.symmetric(
+                    horizontal: _isMobile ? 12 : 12,
+                    vertical: _isMobile ? 10 : 10,
                   ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(
-                        alpha: hovered ? 0.10 : 0.05,
+                  decoration: BoxDecoration(
+                    color: Color(hovered ? 0x660F172A : 0x4D0F172A),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: Colors.white.withValues(
+                        alpha: hovered ? 0.28 : 0.16,
                       ),
-                      blurRadius: hovered ? 12 : 6,
-                      offset: Offset(0, hovered ? 4 : 2),
                     ),
-                  ],
-                ),
-                child: _isMobile
-                    ? Row(
-                        children: [
-                          _heroGlassIconBadge(c.icon),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  c.title,
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w800,
-                                    shadows: const [
-                                      Shadow(
-                                        offset: Offset(0, 1),
-                                        blurRadius: 4,
-                                        color: Color(0x99000000),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  c.subtitle,
-                                  style: TextStyle(
-                                    color: Colors.white.withValues(alpha: 0.92),
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w500,
-                                    shadows: const [
-                                      Shadow(
-                                        offset: Offset(0, 1),
-                                        blurRadius: 3,
-                                        color: Color(0x88000000),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      )
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _heroGlassIconBadge(c.icon),
-                          const SizedBox(height: 8),
-                          Text(
-                            c.title,
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 13.5,
-                              fontWeight: FontWeight.w800,
-                              height: 1.15,
-                              shadows: const [
-                                Shadow(
-                                  offset: Offset(0, 1),
-                                  blurRadius: 4,
-                                  color: Color(0x99000000),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            c.subtitle,
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.92),
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
-                              height: 1.25,
-                              shadows: const [
-                                Shadow(
-                                  offset: Offset(0, 1),
-                                  blurRadius: 3,
-                                  color: Color(0x88000000),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(
+                          alpha: hovered ? 0.10 : 0.05,
+                        ),
+                        blurRadius: hovered ? 12 : 6,
+                        offset: Offset(0, hovered ? 4 : 2),
                       ),
+                    ],
+                  ),
+                  child: _isMobile
+                      ? Row(
+                          children: [
+                            _heroGlassIconBadge(c.icon),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    c.title,
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13.5,
+                                      fontWeight: FontWeight.w800,
+                                      shadows: const [
+                                        Shadow(
+                                          offset: Offset(0, 1),
+                                          blurRadius: 4,
+                                          color: Color(0x99000000),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    c.subtitle,
+                                    style: TextStyle(
+                                      color: Colors.white.withValues(
+                                        alpha: 0.92,
+                                      ),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w500,
+                                      shadows: const [
+                                        Shadow(
+                                          offset: Offset(0, 1),
+                                          blurRadius: 3,
+                                          color: Color(0x88000000),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        )
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _heroGlassIconBadge(c.icon),
+                            const SizedBox(height: 8),
+                            Text(
+                              c.title,
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w800,
+                                height: 1.15,
+                                shadows: const [
+                                  Shadow(
+                                    offset: Offset(0, 1),
+                                    blurRadius: 4,
+                                    color: Color(0x99000000),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              c.subtitle,
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.92),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                height: 1.25,
+                                shadows: const [
+                                  Shadow(
+                                    offset: Offset(0, 1),
+                                    blurRadius: 3,
+                                    color: Color(0x88000000),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                ),
               ),
             ),
           ),
@@ -1764,7 +1814,7 @@ class _LandingPageState extends State<LandingPage> {
     return Align(
       alignment: Alignment.centerLeft,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 640),
+        constraints: const BoxConstraints(maxWidth: 500),
         child: Row(
           children: [
             for (var i = 0; i < cards.length; i++) ...[
@@ -1800,8 +1850,9 @@ class _LandingPageState extends State<LandingPage> {
   Widget _buildHeroHeadline() {
     final align = _isMobile ? TextAlign.center : TextAlign.left;
     return Column(
-      crossAxisAlignment:
-          _isMobile ? CrossAxisAlignment.center : CrossAxisAlignment.start,
+      crossAxisAlignment: _isMobile
+          ? CrossAxisAlignment.center
+          : CrossAxisAlignment.start,
       children: [
         Text(
           'EXPLORE  •  EXPERIENCE  •  BELONG',
@@ -1868,6 +1919,7 @@ class _LandingPageState extends State<LandingPage> {
       ],
     );
   }
+
   Future<void> _openUserApp({int initialIndex = 0}) async {
     _pauseHeroVideoForAuthNavigation();
     if (!_isLoggedIn) {
@@ -1943,11 +1995,11 @@ class _LandingPageState extends State<LandingPage> {
     }
     switch (index) {
       case 0:
-        _openVrTourFromLanding();
+        _openVrOrLogin();
       case 1:
-        _openPlanItinerary();
+        _openTripPlannerOrLogin();
       case 2:
-        _openUserApp(initialIndex: 2);
+        _openLandingFaq();
     }
   }
 
@@ -2218,42 +2270,42 @@ class _LandingPageState extends State<LandingPage> {
                     vertical: 12,
                   ),
                   child: Row(
-                  children: [
-                    Icon(
-                      Icons.location_city_rounded,
-                      size: 20,
-                      color: _primaryOrange.withValues(alpha: 0.9),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            item['name'] ?? '',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14,
-                              color: Color(0xFF0F172A),
-                            ),
-                          ),
-                          if ((item['category'] ?? '').isNotEmpty)
+                    children: [
+                      Icon(
+                        Icons.location_city_rounded,
+                        size: 20,
+                        color: _primaryOrange.withValues(alpha: 0.9),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
                             Text(
-                              item['category']!,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey.shade600,
+                              item['name'] ?? '',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                                color: Color(0xFF0F172A),
                               ),
                             ),
-                        ],
+                            if ((item['category'] ?? '').isNotEmpty)
+                              Text(
+                                item['category']!,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey.shade600,
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
-                    ),
-                    Icon(
-                      Icons.north_west_rounded,
-                      size: 18,
-                      color: Colors.grey.shade500,
-                    ),
-                  ],
+                      Icon(
+                        Icons.north_west_rounded,
+                        size: 18,
+                        color: Colors.grey.shade500,
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -2279,11 +2331,7 @@ class _LandingPageState extends State<LandingPage> {
             gradient: const LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [
-                Color(0xFFFFF7ED),
-                Color(0xFFFFFFFF),
-                Color(0xFFFFF7ED),
-              ],
+              colors: [Color(0xFFFFF7ED), Color(0xFFFFFFFF), Color(0xFFFFF7ED)],
             ),
             borderRadius: BorderRadius.circular(_cardRadius),
             border: Border.all(color: _primaryOrange.withValues(alpha: 0.28)),
@@ -2339,7 +2387,9 @@ class _LandingPageState extends State<LandingPage> {
               Text(
                 'Create your ATMOS-TRS account in minutes — digital tourist ID, '
                 'QR check-ins, VR previews, and itinerary tools in one place.',
-                style: _sectionBodyStyle.copyWith(fontSize: _isMobile ? 14 : 15),
+                style: _sectionBodyStyle.copyWith(
+                  fontSize: _isMobile ? 14 : 15,
+                ),
               ),
             ],
           ),
@@ -2360,9 +2410,7 @@ class _LandingPageState extends State<LandingPage> {
           vertical: compact ? 14 : 16,
         ),
         minimumSize: Size(compact ? 0 : 180, 48),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(999),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
       ),
       icon: const Icon(Icons.person_add_alt_1_rounded, size: 20),
       label: Text(
@@ -2383,7 +2431,7 @@ class _LandingPageState extends State<LandingPage> {
                   : 'Explore destinations in immersive 360° preview',
               'icon': Icons.vrpano_rounded,
               'cta': VrDownloadAppPrompt.blocksVrOnWeb
-                  ? 'Get the app'
+                  ? 'Get the App for VR'
                   : 'Start tour',
             },
             {
@@ -2397,8 +2445,7 @@ class _LandingPageState extends State<LandingPage> {
               'subtitle': kIsWeb
                   ? 'Browse destinations in your browser'
                   : 'Open your tourist dashboard and Digital Tourist ID',
-              'icon':
-                  kIsWeb ? Icons.language_rounded : Icons.dashboard_rounded,
+              'icon': kIsWeb ? Icons.language_rounded : Icons.dashboard_rounded,
               'cta': 'Continue',
             },
           ]
@@ -2410,7 +2457,7 @@ class _LandingPageState extends State<LandingPage> {
                   : 'Explore destinations in immersive 360° preview',
               'icon': Icons.vrpano_rounded,
               'cta': VrDownloadAppPrompt.blocksVrOnWeb
-                  ? 'Get the app'
+                  ? 'Get the App for VR'
                   : 'Start tour',
             },
             {
@@ -2420,10 +2467,11 @@ class _LandingPageState extends State<LandingPage> {
               'cta': 'Start planning',
             },
             {
-              'title': 'QR Check-in',
-              'subtitle': 'Scan QR codes and record visits',
-              'icon': Icons.qr_code_scanner_rounded,
-              'cta': 'Check in now',
+              'title': 'FAQ & Help',
+              'subtitle':
+                  'Quick answers about registration, VR tours, trip planning, and check-ins',
+              'icon': Icons.help_outline_rounded,
+              'cta': 'View FAQs',
             },
           ];
 
@@ -2437,7 +2485,7 @@ class _LandingPageState extends State<LandingPage> {
           radius: 1.1,
           colors: [
             Color.alphaBlend(
-              _primaryOrange.withValues(alpha: 0.07),
+              _primaryOrange.withValues(alpha: 0.04),
               viewport ? Colors.transparent : _pageBackground,
             ),
             viewport ? Colors.transparent : _pageBackground,
@@ -2448,14 +2496,16 @@ class _LandingPageState extends State<LandingPage> {
         mainAxisSize: MainAxisSize.min,
         children: [
           _buildSectionHeader(
-            fromQrSignup ? 'What would you like to do?' : 'Choose Your Experience',
+            fromQrSignup
+                ? 'What would you like to do?'
+                : 'Choose Your Experience',
             fromQrSignup
                 ? 'VR Tour and Trip Planner — continue on the website or get the ATMOS app'
-                : 'One platform — explore, plan, and check in across Misamis Occidental',
+                : 'One platform — explore, plan, and get answers across Misamis Occidental',
             icon: Icons.explore_rounded,
             badge: fromQrSignup
                 ? 'VR · Trip Planner · Website / App'
-                : 'VR · Itinerary · Check-in',
+                : 'VR · Itinerary · FAQ',
             highlight: fromQrSignup ? 'do?' : 'Experience',
           ),
           if (_qrWelcomeMessage != null) ...[
@@ -2510,10 +2560,7 @@ class _LandingPageState extends State<LandingPage> {
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            Color(0xFFFFF7ED),
-            Color(0xFFFFFFFF),
-          ],
+          colors: [Color(0xFFFFF7ED), Color(0xFFFFFFFF)],
         ),
         borderRadius: BorderRadius.circular(_cardRadius),
         border: Border.all(color: _primaryOrange.withValues(alpha: 0.35)),
@@ -2539,10 +2586,7 @@ class _LandingPageState extends State<LandingPage> {
                   style: _cardTitleStyle.copyWith(color: _darkBg),
                 ),
                 const SizedBox(height: 6),
-                Text(
-                  _qrWelcomeMessage!,
-                  style: _cardSubtitleStyle,
-                ),
+                Text(_qrWelcomeMessage!, style: _cardSubtitleStyle),
               ],
             ),
           ),
@@ -2561,28 +2605,49 @@ class _LandingPageState extends State<LandingPage> {
   }) {
     final isHovered = _hoveredExperienceIndex == index;
     final isHighlighted = _highlightExperienceSection;
-    final ctaRow = Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          cta,
-          style: const TextStyle(
-            color: _primaryOrange,
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
+    const mutedText = Color(0xFF64748B);
+    final ctaColor = isHovered ? Colors.white : _primaryOrange;
+    final ctaRow = AnimatedContainer(
+      duration: _motionDuration,
+      curve: Curves.easeOutCubic,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: isHovered
+            ? _primaryOrange
+            : _primaryOrange.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            cta,
+            style: TextStyle(
+              color: ctaColor,
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.1,
+            ),
           ),
-        ),
-        AnimatedPadding(
-          duration: _motionDuration,
-          curve: Curves.easeOutCubic,
-          padding: EdgeInsets.only(left: isHovered ? 10 : 6),
-          child: const Icon(
-            Icons.arrow_forward_rounded,
-            color: _primaryOrange,
-            size: 18,
+          AnimatedPadding(
+            duration: _motionDuration,
+            curve: Curves.easeOutCubic,
+            padding: EdgeInsets.only(left: isHovered ? 8 : 6),
+            child: Icon(Icons.arrow_forward_rounded, color: ctaColor, size: 16),
           ),
-        ),
-      ],
+        ],
+      ),
+    );
+    Widget iconTile(double size) => AnimatedContainer(
+      duration: _motionDuration,
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: _primaryOrange.withValues(alpha: isHovered ? 0.16 : 0.10),
+        borderRadius: BorderRadius.circular(size * 0.3),
+      ),
+      alignment: Alignment.center,
+      child: Icon(icon, color: _primaryOrange, size: size * 0.48),
     );
 
     return MouseRegion(
@@ -2595,34 +2660,27 @@ class _LandingPageState extends State<LandingPage> {
           duration: _motionDuration,
           curve: Curves.easeOutCubic,
           transform: Matrix4.identity()
-            ..translateByDouble(0, isHovered ? -4.0 : 0.0, 0, 1),
+            ..translateByDouble(0, isHovered ? -3.0 : 0.0, 0, 1),
           constraints: expanded
-              ? const BoxConstraints(minHeight: 200)
+              ? const BoxConstraints(minHeight: 210)
               : const BoxConstraints(),
           width: expanded ? double.infinity : null,
-          padding: EdgeInsets.all(expanded ? 24 : 18),
+          padding: EdgeInsets.all(expanded ? 26 : 18),
           decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: isHovered
-                  ? const [Color(0xFFFFF7ED), Colors.white]
-                  : const [Colors.white, Colors.white],
-            ),
-            borderRadius: BorderRadius.circular(_cardRadius),
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(_cardRadius + 2),
             border: Border.all(
               color: isHighlighted || isHovered
-                  ? _primaryOrange.withValues(alpha: 0.45)
-                  : const Color(0xFFE8ECF1),
-              width: isHighlighted || isHovered ? 1.5 : 1,
+                  ? _primaryOrange.withValues(alpha: 0.30)
+                  : const Color(0xFFEEF1F5),
             ),
             boxShadow: [
               BoxShadow(
                 color: isHovered
-                    ? _primaryOrange.withValues(alpha: 0.14)
-                    : Colors.black.withValues(alpha: 0.05),
-                blurRadius: isHovered ? 22 : 12,
-                offset: Offset(0, isHovered ? 8 : 4),
+                    ? _primaryOrange.withValues(alpha: 0.10)
+                    : const Color(0xFF0F172A).withValues(alpha: 0.04),
+                blurRadius: isHovered ? 24 : 16,
+                offset: Offset(0, isHovered ? 10 : 6),
               ),
             ],
           ),
@@ -2630,31 +2688,15 @@ class _LandingPageState extends State<LandingPage> {
               ? Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        _landingIconTile(icon, size: 56),
-                        const Spacer(),
-                        Text(
-                          (index + 1).toString().padLeft(2, '0'),
-                          style: TextStyle(
-                            color: _primaryOrange.withValues(
-                              alpha: isHovered ? 0.35 : 0.18,
-                            ),
-                            fontSize: 34,
-                            fontWeight: FontWeight.w900,
-                            height: 1,
-                          ),
-                        ),
-                      ],
-                    ),
+                    iconTile(52),
                     const SizedBox(height: 20),
                     Text(
                       title,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: _cardTitleStyle.copyWith(
-                        fontSize: 19,
-                        fontWeight: FontWeight.w800,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -2662,16 +2704,20 @@ class _LandingPageState extends State<LandingPage> {
                       subtitle,
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis,
-                      style: _cardSubtitleStyle.copyWith(fontSize: 14),
+                      style: _cardSubtitleStyle.copyWith(
+                        fontSize: 14,
+                        height: 1.6,
+                        color: mutedText,
+                      ),
                     ),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 20),
                     ctaRow,
                   ],
                 )
               : Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _landingIconTile(icon, size: 48),
+                    iconTile(46),
                     const SizedBox(width: 16),
                     Expanded(
                       child: Column(
@@ -2689,9 +2735,13 @@ class _LandingPageState extends State<LandingPage> {
                             subtitle,
                             maxLines: 3,
                             overflow: TextOverflow.ellipsis,
-                            style: _cardSubtitleStyle.copyWith(fontSize: 14),
+                            style: _cardSubtitleStyle.copyWith(
+                              fontSize: 14,
+                              height: 1.55,
+                              color: mutedText,
+                            ),
                           ),
-                          const SizedBox(height: 10),
+                          const SizedBox(height: 12),
                           ctaRow,
                         ],
                       ),
@@ -2730,8 +2780,7 @@ class _LandingPageState extends State<LandingPage> {
               const spacing = 16.0;
               final cardWidth = columns == 1
                   ? constraints.maxWidth
-                  : (constraints.maxWidth - spacing * (columns - 1)) /
-                      columns;
+                  : (constraints.maxWidth - spacing * (columns - 1)) / columns;
               return Wrap(
                 spacing: spacing,
                 runSpacing: spacing,
@@ -2808,9 +2857,7 @@ class _LandingPageState extends State<LandingPage> {
             decoration: BoxDecoration(
               color: _primaryOrange.withValues(alpha: 0.10),
               borderRadius: BorderRadius.circular(999),
-              border: Border.all(
-                color: _primaryOrange.withValues(alpha: 0.22),
-              ),
+              border: Border.all(color: _primaryOrange.withValues(alpha: 0.22)),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -2875,7 +2922,9 @@ class _LandingPageState extends State<LandingPage> {
       Widget card = MouseRegion(
         onEnter: (_) => setState(() => _hoveredFeatureIndex = index),
         onExit: (_) => setState(() => _hoveredFeatureIndex = null),
-        cursor: route != null ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        cursor: route != null
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
         child: AnimatedContainer(
           duration: _motionDuration,
           curve: Curves.easeOutCubic,
@@ -2921,10 +2970,7 @@ class _LandingPageState extends State<LandingPage> {
         ),
       );
       if (route == 'itinerary') {
-        return GestureDetector(
-          onTap: _openPlanItinerary,
-          child: card,
-        );
+        return GestureDetector(onTap: _openPlanItinerary, child: card);
       }
       return card;
     }
@@ -2939,10 +2985,7 @@ class _LandingPageState extends State<LandingPage> {
         transform: Matrix4.identity()
           ..translateByDouble(0, isHovered ? -4.0 : 0.0, 0, 1),
         padding: const EdgeInsets.fromLTRB(20, 22, 20, 20),
-        decoration: _surfaceCardDecoration(
-          hovered: isHovered,
-          accent: accent,
-        ),
+        decoration: _surfaceCardDecoration(hovered: isHovered, accent: accent),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
@@ -2974,10 +3017,7 @@ class _LandingPageState extends State<LandingPage> {
     );
 
     if (route == 'itinerary') {
-      return GestureDetector(
-        onTap: _openPlanItinerary,
-        child: card,
-      );
+      return GestureDetector(onTap: _openPlanItinerary, child: card);
     }
     return card;
   }
@@ -3044,8 +3084,7 @@ class _LandingPageState extends State<LandingPage> {
                     : 2;
                 const spacing = 16.0;
                 final cardWidth =
-                    (constraints.maxWidth - spacing * (columns - 1)) /
-                    columns;
+                    (constraints.maxWidth - spacing * (columns - 1)) / columns;
                 return Wrap(
                   spacing: spacing,
                   runSpacing: spacing,
@@ -3149,234 +3188,241 @@ class _LandingPageState extends State<LandingPage> {
                   clipBehavior: Clip.none,
                   children: [
                     SingleChildScrollView(
-                  padding: EdgeInsets.fromLTRB(
-                    _isMobile ? 18 : 22,
-                    16,
-                    _isMobile ? 18 : 22,
-                    20,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      const SizedBox(height: 8),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(14),
-                        child: SizedBox(
-                          height: _isMobile ? 130 : 160,
-                          width: double.infinity,
-                          child: _isMobile
-                              ? GestureDetector(
-                                  onTap: () => _showDestinationImageFullscreen(
-                                    dialogContext,
-                                    imageUrl: imageUrl,
-                                    isAsset: isAsset,
-                                    title: name,
-                                  ),
-                                  child: Stack(
-                                    fit: StackFit.expand,
-                                    children: [
-                                      _buildDestinationSheetImage(
-                                        imageUrl: imageUrl,
-                                        isAsset: isAsset,
-                                      ),
-                                      Positioned(
-                                        right: 10,
-                                        bottom: 10,
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 5,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: Colors.black
-                                                .withValues(alpha: 0.55),
-                                            borderRadius:
-                                                BorderRadius.circular(8),
-                                          ),
-                                          child: const Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Icon(
-                                                Icons.fullscreen_rounded,
-                                                color: Colors.white,
-                                                size: 16,
-                                              ),
-                                              SizedBox(width: 4),
-                                              Text(
-                                                'View full',
-                                                style: TextStyle(
-                                                  color: Colors.white,
-                                                  fontSize: 11,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                )
-                              : _buildDestinationSheetImage(
-                                  imageUrl: imageUrl,
-                                  isAsset: isAsset,
-                                ),
-                        ),
+                      padding: EdgeInsets.fromLTRB(
+                        _isMobile ? 18 : 22,
+                        16,
+                        _isMobile ? 18 : 22,
+                        20,
                       ),
-                      const SizedBox(height: 14),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        alignment: WrapAlignment.center,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 5,
-                            ),
-                            decoration: BoxDecoration(
-                              color: _primaryOrange.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.landscape_rounded,
-                                  size: 14,
-                                  color: _brandDark,
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  'Tourist destination',
-                                  style: TextStyle(
-                                    color: _brandDark,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ],
+                          const SizedBox(height: 8),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(14),
+                            child: SizedBox(
+                              height: _isMobile ? 130 : 160,
+                              width: double.infinity,
+                              child: _isMobile
+                                  ? GestureDetector(
+                                      onTap: () =>
+                                          _showDestinationImageFullscreen(
+                                            dialogContext,
+                                            imageUrl: imageUrl,
+                                            isAsset: isAsset,
+                                            title: name,
+                                          ),
+                                      child: Stack(
+                                        fit: StackFit.expand,
+                                        children: [
+                                          _buildDestinationSheetImage(
+                                            imageUrl: imageUrl,
+                                            isAsset: isAsset,
+                                          ),
+                                          Positioned(
+                                            right: 10,
+                                            bottom: 10,
+                                            child: Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 8,
+                                                    vertical: 5,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color: Colors.black.withValues(
+                                                  alpha: 0.55,
+                                                ),
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                              ),
+                                              child: const Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Icon(
+                                                    Icons.fullscreen_rounded,
+                                                    color: Colors.white,
+                                                    size: 16,
+                                                  ),
+                                                  SizedBox(width: 4),
+                                                  Text(
+                                                    'View full',
+                                                    style: TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 11,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    )
+                                  : _buildDestinationSheetImage(
+                                      imageUrl: imageUrl,
+                                      isAsset: isAsset,
+                                    ),
                             ),
                           ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 5,
+                          const SizedBox(height: 14),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            alignment: WrapAlignment.center,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: _primaryOrange.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.landscape_rounded,
+                                      size: 14,
+                                      color: _brandDark,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      'Tourist destination',
+                                      style: TextStyle(
+                                        color: _brandDark,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade100,
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Text(
+                                  category,
+                                  style: TextStyle(
+                                    color: Colors.grey.shade700,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            name,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: _darkBg,
+                              fontSize: _isMobile ? 22 : 26,
+                              fontWeight: FontWeight.w800,
+                              height: 1.15,
                             ),
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade100,
-                              borderRadius: BorderRadius.circular(20),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            description,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.grey.shade700,
+                              fontSize: 14,
+                              height: 1.45,
                             ),
-                            child: Text(
-                              category,
-                              style: TextStyle(
-                                color: Colors.grey.shade700,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Choose how to explore $name:',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.grey.shade800,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.icon(
+                              onPressed: () {
+                                Navigator.pop(dialogContext);
+                                _openVrTourFromLanding(municipalityName: name);
+                              },
+                              icon: const Icon(Icons.vrpano_rounded, size: 20),
+                              label: Text(_landingVrButtonLabel),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: _primaryOrange,
+                                foregroundColor: Colors.white,
+                                minimumSize: const Size(double.infinity, 46),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: () {
+                                Navigator.pop(dialogContext);
+                                _openPlanItinerary(municipalityName: name);
+                              },
+                              icon: const Icon(Icons.map_rounded, size: 20),
+                              label: const Text('Plan itinerary'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: const Color(0xFF0369A1),
+                                backgroundColor: const Color(
+                                  0xFF0EA5E9,
+                                ).withValues(alpha: 0.08),
+                                side: const BorderSide(
+                                  color: Color(0xFF0EA5E9),
+                                ),
+                                minimumSize: const Size(double.infinity, 46),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            width: double.infinity,
+                            child: TextButton.icon(
+                              onPressed: () {
+                                Navigator.pop(dialogContext);
+                                _openDestinationTouristSpots(destination);
+                              },
+                              icon: Icon(
+                                Icons.place_rounded,
+                                size: 18,
+                                color: _primaryOrange,
+                              ),
+                              label: Text(
+                                'View tourist spots',
+                                style: TextStyle(
+                                  color: _brandDark,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 12),
-                      Text(
-                        name,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: _darkBg,
-                          fontSize: _isMobile ? 22 : 26,
-                          fontWeight: FontWeight.w800,
-                          height: 1.15,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        description,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Colors.grey.shade700,
-                          fontSize: 14,
-                          height: 1.45,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Choose how to explore $name:',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Colors.grey.shade800,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.icon(
-                          onPressed: () {
-                            Navigator.pop(dialogContext);
-                            _openVrTourFromLanding(municipalityName: name);
-                          },
-                          icon: const Icon(Icons.vrpano_rounded, size: 20),
-                          label: Text(_landingVrButtonLabel),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: _primaryOrange,
-                            foregroundColor: Colors.white,
-                            minimumSize: const Size(double.infinity, 46),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: () {
-                            Navigator.pop(dialogContext);
-                            _openPlanItinerary(municipalityName: name);
-                          },
-                          icon: const Icon(Icons.map_rounded, size: 20),
-                          label: const Text('Plan itinerary'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFF0369A1),
-                            backgroundColor: const Color(0xFF0EA5E9)
-                                .withValues(alpha: 0.08),
-                            side: const BorderSide(color: Color(0xFF0EA5E9)),
-                            minimumSize: const Size(double.infinity, 46),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      SizedBox(
-                        width: double.infinity,
-                        child: TextButton.icon(
-                          onPressed: () {
-                            Navigator.pop(dialogContext);
-                            _openDestinationTouristSpots(destination);
-                          },
-                          icon: Icon(
-                            Icons.place_rounded,
-                            size: 18,
-                            color: _primaryOrange,
-                          ),
-                          label: Text(
-                            'View tourist spots',
-                            style: TextStyle(
-                              color: _brandDark,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                    ),
                     Positioned(
                       top: 4,
                       right: 4,
@@ -3421,10 +3467,7 @@ class _LandingPageState extends State<LandingPage> {
     required bool isAsset,
     BoxFit fit = BoxFit.cover,
   }) {
-    return SpotImage(
-      imageUrl: imageUrl,
-      fit: fit,
-    );
+    return SpotImage(imageUrl: imageUrl, fit: fit);
   }
 
   Widget _destinationCategoryBadge(String category, {bool onImage = false}) {
@@ -3576,8 +3619,9 @@ class _LandingPageState extends State<LandingPage> {
                                 label: _landingVrQuickActionLabel,
                                 icon: Icons.vrpano_rounded,
                                 color: _primaryOrange,
-                                onTap: () =>
-                                    _openVrTourFromLanding(municipalityName: name),
+                                onTap: () => _openVrTourFromLanding(
+                                  municipalityName: name,
+                                ),
                               ),
                             ),
                             const SizedBox(width: 8),
@@ -3817,10 +3861,7 @@ class _LandingPageState extends State<LandingPage> {
                         for (final step in stepEntries)
                           SizedBox(
                             width: cardWidth.clamp(200.0, 260.0),
-                            child: _buildStepCard(
-                              step.value,
-                              compact: false,
-                            ),
+                            child: _buildStepCard(step.value, compact: false),
                           ),
                       ],
                     );
@@ -3876,10 +3917,7 @@ class _LandingPageState extends State<LandingPage> {
     );
   }
 
-  Widget _buildStepCard(
-    Map<String, dynamic> step, {
-    bool compact = false,
-  }) {
+  Widget _buildStepCard(Map<String, dynamic> step, {bool compact = false}) {
     final number = step['number'] as String;
     final title = step['title'] as String;
     final description = step['description'] as String;
@@ -4026,7 +4064,11 @@ class _LandingPageState extends State<LandingPage> {
         children: [
           Row(
             children: [
-              _landingIconTile(stat['icon'] as IconData, accent: accent, size: 44),
+              _landingIconTile(
+                stat['icon'] as IconData,
+                accent: accent,
+                size: 44,
+              ),
               const Spacer(),
             ],
           ),
@@ -4064,13 +4106,13 @@ class _LandingPageState extends State<LandingPage> {
   Widget _buildStatisticsSection({bool viewport = false}) {
     final stats = [
       {
-        'value': '10,000+',
+        'value': _formatStatCount(_publicStats?.registeredTourists),
         'label': 'Registered Tourists',
         'icon': Icons.people_rounded,
         'accent': _primaryOrange,
       },
       {
-        'value': '15-25',
+        'value': _formatStatCount(_publicStats?.touristSpots),
         'label': 'Tourist Spots',
         'icon': Icons.place_rounded,
         'accent': _primaryOrange,
@@ -4203,28 +4245,8 @@ class _LandingPageState extends State<LandingPage> {
                   mainAxisAlignment: MainAxisAlignment.end,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: _primaryOrange.withValues(alpha: 0.92),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: const Text(
-                        'OFFICIAL PARTNER',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.8,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
                     Text(
-                      'Provincial Tourism Office',
+                      'Provincial Governor',
                       style: _cardTitleStyle.copyWith(
                         fontSize: 18,
                         color: Colors.white,
@@ -4268,9 +4290,7 @@ class _LandingPageState extends State<LandingPage> {
               children: [
                 Expanded(child: _buildAboutSectionCopy()),
                 const SizedBox(width: 48),
-                Expanded(
-                  child: _buildProvincialTourismOfficeCard(height: 400),
-                ),
+                Expanded(child: _buildProvincialTourismOfficeCard(height: 400)),
               ],
             ),
     );
@@ -4296,9 +4316,7 @@ class _LandingPageState extends State<LandingPage> {
           decoration: BoxDecoration(
             color: _primaryOrange.withValues(alpha: 0.10),
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: _primaryOrange.withValues(alpha: 0.22),
-            ),
+            border: Border.all(color: _primaryOrange.withValues(alpha: 0.22)),
           ),
           child: const Text(
             'ABOUT ATMOS-TRS',
@@ -4329,43 +4347,7 @@ class _LandingPageState extends State<LandingPage> {
           'Our mission is to connect visitors with local communities and create a sustainable, smart tourism ecosystem across the province.',
           style: _sectionBodyStyle,
         ),
-        const SizedBox(height: 28),
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: [
-            _buildAboutFeature(Icons.verified_rounded, 'Official Partner'),
-            _buildAboutFeature(Icons.security_rounded, 'Secure Platform'),
-            _buildAboutFeature(Icons.support_agent_rounded, '24/7 Support'),
-          ],
-        ),
       ],
-    );
-  }
-
-  Widget _buildAboutFeature(IconData icon, String label) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: _primaryOrange.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: _primaryOrange.withValues(alpha: 0.22)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: _primaryOrange, size: 18),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: TextStyle(
-              color: _darkBg,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -4378,9 +4360,7 @@ class _LandingPageState extends State<LandingPage> {
       ),
       decoration: const BoxDecoration(
         color: _darkBg,
-        border: Border(
-          top: BorderSide(color: _primaryOrange, width: 3),
-        ),
+        border: Border(top: BorderSide(color: _primaryOrange, width: 3)),
       ),
       child: _wrapSectionContent(
         Column(
@@ -4693,10 +4673,7 @@ class _DestinationImageFullscreenPage extends StatelessWidget {
   final String title;
 
   Widget _buildImage() {
-    return SpotImage(
-      imageUrl: imageUrl,
-      fit: BoxFit.contain,
-    );
+    return SpotImage(imageUrl: imageUrl, fit: BoxFit.contain);
   }
 
   @override
@@ -4709,10 +4686,7 @@ class _DestinationImageFullscreenPage extends StatelessWidget {
         elevation: 0,
         title: Text(
           title,
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-          ),
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
         leadingWidth: 80,
         leading: Padding(
@@ -4735,10 +4709,7 @@ class _DestinationImageFullscreenPage extends StatelessWidget {
               ),
               child: const Text(
                 'Back',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
               ),
             ),
           ),
@@ -4748,8 +4719,198 @@ class _DestinationImageFullscreenPage extends StatelessWidget {
         child: InteractiveViewer(
           minScale: 1,
           maxScale: 4,
-          child: Center(
-            child: _buildImage(),
+          child: Center(child: _buildImage()),
+        ),
+      ),
+    );
+  }
+}
+
+class _LandingFaqDialog extends StatefulWidget {
+  const _LandingFaqDialog();
+
+  @override
+  State<_LandingFaqDialog> createState() => _LandingFaqDialogState();
+}
+
+class _LandingFaqDialogState extends State<_LandingFaqDialog> {
+  static const Color _orange = Color(0xFFF97316);
+  static const Color _title = Color(0xFF192334);
+  static const Color _muted = Color(0xFF64748B);
+  static const Color _border = Color(0xFFEEF1F5);
+
+  int? _expandedIndex = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final compact = size.width < 600;
+    return Dialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: compact ? 16 : 24,
+        vertical: 24,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      clipBehavior: Clip.antiAlias,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 640,
+          maxHeight: size.height * 0.85,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildHeader(compact),
+            const Divider(height: 1, color: _border),
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                padding: EdgeInsets.fromLTRB(
+                  compact ? 14 : 22,
+                  16,
+                  compact ? 14 : 22,
+                  22,
+                ),
+                itemCount: kAppFaqItems.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 10),
+                itemBuilder: (context, i) => _buildItem(i, kAppFaqItems[i]),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader(bool compact) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(compact ? 18 : 24, 20, 12, 18),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: _orange.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(13),
+            ),
+            alignment: Alignment.center,
+            child: const Icon(
+              Icons.help_outline_rounded,
+              color: _orange,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Frequently Asked Questions',
+                  style: TextStyle(
+                    color: _title,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  'Everything you need to know about ATMOS-TRS',
+                  style: TextStyle(color: _muted, fontSize: 13, height: 1.4),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Close',
+            onPressed: () => Navigator.of(context).pop(),
+            icon: const Icon(Icons.close_rounded, color: _muted),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildItem(int index, AppFaqItem item) {
+    final expanded = _expandedIndex == index;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOutCubic,
+      decoration: BoxDecoration(
+        color: expanded ? const Color(0xFFFFFBF7) : Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: expanded ? _orange.withValues(alpha: 0.28) : _border,
+        ),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () => setState(() => _expandedIndex = expanded ? null : index),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 10, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: _orange.withValues(alpha: 0.10),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      alignment: Alignment.center,
+                      child: Icon(item.icon, color: _orange, size: 18),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        item.question,
+                        style: const TextStyle(
+                          color: _title,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          height: 1.35,
+                        ),
+                      ),
+                    ),
+                    AnimatedRotation(
+                      turns: expanded ? 0.5 : 0,
+                      duration: const Duration(milliseconds: 200),
+                      child: Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        color: expanded ? _orange : _muted,
+                      ),
+                    ),
+                  ],
+                ),
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOutCubic,
+                  alignment: Alignment.topCenter,
+                  child: expanded
+                      ? Padding(
+                          padding: const EdgeInsets.fromLTRB(46, 10, 8, 0),
+                          child: Text(
+                            item.answer,
+                            style: const TextStyle(
+                              color: Color(0xFF475569),
+                              fontSize: 14,
+                              height: 1.6,
+                            ),
+                          ),
+                        )
+                      : const SizedBox(width: double.infinity),
+                ),
+              ],
+            ),
           ),
         ),
       ),

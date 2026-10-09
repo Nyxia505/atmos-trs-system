@@ -5,6 +5,7 @@ import 'package:firebase_core/firebase_core.dart' show FirebaseException;
 import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/app_theme_controller.dart';
+import 'package:atmos_trs_system/models/tourist_group.dart';
 import 'package:atmos_trs_system/services/qr_checkin_service.dart';
 import 'package:atmos_trs_system/services/notification_firestore_service.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
@@ -102,7 +103,9 @@ Future<void> showQRCheckInSuccessDialog(
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: const Color(0xFF059669).withValues(alpha: 0.35),
+                          color: const Color(
+                            0xFF059669,
+                          ).withValues(alpha: 0.35),
                           blurRadius: 16,
                           offset: const Offset(0, 6),
                         ),
@@ -171,25 +174,29 @@ Future<void> showQRCheckInSuccessDialog(
 
 String _errorDialogTitle(String message) {
   final m = message.toLowerCase();
-  if (m.contains('sorry') ||
-      m.contains('almost there') ||
-      m.contains('location') ||
-      m.contains('gps') ||
-      m.contains('meters') ||
-      m.contains('within about') ||
-      m.contains('digital') ||
-      m.contains('printed') ||
-      m.contains('tourist spot') ||
-      m.contains('on site') ||
-      m.contains('on-site')) {
-    return 'Almost there';
+  if (m.contains('only available at')) return 'Not at the spot yet';
+  if (m.contains('you\'re close')) return 'Almost there';
+  if (m.contains('shown on a screen')) return 'Can\'t use this QR';
+  if (m.contains('mobile phones only')) return 'Use your phone';
+  if (m.contains('still finding') || m.contains('couldn\'t get your location')) {
+    return 'Finding your location';
+  }
+  if (m.contains('location')) return 'Location needed';
+  if (m.contains('official qr') ||
+      m.contains('printed qr') ||
+      m.contains('on site')) {
+    return 'Can\'t check in here';
   }
   return 'Check-in failed';
 }
 
 /// Shows an error dialog when QR check-in save fails.
-void showQRCheckInErrorDialog(BuildContext context, String message) {
-  showTouristDialog<void>(
+Future<void> showQRCheckInErrorDialog(
+  BuildContext context,
+  String message, {
+  String? title,
+}) {
+  return showTouristDialog<void>(
     context: context,
     barrierColor: Colors.black.withValues(alpha: 0.45),
     builder: (dialogContext) {
@@ -238,7 +245,7 @@ void showQRCheckInErrorDialog(BuildContext context, String message) {
                   ),
                   const SizedBox(height: 20),
                   Text(
-                    _errorDialogTitle(message),
+                    title ?? _errorDialogTitle(message),
                     style: const TextStyle(
                       color: Color(0xFF111827),
                       fontSize: 22,
@@ -310,6 +317,10 @@ Future<bool> performQRCheckIn(
   int partySize = 1,
   int femaleCount = 0,
   int maleCount = 0,
+  int filipinoCount = 0,
+  int foreignCount = 0,
+  TouristGroup? group,
+  bool isDemoQr = false,
   VoidCallback? onBeforeDialog,
 }) async {
   final result = await QRCheckInService.saveCheckIn(
@@ -318,9 +329,13 @@ Future<bool> performQRCheckIn(
     userId: userId,
     spotName: spotName,
     municipality: municipality,
+    isDemoQr: isDemoQr,
     partySize: partySize,
     femaleCount: femaleCount,
     maleCount: maleCount,
+    filipinoCount: filipinoCount,
+    foreignCount: foreignCount,
+    group: group,
   );
 
   if (!context.mounted) return false;
@@ -329,13 +344,13 @@ Future<bool> performQRCheckIn(
 
   switch (result) {
     case QRCheckInSuccess(
-        :final welcomeMessage,
-        :final dialogTitle,
-        spotId: final savedSpotId,
-        spotName: final savedSpotName,
-        municipality: final savedMunicipality,
-        municipalityId: final savedMunicipalityId,
-      ):
+      :final welcomeMessage,
+      :final dialogTitle,
+      spotId: final savedSpotId,
+      spotName: final savedSpotName,
+      municipality: final savedMunicipality,
+      municipalityId: final savedMunicipalityId,
+    ):
       final uid = await QRCheckInService.getCurrentUserId();
       if (uid != null && uid.isNotEmpty) {
         await UserActivityService.bindToUser(uid);
@@ -356,8 +371,8 @@ Future<bool> performQRCheckIn(
       final visitCategory = (category != null && category.trim().isNotEmpty)
           ? category.trim()
           : (muniLabel.isNotEmpty ? muniLabel : 'Spot');
-      final visitMunicipalityId =
-          (savedMunicipalityId ?? municipalityId).trim();
+      final visitMunicipalityId = (savedMunicipalityId ?? municipalityId)
+          .trim();
 
       // Persist Visited BEFORE the dialog so Home sees it as soon as we navigate.
       await UserActivityService.addVisit(
@@ -374,7 +389,8 @@ Future<bool> performQRCheckIn(
       // Force a second local write path: sync from Firestore so Home Visited
       // matches qr_checkins even if prefs were read with a stale uid scope.
       final synced = await UserActivityService.syncVisitedSpotsFromQrCheckins();
-      if (synced.every((v) => v.spotId != visitSpotId) && visitSpotId.isNotEmpty) {
+      if (synced.every((v) => v.spotId != visitSpotId) &&
+          visitSpotId.isNotEmpty) {
         await UserActivityService.addVisit(
           spotId: visitSpotId,
           spotName: displayName,

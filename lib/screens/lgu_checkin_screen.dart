@@ -1,10 +1,14 @@
 import 'dart:async' show unawaited;
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/app_theme_controller.dart';
 import 'package:atmos_trs_system/config/atmos_brand_typography.dart';
+import 'package:atmos_trs_system/models/tourist_group.dart';
 import 'package:atmos_trs_system/services/qr_checkin_ui.dart';
+import 'package:atmos_trs_system/services/tourist_group_service.dart';
+import 'package:atmos_trs_system/widgets/laag_group_checkin_toggle.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/widgets/party_demographic_fields.dart';
@@ -15,10 +19,14 @@ class LguCheckInScreen extends StatefulWidget {
     super.key,
     required this.municipalityId,
     required this.displayName,
+    this.isDemoQr = false,
   });
 
   final String municipalityId;
   final String displayName;
+
+  /// Dummy QR: skips the on-site GPS check.
+  final bool isDemoQr;
 
   @override
   State<LguCheckInScreen> createState() => _LguCheckInScreenState();
@@ -28,14 +36,41 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
   static const Color _textDark = Color(0xFF111827);
   static const Color _textMuted = Color(0xFF6B7280);
   bool _submitting = false;
-  final _demoKey = GlobalKey<PartyDemographicFieldsState>();
-  PartyDemographicValue _demo = const PartyDemographicValue(
-    partySize: 1,
-    maleCount: 0,
-    femaleCount: 1,
-    filipinoCount: 1,
-    foreignCount: 0,
-  );
+  var _demoKey = GlobalKey<PartyDemographicFieldsState>();
+  PartyDemographicValue _demo = kSoloParty;
+  TouristGroup? _group;
+  bool _useGroup = true;
+
+  bool get _groupMode =>
+      _useGroup &&
+      _group != null &&
+      _group!.isLeader(FirebaseAuth.instance.currentUser?.uid ?? '');
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadGroup());
+  }
+
+  Future<void> _loadGroup() async {
+    final g = await TouristGroupService.myActiveGroup();
+    if (!mounted || g == null) return;
+    setState(() {
+      _group = g;
+      if (_groupMode) {
+        _demo = kNoCompanions;
+        _demoKey = GlobalKey<PartyDemographicFieldsState>();
+      }
+    });
+  }
+
+  void _setUseGroup(bool v) {
+    setState(() {
+      _useGroup = v;
+      _demo = _groupMode ? kNoCompanions : kSoloParty;
+      _demoKey = GlobalKey<PartyDemographicFieldsState>();
+    });
+  }
 
   void _clearSubmitting() {
     if (mounted && _submitting) {
@@ -108,6 +143,10 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
         partySize: demo.partySize,
         femaleCount: demo.femaleCount,
         maleCount: demo.maleCount,
+        filipinoCount: demo.filipinoCount,
+        foreignCount: demo.foreignCount,
+        group: _groupMode ? _group : null,
+        isDemoQr: widget.isDemoQr,
         onBeforeDialog: _clearSubmitting,
       );
       if (ok && mounted) {
@@ -154,6 +193,17 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           _buildHeroCard(accent, accentLight, accentDark),
+                          if (_group != null) ...[
+                            const SizedBox(height: 16),
+                            LaagGroupCheckInToggle(
+                              group: _group!,
+                              isLeader: _group!.isLeader(
+                                FirebaseAuth.instance.currentUser?.uid ?? '',
+                              ),
+                              enabled: _useGroup,
+                              onChanged: _setUseGroup,
+                            ),
+                          ],
                           const SizedBox(height: 16),
                           _buildPartySizeCard(accent),
                         ],
@@ -328,28 +378,35 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Party size',
-            style: TextStyle(
+          Text(
+            _groupMode ? 'Companions without the app' : 'Party size',
+            style: const TextStyle(
               color: _textDark,
               fontSize: 16,
               fontWeight: FontWeight.w800,
             ),
           ),
           const SizedBox(height: 4),
-          const Text(
-            'Enter total guests, then gender and Filipino/Foreign. '
-            'One side auto-fills the other. Include yourself.',
-            style: TextStyle(color: _textMuted, fontSize: 13, height: 1.4),
+          Text(
+            _groupMode
+                ? kCompanionsHelpText
+                : 'Enter total guests, then gender and Filipino/Foreign. '
+                    'One side auto-fills the other. Include yourself.',
+            style: const TextStyle(color: _textMuted, fontSize: 13, height: 1.4),
           ),
           const SizedBox(height: 12),
           PartyDemographicFields(
             key: _demoKey,
-            initialPartySize: 1,
-            initialMale: 0,
-            initialFemale: 1,
-            initialFilipino: 1,
-            initialForeign: 0,
+            initialPartySize: _demo.partySize,
+            initialMale: _demo.maleCount,
+            initialFemale: _demo.femaleCount,
+            initialFilipino: _demo.filipinoCount,
+            initialForeign: _demo.foreignCount,
+            minPartySize: _groupMode ? 0 : 1,
+            partyLabel: _groupMode ? 'Companions' : 'Party size',
+            partyHelperText: _groupMode
+                ? 'People with you who don\'t have the app (0 if none)'
+                : 'Total guests in this stay / visit',
             onChanged: (v) => setState(() => _demo = v),
           ),
         ],
@@ -380,8 +437,9 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           TextButton(
-            onPressed:
-                _submitting ? null : () => unawaited(_leaveForDashboard()),
+            onPressed: _submitting
+                ? null
+                : () => unawaited(_leaveForDashboard()),
             child: const Text(
               'Skip for now — go to dashboard',
               style: TextStyle(
@@ -429,8 +487,11 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
                           ),
                         )
                       else
-                        Icon(Icons.check_circle_rounded,
-                            color: onAccent, size: 22),
+                        Icon(
+                          Icons.check_circle_rounded,
+                          color: onAccent,
+                          size: 22,
+                        ),
                       const SizedBox(width: 10),
                       Text(
                         _submitting ? 'Saving visit…' : 'Register visit',

@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:atmos_trs_system/models/ae_register.dart';
 import 'package:atmos_trs_system/utils/dae3_aggregates.dart';
 
 void main() {
@@ -52,58 +53,45 @@ void main() {
     });
   });
 
-  group('aggregateDae3FromConfirmedStays', () {
-    test('sums party, nights, rooms per AE × month', () {
-      final rows = aggregateDae3FromConfirmedStays(
-        scopeLabel: 'Oroquieta City',
-        stayEvents: [
-          {
-            'status': 'confirmed',
-            'municipality': 'Oroquieta City',
-            'establishmentName': 'Hoten Hotel',
-            'establishmentCategory': 'Hotel',
-            'roomsAvailable': 20,
-            'partySize': 2,
-            'nightsStayed': 3,
-            'roomsOccupied': 1,
-            'timestamp': DateTime(2026, 9, 10, 12),
-          },
-          {
-            'status': 'confirmed',
-            'municipality': 'Oroquieta City',
-            'establishmentName': 'Hoten Hotel',
-            'establishmentCategory': 'Hotel',
-            'roomsAvailable': 20,
-            'partySize': 1,
-            'nightsStayed': 2,
-            'roomsOccupied': 1,
-            'timestamp': DateTime(2026, 9, 12, 12),
-          },
-          {
-            'status': 'pending',
-            'municipality': 'Oroquieta City',
-            'establishmentName': 'Hoten Hotel',
-            'partySize': 9,
-            'timestamp': DateTime(2026, 9, 11, 12),
-          },
-        ],
-      );
+  group('aggregateDae3FromAeReports', () {
+    test('one row per AE-month from register totals; empty months skipped', () {
+      final rows = aggregateDae3FromAeReports([
+        const AeMonthlyReport(
+          id: 'h_2026_09',
+          aeId: 'h',
+          year: 2026,
+          month: 9,
+          aeName: 'Hoten Hotel',
+          municipality: 'Oroquieta City',
+          totalRooms: 20,
+          aeType: 'Hotel',
+          classificationCode: 'HTL',
+          totals: AeMonthTotals(
+            checkIns: 3,
+            guestNights: 8,
+            roomsOccupied: 5,
+            rowCount: 5,
+          ),
+        ),
+        const AeMonthlyReport(id: 'h_2026_10', aeId: 'h', year: 2026, month: 10, aeName: 'Hoten Hotel'),
+      ]);
 
       expect(rows.length, 1);
       final hoten = rows.single;
       expect(hoten.aeId, 'Hoten Hotel');
       expect(hoten.guestsCheckedIn, 3);
-      expect(hoten.guestNights, 2 * 3 + 1 * 2);
-      expect(hoten.roomsOccupied, 2);
-      expect(hoten.typeClass, 'Hotel');
+      expect(hoten.guestNights, 8);
+      expect(hoten.roomsOccupied, 5);
+      expect(hoten.typeClass, 'HTL');
       expect(hoten.roomsAvailable, 20);
-      expect(hoten.fromConfirmedStays, isTrue);
+      expect(hoten.occupancyPct!, closeTo(5 / (20 * 30) * 100, 1e-9));
+      expect(hoten.fromRegister, isTrue);
     });
 
-    test('preferring stays falls back to check-ins when empty', () {
-      final rows = aggregateDae3PreferringStays(
+    test('preferring register falls back to check-ins when empty', () {
+      final rows = aggregateDae3PreferringRegister(
         scopeLabel: 'Oroquieta City',
-        stayEvents: const [],
+        reports: const [],
         checkIns: [
           {
             'municipality': 'Oroquieta City',
@@ -114,7 +102,7 @@ void main() {
         parseCheckInTimestamp: (c) => c['timestamp'] as DateTime?,
       );
       expect(rows.single.aeId, 'City Plaza');
-      expect(rows.single.fromConfirmedStays, isFalse);
+      expect(rows.single.fromRegister, isFalse);
     });
   });
 }

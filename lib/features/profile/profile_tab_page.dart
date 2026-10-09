@@ -44,6 +44,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
   bool _addressExpanded = false;
   bool _otpVerified = false;
   bool _uploadingPhoto = false;
+  Uint8List? _pendingPhotoBytes;
   final ImagePicker _imagePicker = ImagePicker();
 
   Color get _textPrimary => AppTheme.textPrimary;
@@ -154,48 +155,71 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
       return;
     }
     if (bytes == null || bytes.isEmpty || !mounted) return;
+    await _uploadProfilePhoto(uid, bytes);
+  }
 
-    setState(() => _uploadingPhoto = true);
+  /// Shows [bytes] on the avatar right away, then saves in the background.
+  Future<void> _uploadProfilePhoto(String uid, Uint8List bytes) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    setState(() {
+      _pendingPhotoBytes = bytes;
+      _uploadingPhoto = true;
+    });
     try {
       final result = await TouristProfilePhotoService.uploadBytes(
         uid: uid,
         rawBytes: bytes,
       );
-      if (!mounted) return;
-      if (result == null || !result.hasPhoto) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Could not save profile photo. Try again.'),
-            backgroundColor: Colors.red.shade700,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-        return;
+      final url = result.profilePhotoUrl;
+      if (url != null && url.isNotEmpty && mounted) {
+        // Keep the local preview until the network copy is ready (no flash).
+        try {
+          await precacheImage(NetworkImage(url), context)
+              .timeout(const Duration(seconds: 8));
+        } catch (_) {}
       }
-      await _loadProfile();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      setState(() {
+        _userProfile = UserProfileStorage.cachedProfile ?? _userProfile;
+        _pendingPhotoBytes = null;
+        _uploadingPhoto = false;
+      });
+      messenger.showSnackBar(
         SnackBar(
-          content: Text(
-            result.usedFirestoreFallback
-                ? 'Profile photo saved.'
-                : 'Profile photo updated.',
-          ),
+          content: const Text('Profile photo updated.'),
           backgroundColor: Colors.green.shade700,
           behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
         ),
       );
     } catch (e) {
+      debugPrint('[ProfilePhoto] save failed: $e');
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      setState(() {
+        _pendingPhotoBytes = null;
+        _uploadingPhoto = false;
+      });
+      final reason = e is StateError
+          ? e.message
+          : 'Could not save your photo. Check your internet connection.';
+      messenger.showSnackBar(
         SnackBar(
-          content: Text('Upload failed: $e'),
+          content: Text(reason),
           backgroundColor: Colors.red.shade700,
           behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 8),
+          action: SnackBarAction(
+            label: 'Retry',
+            textColor: Colors.white,
+            onPressed: () {
+              if (mounted && !_uploadingPhoto) {
+                _uploadProfilePhoto(uid, bytes);
+              }
+            },
+          ),
         ),
       );
-    } finally {
-      if (mounted) setState(() => _uploadingPhoto = false);
     }
   }
 
@@ -815,6 +839,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
                   ringColor: onHeader,
                   showEditBadge: true,
                   isBusy: _uploadingPhoto,
+                  previewBytes: _pendingPhotoBytes,
                   onTap: _changeProfilePhoto,
                 ),
                 const SizedBox(width: 12),

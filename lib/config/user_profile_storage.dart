@@ -115,6 +115,19 @@ class UserProfileStorage {
     }
   }
 
+  /// Persists a Firestore-fallback photo and drops the old Storage URL (URL wins in UI).
+  static Future<void> updateProfileImageBase64(String b64) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (b64.length <= maxProfileImageBase64Length) {
+      await prefs.setString(_keyProfileImage, b64);
+    }
+    await prefs.remove(_keyProfilePhotoUrl);
+    final cached = _memoryCache;
+    if (cached != null) {
+      _memoryCache = cached.withProfileImageBase64(b64);
+    }
+  }
+
   /// Get user profile data
   static Future<UserProfile?> getUserProfile() async {
     final cached = cachedProfile;
@@ -253,6 +266,29 @@ class UserProfile {
       touristId: touristId,
       profileImageBase64: profileImageBase64,
       profilePhotoUrl: url,
+    );
+  }
+
+  /// Copy with an inline (Firestore fallback) photo and no Storage URL.
+  UserProfile withProfileImageBase64(String b64) {
+    return UserProfile(
+      firstName: firstName,
+      middleName: middleName,
+      lastName: lastName,
+      suffix: suffix,
+      sex: sex,
+      civilStatus: civilStatus,
+      nationality: nationality,
+      dateOfBirth: dateOfBirth,
+      mobile: mobile,
+      email: email,
+      country: country,
+      province: province,
+      city: city,
+      street: street,
+      barangay: barangay,
+      touristId: touristId,
+      profileImageBase64: b64,
     );
   }
 }

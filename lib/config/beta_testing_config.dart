@@ -12,7 +12,7 @@ import 'package:atmos_trs_system/utils/municipality_helper.dart';
 
 /// DEMO ONLY: when true, skips GPS/geofence and municipality scan restrictions.
 /// Set back to [false] before production release.
-const bool betaTestingMode = true;
+const bool betaTestingMode = false;
 
 /// Canonical LGU dashboard used during beta testing.
 const String kBetaTestingLguMunicipalityId = 'oroquieta';

@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 
 import 'package:atmos_trs_system/services/establishment_registration_service.dart';
+import 'package:atmos_trs_system/utils/establishment_capability.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 
 /// Normalized registry status for OPTACA review.
@@ -44,6 +45,7 @@ class EstablishmentRegistryEntry {
     this.checkOutTime = '',
     this.reviewedAt,
     this.reviewNotes = '',
+    this.hostsMice = false,
   });
 
   final String id;
@@ -66,6 +68,8 @@ class EstablishmentRegistryEntry {
   final String checkOutTime;
   final DateTime? reviewedAt;
   final String reviewNotes;
+  /// Hosts MICE events (CUS MICE survey) — field `hostsMice`, category default.
+  final bool hostsMice;
 
   bool get isPending => EstablishmentRegistryStatus.isPending(status);
   bool get isActive => EstablishmentRegistryStatus.isActive(status);
@@ -96,11 +100,13 @@ class EstablishmentRegistryEntry {
     DateTime? reviewed;
     final ra = d['reviewedAt'];
     if (ra is Timestamp) reviewed = ra.toDate();
+    final category = (d['category'] ?? d['type'] ?? '').toString();
     return EstablishmentRegistryEntry(
       id: doc.id,
       businessName:
           (d['businessName'] ?? d['name'] ?? 'Establishment').toString(),
-      category: (d['category'] ?? d['type'] ?? '').toString(),
+      category: category,
+      hostsMice: EstablishmentCapability.hostsMice(category, d['hostsMice']),
       ownerName: (d['ownerName'] ?? '').toString(),
       municipality: (d['municipality'] ?? '').toString(),
       municipalityId: (d['municipalityId'] ?? '').toString(),

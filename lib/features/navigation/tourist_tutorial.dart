@@ -144,8 +144,7 @@ class TouristTutorial {
       CoachStep(
         target: nav[3],
         title: 'Notifications',
-        body: 'Announcements, check-in results, and hotel stay confirmations '
-            'show up here.',
+        body: 'Announcements and check-in results show up here.',
         icon: Icons.notifications_rounded,
       ),
       CoachStep(

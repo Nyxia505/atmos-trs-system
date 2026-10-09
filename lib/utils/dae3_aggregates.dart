@@ -1,6 +1,6 @@
+import 'package:atmos_trs_system/models/ae_register.dart';
 import 'package:atmos_trs_system/utils/checkin_report_summary_csv.dart';
 import 'package:atmos_trs_system/utils/establishment_capability.dart';
-import 'package:atmos_trs_system/utils/establishment_stay_report_query.dart';
 
 /// One DAE-3 data row: AE × municipality × calendar month.
 class Dae3AggregateRow {
@@ -16,7 +16,7 @@ class Dae3AggregateRow {
     this.roomsOccupied,
     this.roomsAvailable,
     this.roomNights,
-    this.fromConfirmedStays = false,
+    this.fromRegister = false,
   });
 
   final String province;
@@ -29,9 +29,9 @@ class Dae3AggregateRow {
   final int? guestNights;
   final int? roomsOccupied;
   final int? roomsAvailable;
-  /// Sum of (rooms × nights) — aligns with AE Insights room-nights.
+  /// Occupied room-nights (register rows) — numerator of occupancy.
   final int? roomNights;
-  final bool fromConfirmedStays;
+  final bool fromRegister;
 
   /// Room-nights ÷ (rooms available × days in month), when both known.
   double? get occupancyPct {
@@ -63,7 +63,7 @@ class Dae3AggregateRow {
         roomsOccupied: roomsOccupied ?? this.roomsOccupied,
         roomsAvailable: roomsAvailable ?? this.roomsAvailable,
         roomNights: roomNights ?? this.roomNights,
-        fromConfirmedStays: fromConfirmedStays,
+        fromRegister: fromRegister,
       );
 
   /// Legacy helper used by older call sites.
@@ -72,7 +72,7 @@ class Dae3AggregateRow {
 }
 
 /// Groups check-ins into DAE-3 AE-ID rows (excludes Google Form / URL labels).
-/// Prefer [aggregateDae3FromConfirmedStays] when AE stay data exists.
+/// Prefer [aggregateDae3FromAeReports] when hotel register data exists.
 List<Dae3AggregateRow> aggregateDae3FromCheckIns({
   required List<Map<String, dynamic>> checkIns,
   required String scopeLabel,
@@ -107,7 +107,7 @@ List<Dae3AggregateRow> aggregateDae3FromCheckIns({
         month: ts.month,
         aeId: spot,
         guestsCheckedIn: 1,
-        fromConfirmedStays: false,
+        fromRegister: false,
       );
     } else {
       groups[key] = existing.copyWithGuests(existing.guestsCheckedIn + 1);
@@ -117,101 +117,43 @@ List<Dae3AggregateRow> aggregateDae3FromCheckIns({
   return _sortedRows(groups.values.toList());
 }
 
-/// Groups **confirmed** establishment stay events into DAE-3 AE rows.
+/// One DAE-3 row per AE-month from hotel DOT registers (DAE-1B monthly reports).
 ///
-/// Guests use `partySize`; guest-nights = partySize × nights when nights known.
-/// [typeClass] and [roomsAvailable] come from the stay / AE registry snapshot.
-List<Dae3AggregateRow> aggregateDae3FromConfirmedStays({
-  required List<Map<String, dynamic>> stayEvents,
-  required String scopeLabel,
-  DateTime? Function(Map<String, dynamic> event)? parseTimestamp,
-}) {
-  final parse = parseTimestamp ?? parseStayEventTimestamp;
-  final groups = <String, Dae3AggregateRow>{};
-
-  for (final e in stayEvents) {
-    final status = (e['status'] ?? '').toString().toLowerCase();
-    if (status.isNotEmpty &&
-        status != 'confirmed' &&
-        status != 'checked_out') {
-      continue;
-    }
-    final ts = parse(e);
-    if (ts == null) continue;
-
-    final mun = (e['municipality']?.toString().trim().isNotEmpty == true)
-        ? e['municipality'].toString().trim()
-        : scopeLabel;
-    final ae = (e['establishmentName']?.toString().trim().isNotEmpty == true)
-        ? e['establishmentName'].toString().trim()
-        : (e['spot_name']?.toString().trim().isNotEmpty == true
-            ? e['spot_name'].toString().trim()
-            : 'Unknown AE');
-
-    final guests = _asPositiveInt(e['partySize'], fallback: 1);
-    final nights = _asIntOrNull(e['nightsStayed']);
-    final rooms = _asIntOrNull(e['roomsOccupied']);
-    final guestNights = nights == null ? null : guests * nights;
-    final roomNums = e['roomNumbers'];
-    final roomCountFromList = roomNums is List
-        ? roomNums.where((x) => x.toString().trim().isNotEmpty).length
-        : 0;
-    final roomsForNights = rooms ?? (roomCountFromList > 0 ? roomCountFromList : null);
-    final roomNights = (roomsForNights != null && nights != null)
-        ? roomsForNights * nights
-        : roomsForNights;
-    final typeClass = (e['typeClass']?.toString().trim().isNotEmpty == true)
-        ? e['typeClass'].toString().trim()
-        : EstablishmentCapability.typeClassFor(
-            e['establishmentCategory']?.toString(),
-          );
-    final roomsAvailable = _asIntOrNull(e['roomsAvailable']);
-
-    final key = '$mun|${ts.year}|${ts.month}|$ae';
-    final existing = groups[key];
-    if (existing == null) {
-      groups[key] = Dae3AggregateRow(
-        province: 'Misamis Occidental',
-        municipality: mun,
-        year: ts.year,
-        month: ts.month,
-        aeId: ae,
-        typeClass: typeClass,
-        guestsCheckedIn: guests,
-        guestNights: guestNights,
-        roomsOccupied: rooms,
-        roomsAvailable: roomsAvailable,
-        roomNights: roomNights,
-        fromConfirmedStays: true,
-      );
-    } else {
-      groups[key] = existing.copyWith(
-        guestsCheckedIn: existing.guestsCheckedIn + guests,
-        guestNights: _sumNullable(existing.guestNights, guestNights),
-        roomsOccupied: _sumNullable(existing.roomsOccupied, rooms),
-        // Keep a known inventory snapshot (max if both set).
-        roomsAvailable: _maxNullable(existing.roomsAvailable, roomsAvailable),
-        roomNights: _sumNullable(existing.roomNights, roomNights),
-        typeClass: existing.typeClass.isNotEmpty ? existing.typeClass : typeClass,
-      );
-    }
-  }
-
-  return _sortedRows(groups.values.toList());
+/// Guests = check-ins, guest nights = sum of register guests, rooms occupied =
+/// register rows (one occupied room per night), rooms available = total rooms.
+List<Dae3AggregateRow> aggregateDae3FromAeReports(Iterable<AeMonthlyReport> reports) {
+  final rows = <Dae3AggregateRow>[
+    for (final r in reports)
+      if (r.totals.rowCount > 0 || r.zeroDays.isNotEmpty)
+        Dae3AggregateRow(
+          province: r.province.isEmpty ? 'Misamis Occidental' : r.province,
+          municipality: r.municipality,
+          year: r.year,
+          month: r.month,
+          aeId: r.aeName.isEmpty ? r.aeId : r.aeName,
+          typeClass: r.classificationCode.isNotEmpty
+              ? r.classificationCode
+              : (r.aeType.isNotEmpty ? r.aeType : EstablishmentCapability.typeClassFor(r.category)),
+          guestsCheckedIn: r.totals.checkIns,
+          guestNights: r.totals.guestNights,
+          roomsOccupied: r.totals.roomsOccupied,
+          roomsAvailable: r.totalRooms > 0 ? r.totalRooms : null,
+          roomNights: r.totals.roomsOccupied,
+          fromRegister: true,
+        ),
+  ];
+  return _sortedRows(rows);
 }
 
-/// Prefer confirmed stays; fall back to labeled attraction/LGU check-in proxy.
-List<Dae3AggregateRow> aggregateDae3PreferringStays({
-  required List<Map<String, dynamic>> stayEvents,
+/// Prefer hotel registers; fall back to labeled attraction/LGU check-in proxy.
+List<Dae3AggregateRow> aggregateDae3PreferringRegister({
+  required Iterable<AeMonthlyReport> reports,
   required List<Map<String, dynamic>> checkIns,
   required String scopeLabel,
   DateTime? Function(Map<String, dynamic> checkIn)? parseCheckInTimestamp,
 }) {
-  final fromStays = aggregateDae3FromConfirmedStays(
-    stayEvents: stayEvents,
-    scopeLabel: scopeLabel,
-  );
-  if (fromStays.isNotEmpty) return fromStays;
+  final fromRegister = aggregateDae3FromAeReports(reports);
+  if (fromRegister.isNotEmpty) return fromRegister;
   return aggregateDae3FromCheckIns(
     checkIns: checkIns,
     scopeLabel: scopeLabel,
@@ -228,28 +170,4 @@ List<Dae3AggregateRow> _sortedRows(List<Dae3AggregateRow> rows) {
     return a.aeId.compareTo(b.aeId);
   });
   return rows;
-}
-
-int _asPositiveInt(dynamic v, {int fallback = 1}) {
-  final n = _asIntOrNull(v);
-  if (n == null || n < 1) return fallback;
-  return n;
-}
-
-int? _asIntOrNull(dynamic v) {
-  if (v == null) return null;
-  if (v is int) return v;
-  if (v is num) return v.toInt();
-  return int.tryParse(v.toString());
-}
-
-int? _sumNullable(int? a, int? b) {
-  if (a == null && b == null) return null;
-  return (a ?? 0) + (b ?? 0);
-}
-
-int? _maxNullable(int? a, int? b) {
-  if (a == null) return b;
-  if (b == null) return a;
-  return a > b ? a : b;
 }

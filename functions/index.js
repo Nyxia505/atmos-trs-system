@@ -691,6 +691,250 @@ exports.completePasswordResetWithOtp = onCall(
   },
 );
 
+const PASSWORD_RESET_LINK_COLLECTION = 'password_reset_links';
+const PASSWORD_RESET_WEB_ORIGIN = 'https://atmos-trs-system.web.app';
+
+/**
+ * Reset links may only point at the hosted app or a local dev server, so a
+ * caller cannot send users' reset codes to an arbitrary site.
+ */
+function resolvePasswordResetOrigin(raw) {
+  const value = normalizeField(raw);
+  if (!value) return PASSWORD_RESET_WEB_ORIGIN;
+  let url;
+  try {
+    url = new URL(value);
+  } catch (_) {
+    return PASSWORD_RESET_WEB_ORIGIN;
+  }
+  const host = url.hostname.toLowerCase();
+  if (
+    url.protocol === 'https:' &&
+    (host === 'atmos-trs-system.web.app' ||
+      host === 'atmos-trs-system.firebaseapp.com')
+  ) {
+    return url.origin;
+  }
+  if (
+    url.protocol === 'http:' &&
+    (host === 'localhost' || host === '127.0.0.1')
+  ) {
+    return url.origin;
+  }
+  return PASSWORD_RESET_WEB_ORIGIN;
+}
+
+function passwordResetLinkEmailContent({displayName, resetUrl}) {
+  const safeName = String(displayName || '')
+    .replace(/</g, '')
+    .replace(/>/g, '');
+  const greeting = safeName ? `Hi ${safeName},` : 'Hi,';
+  const hrefUrl = resetUrl.replace(/&/g, '&amp;');
+  const subject = 'Reset your ATMOS-TRS password';
+  const text =
+    `${greeting}\n\n` +
+    'We received a request to reset your ATMOS-TRS password.\n\n' +
+    'Open this link to create a new password:\n' +
+    `${resetUrl}\n\n` +
+    'The link expires in 1 hour and can only be used once.\n\n' +
+    'If you did not request this, you can ignore this email.\n\n' +
+    'Thanks,\n' +
+    'ATMOS-TRS Tourism';
+  const html =
+    `<p>${greeting}</p>` +
+    '<p>We received a request to reset your ATMOS-TRS password.</p>' +
+    '<p style="margin:24px 0;">' +
+    `<a href="${hrefUrl}" style="background:#F97316;color:#ffffff;` +
+    'padding:12px 24px;border-radius:8px;text-decoration:none;' +
+    'font-weight:600;display:inline-block;">Create new password</a></p>' +
+    '<p style="color:#666;font-size:13px;">Or copy this link into your browser:<br/>' +
+    `<a href="${hrefUrl}">${hrefUrl}</a></p>` +
+    '<p style="color:#666;font-size:13px;">The link expires in 1 hour and can ' +
+    'only be used once. If you did not request this, you can ignore this email.</p>' +
+    '<p>Thanks,<br/>ATMOS-TRS Tourism</p>';
+  return {subject, text, html};
+}
+
+async function sendSmtpResetLinkIfConfigured({toEmail, subject, text, html}) {
+  const user = (process.env.GMAIL_SMTP_USER || '').trim();
+  const pass = (process.env.GMAIL_SMTP_APP_PASSWORD || '').trim();
+  if (!user || !pass) {
+    return false;
+  }
+  const nodemailer = require('nodemailer');
+  const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {user, pass},
+  });
+  await transporter.sendMail({
+    from: `"${OTP_INBOX_FROM_NAME}" <${user}>`,
+    to: toEmail,
+    replyTo: OTP_INBOX_REPLY_TO,
+    subject,
+    text,
+    html,
+  });
+  console.log('[sendPasswordResetLinkEmail] sent via Gmail SMTP to', toEmail);
+  return true;
+}
+
+/**
+ * EmailJS fallback. The shared OTP template may only render {{otp}}, so the
+ * reset URL is passed there too to guarantee it appears in the email.
+ */
+async function sendEmailJsResetLink({
+  toEmail,
+  displayName,
+  subject,
+  text,
+  html,
+  resetUrl,
+}) {
+  const serviceId =
+    process.env.EMAILJS_SERVICE_ID || EMAILJS_DEFAULTS.serviceId;
+  const templateId =
+    process.env.EMAILJS_TEMPLATE_ID || EMAILJS_DEFAULTS.templateId;
+  const userId = process.env.EMAILJS_PUBLIC_KEY || EMAILJS_DEFAULTS.publicKey;
+  const accessToken =
+    process.env.EMAILJS_PRIVATE_KEY || EMAILJS_DEFAULTS.privateKey || '';
+
+  const payload = {
+    service_id: serviceId,
+    template_id: templateId,
+    user_id: userId,
+    template_params: {
+      to_email: toEmail,
+      to_name: displayName,
+      name: displayName,
+      email: toEmail,
+      user_email: toEmail,
+      otp: resetUrl,
+      link: resetUrl,
+      reset_link: resetUrl,
+      purpose: 'password_reset_link',
+      subject,
+      from_name: OTP_INBOX_FROM_NAME,
+      reply_to: OTP_INBOX_REPLY_TO,
+      message: text,
+      message_html: html,
+      preheader: 'Tap the link to create a new ATMOS-TRS password.',
+    },
+  };
+  if (accessToken) {
+    payload.accessToken = accessToken;
+  }
+
+  const res = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  const body = await res.text();
+  if (!res.ok) {
+    console.error('[sendEmailJsResetLink]', res.status, body);
+    throw new Error(`EmailJS ${res.status}: ${body}`);
+  }
+  console.log('[sendPasswordResetLinkEmail] sent via EmailJS to', toEmail);
+}
+
+/**
+ * Forgot password (no sign-in): emails a reset link that opens the ATMOS web
+ * app's own "Choose a new password" form, bypassing Firebase's hosted action
+ * page. Optional [continueOrigin] (web client origin) is allow-listed.
+ */
+exports.sendPasswordResetLinkEmail = onCall(
+  {region: 'asia-southeast1'},
+  async (request) => {
+    const email = normalizeField(request.data && request.data.email).toLowerCase();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new HttpsError('invalid-argument', 'Valid email is required.');
+    }
+
+    const uid = await resolveUidForPasswordReset(email);
+    let authEmail = '';
+    if (uid) {
+      try {
+        const record = await getAuth().getUser(uid);
+        authEmail = normalizeField(record.email).toLowerCase();
+      } catch (_) {
+        authEmail = '';
+      }
+    }
+    if (!uid || !authEmail) {
+      return {ok: true, accountFound: false, emailSent: false};
+    }
+
+    const linkRef = db.collection(PASSWORD_RESET_LINK_COLLECTION).doc(uid);
+    const existing = await linkRef.get();
+    const lastAt = existing.exists ? existing.data()?.lastRequestedAt : null;
+    if (lastAt && typeof lastAt.toMillis === 'function') {
+      if (Date.now() - lastAt.toMillis() < PASSWORD_RESET_COOLDOWN_MS) {
+        throw new HttpsError(
+          'resource-exhausted',
+          'Please wait a minute before requesting another reset link.',
+        );
+      }
+    }
+
+    let oobCode = '';
+    try {
+      const generated = await getAuth().generatePasswordResetLink(authEmail);
+      oobCode = new URL(generated).searchParams.get('oobCode') || '';
+    } catch (err) {
+      console.error('[sendPasswordResetLinkEmail] generate link', err);
+    }
+    if (!oobCode) {
+      throw new HttpsError(
+        'internal',
+        'Could not create a reset link. Please try again.',
+      );
+    }
+
+    const origin = resolvePasswordResetOrigin(
+      request.data && request.data.continueOrigin,
+    );
+    const resetUrl =
+      `${origin}/?mode=resetPassword&oobCode=${encodeURIComponent(oobCode)}`;
+    const displayName = await readDisplayNameForUid(uid, email);
+    const content = passwordResetLinkEmailContent({displayName, resetUrl});
+
+    let channel = null;
+    try {
+      if (await sendSmtpResetLinkIfConfigured({toEmail: email, ...content})) {
+        channel = 'smtp';
+      }
+    } catch (err) {
+      console.warn('[sendPasswordResetLinkEmail] SMTP failed, trying EmailJS', err);
+    }
+    if (!channel) {
+      try {
+        await sendEmailJsResetLink({
+          toEmail: email,
+          displayName,
+          resetUrl,
+          ...content,
+        });
+        channel = 'emailjs';
+      } catch (err) {
+        console.error('[sendPasswordResetLinkEmail] EmailJS', err);
+      }
+    }
+
+    if (channel) {
+      await linkRef.set(
+        {
+          email,
+          channel,
+          lastRequestedAt: FieldValue.serverTimestamp(),
+        },
+        {merge: true},
+      );
+    }
+
+    return {ok: true, accountFound: true, emailSent: Boolean(channel), channel};
+  },
+);
+
 /**
  * Sends OTP to the user's inbox via EmailJS (server-side, supports private accessToken).
  * Optional: firebase functions:secrets:set EMAILJS_PRIVATE_KEY (Private Key from EmailJS).
@@ -1942,6 +2186,13 @@ exports.seedLguAnalyticsData = onCall(
     let seededTourists = 0;
     let seededCheckins = 0;
     const perMunicipality = {};
+    const writer = db.bulkWriter();
+    const writeErrors = [];
+    writer.onWriteError((err) => {
+      if (err.failedAttempts < 3) return true;
+      writeErrors.push(err.message);
+      return false;
+    });
 
     for (const municipalityId of municipalityIds) {
       const municipalityName = municipalityDisplayName(municipalityId);
@@ -2003,16 +2254,19 @@ exports.seedLguAnalyticsData = onCall(
           isVerified: true,
           // Home-address registry only — foreigners keep overseas city, no LGU id.
           ...(isLocal ? {registrationMunicipalityId: municipalityId} : {}),
-          totalVisits: 0,
+          totalVisits: checkInsPerTourist,
+          lastCheckInAt: FieldValue.serverTimestamp(),
+          lastCheckInLguId: municipalityId,
+          lastCheckInSpotId: spots[i % spots.length].id,
           source: 'lgu_debug_seed',
           seedTag: 'lgu_analytics_debug_v2_address',
           updatedAt: FieldValue.serverTimestamp(),
           createdAt: FieldValue.serverTimestamp(),
         };
 
-        await db.collection('tourists').doc(uid).set(touristPayload, {merge: true});
+        writer.set(db.collection('tourists').doc(uid), touristPayload, {merge: true});
         // users doc with tourist role so staff lists stay consistent
-        await db.collection('users').doc(uid).set({
+        writer.set(db.collection('users').doc(uid), {
           firebaseUid: uid,
           email,
           role: 'tourist',
@@ -2029,7 +2283,6 @@ exports.seedLguAnalyticsData = onCall(
         munTourists += 1;
         seededTourists += 1;
 
-        let checkinsForUser = 0;
         for (let j = 0; j < checkInsPerTourist; j++) {
           const day = monthlyDays[(i + j) % monthlyDays.length];
           const spot = spots[(i + j) % spots.length];
@@ -2079,11 +2332,12 @@ exports.seedLguAnalyticsData = onCall(
             createdAt: Timestamp.fromDate(eventDate),
           };
 
-          await db.collection('qr_checkins').doc(checkinId).set(
+          writer.set(
+            db.collection('qr_checkins').doc(checkinId),
             checkInPayload,
             {merge: true},
           );
-          await db.collection('checkins').doc(checkinId).set({
+          writer.set(db.collection('checkins').doc(checkinId), {
             user_id: uid,
             location_id: spot.id,
             touristSpotId: spot.id,
@@ -2098,15 +2352,7 @@ exports.seedLguAnalyticsData = onCall(
 
           munCheckins += 1;
           seededCheckins += 1;
-          checkinsForUser += 1;
         }
-
-        await db.collection('tourists').doc(uid).set({
-          totalVisits: checkinsForUser,
-          lastCheckInAt: FieldValue.serverTimestamp(),
-          lastCheckInLguId: municipalityId,
-          lastCheckInSpotId: spots[i % spots.length].id,
-        }, {merge: true});
       }
 
       perMunicipality[municipalityId] = {
@@ -2117,6 +2363,14 @@ exports.seedLguAnalyticsData = onCall(
         localCount,
         foreignCount,
       };
+    }
+
+    await writer.close();
+    if (writeErrors.length) {
+      throw new HttpsError(
+        'internal',
+        `Seed failed for ${writeErrors.length} writes: ${writeErrors[0]}`,
+      );
     }
 
     return {
@@ -2414,4 +2668,65 @@ async function deleteAllTouristRoleUsers() {
   }
   return total;
 }
+
+const LANDING_STATS_TTL_MS = 10 * 60 * 1000;
+let landingStatsCache = null;
+
+/** Mirrors ProductionDataFilters.isDummyTourist in the Flutter app. */
+function isLandingDummyTourist(id, t) {
+  if (t.accountDeleted === true) return true;
+  const status = String(t.status || '').trim().toLowerCase();
+  if (status === 'deleted' || status === 'removed') return true;
+  const uid = String(t.firebaseUid || id || '').trim();
+  if (uid.startsWith('dummy_tourist_')) return true;
+  const email = String(t.email || '').trim().toLowerCase();
+  if (email.includes('@dummy-tourist.test')) return true;
+  if (String(t.source || '') === 'dummy_seed') return true;
+  const prov = String(t.province || '').trim().toLowerCase();
+  if (prov && !prov.includes('misamis occidental') && !prov.includes('misocc')) {
+    return true;
+  }
+  return false;
+}
+
+function isLandingCountableSpot(s) {
+  const status = String(s.status || '').trim().toLowerCase();
+  return status !== 'deleted' && status !== 'removed' && status !== 'archived';
+}
+
+/**
+ * Public aggregate counts for the landing page "By the numbers" section.
+ * No auth required; returns counts only (no personal data).
+ */
+exports.getLandingPublicStats = onCall(
+  {region: 'asia-southeast1'},
+  async () => {
+    const now = Date.now();
+    if (landingStatsCache && now - landingStatsCache.at < LANDING_STATS_TTL_MS) {
+      return landingStatsCache.data;
+    }
+
+    const [touristsSnap, spotsSnap] = await Promise.all([
+      db
+        .collection('tourists')
+        .select('firebaseUid', 'email', 'source', 'status', 'accountDeleted', 'province')
+        .get(),
+      db.collection('tourist_spots').select('status').get(),
+    ]);
+
+    let registeredTourists = 0;
+    for (const doc of touristsSnap.docs) {
+      if (!isLandingDummyTourist(doc.id, doc.data() || {})) registeredTourists += 1;
+    }
+
+    let touristSpots = 0;
+    for (const doc of spotsSnap.docs) {
+      if (isLandingCountableSpot(doc.data() || {})) touristSpots += 1;
+    }
+
+    const data = {registeredTourists, touristSpots, updatedAt: now};
+    landingStatsCache = {at: now, data};
+    return data;
+  },
+);
 

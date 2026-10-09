@@ -59,6 +59,7 @@ enum DotReportType {
   dae3FormA,
   dae3b2Domestic,
   dae3bFormAInternational,
+  cusMice,
 }
 
 extension DotReportTypeX on DotReportType {
@@ -69,6 +70,7 @@ extension DotReportTypeX on DotReportType {
         DotReportType.dae3FormA => 'dae3',
         DotReportType.dae3b2Domestic => 'dae3b2_domestic',
         DotReportType.dae3bFormAInternational => 'dae3b_form_a_intl',
+        DotReportType.cusMice => 'mice_cus',
       };
 
   String get title => catalogEntry.title;
@@ -217,7 +219,7 @@ const List<DotFormCatalogEntry> kDotFormCatalog = [
     id: 'dae3',
     code: 'DAE-3',
     title: 'DAE-3 — Municipal AE Monthly',
-    subtitle: 'Fills DAE-3 from confirmed AE stays (nights/rooms when staff enter them)',
+    subtitle: 'Fills DAE-3 from hotel DOT registers (guests, guest-nights, rooms occupied)',
     category: DotFormCategory.accommodation,
     fillMode: DotFormFillMode.atmosFill,
     objectFilename: 'DAE-3 FORM.xlsx',
@@ -236,7 +238,7 @@ const List<DotFormCatalogEntry> kDotFormCatalog = [
     id: 'dae3b2_domestic',
     code: 'DAE 3B.2',
     title: 'DAE 3B.2 — Domestic Origins',
-    subtitle: 'Fills domestic origin × month from check-in profiles',
+    subtitle: 'Fills domestic guests by PH region × month from hotel registers',
     category: DotFormCategory.accommodation,
     fillMode: DotFormFillMode.atmosFill,
     objectFilename: 'DAE3B.2 - Domestic.xlsx',
@@ -257,7 +259,7 @@ const List<DotFormCatalogEntry> kDotFormCatalog = [
     code: 'DAE3 Form A',
     title: 'DAE3 Form A — International',
     subtitle:
-        'Best-effort — foreign visits by country (AE stays when confirmed)',
+        'Fills arrivals / nights / sex by country of residence from hotel registers',
     category: DotFormCategory.accommodation,
     fillMode: DotFormFillMode.atmosDerived,
     objectFilename: 'DAE3B_FORM_A - International.xlsx',
@@ -276,7 +278,7 @@ const List<DotFormCatalogEntry> kDotFormCatalog = [
     code: 'DAE 1B.2',
     title: 'DAE 1B.2 — AE Fill-up',
     subtitle:
-        'Best-effort + gaps — needs confirmed establishment stays for overnight',
+        'Fills country-of-residence matrix from hotel DOT registers',
     category: DotFormCategory.accommodation,
     fillMode: DotFormFillMode.atmosDerived,
     objectFilename: '3. DAE1B.2.xlsx',
@@ -295,7 +297,7 @@ const List<DotFormCatalogEntry> kDotFormCatalog = [
     code: 'DAE 1B.2 Dom',
     title: 'DAE 1B.2 — Domestic (Daily / AE / Monthly)',
     subtitle:
-        'Best-effort + gaps — domestic overnight matrix awaits AE stay QR',
+        'Fills domestic overnight guests by PH region from hotel registers',
     category: DotFormCategory.accommodation,
     fillMode: DotFormFillMode.atmosDerived,
     objectFilename: 'DAE1B.2.Domestic.xlsx',
@@ -314,7 +316,7 @@ const List<DotFormCatalogEntry> kDotFormCatalog = [
     code: 'DAE-1B',
     title: 'DOT ET DAE1B — Macro Register',
     subtitle:
-        'Best-effort + gaps — guest register needs establishment confirmation',
+        'Fills DAE-2 monthly summary from hotel DOT registers',
     category: DotFormCategory.accommodation,
     fillMode: DotFormFillMode.atmosDerived,
     objectFilename: '1. DOT_ET_DAE1Bv10c.xlsm',
@@ -333,7 +335,7 @@ const List<DotFormCatalogEntry> kDotFormCatalog = [
     code: 'DAE-1A',
     title: 'DAE-1A — Manual Tally',
     subtitle:
-        'Best-effort + gaps — rooms/guest nights from staff-confirmed stays',
+        'Fills daily rooms / guest-nights tally from hotel registers',
     category: DotFormCategory.accommodation,
     fillMode: DotFormFillMode.atmosDerived,
     objectFilename: '2.DAE1A_Manual.xls',
@@ -351,9 +353,9 @@ const List<DotFormCatalogEntry> kDotFormCatalog = [
     id: 'mice_cus',
     code: 'CUS MICE',
     title: 'CUS — MICE Utilization Survey',
-    subtitle: 'Best-effort + gaps — MICE utilization from event data when present',
+    subtitle: 'Fills CUS SUMMARY + CUS BY EST from venue event logs (meetings, conventions, exhibits, social events)',
     category: DotFormCategory.mice,
-    fillMode: DotFormFillMode.atmosDerived,
+    fillMode: DotFormFillMode.atmosFill,
     objectFilename: 'CUS-FORM-MICE-UTILIZATION-SURVEY-FORM.xlsx',
     localFilename: 'CUS-FORM-MICE-UTILIZATION-SURVEY-FORM.xlsx',
     searchTags: [
@@ -361,9 +363,14 @@ const List<DotFormCatalogEntry> kDotFormCatalog = [
       'cus',
       'event',
       'conference',
+      'convention',
+      'meeting',
       'exhibition',
+      'wedding',
+      'venue',
       'survey',
     ],
+    reportType: DotReportType.cusMice,
   ),
 ];
 

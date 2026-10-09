@@ -22,7 +22,9 @@ class MunicipalityDetailsScreen extends StatelessWidget {
   final String municipalityId;
   final String municipalityName;
 
-  static Stream<QuerySnapshot<Map<String, dynamic>>> _spotsStream(String municipalityId) {
+  static Stream<QuerySnapshot<Map<String, dynamic>>> _spotsStream(
+    String municipalityId,
+  ) {
     return FirebaseFirestore.instance
         .collection(_kTouristSpotsCollection)
         .where('municipalityId', isEqualTo: municipalityId)
@@ -83,18 +85,28 @@ class MunicipalityDetailsScreen extends StatelessWidget {
                       if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
                         return _EmptyState();
                       }
-                      final spots = snapshot.data!.docs
-                          .map((d) => TouristSpot.fromFirestore(d.data(), d.id))
-                          .toList()
-                        ..sort((a, b) => a.name.compareTo(b.name));
+                      final spots =
+                          snapshot.data!.docs
+                              .map(
+                                (d) =>
+                                    TouristSpot.fromFirestore(d.data(), d.id),
+                              )
+                              .toList()
+                            ..sort((a, b) => a.name.compareTo(b.name));
                       return Column(
                         children: spots
-                            .map((spot) => _SpotCard(
-                                  spot: spot,
-                                  municipalityId: municipalityId,
-                                  onScanQr: () => _navigateToScan(context),
-                                  onShowQr: () => _showSpotQrDialog(context, spot, municipalityId),
-                                ))
+                            .map(
+                              (spot) => _SpotCard(
+                                spot: spot,
+                                municipalityId: municipalityId,
+                                onScanQr: () => _navigateToScan(context),
+                                onShowQr: () => _showSpotQrDialog(
+                                  context,
+                                  spot,
+                                  municipalityId,
+                                ),
+                              ),
+                            )
                             .toList(),
                       );
                     },
@@ -110,15 +122,17 @@ class MunicipalityDetailsScreen extends StatelessWidget {
 
   void _navigateToScan(BuildContext context) {
     Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute<void>(
-        builder: (_) => MainShell(initialIndex: 2),
-      ),
+      MaterialPageRoute<void>(builder: (_) => MainShell(initialIndex: 2)),
       (route) => false,
     );
   }
 
-  void _showSpotQrDialog(BuildContext context, TouristSpot spot, String municipalityId) {
-    final qrData = spotQrData(municipalityId, spot.id);
+  void _showSpotQrDialog(
+    BuildContext context,
+    TouristSpot spot,
+    String municipalityId,
+  ) {
+    final qrData = screenPreviewQrData(spotQrData(municipalityId, spot.id));
     showDialog<void>(
       context: context,
       builder: (ctx) => Dialog(
@@ -140,11 +154,9 @@ class MunicipalityDetailsScreen extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'Spot QR Code – Print or screenshot for registration',
-                style: TextStyle(
-                  color: AppTheme.unselectedMuted,
-                  fontSize: 13,
-                ),
+                'Preview only — tourists check in by scanning the official '
+                'printed QR at the spot',
+                style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 13),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 20),
@@ -184,10 +196,7 @@ class _HeaderPlaceholder extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [
-            AppTheme.cardBackground,
-            AppTheme.scaffoldBackground,
-          ],
+          colors: [AppTheme.cardBackground, AppTheme.scaffoldBackground],
         ),
       ),
       child: Center(
@@ -232,7 +241,11 @@ class _EmptyState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.place_outlined, size: 56, color: AppTheme.unselectedMuted.withOpacity(0.6)),
+            Icon(
+              Icons.place_outlined,
+              size: 56,
+              color: AppTheme.unselectedMuted.withOpacity(0.6),
+            ),
             const SizedBox(height: 16),
             Text(
               'No tourist spots yet',
@@ -242,7 +255,10 @@ class _EmptyState extends StatelessWidget {
             Text(
               'Spots will appear here when added in Firestore.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: AppTheme.unselectedMuted.withOpacity(0.8), fontSize: 14),
+              style: TextStyle(
+                color: AppTheme.unselectedMuted.withOpacity(0.8),
+                fontSize: 14,
+              ),
             ),
           ],
         ),
@@ -276,7 +292,10 @@ class _ErrorState extends StatelessWidget {
               child: Text(
                 message,
                 textAlign: TextAlign.center,
-                style: TextStyle(color: AppTheme.unselectedMuted.withOpacity(0.8), fontSize: 13),
+                style: TextStyle(
+                  color: AppTheme.unselectedMuted.withOpacity(0.8),
+                  fontSize: 13,
+                ),
               ),
             ),
           ],
@@ -315,7 +334,11 @@ class _SpotCard extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(_iconForCategory(spot.category), color: AppTheme.primary, size: 24),
+              Icon(
+                _iconForCategory(spot.category),
+                color: AppTheme.primary,
+                size: 24,
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -359,7 +382,9 @@ class _SpotCard extends StatelessWidget {
                     foregroundColor: AppTheme.primary,
                     side: BorderSide(color: AppTheme.primary),
                     padding: const EdgeInsets.symmetric(vertical: 10),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                    ),
                   ),
                 ),
               ),
@@ -371,9 +396,13 @@ class _SpotCard extends StatelessWidget {
                   label: const Text('Scan QR'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.white,
-                    side: BorderSide(color: AppTheme.unselectedMuted.withOpacity(0.5)),
+                    side: BorderSide(
+                      color: AppTheme.unselectedMuted.withOpacity(0.5),
+                    ),
                     padding: const EdgeInsets.symmetric(vertical: 10),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                    ),
                   ),
                 ),
               ),
@@ -387,8 +416,10 @@ class _SpotCard extends StatelessWidget {
   IconData _iconForCategory(String category) {
     final c = category.toLowerCase();
     if (c.contains('beach') || c.contains('water')) return Icons.waves_rounded;
-    if (c.contains('mountain') || c.contains('nature')) return Icons.terrain_rounded;
-    if (c.contains('heritage') || c.contains('plaza')) return Icons.account_balance_rounded;
+    if (c.contains('mountain') || c.contains('nature'))
+      return Icons.terrain_rounded;
+    if (c.contains('heritage') || c.contains('plaza'))
+      return Icons.account_balance_rounded;
     if (c.contains('festival')) return Icons.celebration_rounded;
     return Icons.place_rounded;
   }

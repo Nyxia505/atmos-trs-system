@@ -1,3 +1,4 @@
+import 'package:atmos_trs_system/config/qr_scan_geofence_config.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/qr_launch_query.dart';
 
@@ -67,7 +68,79 @@ String spotQrData(
     params['lat'] = latitude.toStringAsFixed(6);
     params['lng'] = longitude.toStringAsFixed(6);
   }
-  return Uri.parse(_kPublicCheckInBaseUrl).replace(queryParameters: params).toString();
+  return Uri.parse(
+    _kPublicCheckInBaseUrl,
+  ).replace(queryParameters: params).toString();
+}
+
+const String _kScreenPreviewPrefix = 'ATMOS-TRS-PREVIEW:';
+
+Map<String, String>? _urlQuery(String raw) {
+  final uri = Uri.tryParse(raw.trim());
+  if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+    return null;
+  }
+  return mergedLaunchQueryParameters(uri);
+}
+
+/// True for a dummy QR (`demo=<kDemoQrToken>`) while [kDemoQrEnabled] is on.
+bool isDemoQrPayload(String raw) {
+  if (!kDemoQrEnabled) return false;
+  final q = _urlQuery(raw);
+  return q != null && (q['demo'] ?? '').trim() == kDemoQrToken;
+}
+
+/// True for a QR rendered on a dashboard screen via [screenPreviewQrData].
+bool isScreenPreviewQr(String raw) {
+  final s = raw.trim();
+  if (s.startsWith(_kScreenPreviewPrefix)) return true;
+  final q = _urlQuery(s);
+  return q != null && (q[kQrScreenPreviewParam] ?? '').trim() == '1';
+}
+
+/// Marks a check-in QR as an on-screen preview so it cannot be used to check in.
+/// Printed / downloaded QR files must keep using the original payload.
+String screenPreviewQrData(String data) {
+  final s = data.trim();
+  final uri = Uri.tryParse(s);
+  if (uri != null && (uri.scheme == 'http' || uri.scheme == 'https')) {
+    return uri
+        .replace(
+          queryParameters: {...uri.queryParameters, kQrScreenPreviewParam: '1'},
+        )
+        .toString();
+  }
+  return '$_kScreenPreviewPrefix$s';
+}
+
+/// Dummy spot QR — check-in works anywhere, on any device (demo/testing).
+String demoSpotQrData({
+  String municipalityId = 'oroquieta',
+  String spotId = 'oroquieta_city_plaza',
+}) {
+  return Uri.parse(_kPublicCheckInBaseUrl)
+      .replace(
+        queryParameters: {
+          'type': 'spot',
+          'municipality_id': normalizeMunicipalityId(municipalityId),
+          'spot_id': spotId.trim(),
+          'demo': kDemoQrToken,
+        },
+      )
+      .toString();
+}
+
+/// Dummy LGU QR — check-in works anywhere, on any device (demo/testing).
+String demoLguQrData({String municipalityId = 'oroquieta'}) {
+  return Uri.parse(_kPublicCheckInBaseUrl)
+      .replace(
+        queryParameters: {
+          'type': 'lgu',
+          'municipality_id': normalizeMunicipalityId(municipalityId),
+          'demo': kDemoQrToken,
+        },
+      )
+      .toString();
 }
 
 /// Parses spot QR (URL or `ATMOS-TRS-SPOT:…`).
@@ -79,7 +152,9 @@ SpotCheckInPayload? parseSpotCheckInPayload(String raw) {
     final type = (q['type'] ?? '').trim().toLowerCase();
     final spotId = (q['spot_id'] ?? q['spotId'] ?? '').trim();
     if (spotId.isNotEmpty &&
-        (type == 'spot' || q.containsKey('spot_id') || q.containsKey('spotId'))) {
+        (type == 'spot' ||
+            q.containsKey('spot_id') ||
+            q.containsKey('spotId'))) {
       final midRaw = q['municipality_id'] ?? q['municipalityId'] ?? '';
       final mid = midRaw.trim().isNotEmpty
           ? normalizeMunicipalityId(midRaw)
@@ -111,12 +186,13 @@ SpotCheckInPayload? parseSpotCheckInPayload(String raw) {
 /// Unique QR per LGU (municipality). Scanner format: ATMOS-TRS-LGU:municipalityId
 /// Optional anchor (recommended for strict proximity): ATMOS-TRS-LGU:municipalityId:lat:lng
 /// Example: ATMOS-TRS-LGU:ozamiz — Example with anchor: ATMOS-TRS-LGU:oroquieta:8.4859:123.8048
-String lguQrData(String municipalityId, {double? anchorLat, double? anchorLng}) {
+String lguQrData(
+  String municipalityId, {
+  double? anchorLat,
+  double? anchorLng,
+}) {
   final id = normalizeMunicipalityId(municipalityId.trim());
-  final params = <String, String>{
-    'type': 'lgu',
-    'municipality_id': id,
-  };
+  final params = <String, String>{'type': 'lgu', 'municipality_id': id};
   if (anchorLat != null &&
       anchorLng != null &&
       anchorLat.abs() > 1e-7 &&
@@ -125,9 +201,9 @@ String lguQrData(String municipalityId, {double? anchorLat, double? anchorLng}) 
     params['lng'] = anchorLng.toStringAsFixed(6);
   }
   // Use URL payload so phone camera apps can open web landing/check-in without the app.
-  return Uri.parse(_kPublicCheckInBaseUrl)
-      .replace(queryParameters: params)
-      .toString();
+  return Uri.parse(
+    _kPublicCheckInBaseUrl,
+  ).replace(queryParameters: params).toString();
 }
 
 /// Full LGU QR parse (id + optional lat/lng after the id).
@@ -157,7 +233,10 @@ LguQrPayload? parseLguQrPayload(String raw) {
     final hasLguKey = q.containsKey('lgu_id');
     // Prefer explicit type=lgu. Allow municipality_id only when type is empty/absent
     // (legacy prints) and no competing typed payload keys above.
-    if (id.isNotEmpty && (isExplicitLgu || hasLguKey || (type.isEmpty && q.containsKey('municipality_id')))) {
+    if (id.isNotEmpty &&
+        (isExplicitLgu ||
+            hasLguKey ||
+            (type.isEmpty && q.containsKey('municipality_id')))) {
       final lat = double.tryParse((q['lat'] ?? '').trim());
       final lng = double.tryParse((q['lng'] ?? '').trim());
       if (lat != null && lng != null) {
@@ -209,7 +288,8 @@ LguQrPayload? parseLguQrPayload(String raw) {
 
 /// Returns canonical municipality id if [raw] is an LGU QR, else null.
 /// Accepts `ATMOS-TRS-LGU:id` and variants with spaces (e.g. printed as `ATMOS TRS LGU:id`).
-String? parseLguMunicipalityId(String raw) => parseLguQrPayload(raw)?.municipalityId;
+String? parseLguMunicipalityId(String raw) =>
+    parseLguQrPayload(raw)?.municipalityId;
 
 /// Parses a scanned QR payload.
 /// Returns (municipalityId, spotId) if format is ATMOS-TRS-SPOT:municipalityId:spotId.
@@ -219,7 +299,10 @@ String? parseLguMunicipalityId(String raw) => parseLguQrPayload(raw)?.municipali
   if (s.startsWith('ATMOS-TRS-SPOT:')) {
     final parts = s.split(':');
     if (parts.length >= 3) {
-      return (municipalityId: parts[1].trim(), spotId: parts.sublist(2).join(':').trim());
+      return (
+        municipalityId: parts[1].trim(),
+        spotId: parts.sublist(2).join(':').trim(),
+      );
     }
   }
   return (municipalityId: null, spotId: s);
@@ -247,31 +330,15 @@ class EstablishmentQrPayload {
   final String? businessName;
 }
 
-/// Public URL / payload for an establishment stay QR.
-String establishmentQrData(
-  String establishmentId, {
-  String? municipalityId,
-  String? businessName,
-}) {
-  final eid = establishmentId.trim();
-  final params = <String, String>{
-    'type': 'establishment',
-    'establishment_id': eid,
-  };
-  final mid = (municipalityId ?? '').trim();
-  if (mid.isNotEmpty) {
-    params['municipality_id'] = normalizeMunicipalityId(mid);
-  }
-  final name = (businessName ?? '').trim();
-  if (name.isNotEmpty) {
-    params['name'] = name;
-  }
-  return Uri.parse(_kPublicCheckInBaseUrl)
-      .replace(queryParameters: params)
-      .toString();
-}
+/// Shown when a tourist scans a previously printed establishment stay QR.
+/// Hotels now report guests through their monthly DOT register instead.
+const String kRetiredEstablishmentQrMessage =
+    'This establishment QR is no longer used. Hotels and resorts now record '
+    'guests directly in their DOT register — no scan needed.';
 
-/// Parses establishment QR (URL `type=establishment` or `ATMOS-TRS-EST:…`).
+/// Parses a retired establishment QR (URL `type=establishment` or
+/// `ATMOS-TRS-EST:…`) so scanners can show [kRetiredEstablishmentQrMessage]
+/// instead of misrouting it as an LGU / spot QR.
 EstablishmentQrPayload? parseEstablishmentQrPayload(String raw) {
   final s = raw.trim();
   final uri = Uri.tryParse(s);

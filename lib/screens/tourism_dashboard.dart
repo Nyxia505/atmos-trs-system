@@ -12,6 +12,7 @@ import 'package:gal/gal.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/beta_testing_config.dart';
+import 'package:atmos_trs_system/config/qr_scan_geofence_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/config/supabase_storage_config.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -51,6 +52,8 @@ import 'package:atmos_trs_system/widgets/lgu_submit_report_to_optaca_panel.dart'
 import 'package:atmos_trs_system/widgets/lgu_establishment_registry_panel.dart';
 import 'package:atmos_trs_system/services/dae3_auto_report_service.dart';
 import 'package:atmos_trs_system/widgets/lgu_events_panel.dart';
+import 'package:atmos_trs_system/widgets/spot_location_picker.dart';
+import 'package:atmos_trs_system/widgets/spot_photos_editor.dart';
 import 'package:atmos_trs_system/services/lgu_event_service.dart';
 import 'package:atmos_trs_system/widgets/lgu_debug_data_dialogs.dart';
 import 'package:atmos_trs_system/widgets/chart_transition.dart';
@@ -94,6 +97,19 @@ class _LguDashboardState extends State<LguDashboard>
   static const LinearGradient _lguBrandGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
+    colors: [
+      Color(0xFFFB923C),
+      Color(0xFFF97316),
+      Color(0xFFEA580C),
+    ],
+    stops: [0.0, 0.55, 1.0],
+  );
+
+  /// Same colors as [_lguBrandGradient], but top → bottom so the sidebar's top
+  /// edge is uniform and meets the header's left edge without a color step.
+  static const LinearGradient _lguSidebarGradient = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
     colors: [
       Color(0xFFFB923C),
       Color(0xFFF97316),
@@ -1970,9 +1986,13 @@ class _LguDashboardState extends State<LguDashboard>
                 // Cream underlay — header orange still joins the sidebar; never flash
                 // a full-viewport solid orange behind tab content.
                 Expanded(
-                  child: ColoredBox(
-                    color: _darkBg,
-                    child: _buildMainContent(),
+                  // Clip so the page header's drop shadow cannot darken the
+                  // sidebar edge (visible seam between the two oranges).
+                  child: ClipRect(
+                    child: ColoredBox(
+                      color: _darkBg,
+                      child: _buildMainContent(),
+                    ),
                   ),
                 ),
               ],
@@ -2085,7 +2105,7 @@ class _LguDashboardState extends State<LguDashboard>
 
   BoxDecoration _sidebarGradientDecoration() {
     return BoxDecoration(
-      gradient: _lguBrandGradient,
+      gradient: _lguSidebarGradient,
       boxShadow: [
         BoxShadow(
           color: _primaryOrange.withValues(alpha: 0.18),
@@ -5294,16 +5314,6 @@ class _LguDashboardState extends State<LguDashboard>
   bool _spotHasVr(TouristSpot spot) =>
       spot.vrLink != null && spot.vrLink!.trim().isNotEmpty;
 
-  int _vrViewsForSpot(String spotId) {
-    for (final tour in _vrTours) {
-      if (tour['spotId']?.toString() == spotId) {
-        final views = tour['views'];
-        return views is int ? views : (views is num ? views.toInt() : 0);
-      }
-    }
-    return 0;
-  }
-
   Widget _buildSpotVrBadge(TouristSpot spot) {
     if (!_spotHasVr(spot)) {
       return Text(
@@ -5311,33 +5321,20 @@ class _LguDashboardState extends State<LguDashboard>
         style: TextStyle(color: _textMuted, fontSize: 12),
       );
     }
-    final views = _vrViewsForSpot(spot.id);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: Colors.purple.withOpacity(0.12),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: const Text(
-            'VR linked',
-            style: TextStyle(
-              color: Colors.purple,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.purple.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Text(
+        'VR linked',
+        style: TextStyle(
+          color: Colors.purple,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
         ),
-        if (views > 0) ...[
-          const SizedBox(width: 6),
-          Text(
-            '$views views',
-            style: TextStyle(color: _textMuted, fontSize: 11),
-          ),
-        ],
-      ],
+      ),
     );
   }
 
@@ -5507,19 +5504,6 @@ class _LguDashboardState extends State<LguDashboard>
             ),
           ),
         ),
-      ),
-    );
-  }
-
-  Future<void> _copyQrPayloadToClipboard(String payload, {String label = 'Link'}) async {
-    await Clipboard.setData(ClipboardData(text: payload));
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$label copied'),
-        backgroundColor: _primaryOrange,
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
       ),
     );
   }
@@ -5747,10 +5731,15 @@ class _LguDashboardState extends State<LguDashboard>
         ? spot.municipality
         : municipalityDisplayName;
 
-    return Container(
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => _showEditSpotDialog(spot),
+        child: Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: _panelBorder),
       ),
@@ -5765,7 +5754,7 @@ class _LguDashboardState extends State<LguDashboard>
               border: Border.all(color: _panelBorder),
             ),
             child: QrImageView(
-              data: qrData,
+              data: screenPreviewQrData(qrData),
               version: QrVersions.auto,
               size: wide ? 96 : 120,
               backgroundColor: Colors.white,
@@ -5914,17 +5903,14 @@ class _LguDashboardState extends State<LguDashboard>
                     ),
                   ),
                   TextButton.icon(
-                    onPressed: () => _copyQrPayloadToClipboard(
-                      qrData,
-                      label: 'Spot QR link',
-                    ),
+                    onPressed: () => _showEditSpotDialog(spot),
                     icon: Icon(
-                      Icons.copy_rounded,
+                      Icons.edit_rounded,
                       size: 15,
                       color: _primaryOrange,
                     ),
                     label: Text(
-                      'Copy link',
+                      'Edit details',
                       style: TextStyle(
                         color: _primaryOrange,
                         fontWeight: FontWeight.w700,
@@ -5955,6 +5941,8 @@ class _LguDashboardState extends State<LguDashboard>
             ],
           );
         },
+      ),
+        ),
       ),
     );
   }
@@ -6135,6 +6123,8 @@ class _LguDashboardState extends State<LguDashboard>
                       _buildSpotGpsFields(
                         latController: latController,
                         lngController: lngController,
+                        municipalityId: municipalityId,
+                        autoLocate: true,
                       ),
                       const SizedBox(height: 8),
                       Text(
@@ -6375,10 +6365,14 @@ class _LguDashboardState extends State<LguDashboard>
         },
       ),
     ).whenComplete(() {
-      nameController.dispose();
-      descriptionController.dispose();
-      latController.dispose();
-      lngController.dispose();
+      // The route still rebuilds during its exit transition (e.g. after
+      // _loadData), so dispose only once the dialog is fully gone.
+      Future<void>.delayed(const Duration(milliseconds: 600), () {
+        nameController.dispose();
+        descriptionController.dispose();
+        latController.dispose();
+        lngController.dispose();
+      });
     });
   }
 
@@ -6595,16 +6589,6 @@ class _LguDashboardState extends State<LguDashboard>
           ),
           DataColumn(
             label: Text(
-              'Visitors',
-              style: TextStyle(
-                color: _textDark,
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-              ),
-            ),
-          ),
-          DataColumn(
-            label: Text(
               'VR',
               style: TextStyle(
                 color: _textDark,
@@ -6670,15 +6654,6 @@ class _LguDashboardState extends State<LguDashboard>
                     Text(
                       s.municipality,
                       style: const TextStyle(color: _textDark),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      '${s.visitors}',
-                      style: const TextStyle(
-                        color: _textDark,
-                        fontWeight: FontWeight.w600,
-                      ),
                     ),
                   ),
                   DataCell(_buildSpotVrBadge(s)),
@@ -6808,6 +6783,8 @@ class _LguDashboardState extends State<LguDashboard>
                     _buildSpotGpsFields(
                       latController: latController,
                       lngController: lngController,
+                      municipalityId: normalizedStored,
+                      autoLocate: true,
                     ),
                   ],
                 ),
@@ -6951,7 +6928,7 @@ class _LguDashboardState extends State<LguDashboard>
     final nameController = TextEditingController(text: spot.name);
     final cityController = TextEditingController(text: spot.municipality);
     final descriptionController = TextEditingController(text: spot.description);
-    final imageUrlController = TextEditingController(text: spot.imageUrl ?? '');
+    var photos = spot.imageUrls;
     final vrLinkController = TextEditingController(text: spot.vrLink ?? '');
     final dotCodeController = TextEditingController(text: spot.dotAttractionCode);
     final latController = TextEditingController(
@@ -6961,6 +6938,10 @@ class _LguDashboardState extends State<LguDashboard>
       text: _formatCoordForField(spot.longitude),
     );
     String selectedCategory = spot.category;
+    final categoryOptions = <String>{
+      ..._categories.where((c) => c != 'All'),
+      if (spot.category.trim().isNotEmpty) spot.category,
+    }.toList();
 
     showDialog(
       context: context,
@@ -7000,8 +6981,7 @@ class _LguDashboardState extends State<LguDashboard>
                         dropdownColor: _cardBg,
                         underline: const SizedBox(),
                         style: TextStyle(color: _textDark, fontSize: 16),
-                        items: _categories
-                            .where((c) => c != 'All')
+                        items: categoryOptions
                             .map(
                               (c) => DropdownMenuItem(value: c, child: Text(c)),
                             )
@@ -7024,10 +7004,11 @@ class _LguDashboardState extends State<LguDashboard>
                       maxLines: 3,
                     ),
                     const SizedBox(height: 16),
-                    _buildDialogTextField(
-                      imageUrlController,
-                      'Image URL',
-                      Icons.image,
+                    SpotPhotosEditor(
+                      spotId: spot.id,
+                      initialUrls: photos,
+                      accentColor: _primaryOrange,
+                      onChanged: (urls) => photos = urls,
                     ),
                     const SizedBox(height: 16),
                     _buildDialogTextField(
@@ -7047,6 +7028,7 @@ class _LguDashboardState extends State<LguDashboard>
                     _buildSpotGpsFields(
                       latController: latController,
                       lngController: lngController,
+                      printedSpot: spot,
                     ),
                   ],
                 ),
@@ -7091,9 +7073,8 @@ class _LguDashboardState extends State<LguDashboard>
                           'description': descriptionController.text.trim(),
                           'latitude': lat,
                           'longitude': lng,
-                          'image_url': imageUrlController.text.trim().isNotEmpty
-                              ? imageUrlController.text.trim()
-                              : null,
+                          'image_url': photos.isNotEmpty ? photos.first : null,
+                          'gallery': photos,
                           'vr_link': vrLinkController.text.trim().isNotEmpty
                               ? vrLinkController.text.trim()
                               : null,
@@ -7128,18 +7109,30 @@ class _LguDashboardState extends State<LguDashboard>
                       }
                       await _loadData();
                     }
+                    final needsReprint = ok &&
+                        spotPinNeedsReprint(
+                          printedLatitude: spot.latitude,
+                          printedLongitude: spot.longitude,
+                          latitude: lat,
+                          longitude: lng,
+                        );
                     Navigator.pop(context);
                     if (mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: Text(
-                            ok
-                                ? 'Tourist spot updated successfully'
-                                : 'Failed to update. Check Firebase.',
+                            !ok
+                                ? 'Failed to update. Check Firebase.'
+                                : needsReprint
+                                    ? 'Spot updated. The pin moved — download '
+                                        'and re-post the new QR (PNG/PDF); the '
+                                        'old printed QR will be rejected.'
+                                    : 'Tourist spot updated successfully',
                           ),
                           backgroundColor: ok
                               ? _primaryOrange
                               : Colors.redAccent,
+                          duration: Duration(seconds: needsReprint ? 8 : 4),
                         ),
                       );
                     }
@@ -7257,12 +7250,21 @@ class _LguDashboardState extends State<LguDashboard>
   Widget _buildSpotGpsFields({
     required TextEditingController latController,
     required TextEditingController lngController,
+    String? municipalityId,
+    bool autoLocate = false,
+    TouristSpot? printedSpot,
   }) {
+    final munKey = [
+      municipalityId,
+      printedSpot?.municipalityId,
+      _storedMunicipalityId,
+    ].firstWhere((s) => s != null && s.trim().isNotEmpty, orElse: () => '');
+    final anchor = getMunicipalityAnchorCoordinates(munKey ?? '');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'GPS coordinates (required for QR check-in)',
+          'Spot location (required for QR check-in)',
           style: TextStyle(
             color: _textMuted,
             fontSize: 12,
@@ -7271,31 +7273,26 @@ class _LguDashboardState extends State<LguDashboard>
         ),
         const SizedBox(height: 4),
         Text(
-          'In Google Maps: long-press the spot ? copy coordinates. '
-          'Tourists must be within about 5 m to scan.',
+          'Place the pin where the QR is posted. Tourists must be within '
+          '${kQrScanSpotMaxDistanceMeters.round()} m to check in and get a '
+          '"QR near you" alert within '
+          '${(kNearbySpotNotifyRadiusMeters / 1000).toStringAsFixed(0)} km.',
           style: TextStyle(color: _textMuted, fontSize: 11, height: 1.35),
         ),
         const SizedBox(height: 12),
-        _buildDialogTextField(
-          latController,
-          'Latitude',
-          Icons.my_location,
-          keyboardType: const TextInputType.numberWithOptions(
-            decimal: true,
-            signed: true,
-          ),
-          hintText: 'e.g. 8.486000',
-        ),
-        const SizedBox(height: 16),
-        _buildDialogTextField(
-          lngController,
-          'Longitude',
-          Icons.explore_outlined,
-          keyboardType: const TextInputType.numberWithOptions(
-            decimal: true,
-            signed: true,
-          ),
-          hintText: 'e.g. 123.804800',
+        SpotLocationPicker(
+          initialLatitude: _tryParseCoord(latController.text),
+          initialLongitude: _tryParseCoord(lngController.text),
+          fallbackLatitude: anchor?.lat,
+          fallbackLongitude: anchor?.lng,
+          autoLocate: autoLocate,
+          printedLatitude: printedSpot?.latitude,
+          printedLongitude: printedSpot?.longitude,
+          accentColor: _primaryOrange,
+          onChanged: (pin) {
+            latController.text = pin.latitude.toStringAsFixed(6);
+            lngController.text = pin.longitude.toStringAsFixed(6);
+          },
         ),
       ],
     );

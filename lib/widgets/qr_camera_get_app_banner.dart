@@ -2,7 +2,6 @@ import 'dart:async' show unawaited;
 
 import 'package:atmos_trs_system/config/app_store_links.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
-import 'package:atmos_trs_system/services/pending_establishment_stay_storage.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/qr_launch_bootstrap.dart';
@@ -41,21 +40,14 @@ class _QrCameraGetAppBannerState extends State<QrCameraGetAppBanner> {
     if (!has || !mounted) return;
 
     String label = 'this place';
-    final est = await PendingEstablishmentStayStorage.peek();
-    if (est != null) {
-      label = (est.businessName?.trim().isNotEmpty == true)
-          ? est.businessName!.trim()
-          : 'this establishment';
+    final spot = await PendingSpotCheckInStorage.peek();
+    if (spot != null) {
+      label = (spot.spotName?.trim().isNotEmpty == true)
+          ? spot.spotName!.trim()
+          : 'this tourist spot';
     } else {
-      final spot = await PendingSpotCheckInStorage.peek();
-      if (spot != null) {
-        label = (spot.spotName?.trim().isNotEmpty == true)
-            ? spot.spotName!.trim()
-            : 'this tourist spot';
-      } else {
-        final lgu = await PendingLguCheckInStorage.peek();
-        if (lgu != null) label = lgu.displayName;
-      }
+      final lgu = await PendingLguCheckInStorage.peek();
+      if (lgu != null) label = lgu.displayName;
     }
 
     if (!mounted) return;
@@ -65,11 +57,22 @@ class _QrCameraGetAppBannerState extends State<QrCameraGetAppBanner> {
     });
   }
 
-  Future<void> _download(AtmosAppDownloadTarget target) async {
+  Future<void> _dismiss() async {
+    setState(() => _visible = false);
+    QrLaunchBootstrap.appliedFromLaunchUrl = false;
+    await PendingSpotCheckInStorage.clear();
+    await PendingLguCheckInStorage.clear();
+  }
+
+  Future<void> _download() async {
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final ok = await openAtmosAppDownload(target: target);
+      final ok = await openAtmosAppDownload(
+        target: kHasAndroidApkDownload
+            ? AtmosAppDownloadTarget.apk
+            : AtmosAppDownloadTarget.playStore,
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -149,41 +152,24 @@ class _QrCameraGetAppBannerState extends State<QrCameraGetAppBanner> {
                     ],
                   ),
                 ),
+                IconButton(
+                  tooltip: 'Dismiss',
+                  onPressed: _busy ? null : _dismiss,
+                  icon: Icon(Icons.close_rounded, color: Colors.grey.shade600),
+                ),
               ],
             ),
             const SizedBox(height: 14),
-            if (kHasAndroidApkDownload) ...[
-              FilledButton.icon(
-                onPressed: _busy
-                    ? null
-                    : () => _download(AtmosAppDownloadTarget.apk),
-                style: FilledButton.styleFrom(
-                  backgroundColor: accent,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                ),
-                icon: const Icon(Icons.smartphone_rounded, size: 20),
-                label: const Text(
-                  'Get the ATMOS app',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ),
-              const SizedBox(height: 8),
-            ],
             FilledButton.icon(
-              onPressed: _busy
-                  ? null
-                  : () => _download(AtmosAppDownloadTarget.playStore),
+              onPressed: _busy ? null : _download,
               style: FilledButton.styleFrom(
-                backgroundColor: kHasAndroidApkDownload
-                    ? accent.withValues(alpha: 0.9)
-                    : accent,
+                backgroundColor: accent,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
-              icon: const Icon(Icons.android_rounded, size: 20),
+              icon: const Icon(Icons.smartphone_rounded, size: 20),
               label: const Text(
-                'Get it on Google Play',
+                'Get the ATMOS App',
                 style: TextStyle(fontWeight: FontWeight.w700),
               ),
             ),

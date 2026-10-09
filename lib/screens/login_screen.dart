@@ -12,9 +12,9 @@ import 'package:atmos_trs_system/services/login_flow_service.dart';
 import 'package:atmos_trs_system/services/auth_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/services/registration_rollback_service.dart';
+import 'package:atmos_trs_system/navigation/auth_navigation.dart';
 import 'package:atmos_trs_system/navigation/login_route_args.dart';
 import 'package:atmos_trs_system/navigation/pending_checkin_navigation.dart';
-import 'package:atmos_trs_system/services/pending_establishment_stay_storage.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/landing_intent_service.dart';
@@ -276,7 +276,6 @@ class _LoginScreenState extends State<LoginScreen> {
         await LoginFlowService.persistStaffSessionQuick(uid: uid, email: email);
         await PendingSpotCheckInStorage.clear();
         await PendingLguCheckInStorage.clear();
-        await PendingEstablishmentStayStorage.clear();
         await LandingIntentService.clear();
         if (!mounted) return;
         Navigator.pushReplacementNamed(context, route);
@@ -403,8 +402,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     final pendingSpot = await PendingSpotCheckInStorage.peek();
     final pendingLgu = await PendingLguCheckInStorage.peek();
-    final pendingEst = await PendingEstablishmentStayStorage.peek();
-    if (pendingSpot != null || pendingLgu != null || pendingEst != null) {
+    if (pendingSpot != null || pendingLgu != null) {
       return false;
     }
 
@@ -626,7 +624,7 @@ class _LoginScreenState extends State<LoginScreen> {
     } else {
       Navigator.pushReplacementNamed(
         context,
-        _isDesktopGlass ? '/landing' : '/login',
+        kIsWeb && _isDesktopGlass ? '/landing' : '/login',
       );
     }
   }
@@ -788,7 +786,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                         GestureDetector(
                           key: const Key('sign-up-button'),
-                          onTap: () => Navigator.pushNamed(context, '/signup'),
+                          onTap: () => openSignupFromLogin(context),
                           child: const Text(
                             'Sign Up',
                             style: TextStyle(
@@ -1176,7 +1174,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   GestureDetector(
                     key: const Key('sign-up-button'),
-                    onTap: () => Navigator.pushNamed(context, '/signup'),
+                    onTap: () => openSignupFromLogin(context),
                     child: const Text(
                       'Sign Up >',
                       style: TextStyle(

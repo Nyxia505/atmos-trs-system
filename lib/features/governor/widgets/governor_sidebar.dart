@@ -36,6 +36,11 @@ class GovernorSidebar extends StatelessWidget {
     this.asDrawer = false,
     /// ATMOS mark beside the brand title. Enable only on the Governor portal.
     this.showBrandLogo = false,
+    /// Circular office seal beside the brand title (e.g. OPTACA). Takes
+    /// precedence over [showBrandLogo].
+    this.brandLogoAsset,
+    /// Bundled photo for the footer card; defaults to the landing hero.
+    this.footerImageAsset,
   });
 
   final bool expanded;
@@ -52,6 +57,8 @@ class GovernorSidebar extends StatelessWidget {
   final Widget? avatar;
   final bool asDrawer;
   final bool showBrandLogo;
+  final String? brandLogoAsset;
+  final String? footerImageAsset;
 
   static const double _frameInset = 8;
   static const double _panelRadius = 28;
@@ -92,26 +99,36 @@ class GovernorSidebar extends StatelessWidget {
               ),
             ],
           ),
-          child: Column(
-            children: [
-              SizedBox(height: asDrawer ? 8 : 10),
-              _buildBrandHeader(),
-              const SizedBox(height: 14),
-              Expanded(child: _buildNav()),
-              if (expanded) _buildFooterArt(),
-              Padding(
-                padding: EdgeInsets.fromLTRB(
-                  expanded ? 16 : 10,
-                  expanded ? 10 : 8,
-                  expanded ? 16 : 10,
-                  14 + bottomInset,
-                ),
-                child: _GlassLogoutButton(
-                  expanded: expanded,
-                  onPressed: onLogout,
-                ),
-              ),
-            ],
+          // Expanded layout only once the width animation has finished, so
+          // labels never render inside a still-narrow sidebar.
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final open = asDrawer ||
+                  (expanded &&
+                      constraints.maxWidth >=
+                          GovernorDashboardTokens.sidebarExpanded - 0.5);
+              return Column(
+                children: [
+                  SizedBox(height: asDrawer ? 8 : 10),
+                  _buildBrandHeader(open),
+                  const SizedBox(height: 14),
+                  Expanded(child: _buildNav(open)),
+                  if (open) _buildFooterArt(),
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      open ? 16 : 10,
+                      open ? 10 : 8,
+                      open ? 16 : 10,
+                      14 + bottomInset,
+                    ),
+                    child: _GlassLogoutButton(
+                      expanded: open,
+                      onPressed: onLogout,
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
         ),
       ),
@@ -119,7 +136,7 @@ class GovernorSidebar extends StatelessWidget {
 
     final framed = DecoratedBox(
       decoration: const BoxDecoration(
-        gradient: GovernorDashboardTokens.headerGradient,
+        gradient: GovernorDashboardTokens.sidebarGradient,
       ),
       child: Padding(
         padding: EdgeInsets.fromLTRB(
@@ -138,7 +155,7 @@ class GovernorSidebar extends StatelessWidget {
         backgroundColor: Colors.transparent,
         child: DecoratedBox(
           decoration: const BoxDecoration(
-            gradient: GovernorDashboardTokens.headerGradient,
+            gradient: GovernorDashboardTokens.sidebarGradient,
           ),
           child: framed,
         ),
@@ -153,10 +170,14 @@ class GovernorSidebar extends StatelessWidget {
     );
   }
 
-  Widget _buildBrandHeader() {
-    final mark = _BrandMark(size: expanded ? 44 : 34, showLogo: showBrandLogo);
+  Widget _buildBrandHeader(bool open) {
+    final mark = _BrandMark(
+      size: open ? 44 : 34,
+      showLogo: showBrandLogo,
+      logoAsset: brandLogoAsset,
+    );
 
-    if (!expanded) {
+    if (!open) {
       return Padding(
         padding: const EdgeInsets.fromLTRB(6, 4, 6, 0),
         child: Column(
@@ -227,10 +248,10 @@ class GovernorSidebar extends StatelessWidget {
     );
   }
 
-  Widget _buildNav() {
+  Widget _buildNav(bool open) {
     return ListView.separated(
       padding: EdgeInsets.symmetric(
-        horizontal: expanded ? 12 : 6,
+        horizontal: open ? 12 : 6,
         vertical: 4,
       ),
       itemCount: items.length,
@@ -239,7 +260,7 @@ class GovernorSidebar extends StatelessWidget {
         final item = items[index];
         return _NavTile(
           item: item,
-          expanded: expanded,
+          expanded: open,
           selected: index == selectedIndex,
           onTap: () => onSelect(index),
         );
@@ -248,7 +269,7 @@ class GovernorSidebar extends StatelessWidget {
   }
 
   Widget _buildFooterArt() {
-    final heroUrl =
+    final heroUrl = footerImageAsset ??
         SupabaseStorageConfig.resolve(MisamisOccidentalImages.landingBg);
     final isNetwork =
         heroUrl.startsWith('http://') || heroUrl.startsWith('https://');
@@ -314,12 +335,48 @@ class GovernorSidebar extends StatelessWidget {
 }
 
 class _BrandMark extends StatelessWidget {
-  const _BrandMark({required this.size, required this.showLogo});
+  const _BrandMark({
+    required this.size,
+    required this.showLogo,
+    this.logoAsset,
+  });
   final double size;
   final bool showLogo;
+  final String? logoAsset;
 
   @override
   Widget build(BuildContext context) {
+    final asset = logoAsset;
+    if (asset != null) {
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.white,
+          boxShadow: [
+            BoxShadow(
+              color: GovernorDashboardTokens.primary.withValues(alpha: 0.22),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: ClipOval(
+          child: Image.asset(
+            asset,
+            fit: BoxFit.cover,
+            filterQuality: FilterQuality.high,
+            errorBuilder: (_, __, ___) => Icon(
+              Icons.landscape_rounded,
+              color: GovernorDashboardTokens.primary,
+              size: size * 0.55,
+            ),
+          ),
+        ),
+      );
+    }
+
     if (showLogo) {
       // Official ATMOS mark — Governor sidebar only.
       return AtmosSquareLogo(

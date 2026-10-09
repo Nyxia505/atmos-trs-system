@@ -1,17 +1,22 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:atmos_trs_system/config/mice_event_types.dart';
 import 'package:atmos_trs_system/config/supabase_report_templates_config.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
+import 'package:atmos_trs_system/models/sign_off.dart';
 import 'package:atmos_trs_system/services/establishment_approval_service.dart';
 import 'package:atmos_trs_system/services/lgu_checkin_report_query.dart';
+import 'package:atmos_trs_system/services/sign_off_service.dart';
 import 'package:atmos_trs_system/utils/dot_report_entity_scope.dart';
 import 'package:atmos_trs_system/utils/dot_report_export_service.dart';
 import 'package:atmos_trs_system/utils/dot_report_pdf_export.dart';
 import 'package:atmos_trs_system/utils/dot_report_preview.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
-import 'package:atmos_trs_system/utils/establishment_stay_report_query.dart';
+import 'package:atmos_trs_system/utils/ae_register_report_query.dart';
+import 'package:atmos_trs_system/utils/mice_report_query.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/pdf_file_download.dart';
 import 'package:atmos_trs_system/utils/xlsx_file_download.dart';
@@ -34,6 +39,8 @@ class DotReportExportPanel extends StatefulWidget {
     this.municipalityId,
     this.parseTimestamp,
     this.wrapPanel,
+    this.lockedEstablishment,
+    this.allowedFormIds,
   });
 
   final Color primaryColor;
@@ -52,6 +59,12 @@ class DotReportExportPanel extends StatefulWidget {
   final DateTime? Function(Map<String, dynamic> checkIn)? parseTimestamp;
   final Widget Function(Widget child)? wrapPanel;
 
+  /// Establishment dashboard: scope fixed to this AE (scope pickers hidden).
+  final DotReportEntityOption? lockedEstablishment;
+
+  /// Restricts the form list (catalog ids). Null = full catalog.
+  final Set<String>? allowedFormIds;
+
   @override
   State<DotReportExportPanel> createState() => _DotReportExportPanelState();
 }
@@ -63,6 +76,8 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
   DateTime? _start;
   DateTime? _end;
   bool _busy = false;
+  static const _kPaperPrefKey = 'dot_report_pdf_paper_size';
+  DotPdfPaperSize _paperSize = DotPdfPaperSize.a4;
   String? _lastGapsPreview;
   DotReportPreviewTable? _preview;
   bool _previewLoading = false;
@@ -74,25 +89,170 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
   /// Provincial only: narrow spot/AE lists to one LGU (empty = all LGUs).
   String _entityMunicipalityFilter = '';
   List<DotReportEntityOption> _establishments = const [];
+  Set<String> _miceVenueIds = const {};
   StreamSubscription<List<EstablishmentRegistryEntry>>? _estSub;
+
+  // CUS MICE options.
+  static const _kCusLayoutPrefKey = 'dot_report_cus_layout';
+  final Set<MiceCategory> _miceCategories = {};
+  bool _miceIncludeDrafts = true;
+  CusLayout _cusLayout = CusLayout.summaryAndVenues;
+  final _officerController = TextEditingController();
+  final _mayorController = TextEditingController();
+
+  bool get _locked => widget.lockedEstablishment != null;
+  bool get _isCus => _selected.reportType == DotReportType.cusMice;
+
+  String get _signatoryPrefKey {
+    final slug = widget.scopeSlug.trim().isEmpty ? 'default' : widget.scopeSlug.trim();
+    return 'dot_report_cus_signatories_$slug';
+  }
+
+  List<DotFormCatalogEntry> get _catalog {
+    final allowed = widget.allowedFormIds;
+    if (allowed == null) return kDotFormCatalog;
+    return [for (final f in kDotFormCatalog) if (allowed.contains(f.id)) f];
+  }
 
   @override
   void initState() {
     super.initState();
-    _selected = kDotFormCatalogById['var2']!;
+    final catalog = _catalog;
+    _selected = catalog.isEmpty ? kDotFormCatalogById['var2']! : catalog.first;
     _formSearchController.text = _selected.title;
     final now = DateTime.now();
     _start = DateTime(now.year, now.month, 1);
     _end = DateTime(now.year, now.month, now.day);
-    _subscribeEstablishments();
+    if (_locked) {
+      _entityKind = DotReportEntityKind.establishment;
+      _selectedEntity = widget.lockedEstablishment;
+    } else {
+      _subscribeEstablishments();
+    }
     unawaited(_refreshPreview());
+    unawaited(_loadPaperSize());
+  }
+
+  Future<void> _loadPaperSize() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = DotPdfPaperSizeX.fromName(prefs.getString(_kPaperPrefKey));
+    final layout = CusLayout.values.firstWhere(
+      (l) => l.name == prefs.getString(_kCusLayoutPrefKey),
+      orElse: () => CusLayout.summaryAndVenues,
+    );
+    final names = prefs.getStringList(_signatoryPrefKey) ?? const [];
+    if (!mounted) return;
+    setState(() {
+      _paperSize = saved;
+      _cusLayout = layout;
+    });
+    if (names.isNotEmpty && _officerController.text.isEmpty) _officerController.text = names.first;
+    if (names.length > 1 && _mayorController.text.isEmpty) _mayorController.text = names[1];
+  }
+
+  /// Officer / Mayor names are remembered per LGU scope on this device.
+  void _saveSignatories() {
+    final names = [_officerController.text.trim(), _mayorController.text.trim()];
+    unawaited(SharedPreferences.getInstance().then((p) => p.setStringList(_signatoryPrefKey, names)));
+  }
+
+  CusExportOptions get _cusOptions => CusExportOptions(
+        layout: _cusLayout,
+        officerName: _officerController.text.trim(),
+        mayorName: _mayorController.text.trim(),
+      );
+
+  List<DotPdfSignatory> get _cusSignatories => [
+        DotPdfSignatory(role: 'Name of Tourism Officer', name: _officerController.text),
+        DotPdfSignatory(role: 'Mayor', name: _mayorController.text),
+      ];
+
+  void _onPaperSizeChanged(DotPdfPaperSize? size) {
+    if (size == null || size == _paperSize) return;
+    setState(() => _paperSize = size);
+    unawaited(
+      SharedPreferences.getInstance()
+          .then((p) => p.setString(_kPaperPrefKey, size.name)),
+    );
+  }
+
+  Widget _paperSizeField({bool expand = false}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          'PDF paper size',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: widget.textMuted,
+          ),
+        ),
+        const SizedBox(height: 6),
+        DropdownButtonFormField<DotPdfPaperSize>(
+          key: ValueKey(_paperSize),
+          initialValue: _paperSize,
+          isExpanded: expand,
+          isDense: true,
+          onChanged: _busy ? null : _onPaperSizeChanged,
+          decoration: InputDecoration(
+            prefixIcon: Icon(
+              Icons.description_outlined,
+              size: 18,
+              color: widget.primaryColor,
+            ),
+            prefixIconConstraints:
+                const BoxConstraints(minWidth: 38, minHeight: 20),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: widget.borderColor),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: widget.borderColor),
+            ),
+          ),
+          items: [
+            for (final p in DotPdfPaperSize.values)
+              DropdownMenuItem(
+                value: p,
+                child: Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: p.label,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: widget.textDark,
+                        ),
+                      ),
+                      TextSpan(
+                        text: '  ${p.dimensionsLabel}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: widget.textMuted,
+                        ),
+                      ),
+                    ],
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+          ],
+        ),
+      ],
+    );
   }
 
   @override
   void didUpdateWidget(covariant DotReportExportPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.municipalityId != widget.municipalityId ||
-        oldWidget.isProvincial != widget.isProvincial) {
+    if (!_locked &&
+        (oldWidget.municipalityId != widget.municipalityId ||
+            oldWidget.isProvincial != widget.isProvincial)) {
       _subscribeEstablishments();
     }
     if (oldWidget.checkIns.length != widget.checkIns.length ||
@@ -107,6 +267,8 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
   void dispose() {
     _estSub?.cancel();
     _formSearchController.dispose();
+    _officerController.dispose();
+    _mayorController.dispose();
     _service.dispose();
     super.dispose();
   }
@@ -114,25 +276,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
   void _subscribeEstablishments() {
     _estSub?.cancel();
     if (widget.isProvincial) {
-      _estSub = EstablishmentApprovalService.watchAll().listen((entries) {
-        if (!mounted) return;
-        setState(() {
-          _establishments = [
-            for (final e in entries)
-              if (e.isActive)
-                DotReportEntityOption(
-                  id: e.id,
-                  name: e.businessName,
-                  kind: DotReportEntityKind.establishment,
-                  municipalityId: e.municipalityId,
-                  municipalityName: e.municipality,
-                ),
-          ]..sort(
-              (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-            );
-        });
-        unawaited(_refreshPreview());
-      });
+      _estSub = EstablishmentApprovalService.watchAll().listen(_onEstablishments);
       return;
     }
     final mid = normalizeMunicipalityId(widget.municipalityId);
@@ -140,27 +284,26 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       setState(() => _establishments = const []);
       return;
     }
-    _estSub = EstablishmentApprovalService.watchForMunicipality(mid).listen(
-      (entries) {
-        if (!mounted) return;
-        setState(() {
-          _establishments = [
-            for (final e in entries)
-              if (e.isActive)
-                DotReportEntityOption(
-                  id: e.id,
-                  name: e.businessName,
-                  kind: DotReportEntityKind.establishment,
-                  municipalityId: e.municipalityId,
-                  municipalityName: e.municipality,
-                ),
-          ]..sort(
-              (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-            );
-        });
-        unawaited(_refreshPreview());
-      },
-    );
+    _estSub = EstablishmentApprovalService.watchForMunicipality(mid).listen(_onEstablishments);
+  }
+
+  void _onEstablishments(List<EstablishmentRegistryEntry> entries) {
+    if (!mounted) return;
+    final active = entries.where((e) => e.isActive);
+    setState(() {
+      _establishments = [
+        for (final e in active)
+          DotReportEntityOption(
+            id: e.id,
+            name: e.businessName,
+            kind: DotReportEntityKind.establishment,
+            municipalityId: e.municipalityId,
+            municipalityName: e.municipality,
+          ),
+      ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      _miceVenueIds = {for (final e in active) if (e.hostsMice) e.id};
+    });
+    unawaited(_refreshPreview());
   }
 
   List<DotReportEntityOption> get _spotOptions {
@@ -194,13 +337,14 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
     final munFilter = normalizeMunicipalityId(_entityMunicipalityFilter);
     final list = [
       for (final e in _establishments)
-        if (!widget.isProvincial ||
-            munFilter.isEmpty ||
-            normalizeMunicipalityId(e.municipalityId) == munFilter ||
-            normalizeMunicipalityId(
-                  getMunicipalityIdFromName(e.municipalityName),
-                ) ==
-                munFilter)
+        if ((!_isCus || _miceVenueIds.contains(e.id)) &&
+            (!widget.isProvincial ||
+                munFilter.isEmpty ||
+                normalizeMunicipalityId(e.municipalityId) == munFilter ||
+                normalizeMunicipalityId(
+                      getMunicipalityIdFromName(e.municipalityName),
+                    ) ==
+                    munFilter))
           e,
     ];
     return list;
@@ -250,11 +394,12 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         start: _start!,
         end: end,
       );
-      final stays = await _resolveConfirmedStaysForDae(
+      final aeRegister = await _resolveAeRegisterForDae(
         form: _selected,
         start: _start!,
         end: end,
       );
+      final mice = await _resolveMiceForCus(form: _selected, start: _start!, end: end);
       if (!mounted || seq != _previewSeq) return;
       final preview = buildDotReportPreview(
         form: _selected,
@@ -265,7 +410,8 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         catalogSpots: _effectiveCatalog,
         scopeLabel: _effectiveScopeLabel,
         parseTimestamp: widget.parseTimestamp,
-        confirmedStays: stays,
+        aeRegister: aeRegister,
+        mice: mice,
       );
       if (!mounted || seq != _previewSeq) return;
       setState(() {
@@ -287,6 +433,12 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       _selected = form;
       _formSearchController.text = form.title;
       _lastGapsPreview = null;
+      if (!_locked &&
+          _selectedEntity != null &&
+          _entityKind == DotReportEntityKind.establishment &&
+          !_establishmentOptions.any((e) => e.id == _selectedEntity!.id)) {
+        _selectedEntity = null;
+      }
     });
     unawaited(_refreshPreview());
   }
@@ -370,7 +522,17 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         const SizedBox(height: 10),
         _buildSelectedFormMeta(),
         const SizedBox(height: 14),
-        _buildEntityScopeSection(),
+        if (_locked)
+          Text(
+            'Filled from your own register: ${widget.lockedEstablishment!.name}',
+            style: TextStyle(color: widget.textMuted, fontSize: 12),
+          )
+        else
+          _buildEntityScopeSection(),
+        if (_isCus) ...[
+          const SizedBox(height: 14),
+          _buildCusOptions(),
+        ],
         const SizedBox(height: 14),
         Text(
           'Custom date range',
@@ -392,6 +554,121 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
           const SizedBox(height: 12),
           _buildGapsPreview(),
         ],
+      ],
+    );
+  }
+
+  Widget _buildCusOptions() {
+    final label = TextStyle(color: widget.textDark, fontSize: 13, fontWeight: FontWeight.w700);
+    final hint = TextStyle(color: widget.textMuted, fontSize: 11.5, height: 1.35);
+    InputDecoration deco(String text, IconData icon) => InputDecoration(
+          labelText: text,
+          isDense: true,
+          prefixIcon: Icon(icon, size: 18, color: widget.primaryColor),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        );
+    void changed(VoidCallback fn) {
+      setState(fn);
+      unawaited(_refreshPreview());
+    }
+
+    final officer = TextField(
+      controller: _officerController,
+      enabled: !_busy,
+      textCapitalization: TextCapitalization.words,
+      onSubmitted: (_) => _saveSignatories(),
+      decoration: deco('Name of Tourism Officer', Icons.badge_outlined),
+    );
+    final mayor = TextField(
+      controller: _mayorController,
+      enabled: !_busy,
+      textCapitalization: TextCapitalization.words,
+      onSubmitted: (_) => _saveSignatories(),
+      decoration: deco('Mayor', Icons.account_balance_outlined),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('MICE filters & layout', style: label),
+        const SizedBox(height: 4),
+        Text(
+          'Filled from venue event logs (Events tab). Pick categories to narrow the sheet; none selected = all events.',
+          style: hint,
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final c in MiceCategory.values)
+              FilterChip(
+                avatar: Icon(c.icon, size: 16),
+                label: Text(c.label),
+                selected: _miceCategories.contains(c),
+                onSelected: _busy
+                    ? null
+                    : (on) => changed(() => on ? _miceCategories.add(c) : _miceCategories.remove(c)),
+              ),
+            if (_miceCategories.isNotEmpty)
+              ActionChip(
+                avatar: const Icon(Icons.clear_rounded, size: 16),
+                label: const Text('All categories'),
+                onPressed: _busy ? null : () => changed(_miceCategories.clear),
+              ),
+          ],
+        ),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          value: _miceIncludeDrafts,
+          onChanged: _busy ? null : (v) => changed(() => _miceIncludeDrafts = v),
+          title: const Text('Include draft months'),
+          subtitle: Text(
+            _miceIncludeDrafts
+                ? 'Drafts are counted and flagged in ATMOS_GAPS.'
+                : 'Only months the venue submitted to the LGU.',
+            style: hint,
+          ),
+        ),
+        if (!_locked) ...[
+          const SizedBox(height: 4),
+          DropdownButtonFormField<CusLayout>(
+            key: ValueKey(_cusLayout),
+            initialValue: _cusLayout,
+            isExpanded: true,
+            decoration: deco('Excel layout (several venues)', Icons.table_view_outlined),
+            items: [
+              for (final l in CusLayout.values) DropdownMenuItem(value: l, child: Text(l.label)),
+            ],
+            onChanged: _busy
+                ? null
+                : (v) {
+                    if (v == null) return;
+                    setState(() => _cusLayout = v);
+                    unawaited(
+                      SharedPreferences.getInstance().then((p) => p.setString(_kCusLayoutPrefKey, v.name)),
+                    );
+                  },
+          ),
+          const SizedBox(height: 4),
+          Text('One venue in scope always exports its CUS BY EST sheet.', style: hint),
+        ],
+        const SizedBox(height: 12),
+        if (widget.isMobile) ...[
+          officer,
+          const SizedBox(height: 8),
+          mayor,
+        ] else
+          Row(
+            children: [
+              Expanded(child: officer),
+              const SizedBox(width: 10),
+              Expanded(child: mayor),
+            ],
+          ),
+        const SizedBox(height: 4),
+        Text('Printed on the CUS BY EST footer and the PDF. Remembered on this device.', style: hint),
       ],
     );
   }
@@ -443,7 +720,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
             ),
             const DropdownMenuItem(
               value: DotReportEntityKind.establishment,
-              child: Text('One establishment (DAE / stay QR)'),
+              child: Text('One establishment (DAE / hotel register)'),
             ),
           ],
           onChanged: _busy
@@ -519,11 +796,13 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
                     unawaited(_refreshPreview());
                   },
           ),
-          if (_selected.category == DotFormCategory.accommodation)
+          if (_selected.category == DotFormCategory.accommodation || _isCus)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
-                'Tip: DAE forms use establishment stays. Prefer “One establishment” for DAE.',
+                _isCus
+                    ? 'Tip: CUS MICE uses venue event logs. Pick “One establishment” for a single venue.'
+                    : 'Tip: DAE forms use hotel DOT registers (whole months). Pick “One establishment” for a single hotel.',
                 style: TextStyle(color: widget.textMuted, fontSize: 11.5),
               ),
             ),
@@ -563,11 +842,13 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
                     unawaited(_refreshPreview());
                   },
           ),
-          if (_selected.category == DotFormCategory.attraction)
+          if (_selected.category == DotFormCategory.attraction || _isCus)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
-                'Tip: VAR forms use attraction QR check-ins. Prefer “One tourist spot” for VAR.',
+                _isCus
+                    ? 'Only venues with “We host events (MICE)” turned on are listed.'
+                    : 'Tip: VAR forms use attraction QR check-ins. Prefer “One tourist spot” for VAR.',
                 style: TextStyle(color: widget.textMuted, fontSize: 11.5),
               ),
             ),
@@ -639,7 +920,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
             _onFormSelected(form);
           },
           dropdownMenuEntries: [
-            for (final form in kDotFormCatalog)
+            for (final form in _catalog)
               DropdownMenuEntry<DotFormCatalogEntry>(
                 value: form,
                 label: form.title,
@@ -782,7 +1063,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'ATMOS gaps (will fill as fields / AE stays arrive)',
+            'ATMOS gaps (will fill as fields / hotel registers arrive)',
             style: TextStyle(
               color: widget.textDark,
               fontSize: 11.5,
@@ -1019,10 +1300,11 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
             ),
           ),
         ),
+        SizedBox(width: 210, child: _paperSizeField(expand: true)),
         OutlinedButton.icon(
           onPressed: _busy ? null : _generatePdf,
           icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
-          label: const Text('Download PDF'),
+          label: Text('Download PDF (${_paperSize.label})'),
           style: OutlinedButton.styleFrom(
             foregroundColor: widget.primaryColor,
             side: BorderSide(color: widget.primaryColor.withValues(alpha: 0.55)),
@@ -1073,11 +1355,13 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
             ),
           ),
         ),
+        const SizedBox(height: 12),
+        _paperSizeField(expand: true),
         const SizedBox(height: 8),
         OutlinedButton.icon(
           onPressed: _busy ? null : _generatePdf,
           icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
-          label: const Text('Download PDF'),
+          label: Text('Download PDF (${_paperSize.label})'),
           style: OutlinedButton.styleFrom(
             foregroundColor: widget.primaryColor,
             side: BorderSide(color: widget.primaryColor.withValues(alpha: 0.55)),
@@ -1160,6 +1444,9 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
     required DateTime start,
     required DateTime end,
   }) async {
+    // Establishment scope: attraction QR rows are not AE stays — leave empty
+    // for VAR so preview gaps stay honest when user picks AE + VAR.
+    if (_entityKind == DotReportEntityKind.establishment) return const [];
     List<Map<String, dynamic>> base;
     if (widget.isProvincial) {
       base = List<Map<String, dynamic>>.from(widget.checkIns);
@@ -1207,48 +1494,125 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         spotName: _selectedEntity!.name,
       );
     }
-    // Establishment scope: attraction QR rows are not AE stays — leave empty
-    // for VAR so preview gaps stay honest when user picks AE + VAR.
-    if (_entityKind == DotReportEntityKind.establishment) {
-      return const [];
-    }
     return base;
   }
 
-  /// Confirmed AE stays for DAE-family forms only (VAR forms skip the query).
-  Future<List<Map<String, dynamic>>> _resolveConfirmedStaysForDae({
+  /// Hotel DOT registers for DAE-family forms only (VAR forms skip the query).
+  Future<AeRegisterReportData> _resolveAeRegisterForDae({
     required DotFormCatalogEntry form,
     required DateTime start,
     required DateTime end,
   }) async {
     if (form.category != DotFormCategory.accommodation) {
-      return const [];
+      return AeRegisterReportData.empty;
     }
-    // Spot scope → no AE stays (unless user switches to establishment).
+    // Spot scope → attraction only (switch to establishment for hotel data).
     if (_entityKind == DotReportEntityKind.spot) {
-      return const [];
+      return AeRegisterReportData.empty;
     }
     try {
-      var stays = await fetchConfirmedEstablishmentStays(
+      final oneAe = _entityKind == DotReportEntityKind.establishment && _selectedEntity != null;
+      return await fetchAeRegisterReportData(
         startDate: start,
         endDate: end,
-        municipalityId: widget.isProvincial
-            ? (normalizeMunicipalityId(_entityMunicipalityFilter).isEmpty
-                ? null
-                : _entityMunicipalityFilter)
-            : widget.municipalityId,
+        aeId: oneAe ? _selectedEntity!.id : null,
+        municipalityId: oneAe
+            ? null
+            : widget.isProvincial
+                ? (normalizeMunicipalityId(_entityMunicipalityFilter).isEmpty
+                    ? null
+                    : _entityMunicipalityFilter)
+                : widget.municipalityId,
+        includeRows: form.id == 'dae1a_manual',
       );
-      if (_entityKind == DotReportEntityKind.establishment &&
-          _selectedEntity != null) {
-        stays = DotReportEntityScope.filterStaysForEstablishment(
-          stays,
-          establishmentId: _selectedEntity!.id,
-        );
-      }
-      return stays;
     } catch (e) {
-      debugPrint('[DotReportExportPanel] confirmed stays: $e');
-      return const [];
+      debugPrint('[DotReportExportPanel] AE registers: $e');
+      return AeRegisterReportData.empty;
+    }
+  }
+  /// Venue MICE event logs for the CUS form only.
+  Future<MiceReportData> _resolveMiceForCus({
+    required DotFormCatalogEntry form,
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    if (form.reportType != DotReportType.cusMice || _entityKind == DotReportEntityKind.spot) {
+      return MiceReportData.empty;
+    }
+    try {
+      final oneAe = _entityKind == DotReportEntityKind.establishment && _selectedEntity != null;
+      return await fetchMiceReportData(
+        startDate: start,
+        endDate: end,
+        aeId: oneAe ? _selectedEntity!.id : null,
+        municipalityId: oneAe
+            ? null
+            : widget.isProvincial
+                ? (normalizeMunicipalityId(_entityMunicipalityFilter).isEmpty ? null : _entityMunicipalityFilter)
+                : widget.municipalityId,
+        includeDrafts: _miceIncludeDrafts,
+        categories: Set.of(_miceCategories),
+      );
+    } catch (e) {
+      debugPrint('[DotReportExportPanel] MICE logs: $e');
+      return MiceReportData.empty;
+    }
+  }
+
+  /// Sign-off subjects (venue-months) behind the selected form's PDF.
+  (String, List<({String id, String aeName, int year, int month})>) _signOffSubjects(
+    AeRegisterReportData register,
+    MiceReportData mice,
+  ) {
+    if (_isCus) {
+      return (
+        SignOffSubjects.miceRegister,
+        [for (final r in mice.reports) (id: r.id, aeName: r.aeName, year: r.year, month: r.month)],
+      );
+    }
+    return (
+      SignOffSubjects.aeRegister,
+      [for (final r in register.reports) (id: r.id, aeName: r.aeName, year: r.year, month: r.month)],
+    );
+  }
+
+  /// Latest establishment sign-off per venue-month for the PDF signature block.
+  Future<(List<DotPdfSignOff>, List<String>)> _resolveSignOffsForPdf(
+    AeRegisterReportData register,
+    MiceReportData mice,
+  ) async {
+    final (subjectType, reports) = _signOffSubjects(register, mice);
+    if (reports.isEmpty) return (const <DotPdfSignOff>[], const <String>[]);
+    const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+      'August', 'September', 'October', 'November', 'December'];
+    try {
+      final latest = await SignOffService.latestForSubjects(
+        subjectType: subjectType,
+        subjectIds: reports.map((r) => r.id),
+        ownerId: widget.lockedEstablishment?.id,
+      );
+      final signed = <DotPdfSignOff>[];
+      final unsigned = <String>[];
+      for (final r in reports) {
+        final label = '${r.aeName.isEmpty ? 'Establishment' : r.aeName} · ${months[r.month - 1]} ${r.year}';
+        final s = latest[r.id];
+        if (s == null) {
+          unsigned.add(label);
+          continue;
+        }
+        signed.add(DotPdfSignOff(
+          label: label,
+          name: s.signerName,
+          position: s.signerPosition,
+          action: s.actionLabel,
+          signedAt: s.createdAt,
+          signaturePng: s.signaturePng,
+        ));
+      }
+      return (signed, unsigned);
+    } catch (e) {
+      debugPrint('[DotReportExportPanel] sign-offs: $e');
+      return (const <DotPdfSignOff>[], const <String>[]);
     }
   }
 
@@ -1283,11 +1647,13 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         start: _start!,
         end: end,
       );
-      final stays = await _resolveConfirmedStaysForDae(
+      final aeRegister = await _resolveAeRegisterForDae(
         form: _selected,
         start: _start!,
         end: end,
       );
+      final mice = await _resolveMiceForCus(form: _selected, start: _start!, end: end);
+      if (_isCus) _saveSignatories();
       final result = await _service.exportCatalog(
         form: _selected,
         startDate: _start!,
@@ -1298,7 +1664,9 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         scopeLabel: _effectiveScopeLabel,
         scopeSlug: _effectiveScopeSlug,
         parseTimestamp: widget.parseTimestamp,
-        confirmedStays: stays,
+        aeRegister: aeRegister,
+        mice: mice,
+        cusOptions: _cusOptions,
       );
       await downloadXlsxFile(result.filename, result.bytes);
       if (!mounted) return;
@@ -1352,11 +1720,13 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         start: _start!,
         end: end,
       );
-      final stays = await _resolveConfirmedStaysForDae(
+      final aeRegister = await _resolveAeRegisterForDae(
         form: _selected,
         start: _start!,
         end: end,
       );
+      final mice = await _resolveMiceForCus(form: _selected, start: _start!, end: end);
+      if (_isCus) _saveSignatories();
       final preview = buildDotReportPreview(
         form: _selected,
         startDate: _start!,
@@ -1366,20 +1736,27 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         catalogSpots: _effectiveCatalog,
         scopeLabel: _effectiveScopeLabel,
         parseTimestamp: widget.parseTimestamp,
-        confirmedStays: stays,
+        aeRegister: aeRegister,
+        mice: mice,
       );
+      final (signOffs, unsigned) = await _resolveSignOffsForPdf(aeRegister, mice);
       final bytes = await buildDotReportPdfBytes(
         form: _selected,
         preview: preview,
         scopeLabel: _effectiveScopeLabel,
         startDate: _start!,
         endDate: end,
+        paperSize: _paperSize,
+        signOffs: signOffs,
+        unsignedLabels: unsigned,
+        signatories: _isCus ? _cusSignatories : const [],
       );
       final filename = dotReportPdfFilename(
         form: _selected,
         scopeSlug: _effectiveScopeSlug,
         startDate: _start!,
         endDate: end,
+        paperSize: _paperSize,
       );
       await downloadPdfFile(filename, bytes);
       if (!mounted) return;

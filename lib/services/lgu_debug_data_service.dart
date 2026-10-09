@@ -1,9 +1,23 @@
+import 'dart:async';
+
+import 'package:atmos_trs_system/config/ae_register_schema.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
+import 'package:atmos_trs_system/services/ae_register_service.dart';
+import 'package:atmos_trs_system/services/establishment_approval_service.dart';
+import 'package:atmos_trs_system/services/establishment_demo_seed_service.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
+
+/// Progress of [LguDebugDataService.seedAnalyticsData]: [done] of [total] LGUs
+/// finished; [municipalityName] is the LGU now being seeded (empty when done).
+typedef LguDebugSeedProgress = void Function(
+  int done,
+  int total,
+  String municipalityName,
+);
 
 /// Result of [LguDebugDataService.seedAnalyticsData].
 class LguDebugSeedResult {
@@ -22,8 +36,10 @@ class LguDebugSeedResult {
   final Map<String, dynamic> raw;
 
   String get summaryMessage {
+    final lguCount = (raw['municipalities'] as int?) ?? 1;
+    final scope = lguCount > 1 ? ' across $lguCount LGUs' : '';
     return 'Seeded $localCount local registered tourists (by address) '
-        'and $foreignCount foreign visitor profiles with $seededCheckIns check-ins. '
+        'and $foreignCount foreign visitor profiles with $seededCheckIns check-ins$scope. '
         'Registered Tourists KPI counts address-matched locals only.';
   }
 }
@@ -35,6 +51,7 @@ class LguDebugClearResult {
     required this.deletedCheckIns,
     this.deletedStays = 0,
     this.deletedReviews = 0,
+    this.deletedDemoRegisters = 0,
     this.municipalityId,
     this.raw = const {},
   });
@@ -43,6 +60,9 @@ class LguDebugClearResult {
   final int deletedCheckIns;
   final int deletedStays;
   final int deletedReviews;
+
+  /// Demo-seeded hotel register months (`ae_monthly_reports`, seed: demo).
+  final int deletedDemoRegisters;
   final String? municipalityId;
   final Map<String, dynamic> raw;
 
@@ -50,9 +70,41 @@ class LguDebugClearResult {
     final scope = (municipalityId != null && municipalityId!.isNotEmpty)
         ? 'for $municipalityId'
         : 'across the database';
+    final legacy = deletedStays + deletedReviews;
     return 'Cleared $deletedTourists tourists, $deletedCheckIns check-ins, '
-        '$deletedStays establishment stays, and $deletedReviews reviews $scope.';
+        '$deletedDemoRegisters demo hotel register month(s)'
+        '${legacy > 0 ? ', and $legacy legacy stay/review docs' : ''} $scope.';
   }
+
+  LguDebugClearResult withDemoRegisters(int n) => LguDebugClearResult(
+        deletedTourists: deletedTourists,
+        deletedCheckIns: deletedCheckIns,
+        deletedStays: deletedStays,
+        deletedReviews: deletedReviews,
+        deletedDemoRegisters: n,
+        municipalityId: municipalityId,
+        raw: raw,
+      );
+}
+
+/// Result of [LguDebugDataService.seedHotelRegisters].
+class LguDebugRegisterSeedResult {
+  const LguDebugRegisterSeedResult({
+    required this.establishments,
+    required this.months,
+    required this.rows,
+    this.failed = 0,
+  });
+
+  final int establishments;
+  final int months;
+  final int rows;
+  final int failed;
+
+  String get summaryMessage => establishments == 0
+      ? 'No active lodging establishments in scope — approve one in OPTACA first.'
+      : 'Seeded $rows demo register rows ($months AE-months) for $establishments '
+          'establishment(s)${failed > 0 ? ' · $failed failed' : ''}.';
 }
 
 /// Live snapshot for the Debug data hub charts.
@@ -63,9 +115,10 @@ class LguDebugDataSnapshot {
     required this.totalCheckIns,
     required this.checkInsBySpot,
     required this.checkInsByMunicipality,
-    required this.totalStays,
-    required this.staysByStatus,
-    required this.totalReviews,
+    required this.totalRegisters,
+    required this.registersByStatus,
+    required this.registerGuestNights,
+    required this.legacyStayDocs,
   });
 
   final int totalTourists;
@@ -73,9 +126,16 @@ class LguDebugDataSnapshot {
   final int totalCheckIns;
   final Map<String, int> checkInsBySpot;
   final Map<String, int> checkInsByMunicipality;
-  final int totalStays;
-  final Map<String, int> staysByStatus;
-  final int totalReviews;
+
+  /// Hotel DOT register months (`ae_monthly_reports`) in scope.
+  final int totalRegisters;
+
+  /// Submitted / Draft / Demo (demo wins over status).
+  final Map<String, int> registersByStatus;
+  final int registerGuestNights;
+
+  /// Retired `establishment_stay_requests` + `establishment_stay_reviews` still present.
+  final int legacyStayDocs;
 }
 
 /// LGU Settings debug helpers: seed / clear tourist analytics data.
@@ -122,6 +182,7 @@ class LguDebugDataService {
     int? foreignCount,
     List<String>? spotIds,
     int checkInsPerTourist = 2,
+    LguDebugSeedProgress? onProgress,
   }) async {
     final auth = FirebaseAuth.instance.currentUser;
     if (auth == null) {
@@ -147,45 +208,105 @@ class LguDebugDataService {
     final perTourist =
         (checkInsPerTourist < 1 ? 1 : checkInsPerTourist).clamp(1, 7);
 
-    final payload = <String, dynamic>{
-      'municipalityId': municipalityId.trim().toLowerCase(),
-      'seedAllMunicipalities': seedAllMunicipalities,
-      'checkInsPerTourist': perTourist,
-      'localCount': local,
-      'foreignCount': foreign,
-    };
-    if (spotIds != null && spotIds.isNotEmpty) {
-      payload['spotIds'] = spotIds;
-    }
+    final primaryId = normalizeMunicipalityId(municipalityId);
+    final primary = primaryId.isEmpty ? 'oroquieta' : primaryId;
+    final targets = seedAllMunicipalities
+        ? [
+            for (final m in getMisamisOccidentalMunicipalities())
+              (id: m.id, name: m.name),
+          ]
+        : [(id: primary, name: _displayName(primary))];
 
-    try {
-      final callable = _functions.httpsCallable(
-        'seedLguAnalyticsData',
-        options: HttpsCallableOptions(timeout: _timeout),
-      );
-      final response = await callable.call<Map<String, dynamic>>(payload);
-      final data = Map<String, dynamic>.from(response.data as Map);
-      return LguDebugSeedResult(
-        seededTourists: _asInt(data['seededTourists']),
-        seededCheckIns: _asInt(data['seededCheckins']),
-        localCount: _asInt(data['localCount']),
-        foreignCount: _asInt(data['foreignCount']),
-        raw: data,
-      );
-    } on FirebaseFunctionsException catch (e) {
-      debugPrint('[LguDebugData] seed CF: ${e.code} ${e.message}');
-      if (_isFunctionsUnavailable(e)) {
-        return _seedOnClient(
-          municipalityId: normalizeMunicipalityId(municipalityId),
-          seedAllMunicipalities: seedAllMunicipalities,
-          localCount: local,
-          foreignCount: foreign,
-          spotIds: spotIds ?? const [],
-          checkInsPerTourist: perTourist,
-        );
+    // One LGU per call keeps each request well under the callable timeout and
+    // lets the UI show which LGU is being seeded.
+    var seededTourists = 0;
+    var seededCheckIns = 0;
+    var useCloud = true;
+    final perMunicipality = <String, dynamic>{};
+    for (var k = 0; k < targets.length; k++) {
+      final target = targets[k];
+      onProgress?.call(k, targets.length, target.name);
+      // Spot chips belong to the primary LGU; other LGUs use their own spots.
+      final munSpotIds = target.id == primary
+          ? (spotIds ?? const <String>[])
+          : const <String>[];
+      LguDebugSeedResult? result;
+      if (useCloud) {
+        try {
+          result = await _seedOneViaCloud(
+            municipalityId: target.id,
+            localCount: local,
+            foreignCount: foreign,
+            spotIds: munSpotIds,
+            checkInsPerTourist: perTourist,
+          );
+        } on FirebaseFunctionsException catch (e) {
+          debugPrint('[LguDebugData] seed CF: ${e.code} ${e.message}');
+          if (!_isFunctionsUnavailable(e)) {
+            throw StateError(userFacingError(e));
+          }
+          useCloud = false;
+        }
       }
-      throw StateError(userFacingError(e));
+      result ??= await _seedOnClient(
+        municipalityId: target.id,
+        seedAllMunicipalities: false,
+        localCount: local,
+        foreignCount: foreign,
+        spotIds: munSpotIds,
+        checkInsPerTourist: perTourist,
+      );
+      seededTourists += result.seededTourists;
+      seededCheckIns += result.seededCheckIns;
+      perMunicipality[target.id] = {
+        'tourists': result.seededTourists,
+        'checkIns': result.seededCheckIns,
+      };
     }
+    onProgress?.call(targets.length, targets.length, '');
+
+    return LguDebugSeedResult(
+      seededTourists: seededTourists,
+      seededCheckIns: seededCheckIns,
+      localCount: local * targets.length,
+      foreignCount: foreign * targets.length,
+      raw: {
+        'seedAllMunicipalities': seedAllMunicipalities,
+        'municipalities': targets.length,
+        'via': useCloud ? 'cloud_function' : 'client',
+        'perMunicipality': perMunicipality,
+      },
+    );
+  }
+
+  static Future<LguDebugSeedResult> _seedOneViaCloud({
+    required String municipalityId,
+    required int localCount,
+    required int foreignCount,
+    required List<String> spotIds,
+    required int checkInsPerTourist,
+  }) async {
+    final payload = <String, dynamic>{
+      'municipalityId': municipalityId,
+      'seedAllMunicipalities': false,
+      'checkInsPerTourist': checkInsPerTourist,
+      'localCount': localCount,
+      'foreignCount': foreignCount,
+      if (spotIds.isNotEmpty) 'spotIds': spotIds,
+    };
+    final callable = _functions.httpsCallable(
+      'seedLguAnalyticsData',
+      options: HttpsCallableOptions(timeout: _timeout),
+    );
+    final response = await callable.call<Map<String, dynamic>>(payload);
+    final data = Map<String, dynamic>.from(response.data as Map);
+    return LguDebugSeedResult(
+      seededTourists: _asInt(data['seededTourists']),
+      seededCheckIns: _asInt(data['seededCheckins']),
+      localCount: _asInt(data['localCount']),
+      foreignCount: _asInt(data['foreignCount']),
+      raw: data,
+    );
   }
 
   /// Clears tourist profiles + check-ins. Pass [municipalityId] to scope to one LGU;
@@ -226,7 +347,7 @@ class LguDebugDataService {
           _asInt(deleted['check_ins']);
       final stays = _asInt(deleted['establishment_stay_requests']);
       final reviews = _asInt(deleted['establishment_stay_reviews']);
-      return LguDebugClearResult(
+      final result = LguDebugClearResult(
         deletedTourists: tourists,
         deletedCheckIns: checkIns,
         deletedStays: stays,
@@ -234,13 +355,92 @@ class LguDebugDataService {
         municipalityId: data['municipalityId']?.toString(),
         raw: data,
       );
+      return result.withDemoRegisters(await _deleteDemoRegisters(mun));
     } on FirebaseFunctionsException catch (e) {
       debugPrint('[LguDebugData] clear CF: ${e.code} ${e.message}');
       if (_isFunctionsUnavailable(e)) {
-        return _clearTouristDataOnClient(municipalityId: mun);
+        final result = await _clearTouristDataOnClient(municipalityId: mun);
+        return result.withDemoRegisters(await _deleteDemoRegisters(mun));
       }
       throw StateError(userFacingError(e));
     }
+  }
+
+  static Future<int> _deleteDemoRegisters(String municipalityId) async {
+    try {
+      return await AeRegisterService.deleteDemo(
+        municipalityId: municipalityId.isEmpty ? null : municipalityId,
+      );
+    } catch (e) {
+      debugPrint('[LguDebugData] demo registers purge: $e');
+      return 0;
+    }
+  }
+
+  /// Seeds [months] of demo DAE-1B register rows for every active lodging
+  /// establishment in [municipalityId] (empty = province-wide).
+  /// Existing demo months are replaced; hotel-entered rows are kept.
+  static Future<LguDebugRegisterSeedResult> seedHotelRegisters({
+    required String municipalityId,
+    int months = 3,
+    LguDebugSeedProgress? onProgress,
+  }) async {
+    if (FirebaseAuth.instance.currentUser == null) {
+      throw StateError('Sign in as LGU tourism staff, then try again.');
+    }
+    final mid = normalizeMunicipalityId(municipalityId);
+    final registry = await (mid.isEmpty
+            ? EstablishmentApprovalService.watchAll()
+            : EstablishmentApprovalService.watchForMunicipality(mid))
+        .first
+        .timeout(_timeout);
+    final targets = [
+      for (final e in registry)
+        if (e.isActive && AeRegisterSchema.forCategory(e.category).tracksRooms) e,
+    ];
+    var seededAes = 0, totalMonths = 0, totalRows = 0, failed = 0;
+    for (var i = 0; i < targets.length; i++) {
+      final e = targets[i];
+      onProgress?.call(i, targets.length, e.businessName);
+      try {
+        final doc = await _db.collection('accommodation_establishments').doc(e.id).get();
+        final d = doc.data() ?? const <String, dynamic>{};
+        final profile = AeRegisterProfile.fromRegistry(
+          aeId: e.id,
+          aeName: e.businessName,
+          category: e.category,
+          municipalityId: e.municipalityId.isNotEmpty ? e.municipalityId : mid,
+          municipality: e.municipality,
+          totalRooms: e.roomCount,
+          aeType: (d['aeType'] ?? '').toString(),
+          classificationCode: (d['classificationCode'] ?? '').toString(),
+        );
+        final r = await EstablishmentDemoSeedService.seed(
+          profile: profile,
+          schema: AeRegisterSchema.forCategory(e.category),
+          months: months,
+        );
+        seededAes++;
+        totalMonths += r.months;
+        totalRows += r.rows;
+      } catch (err) {
+        failed++;
+        debugPrint('[LguDebugData] register seed ${e.id}: $err');
+      }
+    }
+    onProgress?.call(targets.length, targets.length, '');
+    if (targets.isNotEmpty && seededAes == 0) {
+      throw StateError(
+        'Could not write demo registers. Deploy the latest firestore.rules '
+        '(ae_monthly_reports) and try again.',
+      );
+    }
+    return LguDebugRegisterSeedResult(
+      establishments: seededAes,
+      months: totalMonths,
+      rows: totalRows,
+      failed: failed,
+    );
   }
 
   static Future<LguDebugSeedResult> _seedOnClient({
@@ -272,7 +472,7 @@ class LguDebugDataService {
     Future<void> commitIfNeeded({bool force = false}) async {
       if (batch == null) return;
       if (!force && batchOps < 400) return;
-      await batch!.commit();
+      await _guardWrite(batch!.commit());
       batch = null;
       batchOps = 0;
     }
@@ -286,19 +486,26 @@ class LguDebugDataService {
       batchOps += 1;
     }
 
+    final groupCandidates = <({
+      String uid,
+      String name,
+      String email,
+      Map<String, dynamic> profile,
+    })>[];
+
     for (final munId in munIds) {
       final munName = _displayName(munId);
       var spots = await _loadSpots(munId, spotIds);
       if (spots.isEmpty) {
         final hubId = '${munId}_visitor_hub';
-        await _db.collection('tourist_spots').doc(hubId).set({
+        await _guardWrite(_db.collection('tourist_spots').doc(hubId).set({
           'name': '$munName Visitor Hub',
           'category': 'Resort',
           'municipalityId': munId,
           'municipality': munName,
           'status': 'Active',
           'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
+        }, SetOptions(merge: true)));
         spots = [(id: hubId, name: '$munName Visitor Hub')];
       }
 
@@ -365,6 +572,22 @@ class LguDebugDataService {
         });
 
         seededTourists += 1;
+        groupCandidates.add((
+          uid: uid,
+          name: '$fn $ln',
+          email: email,
+          profile: {
+            'uid': uid,
+            'name': '$fn $ln',
+            'sex': sex,
+            'nationality': nationality,
+            'country': country,
+            'province': province,
+            'city': city,
+            'isLocal': isLocal,
+            'localOrForeign': isLocal ? 'Local' : 'Foreign',
+          },
+        ));
 
         for (var j = 0; j < checkInsPerTourist; j++) {
           // Distinct calendar day per visit index (j) so dedupe keeps all N check-ins.
@@ -410,6 +633,14 @@ class LguDebugDataService {
             'visitorCount': partySize,
             'femaleCount': femaleCount,
             'maleCount': maleCount,
+            'filipinoCount': isLocal ? partySize : 0,
+            'foreignCount': isLocal ? 0 : partySize,
+            'touristSex': sex,
+            'touristCountry': country,
+            'touristProvince': province,
+            'touristCity': city,
+            'touristIsLocal': isLocal,
+            'touristLocalOrForeign': isLocal ? 'Local' : 'Foreign',
             'timestamp': ts,
             'createdAt': ts,
           });
@@ -423,6 +654,8 @@ class LguDebugDataService {
             'visitorCount': partySize,
             'femaleCount': femaleCount,
             'maleCount': maleCount,
+            'filipinoCount': isLocal ? partySize : 0,
+            'foreignCount': isLocal ? 0 : partySize,
             'checkin_time': ts,
             'seedTag': 'lgu_analytics_debug_v1',
           });
@@ -432,6 +665,65 @@ class LguDebugDataService {
         }
         await commitIfNeeded();
       }
+
+      // "Laag with Friends" group check-ins: 3 members + 1 companion each,
+      // on a day the members did not scan alone (so none are deduped).
+      final groupDay = recentDays[checkInsPerTourist % recentDays.length];
+      for (var g = 0; g < 3; g++) {
+        final start = g * 4;
+        if (start + 2 >= groupCandidates.length) break;
+        final members = groupCandidates.sublist(start, start + 3);
+        final lead = members.first;
+        final spot = spots[g % spots.length];
+        final ts = Timestamp.fromDate(
+          DateTime(groupDay.year, groupDay.month, groupDay.day, 10 + g, 15),
+        );
+        final profiles = [for (final m in members) m.profile];
+        final females = profiles.where((p) => p['sex'] == 'Female').length;
+        final filipinos = profiles.where((p) => p['isLocal'] == true).length;
+        final docId = 'seed_group_${munId}_${g + 1}';
+        enqueueSet(_db.collection('qr_checkins').doc(docId), {
+          'userId': lead.uid,
+          'user_id': lead.uid,
+          'tourist_id': lead.uid,
+          'touristName': lead.name,
+          'tourist_name': lead.name,
+          'touristEmail': lead.email,
+          'municipalityId': munId,
+          'lguId': munId,
+          'municipality': munName,
+          'spotId': spot.id,
+          'spot_id': spot.id,
+          'touristSpotId': spot.id,
+          'spot_name': spot.name,
+          'spotName': spot.name,
+          'location': spot.name,
+          'status': 'Verified',
+          'source': 'qr_scan',
+          'seedTag': 'lgu_analytics_debug_v1',
+          'groupId': 'seed_group_$munId',
+          'groupName': 'Seed Barkada ${g + 1}',
+          'groupLeaderUid': lead.uid,
+          'groupMemberUids': [for (final m in members) m.uid],
+          'groupMembers': profiles,
+          'companionCount': 1,
+          'companionFemale': 1,
+          'companionMale': 0,
+          'companionFilipino': 1,
+          'companionForeign': 0,
+          'partySize': members.length + 1,
+          'visitorCount': members.length + 1,
+          'femaleCount': females + 1,
+          'maleCount': members.length - females,
+          'filipinoCount': filipinos + 1,
+          'foreignCount': members.length - filipinos,
+          'timestamp': ts,
+          'createdAt': ts,
+        });
+        seededCheckIns += 1;
+      }
+      groupCandidates.clear();
+      await commitIfNeeded();
     }
     await commitIfNeeded(force: true);
 
@@ -442,6 +734,41 @@ class LguDebugDataService {
       foreignCount: foreignCount * munIds.length,
       raw: const {'via': 'client_batch'},
     );
+  }
+
+  /// Firestore web SDK retries RESOURCE_EXHAUSTED writes forever, so a commit
+  /// over the free-tier write quota never completes on its own.
+  static const Duration _commitTimeout = Duration(seconds: 45);
+
+  static const String _writeQuotaMessage =
+      'Firestore is not accepting writes right now — usually the free Spark '
+      'plan\'s daily write quota (20,000/day) is used up. It resets around '
+      '3:00 PM PH time. Try again later, seed a single LGU, or upgrade the '
+      'Firebase project to Blaze.';
+
+  static Future<void> _guardWrite(Future<void> write) async {
+    try {
+      await write.timeout(_commitTimeout);
+    } on TimeoutException {
+      throw StateError(_writeQuotaMessage);
+    } on FirebaseException catch (e) {
+      if (e.code == 'resource-exhausted') {
+        throw StateError(_writeQuotaMessage);
+      }
+      rethrow;
+    }
+  }
+
+  /// Firestore writes one seed run costs (tourist + user doc, and a
+  /// qr_checkins + checkins doc per visit).
+  static int estimateSeedWrites({
+    required int touristsPerMunicipality,
+    required int checkInsPerTourist,
+    required bool seedAllMunicipalities,
+  }) {
+    final lgus =
+        seedAllMunicipalities ? getMisamisOccidentalMunicipalities().length : 1;
+    return lgus * touristsPerMunicipality * (2 + 2 * checkInsPerTourist);
   }
 
   static Future<List<({String id, String name})>> _loadSpots(
@@ -597,11 +924,12 @@ class LguDebugDataService {
     final byMun = <String, int>{};
     final bySpot = <String, int>{};
     final checkInsByMun = <String, int>{};
-    final staysByStatus = <String, int>{};
+    final registersByStatus = <String, int>{};
     var totalTourists = 0;
     var totalCheckIns = 0;
-    var totalStays = 0;
-    var totalReviews = 0;
+    var totalRegisters = 0;
+    var registerGuestNights = 0;
+    var legacyStayDocs = 0;
 
     try {
       Query<Map<String, dynamic>> touristsQ = _db.collection('tourists');
@@ -651,29 +979,24 @@ class LguDebugDataService {
     }
 
     try {
-      Query<Map<String, dynamic>> staysQ =
-          _db.collection('establishment_stay_requests');
-      if (mun.isNotEmpty) {
-        staysQ = staysQ.where('municipalityId', isEqualTo: mun);
-      }
-      final staysSnap = await staysQ.limit(2000).get();
-      totalStays = staysSnap.docs.length;
-      for (final doc in staysSnap.docs) {
-        final status =
-            (doc.data()['status'] ?? 'unknown').toString().trim().toLowerCase();
-        final key = status.isEmpty ? 'unknown' : status;
-        staysByStatus[key] = (staysByStatus[key] ?? 0) + 1;
+      final reports = mun.isEmpty
+          ? await AeRegisterService.listInRange(start: DateTime(2000), end: DateTime(2100))
+          : await AeRegisterService.listForMunicipality(mun);
+      totalRegisters = reports.length;
+      for (final r in reports) {
+        final key = r.isDemo ? 'Demo' : (r.isSubmitted ? 'Submitted' : 'Draft');
+        registersByStatus[key] = (registersByStatus[key] ?? 0) + 1;
+        registerGuestNights += r.totals.guestNights;
       }
     } catch (e) {
-      debugPrint('[LguDebugData] stays snapshot: $e');
+      debugPrint('[LguDebugData] registers snapshot: $e');
     }
 
-    try {
-      final reviewsSnap =
-          await _db.collection('establishment_stay_reviews').limit(2000).get();
-      totalReviews = reviewsSnap.docs.length;
-    } catch (e) {
-      debugPrint('[LguDebugData] reviews snapshot: $e');
+    for (final legacy in ['establishment_stay_requests', 'establishment_stay_reviews']) {
+      try {
+        final agg = await _db.collection(legacy).count().get();
+        legacyStayDocs += agg.count ?? 0;
+      } catch (_) {}
     }
 
     return LguDebugDataSnapshot(
@@ -682,9 +1005,10 @@ class LguDebugDataService {
       totalCheckIns: totalCheckIns,
       checkInsBySpot: bySpot,
       checkInsByMunicipality: checkInsByMun,
-      totalStays: totalStays,
-      staysByStatus: staysByStatus,
-      totalReviews: totalReviews,
+      totalRegisters: totalRegisters,
+      registersByStatus: registersByStatus,
+      registerGuestNights: registerGuestNights,
+      legacyStayDocs: legacyStayDocs,
     );
   }
 

@@ -1,14 +1,19 @@
 import 'dart:async';
 
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
+import 'package:atmos_trs_system/models/municipality.dart';
 import 'package:atmos_trs_system/models/tourist_spot.dart';
 import 'package:atmos_trs_system/services/lgu_debug_data_service.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
+import 'package:atmos_trs_system/utils/png_bytes_download.dart';
+import 'package:atmos_trs_system/utils/qr_png_bytes.dart';
+import 'package:atmos_trs_system/utils/spot_qr_helper.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
-/// Full-screen Debug data hub: live charts + seed + full purge (incl. stays).
+/// Full-screen Debug data hub: live charts + seed (tourists, hotel registers) + full purge.
 class LguDebugDataScreen extends StatefulWidget {
   const LguDebugDataScreen({
     super.key,
@@ -67,7 +72,7 @@ class _LguDebugDataScreenState extends State<LguDebugDataScreen>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 3, vsync: this);
+    _tabs = TabController(length: 4, vsync: this);
     _chartScopeMunId = widget.municipalityId;
     unawaited(_refreshStats());
   }
@@ -85,8 +90,7 @@ class _LguDebugDataScreenState extends State<LguDebugDataScreen>
     });
     try {
       final snap = await LguDebugDataService.loadSnapshot(
-        municipalityId:
-            _chartScopeMunId.isEmpty ? null : _chartScopeMunId,
+        municipalityId: _chartScopeMunId.isEmpty ? null : _chartScopeMunId,
       );
       if (!mounted) return;
       setState(() {
@@ -189,6 +193,7 @@ class _LguDebugDataScreenState extends State<LguDebugDataScreen>
             Tab(text: 'Overview'),
             Tab(text: 'Seed'),
             Tab(text: 'Full purge'),
+            Tab(text: 'Demo QR'),
           ],
         ),
       ),
@@ -229,6 +234,249 @@ class _LguDebugDataScreenState extends State<LguDebugDataScreen>
             orange: _orange,
             card: _card,
             muted: _muted,
+          ),
+          _DemoQrTab(
+            municipalityId: widget.municipalityId.isEmpty
+                ? 'oroquieta'
+                : widget.municipalityId,
+            municipalityName: widget.municipalityName,
+            spots: widget.spots,
+            orange: _orange,
+            card: _card,
+            text: _text,
+            muted: _muted,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Demo QR (dummy codes that skip GPS / screen rules) ─────────────
+
+class _DemoQrTab extends StatefulWidget {
+  const _DemoQrTab({
+    required this.municipalityId,
+    required this.municipalityName,
+    required this.spots,
+    required this.orange,
+    required this.card,
+    required this.text,
+    required this.muted,
+  });
+
+  final String municipalityId;
+  final String municipalityName;
+  final List<TouristSpot> spots;
+  final Color orange;
+  final Color card;
+  final Color text;
+  final Color muted;
+
+  @override
+  State<_DemoQrTab> createState() => _DemoQrTabState();
+}
+
+class _DemoQrTabState extends State<_DemoQrTab> {
+  String? _spotId;
+
+  List<TouristSpot> get _spots =>
+      widget.spots.where((s) => s.id.trim().isNotEmpty).toList(growable: false);
+
+  @override
+  void initState() {
+    super.initState();
+    final spots = _spots;
+    _spotId = spots.isNotEmpty ? spots.first.id : null;
+  }
+
+  String get _munLabel => widget.municipalityName.trim().isNotEmpty
+      ? widget.municipalityName.trim()
+      : widget.municipalityId;
+
+  TouristSpot? get _selectedSpot {
+    for (final s in _spots) {
+      if (s.id == _spotId) return s;
+    }
+    return null;
+  }
+
+  String get _spotData {
+    final spot = _selectedSpot;
+    if (spot == null) return demoSpotQrData();
+    final mid = normalizeMunicipalityId(
+      spot.municipalityId.isNotEmpty
+          ? spot.municipalityId
+          : widget.municipalityId,
+    );
+    return demoSpotQrData(municipalityId: mid, spotId: spot.id);
+  }
+
+  String get _lguData => demoLguQrData(municipalityId: widget.municipalityId);
+
+  Future<void> _download(String data, String filename) async {
+    final bytes = await qrDataToPngBytes(data, size: 320);
+    if (bytes == null) return;
+    await downloadPngFile(filename, bytes);
+  }
+
+  Future<void> _copy(String data) async {
+    await Clipboard.setData(ClipboardData(text: data));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Demo QR link copied'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final spot = _selectedSpot;
+    final spotTitle = spot?.name.trim().isNotEmpty == true
+        ? spot!.name.trim()
+        : 'Oroquieta City Plaza';
+    final safeMun = widget.municipalityId.replaceAll(
+      RegExp(r'[^a-z0-9_-]'),
+      '_',
+    );
+
+    final spotCard = _qrCard(
+      title: 'Dummy spot QR',
+      subtitle: spotTitle,
+      data: _spotData,
+      filename: 'ATMOS-DEMO-SPOT-$safeMun.png',
+      picker: _spots.length > 1
+          ? DropdownButton<String>(
+              value: _spotId,
+              isExpanded: true,
+              underline: const SizedBox.shrink(),
+              items: [
+                for (final s in _spots)
+                  DropdownMenuItem(
+                    value: s.id,
+                    child: Text(
+                      s.name.trim().isNotEmpty ? s.name.trim() : s.id,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
+              onChanged: (v) => setState(() => _spotId = v),
+            )
+          : null,
+    );
+    final lguCard = _qrCard(
+      title: 'Dummy LGU QR',
+      subtitle: 'LGU visit — $_munLabel',
+      data: _lguData,
+      filename: 'ATMOS-DEMO-LGU-$safeMun.png',
+    );
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        _Card(
+          color: const Color(0xFFFFF7ED),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.science_outlined, color: widget.orange),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Dummy QR codes for demos and testing. They check in from '
+                  'anywhere and can be scanned from a phone, laptop, or PC '
+                  'screen — no need to be at the tourist spot. Visits are '
+                  'saved with demoQr: true. Real QR codes still require the '
+                  'printed QR and on-site GPS.',
+                  style: TextStyle(
+                    color: widget.text,
+                    fontSize: 13,
+                    height: 1.5,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        LayoutBuilder(
+          builder: (context, c) => c.maxWidth >= 720
+              ? Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: spotCard),
+                    const SizedBox(width: 16),
+                    Expanded(child: lguCard),
+                  ],
+                )
+              : Column(
+                  children: [spotCard, const SizedBox(height: 16), lguCard],
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _qrCard({
+    required String title,
+    required String subtitle,
+    required String data,
+    required String filename,
+    Widget? picker,
+  }) {
+    return _Card(
+      color: widget.card,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              color: widget.text,
+              fontWeight: FontWeight.w700,
+              fontSize: 15,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(subtitle, style: TextStyle(color: widget.muted, fontSize: 13)),
+          if (picker != null) ...[const SizedBox(height: 8), picker],
+          const SizedBox(height: 14),
+          Center(
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: QrImageView(
+                data: data,
+                version: QrVersions.auto,
+                size: 200,
+                backgroundColor: Colors.white,
+                errorCorrectionLevel: QrErrorCorrectLevel.M,
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.icon(
+                onPressed: () => _download(data, filename),
+                style: FilledButton.styleFrom(backgroundColor: widget.orange),
+                icon: const Icon(Icons.download_rounded, size: 18),
+                label: const Text('Download PNG'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => _copy(data),
+                icon: const Icon(Icons.link_rounded, size: 18),
+                label: const Text('Copy link'),
+              ),
+            ],
           ),
         ],
       ),
@@ -294,22 +542,32 @@ class _OverviewTab extends StatelessWidget {
         else if (snapshot != null) ...[
           _StatStrip(
             items: [
-              _StatItem('Tourists', snapshot!.totalTourists, Icons.people_outline),
+              _StatItem(
+                'Tourists',
+                snapshot!.totalTourists,
+                Icons.people_outline,
+              ),
               _StatItem(
                 'Check-ins',
                 snapshot!.totalCheckIns,
                 Icons.qr_code_scanner_outlined,
               ),
               _StatItem(
-                'Est. stays',
-                snapshot!.totalStays,
-                Icons.hotel_outlined,
+                'Hotel registers',
+                snapshot!.totalRegisters,
+                Icons.table_chart_outlined,
               ),
               _StatItem(
-                'Reviews',
-                snapshot!.totalReviews,
-                Icons.rate_review_outlined,
+                'Guest-nights',
+                snapshot!.registerGuestNights,
+                Icons.hotel_outlined,
               ),
+              if (snapshot!.legacyStayDocs > 0)
+                _StatItem(
+                  'Legacy stay docs',
+                  snapshot!.legacyStayDocs,
+                  Icons.delete_sweep_outlined,
+                ),
             ],
             card: card,
             text: text,
@@ -361,13 +619,13 @@ class _OverviewTab extends StatelessWidget {
                 ),
               );
               final stays = _ChartCard(
-                title: 'Establishment stays',
-                subtitle: 'By status (pending → confirmed)',
+                title: 'Hotel DOT registers',
+                subtitle: 'AE-months by status (demo / draft / submitted)',
                 card: card,
                 text: text,
                 muted: muted,
                 child: _DonutBlock(
-                  data: snapshot!.staysByStatus,
+                  data: snapshot!.registersByStatus,
                   labelOf: (s) => s,
                   muted: muted,
                 ),
@@ -383,11 +641,7 @@ class _OverviewTab extends StatelessWidget {
                 );
               }
               return Column(
-                children: [
-                  visits,
-                  const SizedBox(height: 12),
-                  stays,
-                ],
+                children: [visits, const SizedBox(height: 12), stays],
               );
             },
           ),
@@ -515,9 +769,13 @@ class _StatStrip extends StatelessWidget {
         }
         return Column(
           children: [
-            Row(children: [children[0], const SizedBox(width: 10), children[1]]),
+            Row(
+              children: [children[0], const SizedBox(width: 10), children[1]],
+            ),
             const SizedBox(height: 10),
-            Row(children: [children[2], const SizedBox(width: 10), children[3]]),
+            Row(
+              children: [children[2], const SizedBox(width: 10), children[3]],
+            ),
           ],
         );
       },
@@ -620,17 +878,17 @@ class _BarChartBlock extends StatelessWidget {
           gridData: FlGridData(
             show: true,
             drawVerticalLine: false,
-            getDrawingHorizontalLine: (v) => FlLine(
-              color: muted.withValues(alpha: 0.15),
-              strokeWidth: 1,
-            ),
+            getDrawingHorizontalLine: (v) =>
+                FlLine(color: muted.withValues(alpha: 0.15), strokeWidth: 1),
           ),
           borderData: FlBorderData(show: false),
           titlesData: FlTitlesData(
-            topTitles:
-                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            rightTitles:
-                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            topTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false),
+            ),
+            rightTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false),
+            ),
             leftTitles: AxisTitles(
               sideTitles: SideTitles(
                 showTitles: true,
@@ -824,6 +1082,128 @@ class _SeedTabState extends State<_SeedTab> {
   final Set<String> _selectedSpotIds = {};
   bool _busy = false;
   String? _error;
+  int _progressDone = 0;
+  int _progressTotal = 0;
+  String _progressLabel = '';
+
+  int _regMonths = 3;
+  bool _regAll = false;
+  bool _regBusy = false;
+  String? _regError;
+  String _regProgress = '';
+
+  Future<void> _runRegisters() async {
+    setState(() {
+      _regBusy = true;
+      _regError = null;
+      _regProgress = '';
+    });
+    try {
+      final result = await LguDebugDataService.seedHotelRegisters(
+        municipalityId: _regAll ? '' : _selectedMunId,
+        months: _regMonths,
+        onProgress: (done, total, name) {
+          if (!mounted) return;
+          setState(() => _regProgress = name.isEmpty ? 'Finishing up…' : 'Seeding $name (${done + 1} of $total)…');
+        },
+      );
+      if (!mounted) return;
+      widget.onDone();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.summaryMessage), backgroundColor: const Color(0xFF10B981)),
+      );
+      setState(() => _regBusy = false);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _regBusy = false;
+        _regError = e.toString().replaceFirst('Bad state: ', '');
+      });
+    }
+  }
+
+  Widget _registerSeedCard(List<Municipality> muns) {
+    final munName = muns
+        .where((m) => m.id == _selectedMunId)
+        .map((m) => m.name)
+        .firstOrNull ?? _selectedMunId;
+    return _Card(
+      color: widget.card,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Seed hotel DOT registers (DAE-1B)',
+            style: TextStyle(fontWeight: FontWeight.w700, color: Colors.grey.shade900),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Fills demo daily-register rows for every active lodging establishment so '
+            'Insights, the LGU register table and DAE forms can be previewed. '
+            'Demo months replace earlier demo months; hotel-entered rows are kept.',
+            style: TextStyle(fontSize: 13, color: widget.muted),
+          ),
+          const SizedBox(height: 12),
+          Text('Months (ending this month)', style: TextStyle(fontSize: 12.5, color: widget.muted)),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            children: [
+              for (var m = 1; m <= 6; m++)
+                ChoiceChip(
+                  label: Text('$m'),
+                  selected: _regMonths == m,
+                  onSelected: _regBusy ? null : (_) => setState(() => _regMonths = m),
+                ),
+            ],
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('All municipalities'),
+            subtitle: Text(_regAll ? 'Province-wide' : 'Only $munName (Primary LGU above)'),
+            value: _regAll,
+            activeThumbColor: Colors.white,
+            activeTrackColor: widget.orange,
+            onChanged: _regBusy ? null : (v) => setState(() => _regAll = v),
+          ),
+          if (_regError != null) ...[
+            const SizedBox(height: 8),
+            Text(_regError!, style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13)),
+          ],
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: _regBusy ? null : _runRegisters,
+            style: FilledButton.styleFrom(
+              backgroundColor: widget.orange,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            icon: _regBusy
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.table_chart_rounded),
+            label: Text(_regBusy ? 'Seeding…' : 'Seed hotel registers'),
+          ),
+          if (_regBusy && _regProgress.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(_regProgress, style: TextStyle(fontSize: 12.5, color: widget.muted)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _onSeedProgress(int done, int total, String municipalityName) {
+    if (!mounted) return;
+    setState(() {
+      _progressDone = done;
+      _progressTotal = total;
+      _progressLabel = municipalityName;
+    });
+  }
 
   @override
   void initState() {
@@ -832,6 +1212,51 @@ class _SeedTabState extends State<_SeedTab> {
     for (final s in widget.spots) {
       if (s.id.trim().isNotEmpty) _selectedSpotIds.add(s.id);
     }
+    for (final c in [_totalCtrl, _localCtrl, _foreignCtrl, _checkInsCtrl]) {
+      c.addListener(_onCountsChanged);
+    }
+  }
+
+  void _onCountsChanged() {
+    if (mounted) setState(() {});
+  }
+
+  int get _estimatedWrites {
+    final tourists = _useSplit
+        ? _parse(_localCtrl).clamp(0, 200) + _parse(_foreignCtrl).clamp(0, 200)
+        : _parse(_totalCtrl, fallback: 20).clamp(1, 200);
+    return LguDebugDataService.estimateSeedWrites(
+      touristsPerMunicipality: tourists,
+      checkInsPerTourist: _parse(_checkInsCtrl, fallback: 2).clamp(1, 7),
+      seedAllMunicipalities: _seedAll,
+    );
+  }
+
+  Widget _writeEstimate() {
+    final writes = _estimatedWrites;
+    final heavy = writes > 2000;
+    final color = heavy ? const Color(0xFFB45309) : widget.muted;
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            heavy ? Icons.warning_amber_rounded : Icons.info_outline_rounded,
+            size: 16,
+            color: color,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              'About $writes Firestore writes. The free Spark plan allows '
+              '20,000 writes per day across the whole app.',
+              style: TextStyle(fontSize: 12.5, color: color),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -851,6 +1276,9 @@ class _SeedTabState extends State<_SeedTab> {
     setState(() {
       _busy = true;
       _error = null;
+      _progressDone = 0;
+      _progressTotal = 0;
+      _progressLabel = '';
     });
     try {
       final checkIns = _parse(_checkInsCtrl, fallback: 2).clamp(1, 7);
@@ -869,6 +1297,7 @@ class _SeedTabState extends State<_SeedTab> {
           foreignCount: foreign,
           spotIds: spotIds.isEmpty ? null : spotIds,
           checkInsPerTourist: checkIns,
+          onProgress: _onSeedProgress,
         );
       } else {
         final total = _parse(_totalCtrl, fallback: 20).clamp(1, 200);
@@ -878,6 +1307,7 @@ class _SeedTabState extends State<_SeedTab> {
           touristCount: total,
           spotIds: spotIds.isEmpty ? null : spotIds,
           checkInsPerTourist: checkIns,
+          onProgress: _onSeedProgress,
         );
       }
       if (!mounted) return;
@@ -890,11 +1320,43 @@ class _SeedTabState extends State<_SeedTab> {
       );
       setState(() => _busy = false);
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _busy = false;
         _error = e.toString().replaceFirst('Bad state: ', '');
       });
     }
+  }
+
+  Widget _progressPanel() {
+    final total = _progressTotal;
+    final value = total > 0 ? _progressDone / total : null;
+    final label = total <= 0
+        ? 'Preparing seed…'
+        : _progressDone >= total
+        ? 'Finishing up…'
+        : total == 1
+        ? 'Seeding $_progressLabel…'
+        : 'Seeding $_progressLabel (${_progressDone + 1} of $total LGUs)…';
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: value,
+              minHeight: 6,
+              color: widget.orange,
+              backgroundColor: widget.orange.withValues(alpha: 0.15),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(label, style: TextStyle(fontSize: 12.5, color: widget.muted)),
+        ],
+      ),
+    );
   }
 
   @override
@@ -946,8 +1408,7 @@ class _SeedTabState extends State<_SeedTab> {
                 value: _seedAll,
                 activeThumbColor: Colors.white,
                 activeTrackColor: widget.orange,
-                onChanged:
-                    _busy ? null : (v) => setState(() => _seedAll = v),
+                onChanged: _busy ? null : (v) => setState(() => _seedAll = v),
               ),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
@@ -955,8 +1416,7 @@ class _SeedTabState extends State<_SeedTab> {
                 value: _useSplit,
                 activeThumbColor: Colors.white,
                 activeTrackColor: widget.orange,
-                onChanged:
-                    _busy ? null : (v) => setState(() => _useSplit = v),
+                onChanged: _busy ? null : (v) => setState(() => _useSplit = v),
               ),
               if (_useSplit) ...[
                 Row(
@@ -1055,7 +1515,10 @@ class _SeedTabState extends State<_SeedTab> {
                 const SizedBox(height: 12),
                 Text(
                   _error!,
-                  style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13),
+                  style: const TextStyle(
+                    color: Color(0xFFDC2626),
+                    fontSize: 13,
+                  ),
                 ),
               ],
               const SizedBox(height: 16),
@@ -1076,9 +1539,12 @@ class _SeedTabState extends State<_SeedTab> {
                       )
                     : const Text('Seed now'),
               ),
+              if (_busy) _progressPanel() else _writeEstimate(),
             ],
           ),
         ),
+        const SizedBox(height: 16),
+        _registerSeedCard(muns),
       ],
     );
   }
@@ -1185,19 +1651,21 @@ class _PurgeTabState extends State<_PurgeTab> {
               const SizedBox(height: 8),
               Text(
                 _thisLguOnly
-                    ? 'Deletes registered tourists, QR check-ins, establishment '
-                        'stay requests, and stay reviews for $label — so the '
-                        'establishment dashboard has no orphan pending/confirmed stays.'
-                    : 'Deletes ALL tourist profiles, check-ins, establishment '
-                        'stay requests, and stay reviews in the project. '
-                        'Staff accounts and tourist spots are kept.',
+                    ? 'Deletes registered tourists, QR check-ins and demo hotel '
+                          'register months for $label, plus retired stay/review docs. '
+                          'Hotel-entered register rows are kept.'
+                    : 'Deletes ALL tourist profiles, check-ins, demo hotel register '
+                          'months and retired stay/review docs in the project. '
+                          'Staff accounts, tourist spots and hotel-entered registers are kept.',
                 style: TextStyle(fontSize: 13, color: widget.muted),
               ),
               const SizedBox(height: 12),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: Text('Only $label'),
-                subtitle: const Text('Off = clear entire tourist + stay database'),
+                subtitle: const Text(
+                  'Off = clear the entire tourist database + all demo registers',
+                ),
                 value: _thisLguOnly,
                 activeThumbColor: Colors.white,
                 activeTrackColor: widget.orange,
@@ -1219,7 +1687,10 @@ class _PurgeTabState extends State<_PurgeTab> {
                 const SizedBox(height: 12),
                 Text(
                   _error!,
-                  style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13),
+                  style: const TextStyle(
+                    color: Color(0xFFDC2626),
+                    fontSize: 13,
+                  ),
                 ),
               ],
               const SizedBox(height: 16),

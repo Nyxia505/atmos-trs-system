@@ -48,6 +48,8 @@ class _TouristDestinationDetailScreenState
   bool _isSaving = false;
   SpotReview? _userReview;
   bool _canReview = false;
+  bool _checkingReviewEligibility = false;
+  Future<void>? _eligibilityLoad;
 
   TouristDestinationDetail get d => widget.destination;
 
@@ -55,7 +57,7 @@ class _TouristDestinationDetailScreenState
   void initState() {
     super.initState();
     _loadSaved();
-    _loadReviewEligibility();
+    _eligibilityLoad = _loadReviewEligibility();
     unawaited(
       UserActivityService.recordRecentlyViewed(
         spotId: d.spotId,
@@ -87,6 +89,37 @@ class _TouristDestinationDetailScreenState
       _canReview = checkedIn;
       _userReview = userReview;
     });
+  }
+
+  /// Eligibility loads async (visit sync); a tap before it finishes — or after
+  /// scanning while this screen stayed open — must re-check, not reject.
+  Future<void> _onWriteReviewTap() async {
+    if (d.spotId.isEmpty || _checkingReviewEligibility) return;
+    if (!_canReview && _userReview == null) {
+      setState(() => _checkingReviewEligibility = true);
+      try {
+        await _eligibilityLoad;
+        if (!_canReview && _userReview == null) {
+          _eligibilityLoad = _loadReviewEligibility();
+          await _eligibilityLoad;
+        }
+      } finally {
+        if (mounted) setState(() => _checkingReviewEligibility = false);
+      }
+      if (!mounted) return;
+      if (!_canReview && _userReview == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Scan the QR code here to check in, then you can leave a review.',
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+    }
+    await _openWriteReview();
   }
 
   Future<void> _openWriteReview() async {
@@ -853,23 +886,21 @@ class _TouristDestinationDetailScreenState
           if (d.spotId.isNotEmpty) ...[
             const SizedBox(height: 14),
             OutlinedButton.icon(
-              onPressed: _canReview || _userReview != null
-                  ? _openWriteReview
-                  : () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Scan the QR code here to check in, then you can leave a review.',
-                          ),
-                          behavior: SnackBarBehavior.floating,
-                        ),
-                      );
-                    },
-              icon: Icon(
-                _userReview != null
-                    ? Icons.edit_outlined
-                    : Icons.rate_review_outlined,
-              ),
+              onPressed: _onWriteReviewTap,
+              icon: _checkingReviewEligibility
+                  ? SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: accent,
+                      ),
+                    )
+                  : Icon(
+                      _userReview != null
+                          ? Icons.edit_outlined
+                          : Icons.rate_review_outlined,
+                    ),
               label: Text(
                 _userReview != null ? 'Edit your review' : 'Write a review',
               ),

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -53,6 +54,14 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
   int? _expirySecondsLeft;
   Timer? _expiryTicker;
   String? _contactEmail;
+  /// Set after a successful code check; the "Verified!" view runs it on
+  /// "Go to Dashboard".
+  Future<void> Function()? _goToDashboard;
+  bool _openingDashboard = false;
+  String? _verifiedName;
+  String _verifiedEmail = '';
+  bool _verifiedIsStaff = false;
+  bool _verifiedAwaitingApproval = false;
 
   static const Color _verifyOrange = Color(0xFFFF6B00);
   static const Color _textDark = Color(0xFF1C1917);
@@ -217,7 +226,6 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
               ? OtpDeliveryResult.deliveryUnconfirmedMessage(inbox)
               : OtpDeliveryResult.deliveryPendingMessage(inbox);
         });
-        _startCooldown(60);
         await _syncExpiryFromStore(otpKey);
         return;
       }
@@ -232,7 +240,6 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
             ? OtpDeliveryResult.deliveryPendingMessage(inbox)
             : OtpDeliveryResult.deliveryUnconfirmedMessage(inbox);
       });
-      if (deliveryOk) _startCooldown(60);
       return;
     }
 
@@ -262,7 +269,6 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
             : 'Open your email Inbox for the 6-digit code, then enter it below '
                 '(check Spam only if it is missing).';
       });
-      _startCooldown(60);
       await _syncExpiryFromStore(user.uid);
       debugPrint('[OTP] active code exists for $inbox (preserved)');
       return;
@@ -293,9 +299,6 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
               '(Spam only if missing), then enter it below.'
           : OtpDeliveryResult.deliveryUnconfirmedMessage(email);
     });
-    if (deliveryOk) {
-      _startCooldown(60);
-    }
   }
 
   /// Verified tourists and non-tourist roles should not stay on this screen.
@@ -353,6 +356,38 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
     );
     if (!mounted) return;
     await _navigateAfterTouristVerification(route);
+  }
+
+  void _showVerified(
+    Future<void> Function() goToDashboard, {
+    required AppUserProfile profile,
+    required String email,
+  }) {
+    _expiryTicker?.cancel();
+    _expiryTicker = null;
+    FocusManager.instance.primaryFocus?.unfocus();
+    ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
+    final isStaff = profile.isTourismEstablishment || profile.isTourismOffice;
+    setState(() {
+      _goToDashboard = goToDashboard;
+      _submitting = false;
+      _verifiedName = profile.fullName?.trim().split(RegExp(r'\s+')).first;
+      _verifiedEmail = email;
+      _verifiedIsStaff = isStaff;
+      _verifiedAwaitingApproval =
+          isStaff && profile.status.trim().toLowerCase() == 'pending';
+    });
+  }
+
+  Future<void> _onGoToDashboard() async {
+    final go = _goToDashboard;
+    if (go == null || _openingDashboard) return;
+    setState(() => _openingDashboard = true);
+    try {
+      await go();
+    } finally {
+      if (mounted) setState(() => _openingDashboard = false);
+    }
   }
 
   Future<void> _navigateAfterTouristVerification(String route) async {
@@ -584,7 +619,21 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
           firebaseUid: createdUser.uid,
         );
         if (!mounted) return;
-        await _navigateAfterTouristVerification(route);
+        _showVerified(
+          () => _navigateAfterTouristVerification(route),
+          profile: profileForRoute.fullName?.trim().isNotEmpty == true
+              ? profileForRoute
+              : AppUserProfile(
+                  uid: profileForRoute.uid,
+                  email: profileForRoute.email,
+                  roleRaw: profileForRoute.roleRaw,
+                  fullName:
+                      deferredPending.touristData['fullName']?.toString(),
+                  isVerified: true,
+                  status: profileForRoute.status,
+                ),
+          email: email,
+        );
       } catch (e) {
         debugPrint('[OTP] deferred Auth complete failed: $e');
         if (mounted) {
@@ -812,16 +861,17 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
       );
 
       if (!mounted) return;
-      _snack('Email verified. Welcome!', isError: false);
-      if (profileForRoute.isTourismEstablishment ||
-          route == '/establishment-dashboard') {
-        Navigator.pushReplacementNamed(context, '/establishment-dashboard');
-      } else if (profileForRoute.isTourismOffice ||
-          route == '/lgu-dashboard') {
-        Navigator.pushReplacementNamed(context, '/lgu-dashboard');
-      } else {
-        await _navigateAfterTouristVerification(route);
-      }
+      _showVerified(() async {
+        if (profileForRoute.isTourismEstablishment ||
+            route == '/establishment-dashboard') {
+          Navigator.pushReplacementNamed(context, '/establishment-dashboard');
+        } else if (profileForRoute.isTourismOffice ||
+            route == '/lgu-dashboard') {
+          Navigator.pushReplacementNamed(context, '/lgu-dashboard');
+        } else {
+          await _navigateAfterTouristVerification(route);
+        }
+      }, profile: profileForRoute, email: email);
     } on FirebaseException catch (e) {
       if (mounted) {
         final msg = _formatFirestoreFailure(e);
@@ -1181,10 +1231,12 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
     final width = MediaQuery.sizeOf(context).width;
     final cardMaxWidth = width >= 900 ? 440.0 : (width >= 600 ? 420.0 : 400.0);
 
+    final verified = _goToDashboard != null;
+
     return PopScope(
-      canPop: !hasPendingSignup,
+      canPop: !hasPendingSignup && !verified,
       onPopInvokedWithResult: (didPop, _) async {
-        if (didPop || !hasPendingSignup) return;
+        if (didPop || verified || !hasPendingSignup) return;
         // System back → review/edit filled signup (not cancel).
         await _onEditSignupDetails();
       },
@@ -1202,7 +1254,9 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
                   child: ConstrainedBox(
                     constraints: BoxConstraints(maxWidth: cardMaxWidth),
                     child: _OtpGlassCard(
-                      child: Column(
+                      child: verified
+                          ? _buildVerifiedView(width)
+                          : Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           _buildEnvelopeBadge(),
@@ -1387,6 +1441,351 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  static const Color _successGreen = Color(0xFF16A34A);
+
+  Widget _buildVerifiedView(double width) {
+    final name = _verifiedName;
+    final greeting = name != null && name.isNotEmpty
+        ? 'Welcome to ATMOS-TRS, $name!'
+        : 'Welcome to ATMOS-TRS!';
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const _VerifiedSuccessBadge(),
+        const SizedBox(height: 18),
+        _FadeSlideIn(
+          delay: const Duration(milliseconds: 350),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+            decoration: BoxDecoration(
+              color: _successGreen.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: _successGreen.withValues(alpha: 0.25),
+              ),
+            ),
+            child: const Text(
+              'ACCOUNT VERIFIED',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.2,
+                color: _successGreen,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        _FadeSlideIn(
+          delay: const Duration(milliseconds: 450),
+          child: Text(
+            'Verified!',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: width < 380 ? 28 : 32,
+              fontWeight: FontWeight.w800,
+              color: _textDark,
+              letterSpacing: -0.6,
+              height: 1.1,
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        _FadeSlideIn(
+          delay: const Duration(milliseconds: 550),
+          child: Text(
+            '$greeting\nYou have successfully verified your account.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 15,
+              color: _textMuted,
+              height: 1.45,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        if (_verifiedEmail.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          _FadeSlideIn(
+            delay: const Duration(milliseconds: 650),
+            child: _buildVerifiedEmailChip(),
+          ),
+        ],
+        const SizedBox(height: 22),
+        _FadeSlideIn(
+          delay: const Duration(milliseconds: 750),
+          child: _buildWhatsNextPanel(),
+        ),
+        const SizedBox(height: 24),
+        _FadeSlideIn(
+          delay: const Duration(milliseconds: 850),
+          child: _buildGoToDashboardButton(),
+        ),
+        const SizedBox(height: 12),
+        _FadeSlideIn(
+          delay: const Duration(milliseconds: 900),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.lock_outline_rounded,
+                size: 14,
+                color: _textMuted.withValues(alpha: 0.8),
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  'Use this email and your password next time you log in.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _textMuted.withValues(alpha: 0.9),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVerifiedEmailChip() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 8, 14, 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.verified_rounded, size: 18, color: _successGreen),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              _verifiedEmail,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w700,
+                color: _textDark,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWhatsNextPanel() {
+    final List<(IconData, String, String)> items;
+    if (_verifiedAwaitingApproval) {
+      items = const [
+        (
+          Icons.mark_email_read_rounded,
+          'Email confirmed',
+          'Your sign-in email is now verified.',
+        ),
+        (
+          Icons.hourglass_top_rounded,
+          'Waiting for approval',
+          'Some features stay locked until your registration is approved.',
+        ),
+        (
+          Icons.notifications_active_rounded,
+          'We will notify you',
+          'Check your dashboard for your approval status.',
+        ),
+      ];
+    } else if (_verifiedIsStaff) {
+      items = const [
+        (
+          Icons.mark_email_read_rounded,
+          'Email confirmed',
+          'Your sign-in email is now verified.',
+        ),
+        (
+          Icons.dashboard_customize_rounded,
+          'Open your dashboard',
+          'Manage check-ins, records and reports in one place.',
+        ),
+      ];
+    } else {
+      items = const [
+        (
+          Icons.qr_code_scanner_rounded,
+          'Check in with QR',
+          'Scan the QR code at attractions and tourism desks.',
+        ),
+        (
+          Icons.hotel_rounded,
+          'Confirm your stays',
+          'Scan your accommodation QR so staff can confirm your stay.',
+        ),
+        (
+          Icons.explore_rounded,
+          'Explore Misamis Occidental',
+          'Discover destinations across all 17 LGUs.',
+        ),
+      ];
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _verifyOrange.withValues(alpha: 0.14)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            "WHAT'S NEXT",
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.1,
+              color: _verifyOrange.withValues(alpha: 0.9),
+            ),
+          ),
+          const SizedBox(height: 10),
+          for (final (icon, title, subtitle) in items)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(10),
+                      boxShadow: [
+                        BoxShadow(
+                          color: _verifyOrange.withValues(alpha: 0.12),
+                          blurRadius: 8,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
+                    ),
+                    child: Icon(icon, size: 20, color: _verifyOrange),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: _textDark,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle,
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            height: 1.35,
+                            color: _textMuted,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGoToDashboardButton() {
+    final enabled = !_openingDashboard;
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 180),
+      opacity: enabled ? 1 : 0.7,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          gradient: const LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: [Color(0xFFFF8A3D), _verifyOrange],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: _verifyOrange.withValues(alpha: 0.32),
+              blurRadius: 18,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: enabled ? _onGoToDashboard : null,
+            child: SizedBox(
+              width: double.infinity,
+              height: 54,
+              child: Center(
+                child: _openingDashboard
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'Go to Dashboard',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.2,
+                              color: Colors.white,
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Icon(
+                            Icons.arrow_forward_rounded,
+                            size: 20,
+                            color: Colors.white,
+                          ),
+                        ],
+                      ),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -1682,4 +2081,221 @@ class _OtpGlassCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Fades + slides [child] up once, starting after [delay].
+class _FadeSlideIn extends StatelessWidget {
+  const _FadeSlideIn({required this.child, this.delay = Duration.zero});
+
+  final Widget child;
+  final Duration delay;
+
+  static const Duration _animDuration = Duration(milliseconds: 420);
+
+  @override
+  Widget build(BuildContext context) {
+    final total = delay + _animDuration;
+    final start = delay.inMilliseconds / total.inMilliseconds;
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: total,
+      curve: Interval(start, 1, curve: Curves.easeOutCubic),
+      builder: (context, t, child) => Opacity(
+        opacity: t,
+        child: Transform.translate(
+          offset: Offset(0, (1 - t) * 14),
+          child: child,
+        ),
+      ),
+      child: child,
+    );
+  }
+}
+
+/// Success badge: pop-in circle, self-drawing check, confetti burst and
+/// soft pulsing rings.
+class _VerifiedSuccessBadge extends StatefulWidget {
+  const _VerifiedSuccessBadge();
+
+  @override
+  State<_VerifiedSuccessBadge> createState() => _VerifiedSuccessBadgeState();
+}
+
+class _VerifiedSuccessBadgeState extends State<_VerifiedSuccessBadge>
+    with TickerProviderStateMixin {
+  late final AnimationController _intro = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  )..forward();
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2200),
+  );
+
+  static const double _size = 150;
+  static const double _core = 92;
+  static const Color _orange = Color(0xFFFF6B00);
+
+  @override
+  void initState() {
+    super.initState();
+    _intro.addStatusListener((status) {
+      if (status == AnimationStatus.completed && mounted) _pulse.repeat();
+    });
+  }
+
+  @override
+  void dispose() {
+    _intro.dispose();
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: _size,
+      height: _size,
+      child: AnimatedBuilder(
+        animation: Listenable.merge([_intro, _pulse]),
+        builder: (context, _) {
+          final pop = Curves.elasticOut.transform(
+            const Interval(0, 0.6).transform(_intro.value),
+          );
+          final check = Curves.easeOutCubic.transform(
+            const Interval(0.35, 0.75).transform(_intro.value),
+          );
+          final burst = Curves.easeOutCubic.transform(
+            const Interval(0.4, 1).transform(_intro.value),
+          );
+          return Stack(
+            alignment: Alignment.center,
+            children: [
+              for (final offset in const [0.0, 0.5])
+                _buildPulseRing((_pulse.value + offset) % 1),
+              CustomPaint(
+                size: const Size.square(_size),
+                painter: _ConfettiBurstPainter(progress: burst),
+              ),
+              Transform.scale(
+                scale: pop,
+                child: Container(
+                  width: _core,
+                  height: _core,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xFFFFA05C), _orange],
+                    ),
+                    border: Border.all(color: Colors.white, width: 4),
+                    boxShadow: [
+                      BoxShadow(
+                        color: _orange.withValues(alpha: 0.35),
+                        blurRadius: 26,
+                        offset: const Offset(0, 12),
+                      ),
+                    ],
+                  ),
+                  child: CustomPaint(
+                    painter: _CheckMarkPainter(progress: check),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildPulseRing(double t) {
+    if (!_pulse.isAnimating) return const SizedBox.shrink();
+    final scale = 1 + t * 0.6;
+    return Opacity(
+      opacity: (1 - t) * 0.45,
+      child: Container(
+        width: _core * scale,
+        height: _core * scale,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: _orange.withValues(alpha: 0.6), width: 2),
+        ),
+      ),
+    );
+  }
+}
+
+class _CheckMarkPainter extends CustomPainter {
+  _CheckMarkPainter({required this.progress});
+
+  final double progress;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (progress <= 0) return;
+    final path = Path()
+      ..moveTo(size.width * 0.29, size.height * 0.52)
+      ..lineTo(size.width * 0.44, size.height * 0.66)
+      ..lineTo(size.width * 0.72, size.height * 0.37);
+    final metric = path.computeMetrics().first;
+    final partial = metric.extractPath(0, metric.length * progress);
+    canvas.drawPath(
+      partial,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = size.width * 0.09
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_CheckMarkPainter old) => old.progress != progress;
+}
+
+class _ConfettiBurstPainter extends CustomPainter {
+  _ConfettiBurstPainter({required this.progress});
+
+  final double progress;
+
+  static const List<Color> _colors = [
+    Color(0xFFFF6B00),
+    Color(0xFFFDBA74),
+    Color(0xFF16A34A),
+    Color(0xFFFACC15),
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (progress <= 0 || progress >= 1) return;
+    final center = size.center(Offset.zero);
+    final opacity = (1 - progress).clamp(0.0, 1.0);
+    const count = 12;
+    for (var i = 0; i < count; i++) {
+      final angle = (i / count) * 2 * math.pi - math.pi / 2;
+      final reach = size.width * (i.isEven ? 0.46 : 0.38);
+      final distance = size.width * 0.3 + (reach - size.width * 0.3) * progress;
+      final pos = center + Offset(math.cos(angle), math.sin(angle)) * distance;
+      final paint = Paint()
+        ..color = _colors[i % _colors.length].withValues(alpha: opacity);
+      final r = (i.isEven ? 4.0 : 3.0) * (1 - progress * 0.4);
+      if (i % 3 == 0) {
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromCenter(center: pos, width: r * 2.2, height: r * 1.2),
+            const Radius.circular(1.5),
+          ),
+          paint,
+        );
+      } else {
+        canvas.drawCircle(pos, r, paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ConfettiBurstPainter old) => old.progress != progress;
 }

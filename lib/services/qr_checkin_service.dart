@@ -1,3 +1,5 @@
+import 'dart:async' show unawaited;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -7,10 +9,13 @@ import 'package:atmos_trs_system/config/beta_testing_config.dart';
 import 'package:atmos_trs_system/config/user_profile_storage.dart';
 import 'package:atmos_trs_system/config/qr_scan_geofence_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
+import 'package:atmos_trs_system/models/tourist_group.dart';
 import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
 import 'package:atmos_trs_system/services/qr_scan_demo_guard.dart';
 import 'package:atmos_trs_system/services/qr_scan_location_guard.dart';
+import 'package:atmos_trs_system/services/spot_location_cache.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
+import 'package:atmos_trs_system/utils/checkin_visitor_expansion.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 
 /// Result of a QR check-in save attempt.
@@ -59,11 +64,15 @@ class SpotInfo {
     this.longitude,
     this.imageUrl,
     this.category,
+    this.fromCache = false,
   });
   final String spotId;
   final String spotName;
   final String municipality;
   final String municipalityId;
+
+  /// Read from [SpotLocationCache] (device) instead of Firestore.
+  final bool fromCache;
 
   /// From Firestore `tourist_spots` (used for proximity check).
   final double? latitude;
@@ -153,22 +162,34 @@ class QRCheckInService {
       final composed = fullName.isNotEmpty
           ? fullName
           : [first, last].where((s) => s.isNotEmpty).join(' ');
-      final email =
-          (t['email'] ?? t['authEmail'] ?? '').toString().trim().toLowerCase();
+      final email = (t['email'] ?? t['authEmail'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
       final mobile = (t['mobile'] ?? '').toString().trim();
-      final nationality =
-          (t['nationality'] ?? t['country'] ?? '').toString().trim();
+      final nationality = (t['nationality'] ?? t['country'] ?? '')
+          .toString()
+          .trim();
+      String str(String key) => t[key]?.toString().trim() ?? '';
+      final sex = str('sex');
+      final country = str('country');
+      final province = str('province');
+      final city = str('city');
+      final localOrForeign = str('localOrForeign');
       return {
         if (composed.isNotEmpty) ...{
           'touristFullName': composed,
           'fullName': composed,
         },
-        if (email.isNotEmpty) ...{
-          'touristEmail': email,
-          'email': email,
-        },
+        if (email.isNotEmpty) ...{'touristEmail': email, 'email': email},
         if (mobile.isNotEmpty) 'touristMobile': mobile,
         if (nationality.isNotEmpty) 'touristNationality': nationality,
+        if (sex.isNotEmpty) 'touristSex': sex,
+        if (country.isNotEmpty) 'touristCountry': country,
+        if (province.isNotEmpty) 'touristProvince': province,
+        if (city.isNotEmpty) 'touristCity': city,
+        if (t['isLocal'] is bool) 'touristIsLocal': t['isLocal'],
+        if (localOrForeign.isNotEmpty) 'touristLocalOrForeign': localOrForeign,
       };
     } catch (e) {
       debugPrint('[CheckIn] tourist profile read skipped: $e');
@@ -192,8 +213,7 @@ class QRCheckInService {
     }
     if (hasPriorVisitsAtLocation) {
       return (
-        message:
-            'Thank you, $displayName! for scanning $locationLabel again.',
+        message: 'Thank you, $displayName! for scanning $locationLabel again.',
         dialogTitle: 'Thank you!',
       );
     }
@@ -277,7 +297,8 @@ class QRCheckInService {
       DateTime? newestTime;
       for (final d in snap.docs) {
         final data = d.data();
-        final spot = data['spotId']?.toString() ??
+        final spot =
+            data['spotId']?.toString() ??
             data['spot_id']?.toString() ??
             data['touristSpotId']?.toString() ??
             '';
@@ -315,11 +336,38 @@ class QRCheckInService {
   /// Uses fields: name, municipality, municipalityId (optional).
   /// If municipalityId is missing, derives it from municipality so check-ins
   /// match the correct LGU dashboard (e.g. "Oroquieta City" → oroquieta).
+  ///
+  /// With [preferCache] (default), a spot in [SpotLocationCache] is returned
+  /// without a network round-trip so scans stay fast on slow connections.
   static Future<SpotInfo?> getSpotById(
     String spotId, {
     String? municipalityId,
+    bool preferCache = true,
   }) async {
     if (!_isFirebaseInitialized || spotId.isEmpty) return null;
+    if (preferCache) {
+      await SpotLocationCache.ensureLoaded();
+      final cached = SpotLocationCache.spotById(spotId);
+      if (cached != null) {
+        unawaited(SpotLocationCache.refresh());
+        if (!_matchesMunicipality(cached.municipalityId, municipalityId)) {
+          return null;
+        }
+        return SpotInfo(
+          spotId: cached.id,
+          spotName: cached.name,
+          municipality: cached.municipality,
+          municipalityId: cached.municipalityId.isNotEmpty
+              ? cached.municipalityId
+              : getMunicipalityIdFromName(cached.municipality),
+          latitude: cached.latitude,
+          longitude: cached.longitude,
+          imageUrl: cached.imageUrl,
+          category: cached.category,
+          fromCache: true,
+        );
+      }
+    }
     try {
       final doc = await _firestore
           .collection(_spotsCollectionId)
@@ -333,20 +381,12 @@ class QRCheckInService {
       final munId = docMunId.isNotEmpty
           ? normalizeMunicipalityId(docMunId)
           : getMunicipalityIdFromName(municipality);
-      if (municipalityId != null &&
-          municipalityId.isNotEmpty &&
-          munId.isNotEmpty) {
-        final normalized = normalizeMunicipalityId(municipalityId);
-        if (normalized.isNotEmpty && munId != normalized) {
-          final queryIds = municipalityIdsForQuery(municipalityId);
-          if (!queryIds.contains(munId)) return null;
-        }
-      }
+      if (!_matchesMunicipality(munId, municipalityId)) return null;
       final latRaw = d['latitude'];
       final lngRaw = d['longitude'];
       final double? lat = latRaw is num ? latRaw.toDouble() : null;
       final double? lng = lngRaw is num ? lngRaw.toDouble() : null;
-      return SpotInfo(
+      final info = SpotInfo(
         spotId: doc.id,
         spotName: name,
         municipality: municipality,
@@ -358,9 +398,41 @@ class QRCheckInService {
         imageUrl: TouristSpotFirestore.readImageUrl(d),
         category: d['category'] as String?,
       );
+      if (lat != null && lng != null && lat.abs() > 1e-7 && lng.abs() > 1e-7) {
+        unawaited(
+          SpotLocationCache.remember(
+            CachedSpot(
+              id: info.spotId,
+              name: info.spotName,
+              municipality: info.municipality,
+              municipalityId: info.municipalityId,
+              latitude: lat,
+              longitude: lng,
+              imageUrl: info.imageUrl,
+              category: info.category,
+            ),
+          ),
+        );
+      }
+      return info;
     } catch (_) {
       return null;
     }
+  }
+
+  /// False when the QR's municipality cannot own a spot in [spotMunicipalityId].
+  static bool _matchesMunicipality(
+    String spotMunicipalityId,
+    String? qrMunicipalityId,
+  ) {
+    if (qrMunicipalityId == null ||
+        qrMunicipalityId.isEmpty ||
+        spotMunicipalityId.isEmpty) {
+      return true;
+    }
+    final normalized = normalizeMunicipalityId(qrMunicipalityId);
+    if (normalized.isEmpty || spotMunicipalityId == normalized) return true;
+    return municipalityIdsForQuery(qrMunicipalityId).contains(spotMunicipalityId);
   }
 
   /// Records every scan: writes [checkins] (user_id, location_id, checkin_time) and
@@ -374,16 +446,32 @@ class QRCheckInService {
     String? userId,
     String? spotName,
     String? municipality,
-    /// True after QR registration (pending scan) — no on-site GPS required.
-    bool skipProximityForRegistration = false,
+
+    /// True when the caller already ran [verifyProximityToTouristSpot]
+    /// (post-registration pending scan) — avoids a second GPS check.
+    bool proximityAlreadyVerified = false,
+
+    /// Dummy QR (LGU Debug data → Demo QR): no on-site GPS; tagged `demoQr`.
+    bool isDemoQr = false,
+
     /// Total visitors for this scan (pila kabook). Clamped to ≥ 1.
+    ///
+    /// With [group], the party counts describe only companions without the
+    /// app (may be 0); members are counted from their group snapshots.
     int partySize = 1,
     int femaleCount = 0,
     int maleCount = 0,
+    int filipinoCount = 0,
+    int foreignCount = 0,
+    TouristGroup? group,
   }) async {
-    final resolvedPartySize = partySize < 1 ? 1 : partySize;
-    final resolvedFemales = femaleCount < 0 ? 0 : femaleCount;
-    final resolvedMales = maleCount < 0 ? 0 : maleCount;
+    final clampedFilipinos = filipinoCount < 0 ? 0 : filipinoCount;
+    final clampedForeign = foreignCount < 0 ? 0 : foreignCount;
+    var resolvedPartySize = partySize < 1 ? 1 : partySize;
+    var resolvedFemales = femaleCount < 0 ? 0 : femaleCount;
+    var resolvedMales = maleCount < 0 ? 0 : maleCount;
+    var resolvedFilipinos = clampedFilipinos;
+    var resolvedForeign = clampedForeign;
     if (!_isFirebaseInitialized) {
       return const QRCheckInFailure(
         'Firebase is not configured. Check-in saved locally.',
@@ -396,9 +484,7 @@ class QRCheckInService {
     }
     // Firestore rules require user_id / tourist_id == request.auth.uid.
     final uid = authUser.uid;
-    if (userId != null &&
-        userId.isNotEmpty &&
-        userId != uid) {
+    if (userId != null && userId.isNotEmpty && userId != uid) {
       debugPrint(
         '[CheckIn] Ignoring passed userId ($userId); using Auth uid=$uid',
       );
@@ -406,6 +492,56 @@ class QRCheckInService {
     try {
       await authUser.getIdToken(true);
     } catch (_) {}
+
+    Map<String, dynamic> groupFields = const {};
+    if (group != null) {
+      if (!group.isLeader(uid)) {
+        return const QRCheckInFailure(
+          'Only the group leader can check in the whole group.',
+        );
+      }
+      if (!group.isActive) {
+        return const QRCheckInFailure(
+          'Your Laag with Friends group has ended. Create a new group to check in together.',
+        );
+      }
+      final members = group.orderedMembers;
+      var memberFemales = 0;
+      var memberMales = 0;
+      var memberFilipinos = 0;
+      var memberForeign = 0;
+      for (final m in members) {
+        final sex = m.sex.toLowerCase();
+        if (sex.startsWith('f')) memberFemales++;
+        if (sex.startsWith('m')) memberMales++;
+        if (isDomesticVisitorProfile(m.toProfileMap())) {
+          memberFilipinos++;
+        } else {
+          memberForeign++;
+        }
+      }
+      final companions = partySize < 0 ? 0 : partySize;
+      final companionFemales = femaleCount < 0 ? 0 : femaleCount;
+      final companionMales = maleCount < 0 ? 0 : maleCount;
+      resolvedPartySize = members.length + companions;
+      if (resolvedPartySize < 1) resolvedPartySize = 1;
+      resolvedFemales = memberFemales + companionFemales;
+      resolvedMales = memberMales + companionMales;
+      resolvedFilipinos = memberFilipinos + clampedFilipinos;
+      resolvedForeign = memberForeign + clampedForeign;
+      groupFields = {
+        'groupId': group.id,
+        'groupName': group.name,
+        'groupLeaderUid': group.leaderUid,
+        'groupMemberUids': [for (final m in members) m.uid],
+        'groupMembers': [for (final m in members) m.toProfileMap()],
+        'companionCount': companions,
+        'companionFemale': companionFemales,
+        'companionMale': companionMales,
+        'companionFilipino': clampedFilipinos,
+        'companionForeign': clampedForeign,
+      };
+    }
 
     final locationId = spotId.trim();
     if (locationId.isEmpty) {
@@ -448,7 +584,8 @@ class QRCheckInService {
       return QRCheckInFailure(demoRestriction);
     }
 
-    if (!skipProximityForRegistration &&
+    if (!proximityAlreadyVerified &&
+        !isDemoQr &&
         !BetaTestingGuard.bypassValidation &&
         spotDoc != null &&
         spotDoc.latitude != null &&
@@ -458,9 +595,7 @@ class QRCheckInService {
       final proximityError = await verifyProximityToTouristSpot(
         latitude: spotDoc.latitude!,
         longitude: spotDoc.longitude!,
-        spotLabel: resolvedSpotName.isNotEmpty
-            ? resolvedSpotName
-            : locationId,
+        spotLabel: resolvedSpotName.isNotEmpty ? resolvedSpotName : locationId,
       );
       if (proximityError != null) {
         return QRCheckInFailure(proximityError);
@@ -487,7 +622,8 @@ class QRCheckInService {
       );
       final touristSnap = await _touristSnapshotForCheckIn(uid);
       var displayName = await _displayNameForUid(uid);
-      final profileName = touristSnap['touristFullName']?.toString().trim() ?? '';
+      final profileName =
+          touristSnap['touristFullName']?.toString().trim() ?? '';
       if (profileName.isNotEmpty) {
         displayName = profileName;
       }
@@ -507,7 +643,9 @@ class QRCheckInService {
         locationId: routedLocationId,
         within: const Duration(minutes: 5),
       );
-      if (recent != null) {
+      final reuseRecent = recent != null &&
+          (recent.data()['groupId']?.toString() ?? '') == (group?.id ?? '');
+      if (recent != null && reuseRecent) {
         debugPrint(
           '[CheckIn] reuse recent qr_checkins/${recent.id} '
           '(same user+spot within 5m)',
@@ -547,14 +685,18 @@ class QRCheckInService {
         'municipality': resolvedMunicipality,
         'status': 'Verified',
         'source': 'qr_scan',
+        if (isDemoQr) 'demoQr': true,
         'partySize': resolvedPartySize,
         'visitorCount': resolvedPartySize,
         'femaleCount': resolvedFemales,
         'maleCount': resolvedMales,
+        'filipinoCount': resolvedFilipinos,
+        'foreignCount': resolvedForeign,
         'timestamp': FieldValue.serverTimestamp(),
         'createdAt': FieldValue.serverTimestamp(),
         'checkins_ref': checkinRef.id,
         ...touristSnap,
+        ...groupFields,
       });
 
       final saved = await qrRef.get(const GetOptions(source: Source.server));
@@ -575,6 +717,9 @@ class QRCheckInService {
           'visitorCount': resolvedPartySize,
           'femaleCount': resolvedFemales,
           'maleCount': resolvedMales,
+          'filipinoCount': resolvedFilipinos,
+          'foreignCount': resolvedForeign,
+          if (group != null) 'groupId': group.id,
           'checkin_time': FieldValue.serverTimestamp(),
         });
       } catch (e) {
@@ -632,9 +777,7 @@ class QRCheckInService {
       final n = normalizeMunicipalityId(docMun);
       if (n.isNotEmpty) return n;
     }
-    final munName = municipality.trim().isNotEmpty
-        ? municipality
-        : displayName;
+    final munName = municipality.trim().isNotEmpty ? municipality : displayName;
     final fromName = getMunicipalityIdFromName(munName);
     if (fromName.isNotEmpty) return fromName;
     return normalizeMunicipalityId(spotDocId);
@@ -649,11 +792,6 @@ class QRCheckInService {
   }) async {
     if (BetaTestingGuard.bypassValidation) return null;
 
-    if (latitude.abs() < 1e-6 && longitude.abs() < 1e-6) {
-      return 'Sorry — we need you at $spotLabel to check in, but this destination '
-          'has no GPS coordinates yet. Please scan the official on-site QR, or ask '
-          'the tourism office to add latitude and longitude. 😊';
-    }
     return QrScanLocationGuard.verifyNearAnchor(
       anchorLat: latitude,
       anchorLng: longitude,
@@ -680,8 +818,7 @@ class QRCheckInService {
       firestoreLng,
     );
     if (mismatch > kQrScanQrVsFirestoreMaxMismatchMeters) {
-      return 'This QR does not match our records for this tourist spot. '
-          'Please use the official poster from the tourism office and scan it on site. 😊';
+      return QrScanMessages.qrMismatch;
     }
     return null;
   }

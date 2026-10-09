@@ -1,6 +1,6 @@
 ---
-description: Atmos TRS role workflows, DOT forms, establishment QR, OPTACA boundaries
-globs: lib/screens/tourism_dashboard.dart,lib/screens/provincial_tourism_dashboard.dart,lib/screens/establishment_**,lib/services/lgu_**,lib/services/dae3_**,lib/services/establishment_**,lib/widgets/lgu_**,lib/widgets/dot_**,lib/widgets/optaca_**,lib/widgets/*report*,lib/utils/dot_**,lib/utils/dae3_**,lib/utils/provincial_report_**,lib/utils/checkin_report_**,lib/config/supabase_report_**,functions/**,firestore.rules,tools/seed_**,tools/cleanup_**,docs/**REPORT**,docs/**DOT**,docs/atmos-forms**
+description: Atmos TRS role workflows, DOT forms, establishment DOT register, OPTACA boundaries
+globs: lib/screens/tourism_dashboard.dart,lib/screens/provincial_tourism_dashboard.dart,lib/screens/establishment_**,lib/services/lgu_**,lib/services/dae3_**,lib/services/establishment_**,lib/widgets/lgu_**,lib/widgets/dot_**,lib/widgets/optaca_**,lib/widgets/ae_register/**,lib/widgets/*report*,lib/utils/dot_**,lib/utils/dae3_**,lib/utils/provincial_report_**,lib/utils/checkin_report_**,lib/config/supabase_report_**,functions/**,firestore.rules,tools/seed_**,tools/cleanup_**,docs/**REPORT**,docs/**DOT**,docs/atmos-forms**
 alwaysApply: false
 ---
 
@@ -18,13 +18,13 @@ Full product agreements: `docs/atmos-forms-and-establishment-qr.md`.
 | Provincial / OPTACA | Provincial dashboard + `optaca_report_review_panel` | Inbox/review primary |
 | Tourist | Home / QR | Visit data source; seed mid-report work |
 | Governor | Governor dashboard | Aggregates from real/seeded data |
-| Establishment | `establishment_dashboard_*` | Staff confirm queue for AE stays (`establishment_stay_service`) |
+| Establishment | `establishment_dashboard_*` | DAE-1B Daily Register + Insights (`ae_register_service`, `lib/widgets/ae_register/`) |
 
-Keep Filipino vs foreign, municipality vs province, spot vs LGU vs **establishment** check-ins distinguishable.
+Keep Filipino vs foreign, municipality vs province, spot vs LGU check-ins vs **hotel register** data distinguishable.
 
 ## Data flow
 
-Tourist registered → QR (attraction / LGU / later establishment) → LGU analytics → DOT preview + Excel/PDF → optional OPTACA package → Governor aggregates.
+Tourist registered → QR (attraction / LGU) → LGU analytics → DOT preview + Excel/PDF → optional OPTACA package → Governor aggregates.
 
 ## DOT export (Analytics)
 
@@ -35,19 +35,19 @@ Tourist registered → QR (attraction / LGU / later establishment) → LGU analy
 | Blank official | Secondary/advanced only — not the happy path |
 | Pipeline | One aggregate → preview → Excel → PDF |
 | Attraction data | Feeds VAR family |
-| Confirmed AE stays | Feed DAE family (attraction proxy only if labeled as gap/proxy) |
+| Hotel DOT registers | Feed DAE family via `fetchAeRegisterReportData` (attraction proxy only if labeled as gap/proxy) |
 
 Extend `dot_report_preview`, `dot_report_export_service`, `dot_report_pdf_export`, `DotReportExportPanel` — do not fork exporters.
 
-## Establishment stay QR (implemented — extend, don’t rebuild)
+## Establishment DOT register (implemented — extend, don't rebuild)
 
-1. Tourist scans establishment QR → Firestore **pending** stay request.
-2. Logged-in staff sees queue/popup on establishment dashboard → enters DAE fields → **Confirm**.
-3. Status → **confirmed**; tourist sees receipt/history of that transaction.
-4. Reports/DOT count **confirmed** only. Pending ignored.
-5. Same day: attraction check-in + hotel stay = **two records**.
+1. Hotel logs in → **Register** tab = DAE-1B Daily Register (one row = one occupied room-night). "Add stay" expands guests × nights into rows.
+2. Monthly Record, DAE-2 summary, By Country are computed by `AeRegisterCalculator` (never typed).
+3. Header `ae_monthly_reports/{aeId}_{yyyy}_{mm}` holds saved totals; `rows` subcollection holds the register. Hotel marks the month **submitted**.
+4. LGU (Establishments tab) / OPTACA (registry) see `AeRegisterCompliancePanel` (submitted / draft / missing); Governor entity analytics embeds Insights. All open `AeRegisterViewerScreen` (read-only).
+5. DAE forms read registers (drafts included with a gap note). Columns adapt via `AeRegisterSchema` (lodging first).
 
-Do not overload attraction `qr_checkins` without `qr_type` / `establishmentId`. Prefer stay-request collection linked to `accommodation_establishments`. Extend fillers when stay fields feed DAE.
+Retired: establishment QR stay requests, staff confirm queue, rooms tab, establishment reviews.
 
 ## Integration boundary
 
@@ -59,8 +59,8 @@ Do not overload attraction `qr_checkins` without `qr_type` / `establishmentId`. 
 
 ## Temporary seeding
 
-LGU Debug data → `tools/seed_dashboard_analytics.js` → `tools/seed_dummy_data.js` → cleanup tools. Seeds are replaceable.
+LGU Debug data (tourists + demo hotel registers) → `tools/seed_dashboard_analytics.js` → `tools/seed_dummy_data.js` → cleanup tools. Seeds are replaceable.
 
 ## Do not confuse context with tasks
 
-`Tourist → QR → LGU → OPTACA → Governor` does not mean implement every hop. Start in LGU / DOT / OPTACA (or establishment stay slice when asked).
+`Tourist → QR → LGU → OPTACA → Governor` does not mean implement every hop. Start in LGU / DOT / OPTACA (or the establishment register slice when asked).

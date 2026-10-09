@@ -86,20 +86,6 @@ class GovernorGlassHeader extends StatelessWidget {
                 gradient: GovernorDashboardTokens.headerGradient,
               ),
             ),
-            // Soft highlight so content stays readable on orange.
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.white.withValues(alpha: 0.18),
-                    Colors.white.withValues(alpha: 0.06),
-                    GovernorDashboardTokens.background.withValues(alpha: 0.35),
-                  ],
-                ),
-              ),
-            ),
             Positioned(
               right: -40,
               top: -30,

@@ -31,6 +31,9 @@ import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/widgets/lgu_debug_data_dialogs.dart';
 
+const String _kOptacaLogoAsset = 'assets/images/tourism logo.png';
+const String _kCapitolPhotoAsset = 'assets/images/capitol.webp';
+
 class ProvincialTourismDashboard extends StatefulWidget {
   const ProvincialTourismDashboard({super.key});
 
@@ -303,6 +306,8 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
       onSelect: _go,
       onToggle: () => setState(() => _isSidebarExpanded = !_isSidebarExpanded),
       onLogout: _logout,
+      brandLogoAsset: _kOptacaLogoAsset,
+      footerImageAsset: _kCapitolPhotoAsset,
       brandTitle: 'Provincial Tourism',
       brandSubtitle: 'Misamis Occidental',
       profileName: _profileName,
@@ -322,6 +327,8 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
       },
       onToggle: () => Navigator.of(context).maybePop(),
       onLogout: _logout,
+      brandLogoAsset: _kOptacaLogoAsset,
+      footerImageAsset: _kCapitolPhotoAsset,
       brandTitle: 'Provincial Tourism',
       brandSubtitle: 'Misamis Occidental',
       profileName: _profileName,
@@ -999,19 +1006,242 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
   }
 
   // ─── Destinations ────────────────────────────────────────────
+  static ({Color color, IconData icon}) _categoryVisual(String category) {
+    final c = category.toLowerCase();
+    if (c == 'all') {
+      return (color: GovernorDashboardTokens.primary, icon: Icons.apps_rounded);
+    }
+    if (c.contains('beach')) {
+      return (color: const Color(0xFF0EA5E9), icon: Icons.beach_access_rounded);
+    }
+    if (c.contains('fall') || c.contains('lake') || c.contains('river')) {
+      return (color: const Color(0xFF0D9488), icon: Icons.water_rounded);
+    }
+    if (c.contains('mountain') || c.contains('hill')) {
+      return (color: const Color(0xFF16A34A), icon: Icons.terrain_rounded);
+    }
+    if (c.contains('church')) {
+      return (color: const Color(0xFF8B5CF6), icon: Icons.church_rounded);
+    }
+    if (c.contains('histor') || c.contains('fort') || c.contains('heritage')) {
+      return (color: const Color(0xFFA16207), icon: Icons.account_balance_rounded);
+    }
+    if (c.contains('park') || c.contains('garden')) {
+      return (color: const Color(0xFF65A30D), icon: Icons.park_rounded);
+    }
+    if (c.contains('resort')) {
+      return (color: const Color(0xFFEC4899), icon: Icons.pool_rounded);
+    }
+    return (color: GovernorDashboardTokens.primary, icon: Icons.place_rounded);
+  }
+
+  static bool _spotHasVr(Map<String, dynamic> s) {
+    final url =
+        (s['vrTourUrl'] ?? s['vrUrl'] ?? s['vrLink'] ?? '').toString().trim();
+    return url.isNotEmpty || s['hasVr'] == true;
+  }
+
+  Future<void> _toggleFeatured(Map<String, dynamic> s, bool v) async {
+    final id = s['id']?.toString() ?? '';
+    final ok = await _service.setDestinationFeatured(spotId: id, featured: v);
+    if (ok && mounted) setState(() => s['provincialFeatured'] = v);
+  }
+
+  Widget _tabHeader({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    Widget? trailing,
+  }) {
+    final heading = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            gradient: GovernorDashboardTokens.primaryGradient,
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(
+                color: GovernorDashboardTokens.primary.withValues(alpha: 0.28),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Icon(icon, color: Colors.white, size: 22),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: GovernorDashboardTokens.heading(size: 20)),
+              const SizedBox(height: 2),
+              Text(subtitle, style: GovernorDashboardTokens.body(size: 13)),
+            ],
+          ),
+        ),
+      ],
+    );
+    if (trailing == null) return heading;
+    if (_isMobile) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [heading, const SizedBox(height: 12), trailing],
+      );
+    }
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(child: heading),
+        const SizedBox(width: 12),
+        trailing,
+      ],
+    );
+  }
+
+  Widget _softChip({
+    required String label,
+    required Color color,
+    IconData? icon,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(99),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 12, color: color),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            label,
+            style: GovernorDashboardTokens.sectionTitle(size: 11, color: color),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusChip(String status) {
+    final s = status.toLowerCase();
+    final active = s != 'inactive' && s != 'closed';
+    final color = active ? const Color(0xFF16A34A) : const Color(0xFF64748B);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(99),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            active ? 'Active' : (s.isEmpty ? 'Inactive' : '${s[0].toUpperCase()}${s.substring(1)}'),
+            style: GovernorDashboardTokens.sectionTitle(size: 11, color: color),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _categoryPill(String category, int count) {
+    final selected = _destCategory == category;
+    final v = _categoryVisual(category);
+    final accent = GovernorDashboardTokens.primary;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      decoration: BoxDecoration(
+        color: selected ? accent : Colors.white,
+        borderRadius: BorderRadius.circular(99),
+        border: Border.all(
+          color: selected ? accent : GovernorDashboardTokens.border,
+        ),
+        boxShadow: selected
+            ? [
+                BoxShadow(
+                  color: accent.withValues(alpha: 0.25),
+                  blurRadius: 10,
+                  offset: const Offset(0, 3),
+                ),
+              ]
+            : null,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(99),
+          onTap: () => setState(() => _destCategory = category),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(11, 7, 8, 7),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  v.icon,
+                  size: 15,
+                  color: selected ? Colors.white : v.color,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  category,
+                  style: GovernorDashboardTokens.sectionTitle(
+                    size: 12.5,
+                    color: selected ? Colors.white : GovernorDashboardTokens.text,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Container(
+                  constraints: const BoxConstraints(minWidth: 20),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: selected
+                        ? Colors.white.withValues(alpha: 0.25)
+                        : GovernorDashboardTokens.mutedSurface,
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                  child: Text(
+                    '$count',
+                    textAlign: TextAlign.center,
+                    style: GovernorDashboardTokens.sectionTitle(
+                      size: 11,
+                      color: selected
+                          ? Colors.white
+                          : GovernorDashboardTokens.subtitle,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildDestinationsTab() {
     final munis = ['All', ...getMisamisOccidentalMunicipalities().map((m) => m.name)];
-    final filtered = _spots.where((s) {
+    final q = _destSearch.trim().toLowerCase();
+    final base = _spots.where((s) {
       final name = (s['name']?.toString() ?? '').toLowerCase();
-      final cat = (s['category']?.toString() ?? '').toLowerCase();
       final mid = ProvincialTourismService.municipalityIdOf(s);
       final mname = ProvincialTourismService.municipalityNameOf(mid);
-      if (_destSearch.trim().isNotEmpty &&
-          !name.contains(_destSearch.toLowerCase()) &&
-          !mname.toLowerCase().contains(_destSearch.toLowerCase())) {
-        return false;
-      }
-      if (_destCategory != 'All' && !cat.contains(_destCategory.toLowerCase())) {
+      if (q.isNotEmpty &&
+          !name.contains(q) &&
+          !mname.toLowerCase().contains(q)) {
         return false;
       }
       if (_destMunicipality != 'All' && mname != _destMunicipality) {
@@ -1019,6 +1249,10 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
       }
       return true;
     }).toList();
+    bool inCategory(Map<String, dynamic> s, String cat) =>
+        cat == 'All' ||
+        (s['category']?.toString() ?? '').toLowerCase().contains(cat.toLowerCase());
+    final filtered = base.where((s) => inCategory(s, _destCategory)).toList();
 
     final visitCounts = <String, int>{};
     for (final c in _periodCheckIns) {
@@ -1026,169 +1260,862 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
       if (sid.isEmpty) continue;
       visitCounts[sid] = (visitCounts[sid] ?? 0) + 1;
     }
+    int visitsOf(Map<String, dynamic> s) => visitCounts[s['id']?.toString()] ?? 0;
+
+    final totalVisits = filtered.fold<int>(0, (a, s) => a + visitsOf(s));
+    final vrCount = filtered.where(_spotHasVr).length;
+    final featuredCount =
+        filtered.where((s) => s['provincialFeatured'] == true).length;
+    final lguCount = {
+      for (final s in filtered) ProvincialTourismService.municipalityIdOf(s),
+    }.where((id) => id.isNotEmpty).length;
+    final filtersActive =
+        _destCategory != 'All' || _destMunicipality != 'All' || q.isNotEmpty;
 
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
       children: [
-        Text('Destinations', style: GovernorDashboardTokens.heading(size: 20)),
-        const SizedBox(height: 4),
-        Text(
-          'Province-wide inventory (read-only; LGU offices manage spot CRUD).',
-          style: GovernorDashboardTokens.body(size: 13),
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final c in _categories)
-              FilterChip(
-                label: Text(c),
-                selected: _destCategory == c,
-                onSelected: (_) => setState(() => _destCategory = c),
-              ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        DropdownButtonFormField<String>(
-          initialValue: _destMunicipality,
-          decoration: const InputDecoration(
-            labelText: 'Municipality',
-            border: OutlineInputBorder(),
-            isDense: true,
+        _tabHeader(
+          icon: Icons.place_rounded,
+          title: 'Destinations',
+          subtitle:
+              'Province-wide inventory of tourist spots across Misamis Occidental.',
+          trailing: _softChip(
+            label: 'Read-only · LGUs manage spots',
+            color: GovernorDashboardTokens.subtitle,
+            icon: Icons.lock_outline_rounded,
           ),
-          items: [
-            for (final m in munis)
-              DropdownMenuItem(value: m, child: Text(m)),
+        ),
+        const SizedBox(height: 16),
+        _kpiGrid(
+          children: [
+            _simpleKpi(
+              title: 'Destinations',
+              value: '${filtered.length}',
+              icon: Icons.place_rounded,
+              accent: GovernorDashboardTokens.primary,
+              subtitle: filtersActive
+                  ? 'of ${_spots.length} total'
+                  : 'across $lguCount LGUs',
+            ),
+            _simpleKpi(
+              title: 'Visits',
+              value: '$totalVisits',
+              icon: Icons.qr_code_scanner_rounded,
+              accent: const Color(0xFF3B82F6),
+              subtitle: 'QR check-ins · $_selectedTimeFilter',
+            ),
+            _simpleKpi(
+              title: 'VR-ready',
+              value: '$vrCount',
+              icon: Icons.vrpano_rounded,
+              accent: const Color(0xFF8B5CF6),
+              subtitle: '360° tours linked',
+            ),
+            _simpleKpi(
+              title: 'Featured',
+              value: '$featuredCount',
+              icon: Icons.star_rounded,
+              accent: const Color(0xFFF59E0B),
+              subtitle: 'Provincial highlights',
+            ),
           ],
-          onChanged: (v) => setState(() => _destMunicipality = v ?? 'All'),
         ),
         const SizedBox(height: 14),
         _panel(
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: DataTable(
-              columns: const [
-                DataColumn(label: Text('Name')),
-                DataColumn(label: Text('Municipality')),
-                DataColumn(label: Text('Category')),
-                DataColumn(label: Text('Visits')),
-                DataColumn(label: Text('Status')),
-                DataColumn(label: Text('VR')),
-                DataColumn(label: Text('Featured')),
-              ],
-              rows: [
-                for (final s in filtered)
-                  DataRow(
-                    cells: [
-                      DataCell(Text(s['name']?.toString() ?? '—')),
-                      DataCell(Text(ProvincialTourismService.municipalityNameOf(
-                        ProvincialTourismService.municipalityIdOf(s),
-                      ))),
-                      DataCell(Text(s['category']?.toString() ?? '—')),
-                      DataCell(Text('${visitCounts[s['id']?.toString()] ?? 0}')),
-                      DataCell(Text(
-                        (s['status']?.toString().isNotEmpty == true)
-                            ? s['status'].toString()
-                            : 'active',
-                      )),
-                      DataCell(Text(
-                        (s['vrTourUrl'] ?? s['vrUrl'] ?? s['hasVr']) != null &&
-                                (s['vrTourUrl'] ?? s['vrUrl'] ?? '')
-                                    .toString()
-                                    .isNotEmpty
-                            ? 'Yes'
-                            : (s['hasVr'] == true ? 'Yes' : '—'),
-                      )),
-                      DataCell(
-                        Switch(
-                          value: s['provincialFeatured'] == true,
-                          onChanged: (v) async {
-                            final id = s['id']?.toString() ?? '';
-                            final ok = await _service.setDestinationFeatured(
-                              spotId: id,
-                              featured: v,
-                            );
-                            if (ok && mounted) {
-                              setState(() => s['provincialFeatured'] = v);
-                            }
-                          },
-                        ),
-                      ),
-                    ],
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.tune_rounded,
+                    size: 18,
+                    color: GovernorDashboardTokens.primary,
                   ),
-              ],
-            ),
+                  const SizedBox(width: 8),
+                  Text('Filters', style: GovernorDashboardTokens.sectionTitle()),
+                  const Spacer(),
+                  if (filtersActive)
+                    TextButton.icon(
+                      onPressed: () => setState(() {
+                        _destCategory = 'All';
+                        _destMunicipality = 'All';
+                        _destSearch = '';
+                        _searchController.clear();
+                      }),
+                      icon: const Icon(Icons.filter_alt_off_outlined, size: 16),
+                      label: const Text('Clear'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: GovernorDashboardTokens.primaryDark,
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              LayoutBuilder(
+                builder: (context, c) {
+                  final pills = Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final cat in _categories)
+                        _categoryPill(
+                          cat,
+                          base.where((s) => inCategory(s, cat)).length,
+                        ),
+                    ],
+                  );
+                  final dropdown = DropdownButtonFormField<String>(
+                    key: ValueKey(_destMunicipality),
+                    initialValue: _destMunicipality,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      labelText: 'Municipality',
+                      isDense: true,
+                      filled: true,
+                      fillColor: GovernorDashboardTokens.background,
+                      prefixIcon: Icon(
+                        Icons.location_city_rounded,
+                        size: 18,
+                        color: GovernorDashboardTokens.primary,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide:
+                            BorderSide(color: GovernorDashboardTokens.border),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide:
+                            BorderSide(color: GovernorDashboardTokens.border),
+                      ),
+                    ),
+                    items: [
+                      for (final m in munis)
+                        DropdownMenuItem(value: m, child: Text(m)),
+                    ],
+                    onChanged: (v) =>
+                        setState(() => _destMunicipality = v ?? 'All'),
+                  );
+                  if (c.maxWidth < 760) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [pills, const SizedBox(height: 12), dropdown],
+                    );
+                  }
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Expanded(child: pills),
+                      const SizedBox(width: 12),
+                      SizedBox(width: 280, child: dropdown),
+                    ],
+                  );
+                },
+              ),
+            ],
           ),
+          padding: const EdgeInsets.all(14),
         ),
+        const SizedBox(height: 14),
         if (filtered.isEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 16),
-            child: Text('No destinations match filters.', style: GovernorDashboardTokens.body()),
-          ),
+          _panel(
+            _emptyMessage(
+              icon: Icons.travel_explore_rounded,
+              title: 'No destinations match',
+              message: 'Try another category or municipality.',
+            ),
+          )
+        else
+          _destinationsTable(filtered, visitsOf),
       ],
     );
   }
 
+  Widget _emptyMessage({
+    required IconData icon,
+    required String title,
+    required String message,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 20),
+      child: Column(
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: GovernorDashboardTokens.softOrange,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: GovernorDashboardTokens.primaryDark),
+          ),
+          const SizedBox(height: 10),
+          Text(title, style: GovernorDashboardTokens.sectionTitle()),
+          const SizedBox(height: 3),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: GovernorDashboardTokens.body(size: 12.5),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _destinationsTable(
+    List<Map<String, dynamic>> rows,
+    int Function(Map<String, dynamic>) visitsOf,
+  ) {
+    final maxVisits =
+        rows.map(visitsOf).fold<int>(0, (a, b) => a > b ? a : b).clamp(1, 1 << 30);
+    final headStyle = GovernorDashboardTokens.sectionTitle(
+      size: 11,
+      color: GovernorDashboardTokens.subtitle,
+    );
+
+    return _panel(
+      LayoutBuilder(
+        builder: (context, c) {
+          if (c.maxWidth < 760) {
+            return Column(
+              children: [
+                for (var i = 0; i < rows.length; i++) ...[
+                  if (i > 0) const SizedBox(height: 8),
+                  _destinationCard(rows[i], visitsOf(rows[i])),
+                ],
+              ],
+            );
+          }
+          Widget head(String t, int flex, {TextAlign align = TextAlign.left}) =>
+              Expanded(
+                flex: flex,
+                child: Text(t.toUpperCase(), textAlign: align, style: headStyle),
+              );
+          return Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: GovernorDashboardTokens.background,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    head('Destination', 10),
+                    head('Category', 4),
+                    head('Visits', 4),
+                    head('Status', 3),
+                    head('VR', 3),
+                    head('Featured', 3, align: TextAlign.center),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 4),
+              for (var i = 0; i < rows.length; i++)
+                _destinationRow(
+                  rows[i],
+                  visitsOf(rows[i]),
+                  maxVisits,
+                  striped: i.isOdd,
+                ),
+            ],
+          );
+        },
+      ),
+      padding: const EdgeInsets.all(12),
+    );
+  }
+
+  Widget _destinationAvatar(String category, {double size = 38}) {
+    final v = _categoryVisual(category);
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: v.color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(size * 0.3),
+      ),
+      child: Icon(v.icon, size: size * 0.5, color: v.color),
+    );
+  }
+
+  Widget _vrCell(Map<String, dynamic> s) {
+    if (!_spotHasVr(s)) {
+      return Text(
+        '—',
+        style: GovernorDashboardTokens.body(
+          size: 13,
+          color: GovernorDashboardTokens.subtitle,
+        ),
+      );
+    }
+    return _softChip(
+      label: '360° VR',
+      color: const Color(0xFF8B5CF6),
+      icon: Icons.vrpano_rounded,
+    );
+  }
+
+  Widget _featuredSwitch(Map<String, dynamic> s) {
+    final featured = s['provincialFeatured'] == true;
+    return Tooltip(
+      message: featured ? 'Featured on provincial home' : 'Feature this destination',
+      child: Transform.scale(
+        scale: 0.85,
+        child: Switch(
+          value: featured,
+          activeTrackColor: GovernorDashboardTokens.primary,
+          onChanged: (v) => _toggleFeatured(s, v),
+        ),
+      ),
+    );
+  }
+
+  Widget _destinationRow(
+    Map<String, dynamic> s,
+    int visits,
+    int maxVisits, {
+    required bool striped,
+  }) {
+    final name = s['name']?.toString() ?? '—';
+    final category = s['category']?.toString() ?? '';
+    final muni = ProvincialTourismService.municipalityNameOf(
+      ProvincialTourismService.municipalityIdOf(s),
+    );
+    final status = (s['status']?.toString().isNotEmpty == true)
+        ? s['status'].toString()
+        : 'active';
+    final v = _categoryVisual(category);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: striped ? GovernorDashboardTokens.background : Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 10,
+            child: Row(
+              children: [
+                _destinationAvatar(category),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: GovernorDashboardTokens.sectionTitle(size: 13.5),
+                      ),
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.location_on_outlined,
+                            size: 12,
+                            color: GovernorDashboardTokens.subtitle,
+                          ),
+                          const SizedBox(width: 3),
+                          Flexible(
+                            child: Text(
+                              muni,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GovernorDashboardTokens.body(size: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            flex: 4,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: category.isEmpty
+                  ? Text('—', style: GovernorDashboardTokens.body(size: 13))
+                  : _softChip(label: category, color: v.color),
+            ),
+          ),
+          Expanded(
+            flex: 4,
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 30,
+                  child: Text(
+                    '$visits',
+                    style: GovernorDashboardTokens.sectionTitle(size: 13.5),
+                  ),
+                ),
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(99),
+                    child: LinearProgressIndicator(
+                      value: visits / maxVisits,
+                      minHeight: 5,
+                      backgroundColor: GovernorDashboardTokens.mutedSurface,
+                      color: GovernorDashboardTokens.primary,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+              ],
+            ),
+          ),
+          Expanded(
+            flex: 3,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: _statusChip(status),
+            ),
+          ),
+          Expanded(
+            flex: 3,
+            child: Align(alignment: Alignment.centerLeft, child: _vrCell(s)),
+          ),
+          Expanded(
+            flex: 3,
+            child: Center(child: _featuredSwitch(s)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _destinationCard(Map<String, dynamic> s, int visits) {
+    final name = s['name']?.toString() ?? '—';
+    final category = s['category']?.toString() ?? '';
+    final muni = ProvincialTourismService.municipalityNameOf(
+      ProvincialTourismService.municipalityIdOf(s),
+    );
+    final status = (s['status']?.toString().isNotEmpty == true)
+        ? s['status'].toString()
+        : 'active';
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 12, 4, 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: GovernorDashboardTokens.border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _destinationAvatar(category, size: 42),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(name, style: GovernorDashboardTokens.sectionTitle(size: 14)),
+                const SizedBox(height: 2),
+                Text(muni, style: GovernorDashboardTokens.body(size: 12)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    if (category.isNotEmpty)
+                      _softChip(
+                        label: category,
+                        color: _categoryVisual(category).color,
+                      ),
+                    _statusChip(status),
+                    _softChip(
+                      label: '$visits visit${visits == 1 ? '' : 's'}',
+                      color: const Color(0xFF3B82F6),
+                      icon: Icons.qr_code_scanner_rounded,
+                    ),
+                    if (_spotHasVr(s)) _vrCell(s),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          _featuredSwitch(s),
+        ],
+      ),
+    );
+  }
+
   // ─── Municipality performance ────────────────────────────────
+  Widget _growthChip(ProvincialMunicipalityStats m, {bool onDark = false}) {
+    if (m.arrivals == 0 && m.previousArrivals == 0) {
+      return Text(
+        '—',
+        style: GovernorDashboardTokens.body(
+          size: 12,
+          color: onDark ? Colors.white70 : GovernorDashboardTokens.subtitle,
+        ),
+      );
+    }
+    final g = m.growthPercent;
+    final up = g >= 0;
+    final color = up ? const Color(0xFF16A34A) : GovernorDashboardTokens.danger;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: onDark ? Colors.white : color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(99),
+      ),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              up ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
+              size: 11,
+              color: color,
+            ),
+            const SizedBox(width: 2),
+            Text(
+              '${g.abs().toStringAsFixed(0)}%',
+              maxLines: 1,
+              softWrap: false,
+              style:
+                  GovernorDashboardTokens.sectionTitle(size: 10.5, color: color),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _gradientBar(double fraction, {double height = 6}) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(99),
+      child: Container(
+        height: height,
+        color: GovernorDashboardTokens.mutedSurface,
+        alignment: Alignment.centerLeft,
+        child: FractionallySizedBox(
+          widthFactor: fraction.clamp(0.0, 1.0),
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: GovernorDashboardTokens.primaryGradient,
+              borderRadius: BorderRadius.circular(99),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _rankBadge(int rank, {required bool hasData}) {
+    final medal = !hasData
+        ? null
+        : switch (rank) {
+            1 => const Color(0xFFF59E0B),
+            2 => const Color(0xFF94A3B8),
+            3 => const Color(0xFFB45309),
+            _ => null,
+          };
+    return Container(
+      width: 26,
+      height: 26,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: medal ?? GovernorDashboardTokens.mutedSurface,
+        shape: BoxShape.circle,
+      ),
+      child: Text(
+        '$rank',
+        style: GovernorDashboardTokens.sectionTitle(
+          size: 11.5,
+          color: medal != null ? Colors.white : GovernorDashboardTokens.subtitle,
+        ),
+      ),
+    );
+  }
+
+  Widget _perfRankRow(
+    int rank,
+    ProvincialMunicipalityStats m,
+    int maxArrivals, {
+    required bool selected,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => setState(() => _selectedMunicipalityId = m.id),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: selected
+                  ? GovernorDashboardTokens.softOrange.withValues(alpha: 0.7)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: selected
+                    ? GovernorDashboardTokens.primary.withValues(alpha: 0.45)
+                    : Colors.transparent,
+              ),
+            ),
+            child: Row(
+              children: [
+                _rankBadge(rank, hasData: m.arrivals > 0),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              m.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GovernorDashboardTokens.sectionTitle(
+                                size: 13,
+                              ),
+                            ),
+                          ),
+                          if (m.isUnderperforming) ...[
+                            Icon(
+                              Icons.flag_rounded,
+                              size: 13,
+                              color: GovernorDashboardTokens.danger
+                                  .withValues(alpha: 0.75),
+                            ),
+                            const SizedBox(width: 6),
+                          ],
+                          Text(
+                            '${m.arrivals}',
+                            style: GovernorDashboardTokens.sectionTitle(
+                              size: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 5),
+                      _gradientBar(m.arrivals / maxArrivals),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 64,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: _growthChip(m),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildPerformanceTab() {
+    final stats = _muniStats;
     ProvincialMunicipalityStats? selected;
-    for (final m in _muniStats) {
+    for (final m in stats) {
       if (m.id == _selectedMunicipalityId) {
         selected = m;
         break;
       }
     }
-    selected ??= _muniStats.isNotEmpty ? _muniStats.first : null;
+    selected ??= stats.isNotEmpty ? stats.first : null;
+
+    final totalArrivals = stats.fold<int>(0, (a, m) => a + m.arrivals);
+    final activeLgus = stats.where((m) => m.arrivals > 0).length;
+    final flagged = stats.where((m) => m.isUnderperforming).length;
+    ProvincialMunicipalityStats? leader;
+    for (final m in stats) {
+      if (m.arrivals > 0 && (leader == null || m.arrivals > leader.arrivals)) {
+        leader = m;
+      }
+    }
+    final maxArrivals = (leader?.arrivals ?? 0).clamp(1, 1 << 30);
+
+    final ranking = _panel(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.leaderboard_rounded,
+                size: 18,
+                color: GovernorDashboardTokens.primary,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'LGU ranking by arrivals',
+                  style: GovernorDashboardTokens.sectionTitle(),
+                ),
+              ),
+              Text(
+                '${stats.length} LGUs',
+                style: GovernorDashboardTokens.body(size: 12),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Tap an LGU to view its details.',
+            style: GovernorDashboardTokens.body(size: 12),
+          ),
+          const SizedBox(height: 12),
+          if (stats.isEmpty)
+            _emptyMessage(
+              icon: Icons.location_city_rounded,
+              title: 'No LGU data yet',
+              message: 'Arrivals appear once QR check-ins come in.',
+            )
+          else
+            for (var i = 0; i < stats.length; i++)
+              _perfRankRow(
+                i + 1,
+                stats[i],
+                maxArrivals,
+                selected: stats[i].id == selected?.id,
+              ),
+        ],
+      ),
+    );
+
+    final detail = selected == null
+        ? _panel(
+            _emptyMessage(
+              icon: Icons.touch_app_rounded,
+              title: 'Select an LGU',
+              message: 'Pick a municipality from the ranking.',
+            ),
+          )
+        : _panel(_municipalityDetail(selected), padding: const EdgeInsets.all(14));
 
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
       children: [
-        Row(
+        _tabHeader(
+          icon: Icons.location_city_rounded,
+          title: 'Municipality Performance',
+          subtitle: 'Arrivals ranking and health of each LGU · $_selectedTimeFilter',
+          trailing: _timeFilters(),
+        ),
+        const SizedBox(height: 16),
+        _kpiGrid(
           children: [
-            Expanded(
-              child: Text('Municipality Performance',
-                  style: GovernorDashboardTokens.heading(size: 20)),
+            _simpleKpi(
+              title: 'Total arrivals',
+              value: '$totalArrivals',
+              icon: Icons.groups_rounded,
+              accent: GovernorDashboardTokens.primary,
+              subtitle: 'QR check-ins · $_selectedTimeFilter',
             ),
-            _timeFilters(),
+            _simpleKpi(
+              title: 'LGUs with arrivals',
+              value: '$activeLgus / ${stats.length}',
+              icon: Icons.location_city_rounded,
+              accent: const Color(0xFF22C55E),
+            ),
+            _simpleKpi(
+              title: 'Top LGU',
+              value: leader?.name ?? '—',
+              icon: Icons.emoji_events_rounded,
+              accent: const Color(0xFFF59E0B),
+              subtitle: leader == null
+                  ? 'No arrivals yet'
+                  : '${leader.arrivals} arrivals',
+            ),
+            _simpleKpi(
+              title: 'Flagged LGUs',
+              value: '$flagged',
+              icon: Icons.flag_rounded,
+              accent: GovernorDashboardTokens.danger,
+              subtitle: 'Zero activity or down ≥25%',
+            ),
           ],
         ),
-        const SizedBox(height: 12),
-        _panel(
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        const SizedBox(height: 14),
+        LayoutBuilder(
+          builder: (context, c) {
+            if (c.maxWidth < 1000) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [ranking, const SizedBox(height: 14), detail],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(flex: 5, child: ranking),
+                const SizedBox(width: 14),
+                Expanded(flex: 6, child: detail),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _metricTile({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color accent,
+    Widget? footer,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: GovernorDashboardTokens.background,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: GovernorDashboardTokens.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Text('LGU ranking by arrivals',
-                  style: GovernorDashboardTokens.sectionTitle()),
-              const SizedBox(height: 10),
-              _rankColumn([
-                for (final m in _muniStats.take(12))
-                  (name: m.name, count: m.arrivals),
-              ]),
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, size: 16, color: accent),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GovernorDashboardTokens.body(size: 12),
+                ),
+              ),
             ],
           ),
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: [
-            for (final m in _muniStats.take(12))
-              ActionChip(
-                label: Text(m.name),
-                onPressed: () =>
-                    setState(() => _selectedMunicipalityId = m.id),
-              ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        if (selected == null)
-          _panel(Text('Select an LGU.', style: GovernorDashboardTokens.body()))
-        else
-          _panel(_municipalityDetail(selected)),
-      ],
+          const SizedBox(height: 8),
+          Text(value, style: GovernorDashboardTokens.number(size: 22)),
+          if (footer != null) ...[const SizedBox(height: 6), footer],
+        ],
+      ),
     );
   }
 
@@ -1202,48 +2129,257 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
           .toList(),
       limit: 5,
     );
+    final growth = m.growthPercent;
+    final growthColor = m.arrivals == 0 && m.previousArrivals == 0
+        ? GovernorDashboardTokens.subtitle
+        : growth >= 0
+            ? const Color(0xFF16A34A)
+            : GovernorDashboardTokens.danger;
+    final spotRatio = m.spotCount == 0 ? 0.0 : m.activeSpotCount / m.spotCount;
+    final topMax = tops.isEmpty
+        ? 1
+        : tops.map((t) => t.count).reduce((a, b) => a > b ? a : b).clamp(1, 1 << 30);
+
+    final (statusLabel, statusIcon, statusColor) = m.isUnderperforming
+        ? (
+            m.hasZeroActivity
+                ? 'Zero activity'
+                : 'Down ${growth.abs().toStringAsFixed(0)}%',
+            Icons.flag_rounded,
+            GovernorDashboardTokens.danger,
+          )
+        : ('Healthy', Icons.check_circle_rounded, const Color(0xFF16A34A));
+
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(m.name, style: GovernorDashboardTokens.heading(size: 18)),
-        const SizedBox(height: 8),
-        if (m.isUnderperforming)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFEE2E2),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Text(
-              m.hasZeroActivity
-                  ? 'Flagged: zero activity this period'
-                  : 'Flagged: arrivals down ${m.growthPercent.abs().toStringAsFixed(0)}%',
-              style: GovernorDashboardTokens.sectionTitle(
-                size: 12,
-                color: GovernorDashboardTokens.danger,
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: GovernorDashboardTokens.primaryGradient,
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.35)),
+                ),
+                child: const Icon(
+                  Icons.location_city_rounded,
+                  color: Colors.white,
+                ),
               ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      m.name,
+                      style: GovernorDashboardTokens.heading(
+                        size: 18,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Misamis Occidental · $_selectedTimeFilter',
+                      style: GovernorDashboardTokens.body(
+                        size: 12,
+                        color: Colors.white.withValues(alpha: 0.9),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.fromLTRB(8, 4, 10, 4),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(99),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(statusIcon, size: 13, color: statusColor),
+                    const SizedBox(width: 4),
+                    Text(
+                      statusLabel,
+                      style: GovernorDashboardTokens.sectionTitle(
+                        size: 11.5,
+                        color: statusColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (m.isUnderperforming) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFEF2F2),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFFECACA)),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.warning_amber_rounded,
+                  size: 18,
+                  color: GovernorDashboardTokens.danger,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    m.hasZeroActivity
+                        ? 'No QR check-ins recorded for ${m.name} this period.'
+                        : 'Arrivals are down ${growth.abs().toStringAsFixed(0)}% vs the prior period.',
+                    style: GovernorDashboardTokens.body(
+                      size: 12.5,
+                      color: const Color(0xFF991B1B),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
+        ],
         const SizedBox(height: 12),
-        Text('Arrivals: ${m.arrivals}', style: GovernorDashboardTokens.body()),
-        Text(
-          'Growth vs prior: ${m.growthPercent.toStringAsFixed(1)}%',
-          style: GovernorDashboardTokens.body(),
+        LayoutBuilder(
+          builder: (context, c) {
+            final cols = c.maxWidth >= 620 ? 4 : 2;
+            const gap = 10.0;
+            final w = (c.maxWidth - gap * (cols - 1)) / cols;
+            return Wrap(
+              spacing: gap,
+              runSpacing: gap,
+              children: [
+                SizedBox(
+                  width: w,
+                  child: _metricTile(
+                    icon: Icons.groups_rounded,
+                    label: 'Arrivals',
+                    value: '${m.arrivals}',
+                    accent: GovernorDashboardTokens.primary,
+                  ),
+                ),
+                SizedBox(
+                  width: w,
+                  child: _metricTile(
+                    icon: growth >= 0
+                        ? Icons.trending_up_rounded
+                        : Icons.trending_down_rounded,
+                    label: 'Growth vs prior',
+                    value:
+                        '${growth > 0 ? '+' : ''}${growth.toStringAsFixed(1)}%',
+                    accent: growthColor,
+                  ),
+                ),
+                SizedBox(
+                  width: w,
+                  child: _metricTile(
+                    icon: Icons.place_rounded,
+                    label: 'Active spots',
+                    value: '${m.activeSpotCount}/${m.spotCount}',
+                    accent: const Color(0xFF3B82F6),
+                    footer: _gradientBar(spotRatio, height: 4),
+                  ),
+                ),
+                SizedBox(
+                  width: w,
+                  child: _metricTile(
+                    icon: Icons.person_rounded,
+                    label: 'Unique visitors',
+                    value: '${m.uniqueVisitors}',
+                    accent: const Color(0xFF8B5CF6),
+                  ),
+                ),
+              ],
+            );
+          },
         ),
-        Text(
-          'Spots: ${m.activeSpotCount}/${m.spotCount} active',
-          style: GovernorDashboardTokens.body(),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const Icon(Icons.star_rounded, size: 18, color: Color(0xFFF59E0B)),
+            const SizedBox(width: 6),
+            Text('Top spots', style: GovernorDashboardTokens.sectionTitle()),
+          ],
         ),
-        Text(
-          'Unique visitors: ${m.uniqueVisitors}',
-          style: GovernorDashboardTokens.body(),
-        ),
-        const SizedBox(height: 12),
-        Text('Top spots', style: GovernorDashboardTokens.sectionTitle()),
         const SizedBox(height: 8),
-        _rankColumn([
-          for (final t in tops) (name: t.name, count: t.count),
-        ]),
+        if (tops.isEmpty)
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
+            decoration: BoxDecoration(
+              color: GovernorDashboardTokens.background,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: GovernorDashboardTokens.border),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.qr_code_scanner_rounded,
+                  size: 18,
+                  color: GovernorDashboardTokens.subtitle,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'No check-ins yet for this period',
+                  style: GovernorDashboardTokens.body(size: 12.5),
+                ),
+              ],
+            ),
+          )
+        else
+          for (var i = 0; i < tops.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  _rankBadge(i + 1, hasData: tops[i].count > 0),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                tops[i].name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: GovernorDashboardTokens.sectionTitle(
+                                  size: 12.5,
+                                ),
+                              ),
+                            ),
+                            Text(
+                              '${tops[i].count}',
+                              style: GovernorDashboardTokens.sectionTitle(
+                                size: 12.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        _gradientBar(tops[i].count / topMax, height: 5),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
       ],
     );
   }
@@ -1777,12 +2913,12 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
               '${formatReportDate(_reportStart)} – ${formatReportDate(_reportEnd)}',
               content:
               '=== DOT ACCOMMODATION ESTABLISHMENT DATA ===\n\n'
-              'Use the Establishments tab to approve AEs, then confirm stays on the\n'
-              'establishment dashboard. LGU/Analytics DAE forms fill from confirmed stays.\n\n'
+              'Use the Establishments tab to approve AEs and track their monthly DOT\n'
+              'registers (DAE-1B). LGU/Analytics DAE forms fill from those registers.\n\n'
               'Scope: ${_reportMunicipality == 'All' ? 'Province-wide' : _reportMunicipality}\n'
               'Period: ${formatReportDate(_reportStart)} to ${formatReportDate(_reportEnd)}\n\n'
               'Open Analytics → DAE-3 / DAE 3B.2 on an LGU dashboard (or use the catalogue)\n'
-              'for filled preview + Excel/PDF once stays are confirmed.',
+              'for filled preview + Excel/PDF once hotels fill their registers.',
         );
         return;
       }

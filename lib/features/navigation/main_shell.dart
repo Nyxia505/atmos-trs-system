@@ -8,6 +8,7 @@ import 'package:atmos_trs_system/config/app_theme_controller.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/services/announcement_notification_sync.dart';
 import 'package:atmos_trs_system/services/faq_chat_store.dart';
+import 'package:atmos_trs_system/services/nearby_spot_service.dart';
 import 'package:atmos_trs_system/config/user_profile_storage.dart';
 import 'package:atmos_trs_system/services/welcome_notification_service.dart';
 import 'package:atmos_trs_system/services/notification_badge_notifier.dart';
@@ -42,6 +43,15 @@ class MainShell extends StatefulWidget {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (state.mounted) TouristTutorial.start(state.context, state._tourKeys);
     });
+  }
+
+  /// Switches the top-most shell to the Home tab (e.g. after a flow pushed
+  /// from the Scan tab pops back to the shell).
+  static void showHome() {
+    final shells = _MainShellState._mounted;
+    if (shells.isEmpty) return;
+    final state = shells.last;
+    if (state.mounted) state._onNavTap(0);
   }
 
   @override
@@ -84,6 +94,12 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       );
     }
     _badge.refresh(userId: uid);
+    Future<void>.delayed(const Duration(seconds: 2), () {
+      if (mounted && _currentIndex != 3) unawaited(AlertsTabPage.prefetch());
+    });
+    Future<void>.delayed(const Duration(seconds: 3), () {
+      if (mounted) unawaited(NearbySpotService.checkNow());
+    });
     _mounted.add(this);
     final hadPendingEvent = PendingEventOpen.eventId?.isNotEmpty ?? false;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -102,6 +118,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted) {
       PendingEventOpen.consumeIfAny(context);
+      unawaited(NearbySpotService.checkNow());
     }
   }
 

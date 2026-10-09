@@ -1,6 +1,5 @@
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/atmos_brand_typography.dart';
-import 'package:atmos_trs_system/services/pending_establishment_stay_storage.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/qr_welcome_destination_context.dart';
@@ -8,6 +7,7 @@ import 'package:atmos_trs_system/widgets/atmos_brand_logo.dart';
 import 'package:atmos_trs_system/widgets/party_demographic_fields.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 /// Welcome shown after a new visitor scans an LGU or spot QR without an account.
@@ -94,20 +94,16 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
       filipinoCount: demo.filipinoCount,
       foreignCount: demo.foreignCount,
     );
-    await PendingEstablishmentStayStorage.setPartyDemographics(
-      partySize: demo.partySize,
-      femaleCount: demo.femaleCount,
-      maleCount: demo.maleCount,
-      filipinoCount: demo.filipinoCount,
-      foreignCount: demo.foreignCount,
-    );
     return true;
   }
 
   Future<void> _loadContext() async {
     if (FirebaseAuth.instance.currentUser != null) {
       if (mounted) {
-        Navigator.pushReplacementNamed(context, '/landing');
+        Navigator.pushReplacementNamed(
+          context,
+          kIsWeb ? '/landing' : '/qr-resume',
+        );
       }
       return;
     }
@@ -118,7 +114,7 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
     if (!mounted) return;
 
     if (destination == null) {
-      Navigator.pushReplacementNamed(context, '/landing');
+      Navigator.pushReplacementNamed(context, kIsWeb ? '/landing' : '/login');
       return;
     }
 
@@ -189,16 +185,20 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
                           ),
                           const SizedBox(height: 4),
                           _buildPartySizeCard(),
-                          const SizedBox(height: 24),
-                          _buildSectionTitle('Explore Before You Register'),
-                          const SizedBox(height: 12),
-                          _buildExploreGrid(),
+                          if (kIsWeb) ...[
+                            const SizedBox(height: 24),
+                            _buildSectionTitle('Explore Before You Register'),
+                            const SizedBox(height: 12),
+                            _buildExploreGrid(),
+                          ],
                           const SizedBox(height: 28),
                           _buildBenefitsCard(),
                           const SizedBox(height: 28),
                           _buildPrimaryCta(),
-                          const SizedBox(height: 12),
-                          _buildGuestButton(),
+                          if (kIsWeb) ...[
+                            const SizedBox(height: 12),
+                            _buildGuestButton(),
+                          ],
                           const SizedBox(height: 8),
                           _buildSignInLink(),
                         ],
@@ -520,10 +520,12 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
   }
 
   Widget _buildBenefitsCard() {
-    const benefits = [
+    final benefits = [
       'Faster QR check-ins at destinations',
       'Digital Tourist ID',
-      'After signup: VR Tour, Trip Planner, or continue on the website / in the app',
+      kIsWeb
+          ? 'After signup: VR Tour, Trip Planner, or continue on the website / in the app'
+          : 'After signup: VR Tour, Trip Planner and Laag with Friends',
       'Save your travel history',
       'Receive tourism announcements and updates',
     ];
@@ -626,8 +628,11 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
         ),
         const SizedBox(height: 10),
         Text(
-          'Register to check in, then choose VR Tour or Trip Planner — '
-          'continue on the website or get the ATMOS app for VR on your phone.',
+          kIsWeb
+              ? 'Register to check in, then choose VR Tour or Trip Planner — '
+                  'continue on the website or get the ATMOS app for VR on your phone.'
+              : 'Register or sign in to finish your check-in, then open '
+                  'VR Tour or Trip Planner right here in the app.',
           textAlign: TextAlign.center,
           style: TextStyle(
             color: _mutedText.withValues(alpha: 0.95),

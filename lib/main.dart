@@ -26,7 +26,9 @@ import 'package:atmos_trs_system/features/navigation/main_shell.dart';
 import 'package:atmos_trs_system/screens/municipality_map_and_spots_screen.dart';
 import 'package:atmos_trs_system/firebase_options.dart';
 import 'package:atmos_trs_system/utils/firebase_client_blocked_message.dart';
+import 'package:atmos_trs_system/navigation/auth_navigation.dart';
 import 'package:atmos_trs_system/navigation/root_navigator.dart';
+import 'package:atmos_trs_system/services/password_reset_service.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
 import 'package:atmos_trs_system/services/qr_launch_bootstrap.dart';
 import 'package:atmos_trs_system/services/camera_qr_deep_link_service.dart';
@@ -36,6 +38,9 @@ import 'package:atmos_trs_system/screens/qr_pending_resume_screen.dart';
 import 'package:atmos_trs_system/screens/mobile_onboarding_screen.dart';
 
 export 'package:atmos_trs_system/navigation/root_navigator.dart' show rootNavigatorKey;
+
+/// Web launches from a Firebase reset email open straight on the reset form.
+const String _passwordResetRoute = '/forgot-password';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -111,7 +116,10 @@ void main() async {
   await AppThemeController.instance.load();
   await preloadAtmosBrandFonts();
 
-  final initialRoute = await StartupRouteResolver.resolveQuickInitialRoute();
+  final initialRoute =
+      PasswordResetService.emailResetOobCodeFromLaunchUrl() != null
+          ? _passwordResetRoute
+          : await StartupRouteResolver.resolveQuickInitialRoute();
 
   runApp(MyApp(initialRoute: initialRoute));
 }
@@ -136,6 +144,7 @@ class _MyAppState extends State<MyApp> {
       // Register device for announcement pop-ups for all logged-in roles.
       unawaited(registerTouristPushNotifications());
     }
+    if (widget.initialRoute == _passwordResetRoute) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(
         StartupRouteResolver.refineAndNavigateIfNeeded(
@@ -179,21 +188,12 @@ class _MyAppState extends State<MyApp> {
             },
             routes: {
           '/': (context) => kIsWeb ? const LandingPage() : const LoginScreen(),
-          '/landing': (context) => const LandingPage(),
+          // Website landing is web-only; the installed app shows sign-in.
+          '/landing': (context) =>
+              kIsWeb ? const LandingPage() : const LoginScreen(),
           '/qr-welcome': (context) => const QrScanWelcomeScreen(),
           '/qr-resume': (context) => const QrPendingResumeScreen(),
           '/mobile-onboarding': (context) => const MobileOnboardingScreen(),
-          '/login': (context) => const LoginScreen(),
-          '/forgot-password': (context) {
-            final email = ModalRoute.of(context)?.settings.arguments as String?;
-            return ForgotPasswordScreen(initialEmail: email);
-          },
-          '/signup': (context) => const SignupAccountTypeScreen(),
-          '/signup-tourist': (context) => const SignupScreen(),
-          '/signup-lgu': (context) => const LguSignupScreen(),
-          '/signup-lgu-info': (context) => const LguSignupScreen(),
-          '/signup-establishment': (context) =>
-              const EstablishmentSignupScreen(),
           '/verify-otp': (context) => const VerifyOtpScreen(),
           '/establishment-dashboard': (context) =>
               const EstablishmentDashboardScreen(),
@@ -217,6 +217,28 @@ class _MyAppState extends State<MyApp> {
           '/tourism-dashboard': (context) => const LguDashboard(),
           '/provincial-tourism-dashboard': (context) =>
               const ProvincialTourismDashboard(),
+            },
+            onGenerateRoute: (settings) {
+              final WidgetBuilder? builder = switch (settings.name) {
+                '/login' => (_) => const LoginScreen(),
+                '/forgot-password' => (_) => ForgotPasswordScreen(
+                      initialEmail: settings.arguments as String?,
+                    ),
+                '/signup' => (_) => const SignupAccountTypeScreen(),
+                '/signup-tourist' => (_) => const SignupScreen(),
+                '/signup-lgu' ||
+                '/signup-lgu-info' =>
+                  (_) => const LguSignupScreen(),
+                '/signup-establishment' => (_) =>
+                    const EstablishmentSignupScreen(),
+                _ => null,
+              };
+              if (builder == null) return null;
+              return authFadeRoute<dynamic>(
+                name: settings.name!,
+                arguments: settings.arguments,
+                builder: builder,
+              );
             },
           ),
         );

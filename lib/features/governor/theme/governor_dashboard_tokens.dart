@@ -15,17 +15,30 @@ abstract final class GovernorDashboardTokens {
   static const Color subtitle = Color(0xFF6B7280);
   static const Color mutedSurface = Color(0xFFF1F5F9);
   static const Color softOrange = Color(0xFFFFEDD5);
-  /// Outer sidebar frame fallback (solid). Prefer [headerGradient].
+  /// Outer sidebar frame fallback (solid). Prefer [sidebarGradient].
   static const Color sidebarFrame = Color(0xFFF97316);
 
-  /// Shared orange gradient used by dashboard header + sidebar outer frame.
+  /// Dashboard header: runs left → right so its left edge starts on the same
+  /// light orange as the top of [sidebarGradient] (no seam where they meet).
   static const LinearGradient headerGradient = LinearGradient(
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
     colors: [
       Color(0xFFFB923C), // lighter orange
       Color(0xFFF97316), // primary
       Color(0xFFEA580C), // primary dark
+    ],
+    stops: [0.0, 0.55, 1.0],
+  );
+
+  /// Sidebar outer frame: runs top → bottom, same stops as [headerGradient].
+  static const LinearGradient sidebarGradient = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [
+      Color(0xFFFB923C),
+      Color(0xFFF97316),
+      Color(0xFFEA580C),
     ],
     stops: [0.0, 0.55, 1.0],
   );

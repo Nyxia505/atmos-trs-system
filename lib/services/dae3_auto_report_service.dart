@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:atmos_trs_system/config/supabase_report_templates_config.dart';
 import 'package:atmos_trs_system/services/lgu_checkin_report_query.dart';
+import 'package:atmos_trs_system/utils/ae_register_report_query.dart';
 import 'package:atmos_trs_system/utils/dae3_aggregates.dart';
 import 'package:atmos_trs_system/utils/dot_report_export_service.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
@@ -86,7 +87,7 @@ class Dae3DraftMeta {
 
 /// Debounced current-month DAE-3 draft updater for LGU dashboards.
 ///
-/// Check-ins auto-count toward DAE-3; Excel bytes are generated on download from
+/// Hotel DOT registers (else QR check-ins as proxy) count toward DAE-3; Excel bytes are generated on download from
 /// the official Supabase `DAE-3 FORM.xlsx` template + live month data.
 class Dae3AutoReportService {
   Dae3AutoReportService._();
@@ -196,12 +197,14 @@ class Dae3AutoReportService {
       byId.putIfAbsent(id, () => c);
     }
 
+    final register = await _monthRegister(mid, start, end);
     if (gen != _refreshGeneration) return draftMeta.value;
 
-    final rows = aggregateDae3FromCheckIns(
+    final rows = aggregateDae3PreferringRegister(
+      reports: register.reports,
       checkIns: byId.values.toList(),
       scopeLabel: scopeLabel,
-      parseTimestamp: parseTimestamp,
+      parseCheckInTimestamp: parseTimestamp,
     );
     final monthRows = rows
         .where((r) => r.year == now.year && r.month == now.month)
@@ -220,8 +223,8 @@ class Dae3AutoReportService {
       lastCheckInId: newestCheckInId,
       summary:
           'DAE-3 $scopeSlug ${now.year}-${now.month.toString().padLeft(2, '0')}: '
-          '$checkInCount check-ins → ${monthRows.length} AE rows '
-          '($guests guests). Template: ${DotReportType.dae3FormA.objectFilename}',
+          '${register.isNotEmpty ? '${register.reports.length} hotel register(s)' : '$checkInCount check-ins (proxy)'} '
+          '→ ${monthRows.length} AE rows ($guests guests). Template: ${DotReportType.dae3FormA.objectFilename}',
     );
 
     draftMeta.value = meta;
@@ -272,6 +275,7 @@ class Dae3AutoReportService {
         if ((c['id']?.toString() ?? '').isNotEmpty) c['id'].toString(): c,
     };
 
+    final register = await _monthRegister(mid, start, end);
     final owns = exportService == null;
     final service = exportService ?? DotReportExportService();
     try {
@@ -285,12 +289,14 @@ class Dae3AutoReportService {
         scopeLabel: scopeLabel,
         scopeSlug: scopeSlug.isEmpty ? mid : scopeSlug,
         parseTimestamp: parseTimestamp,
+        aeRegister: register,
       );
 
-      final rows = aggregateDae3FromCheckIns(
+      final rows = aggregateDae3PreferringRegister(
+        reports: register.reports,
         checkIns: byId.values.toList(),
         scopeLabel: scopeLabel,
-        parseTimestamp: parseTimestamp,
+        parseCheckInTimestamp: parseTimestamp,
       );
       final monthRows =
           rows.where((r) => r.year == now.year && r.month == now.month);
@@ -311,6 +317,15 @@ class Dae3AutoReportService {
       return result;
     } finally {
       if (owns) service.dispose();
+    }
+  }
+
+  Future<AeRegisterReportData> _monthRegister(String mid, DateTime start, DateTime end) async {
+    try {
+      return await fetchAeRegisterReportData(startDate: start, endDate: end, municipalityId: mid);
+    } catch (e) {
+      debugPrint('[Dae3AutoReport] AE registers: $e');
+      return AeRegisterReportData.empty;
     }
   }
 

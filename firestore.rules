@@ -184,10 +184,68 @@ service cloud.firestore {
       allow delete: if isLguStaff();
     }
 
+    /// "Laag with Friends": a group check-in must come from the group's leader
+    /// while the group is unexpired, and list only real group members.
+    function isValidGroupCheckIn() {
+      let data = request.resource.data;
+      return !('groupId' in data)
+        || (
+          exists(/databases/$(database)/documents/tourist_groups/$(data.groupId))
+          && get(/databases/$(database)/documents/tourist_groups/$(data.groupId)).data.leaderUid == request.auth.uid
+          && get(/databases/$(database)/documents/tourist_groups/$(data.groupId)).data.expiresAt > request.time
+          && get(/databases/$(database)/documents/tourist_groups/$(data.groupId)).data.memberUids
+               .hasAll(data.get('groupMemberUids', []))
+        );
+    }
+
+    match /tourist_groups/{groupId} {
+      allow get: if isSignedIn();
+      // Join-by-code lookup only (small result sets).
+      allow list: if isSignedIn() && request.query.limit <= 5;
+      allow create: if isSignedIn()
+        && request.resource.data.leaderUid == request.auth.uid
+        && request.resource.data.memberUids == [request.auth.uid]
+        && request.resource.data.members.keys().hasOnly([request.auth.uid])
+        && request.resource.data.status == 'active'
+        && request.resource.data.joinCode is string
+        && request.resource.data.joinCode.size() == 6
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt <= request.time + duration.value(13, 'h');
+      // Leader manages the group; cannot hand off, extend, or change the code.
+      allow update: if isSignedIn()
+        && resource.data.leaderUid == request.auth.uid
+        && request.resource.data.leaderUid == resource.data.leaderUid
+        && request.resource.data.joinCode == resource.data.joinCode
+        && request.resource.data.expiresAt == resource.data.expiresAt
+        && request.resource.data.memberUids.hasAll([request.auth.uid])
+        && request.resource.data.memberUids.size() <= 30;
+      // Other tourists may only add or remove themselves.
+      allow update: if isSignedIn()
+        && resource.data.leaderUid != request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['memberUids', 'members'])
+        && request.resource.data.memberUids.toSet()
+             .difference(resource.data.memberUids.toSet())
+             .union(resource.data.memberUids.toSet()
+               .difference(request.resource.data.memberUids.toSet()))
+             .hasOnly([request.auth.uid])
+        && request.resource.data.members.diff(resource.data.members)
+             .affectedKeys().hasOnly([request.auth.uid])
+        && (
+          !request.resource.data.memberUids.hasAll([request.auth.uid])
+          || (
+            resource.data.status == 'active'
+            && resource.data.expiresAt > request.time
+            && request.resource.data.memberUids.size() <= 30
+          )
+        );
+      allow delete: if isSignedIn() && resource.data.leaderUid == request.auth.uid;
+    }
+
     match /qr_checkins/{docId} {
       // Signed-in read: LGU dashboards + tourists viewing own history (client filters by municipality).
       allow get, list: if isSignedIn();
-      allow create: if isQrCheckInOwner() || isLguStaff();
+      allow create: if (isQrCheckInOwner() && isValidGroupCheckIn()) || isLguStaff();
       allow update: if isSignedIn()
                     && (resource.data.get('tourist_id', '') == request.auth.uid
                         || isLguStaff());
@@ -306,60 +364,123 @@ service cloud.firestore {
       allow delete: if isLguStaff();
     }
 
-    /// Hotel / AE stay requests: tourist scan → staff confirm → checkout → receipt.
-    /// DOT/DAE counts status == 'confirmed' or 'checked_out'.
-    match /establishment_stay_requests/{stayId} {
-      allow get: if isSignedIn()
-        && (
-          resource.data.touristId == request.auth.uid
-          || resource.data.establishmentId == request.auth.uid
-          || isLguStaff()
-        );
-      // List may run before web Auth token attaches; desk/history still filter client-side.
-      allow list: if true;
-      // Keep create checks minimal — FieldValue / extra keys must not fail the write.
-      allow create: if request.auth != null
-        && request.resource.data.touristId == request.auth.uid
-        && request.resource.data.status == 'pending'
-        && request.resource.data.establishmentId is string
-        && request.resource.data.establishmentId.size() > 0;
-      allow update: if isSignedIn()
-        && (
-          resource.data.establishmentId == request.auth.uid
-          || isLguStaff()
-          || (
-            resource.data.touristId == request.auth.uid
-            && resource.data.status == 'confirmed'
-            && request.resource.data.status == 'checked_out'
-            && request.resource.data.touristId == resource.data.touristId
-            && request.resource.data.establishmentId == resource.data.establishmentId
-          )
-        );
-      allow delete: if isLguStaff()
-        || (
-          isSignedIn()
-          && resource.data.establishmentId == request.auth.uid
-        );
+    /// Hotel DOT register (DAE-1B): `ae_monthly_reports/{aeId}_{yyyy}_{mm}` + `rows`.
+    /// The hotel (aeId == auth uid) owns its months; LGU reads its municipality,
+    /// OPTACA / Governor read province-wide. Staff may write demo-seeded data only.
+    function ownsAeReport(reportId) {
+      return isSignedIn()
+        && reportId.matches('^' + request.auth.uid + '_[0-9]{4}_[0-9]{2}$');
     }
 
-    /// Guest reviews after establishment stay checkout.
-    match /establishment_stay_reviews/{reviewId} {
-      allow read: if true;
+    function registerInLguMunicipality(data) {
+      return isLguTourismFromUserDoc()
+        && data.get('municipalityId', '') == lguMunicipalityId();
+    }
+
+    match /ae_monthly_reports/{reportId} {
+      // get: path-based ownership so a hotel can read a month that does not
+      // exist yet (resource == null) before creating it.
+      allow get: if ownsAeReport(reportId)
+        || isProvincialStaff()
+        || (resource != null && registerInLguMunicipality(resource.data));
+      allow list: if isSignedIn()
+        && (
+          resource.data.get('aeId', '') == request.auth.uid
+          || isProvincialStaff()
+          || registerInLguMunicipality(resource.data)
+        );
+      allow create: if (ownsAeReport(reportId)
+          && request.resource.data.get('aeId', '') == request.auth.uid)
+        || (isLguStaff() && request.resource.data.get('seed', '') == 'demo');
+      allow update: if (ownsAeReport(reportId)
+          && request.resource.data.get('aeId', '') == request.auth.uid)
+        || (isLguStaff()
+          && (resource.data.get('seed', '') == 'demo'
+            || request.resource.data.get('seed', '') == 'demo'));
+      allow delete: if ownsAeReport(reportId) || isLguStaff();
+
+      match /rows/{rowId} {
+        allow read: if ownsAeReport(reportId) || isLguStaff();
+        allow create, update: if ownsAeReport(reportId)
+          || (isLguStaff() && request.resource.data.get('seed', '') == 'demo');
+        allow delete: if ownsAeReport(reportId) || isLguStaff();
+      }
+    }
+
+    /// Venue MICE log (CUS MICE): `mice_monthly_reports/{aeId}_{yyyy}_{mm}` + `events`.
+    /// Same ownership / visibility model as the DAE-1B register above.
+    match /mice_monthly_reports/{reportId} {
+      allow get: if ownsAeReport(reportId)
+        || isProvincialStaff()
+        || (resource != null && registerInLguMunicipality(resource.data));
+      allow list: if isSignedIn()
+        && (
+          resource.data.get('aeId', '') == request.auth.uid
+          || isProvincialStaff()
+          || registerInLguMunicipality(resource.data)
+        );
+      allow create: if (ownsAeReport(reportId)
+          && request.resource.data.get('aeId', '') == request.auth.uid)
+        || (isLguStaff() && request.resource.data.get('seed', '') == 'demo');
+      allow update: if (ownsAeReport(reportId)
+          && request.resource.data.get('aeId', '') == request.auth.uid)
+        || (isLguStaff()
+          && (resource.data.get('seed', '') == 'demo'
+            || request.resource.data.get('seed', '') == 'demo'));
+      allow delete: if ownsAeReport(reportId) || isLguStaff();
+
+      match /events/{eventId} {
+        allow read: if ownsAeReport(reportId) || isLguStaff();
+        allow create, update: if ownsAeReport(reportId)
+          || (isLguStaff() && request.resource.data.get('seed', '') == 'demo');
+        allow delete: if ownsAeReport(reportId) || isLguStaff();
+      }
+    }
+
+    /// Venue's custom MICE event types (suggestion list).
+    match /mice_venue_settings/{aeId} {
+      allow read: if isSignedIn() && (request.auth.uid == aeId || isLguStaff());
+      allow write: if isSignedIn() && request.auth.uid == aeId;
+    }
+
+    /// Sign-offs (name + position + fresh signature) on every major save.
+    /// Append-only evidence: nobody can edit or delete a record.
+    match /signoffs/{signOffId} {
+      allow read: if isSignedIn()
+        && (
+          resource.data.get('ownerId', '') == request.auth.uid
+          || isProvincialStaff()
+          || registerInLguMunicipality(resource.data)
+        );
       allow create: if isSignedIn()
-        && request.resource.data.touristId == request.auth.uid
-        && request.resource.data.hotelRating is number
-        && request.resource.data.hotelRating >= 1
-        && request.resource.data.hotelRating <= 5
-        && request.resource.data.roomRating is number
-        && request.resource.data.roomRating >= 1
-        && request.resource.data.roomRating <= 5
-        && request.resource.data.stayRequestId is string
-        && request.resource.data.establishmentId is string;
-      allow update: if isSignedIn()
-        && resource.data.touristId == request.auth.uid
-        && request.resource.data.touristId == request.auth.uid;
-      allow delete: if (isSignedIn() && resource.data.touristId == request.auth.uid)
-        || isLguStaff();
+        && request.resource.data.get('ownerId', '') == request.auth.uid
+        && request.resource.data.get('accountUid', '') == request.auth.uid
+        && request.resource.data.get('signerName', '') is string
+        && request.resource.data.signerName.size() >= 2
+        && request.resource.data.signerName.size() <= 80
+        && request.resource.data.get('signerPosition', '') is string
+        && request.resource.data.signerPosition.size() >= 2
+        && request.resource.data.signerPosition.size() <= 80
+        && request.resource.data.get('signaturePng', null) is bytes
+        && request.resource.data.signaturePng.size() <= 400000
+        && request.resource.data.get('createdAt', null) == request.time
+        && (!(request.resource.data.get('subjectType', '') in ['ae_register', 'mice_register'])
+          || ownsAeReport(request.resource.data.get('subjectId', '')));
+      allow update, delete: if false;
+    }
+
+    /// Remembered signers (name + position) per establishment / owner.
+    match /signoff_signers/{ownerId}/people/{personId} {
+      allow read, write: if isSignedIn() && request.auth.uid == ownerId;
+    }
+
+    /// Retired establishment QR stay flow + stay reviews: staff purge only.
+    match /establishment_stay_requests/{stayId} {
+      allow read, delete: if isLguStaff();
+    }
+
+    match /establishment_stay_reviews/{reviewId} {
+      allow read, delete: if isLguStaff();
     }
 
     match /{document=**} {

@@ -25,7 +25,11 @@ class TouristSpot {
     this.qrPayload,
     this.createdAt,
     this.dotAttractionCode = '',
+    this.gallery = const [],
   });
+
+  /// Max photos per spot (cover + gallery) managed from the LGU dashboard.
+  static const int maxImages = 8;
 
   final String id;
   final String name;
@@ -53,6 +57,15 @@ class TouristSpot {
 
   /// Optional DOT attraction code for VAR 2 reports (e.g. 202, 108, 414).
   final String dotAttractionCode;
+
+  /// Firestore `gallery` (extra photos shown on the tourist detail screen).
+  final List<String> gallery;
+
+  /// Cover ([imageUrl]) first, then gallery photos, de-duplicated.
+  List<String> get imageUrls => <String>{
+        if (imageUrl != null && imageUrl!.trim().isNotEmpty) imageUrl!.trim(),
+        ...gallery.map((e) => e.trim()).where((e) => e.isNotEmpty),
+      }.toList();
 
   /// Alias for [vrLink] for compatibility with code that expects vrTourUrl.
   String? get vrTourUrl => vrLink;
@@ -101,6 +114,12 @@ class TouristSpot {
       qrPayload: qrPay?.trim().isNotEmpty == true ? qrPay : null,
       createdAt: created,
       dotAttractionCode: dotCode,
+      gallery: data['gallery'] is List
+          ? [
+              for (final e in data['gallery'] as List)
+                if (e is String && e.trim().isNotEmpty) e.trim(),
+            ]
+          : const [],
     );
   }
 
@@ -124,6 +143,7 @@ class TouristSpot {
         'qr_payload': qrPayload,
       if (dotAttractionCode.isNotEmpty)
         'dotAttractionCode': dotAttractionCode,
+      if (gallery.isNotEmpty) 'gallery': gallery,
     };
   }
 }

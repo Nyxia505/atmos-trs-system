@@ -235,24 +235,43 @@ class UserActivityService {
 
   /// Loads the user's docs from [collection], trying every uid field variant.
   /// An empty first query must not skip the others (Firestore returns [] not throw).
+  ///
+  /// With [includeGroupVisits], also loads "Laag with Friends" check-ins where
+  /// a group leader checked this user in (`groupMemberUids` array-contains).
   static Future<List<Map<String, dynamic>>> _queryUserRows(
     String collection,
-    String uid,
-  ) async {
+    String uid, {
+    bool includeGroupVisits = false,
+  }) async {
     final db = FirebaseFirestore.instance;
     final byDocId = <String, Map<String, dynamic>>{};
+    Future<QuerySnapshot<Map<String, dynamic>>?> safe(
+      Query<Map<String, dynamic>> q,
+      String label,
+    ) {
+      return q
+          .limit(300)
+          .get()
+          .then<QuerySnapshot<Map<String, dynamic>>?>((s) => s)
+          .catchError((Object e) {
+        debugPrint('[UserActivity] $collection $label skipped: $e');
+        return null;
+      });
+    }
+
     final snaps = await Future.wait([
       for (final field in ['userId', 'tourist_id', 'user_id'])
-        db
-            .collection(collection)
-            .where(field, isEqualTo: uid)
-            .limit(300)
-            .get()
-            .then<QuerySnapshot<Map<String, dynamic>>?>((s) => s)
-            .catchError((Object e) {
-          debugPrint('[UserActivity] $collection where $field skipped: $e');
-          return null;
-        }),
+        safe(
+          db.collection(collection).where(field, isEqualTo: uid),
+          'where $field',
+        ),
+      if (includeGroupVisits)
+        safe(
+          db
+              .collection(collection)
+              .where('groupMemberUids', arrayContains: uid),
+          'group visits',
+        ),
     ]);
     for (final snap in snaps) {
       if (snap == null) continue;
@@ -274,7 +293,8 @@ class UserActivityService {
     try {
       final bySpot = <String, VisitRecord>{};
       var firestoreQueried = false;
-      final qrFuture = _queryUserRows('qr_checkins', uid);
+      final qrFuture =
+          _queryUserRows('qr_checkins', uid, includeGroupVisits: true);
       final checkinsFuture = _queryUserRows('checkins', uid);
 
       try {

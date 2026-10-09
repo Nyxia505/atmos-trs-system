@@ -1,250 +1,189 @@
 import 'package:flutter/material.dart';
-import 'package:qr_flutter/qr_flutter.dart';
+import 'package:flutter/services.dart';
 
+import 'package:atmos_trs_system/config/ae_register_schema.dart';
 import 'package:atmos_trs_system/widgets/establishment_dash_tokens.dart';
 import 'package:atmos_trs_system/widgets/establishment_dashboard_components.dart';
 import 'package:atmos_trs_system/widgets/establishment_location_capture.dart';
 
-/// Cards for the establishment "QR & profile" tab.
+/// Cards for the establishment "Profile" tab.
 
-/// Peach hero with the live establishment QR, downloads and scan artwork.
-class EstablishmentQrHero extends StatelessWidget {
-  const EstablishmentQrHero({
+/// DOT reporting identity: total rooms, AE type, classification code
+/// (DAE-2 items 2–4). Saved onto the AE profile + every monthly header.
+class EstablishmentReportingProfileCard extends StatefulWidget {
+  const EstablishmentReportingProfileCard({
     super.key,
-    required this.payload,
-    required this.hint,
-    required this.onDownloadPng,
-    required this.onDownloadPdf,
-    this.flush = false,
+    required this.tracksRooms,
+    required this.totalRooms,
+    required this.aeType,
+    required this.classificationCode,
+    required this.hostsMice,
+    required this.saving,
+    required this.onSave,
   });
 
-  static const String artAsset = 'assets/images/ae_qr_scan_phone.png';
-
-  final String? payload;
-  final String hint;
-  final VoidCallback onDownloadPng;
-  final VoidCallback onDownloadPdf;
-
-  /// Edge-to-edge banner: square corners, bottom border only.
-  final bool flush;
+  final bool tracksRooms;
+  final int totalRooms;
+  final String aeType;
+  final String classificationCode;
+  final bool hostsMice;
+  final bool saving;
+  final void Function({
+    required int totalRooms,
+    required String aeType,
+    required String classificationCode,
+    required bool hostsMice,
+  }) onSave;
 
   @override
-  Widget build(BuildContext context) {
-    final qrBox = Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AeDashTokens.accent, width: 2),
-        boxShadow: AeDashTokens.softShadow,
-      ),
-      child: payload == null
-          ? const SizedBox(
-              width: 150,
-              height: 150,
-              child: Center(
-                child: Icon(Icons.qr_code_2_rounded,
-                    size: 64, color: AeDashTokens.muted),
-              ),
-            )
-          : QrImageView(
-              data: payload!,
-              size: 150,
-              padding: EdgeInsets.zero,
-              backgroundColor: Colors.white,
-            ),
-    );
-    final buttons = Wrap(
-      spacing: 12,
-      runSpacing: 10,
-      children: [
-        FilledButton.icon(
-          onPressed: onDownloadPng,
-          icon: const Icon(Icons.download_rounded, size: 18),
-          label: const Text('Download PNG'),
-          style: FilledButton.styleFrom(
-            backgroundColor: AeDashTokens.accent,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            textStyle: AeDashTokens.body(
-              size: 13.5,
-              color: Colors.white,
-              weight: FontWeight.w700,
-            ),
-          ),
-        ),
-        OutlinedButton.icon(
-          onPressed: onDownloadPdf,
-          icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
-          label: const Text('Download PDF'),
-          style: OutlinedButton.styleFrom(
-            backgroundColor: Colors.white,
-            foregroundColor: AeDashTokens.accent,
-            side: const BorderSide(color: AeDashTokens.accent, width: 1.4),
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            textStyle: AeDashTokens.body(
-              size: 13.5,
-              color: AeDashTokens.accent,
-              weight: FontWeight.w700,
-            ),
-          ),
-        ),
-      ],
-    );
-
-    return LayoutBuilder(
-      builder: (context, c) {
-        final wide = c.maxWidth >= 860;
-        final artWidth = c.maxWidth * 0.32;
-        return Container(
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            borderRadius: flush ? null : BorderRadius.circular(20),
-            gradient: const LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-              colors: [Color(0xFFFFF7ED), Color(0xFFFFEDD5)],
-            ),
-            border: flush
-                ? const Border(bottom: BorderSide(color: Color(0xFFFED7AA)))
-                : Border.all(color: const Color(0xFFFED7AA)),
-            boxShadow: flush ? null : AeDashTokens.softShadow,
-          ),
-          child: wide
-              ? Stack(
-                  children: [
-                    Positioned(
-                      right: 0,
-                      top: 0,
-                      bottom: 0,
-                      width: artWidth,
-                      child: IgnorePointer(
-                        child: ShaderMask(
-                          blendMode: BlendMode.dstIn,
-                          shaderCallback: (rect) => const LinearGradient(
-                            colors: [Colors.transparent, Colors.black],
-                            stops: [0.0, 0.3],
-                          ).createShader(rect),
-                          child: Image.asset(
-                            artAsset,
-                            fit: BoxFit.cover,
-                            alignment: Alignment.centerRight,
-                            errorBuilder: (_, __, ___) =>
-                                const SizedBox.shrink(),
-                          ),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      right: artWidth * 0.5,
-                      bottom: 20,
-                      child: const _ScanChip(),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(26, 24, 0, 24),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                _header(compact: false),
-                                const SizedBox(height: 26),
-                                buttons,
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 20),
-                          qrBox,
-                          SizedBox(width: artWidth),
-                        ],
-                      ),
-                    ),
-                  ],
-                )
-              : Padding(
-                  padding: const EdgeInsets.all(18),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _header(compact: true),
-                      const SizedBox(height: 18),
-                      Center(child: qrBox),
-                      const SizedBox(height: 18),
-                      buttons,
-                    ],
-                  ),
-                ),
-        );
-      },
-    );
-  }
-
-  Widget _header({required bool compact}) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: compact ? 46 : 56,
-          height: compact ? 46 : 56,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: AeDashTokens.softShadow,
-          ),
-          child: Icon(Icons.qr_code_2_rounded,
-              color: AeDashTokens.accent, size: compact ? 24 : 28),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Your establishment QR',
-                style: AeDashTokens.heading(size: compact ? 20 : 24),
-              ),
-              const SizedBox(height: 4),
-              Text(hint, style: AeDashTokens.body(size: 13.5)),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+  State<EstablishmentReportingProfileCard> createState() => _EstablishmentReportingProfileCardState();
 }
 
-class _ScanChip extends StatelessWidget {
-  const _ScanChip();
+class _EstablishmentReportingProfileCardState extends State<EstablishmentReportingProfileCard> {
+  late final TextEditingController _rooms;
+  late final TextEditingController _code;
+  late String _type;
+  late bool _hostsMice;
+
+  @override
+  void initState() {
+    super.initState();
+    _hostsMice = widget.hostsMice;
+    _rooms = TextEditingController(text: '${widget.totalRooms}');
+    _type = AeTypeCatalog.types.containsKey(widget.aeType) ? widget.aeType : 'Others';
+    _code = TextEditingController(
+      text: widget.classificationCode.isNotEmpty ? widget.classificationCode : AeTypeCatalog.codeFor(_type),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant EstablishmentReportingProfileCard old) {
+    super.didUpdateWidget(old);
+    if (old.totalRooms != widget.totalRooms) _rooms.text = '${widget.totalRooms}';
+    if (old.aeType != widget.aeType && AeTypeCatalog.types.containsKey(widget.aeType)) _type = widget.aeType;
+    if (old.classificationCode != widget.classificationCode && widget.classificationCode.isNotEmpty) {
+      _code.text = widget.classificationCode;
+    }
+    if (old.hostsMice != widget.hostsMice) _hostsMice = widget.hostsMice;
+  }
+
+  @override
+  void dispose() {
+    _rooms.dispose();
+    _code.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final rooms = int.tryParse(_rooms.text.trim());
+    if (widget.tracksRooms && (rooms == null || rooms < 0)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a valid number of rooms.'), behavior: SnackBarBehavior.floating),
+      );
+      return;
+    }
+    widget.onSave(
+      totalRooms: rooms ?? 0,
+      aeType: _type,
+      classificationCode: _code.text.trim().isEmpty ? AeTypeCatalog.codeFor(_type) : _code.text.trim().toUpperCase(),
+      hostsMice: _hostsMice,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(999),
-        boxShadow: AeDashTokens.softShadow,
+    final border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: const BorderSide(color: AeDashTokens.border),
+    );
+    InputDecoration dec(String label, IconData icon) => InputDecoration(
+          labelText: label,
+          labelStyle: AeDashTokens.body(size: 13),
+          prefixIcon: Icon(icon, color: AeDashTokens.accent, size: 20),
+          filled: true,
+          fillColor: Colors.white,
+          isDense: true,
+          border: border,
+          enabledBorder: border,
+          focusedBorder: border.copyWith(borderSide: const BorderSide(color: AeDashTokens.accent, width: 1.4)),
+        );
+    final fields = <Widget>[
+      if (widget.tracksRooms)
+        TextField(
+          controller: _rooms,
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          decoration: dec('Total available rooms', Icons.bed_rounded),
+        ),
+      DropdownButtonFormField<String>(
+        initialValue: _type,
+        isExpanded: true,
+        decoration: dec('Type of accommodation', Icons.apartment_rounded),
+        items: [for (final t in AeTypeCatalog.types.keys) DropdownMenuItem(value: t, child: Text(t))],
+        onChanged: (v) {
+          if (v == null) return;
+          setState(() {
+            _type = v;
+            _code.text = AeTypeCatalog.codeFor(v);
+          });
+        },
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+      TextField(
+        controller: _code,
+        textCapitalization: TextCapitalization.characters,
+        decoration: dec('Classification code', Icons.tag_rounded),
+      ),
+    ];
+    return AePanelCard(
+      title: 'DOT reporting profile',
+      subtitle: 'Used on your DAE-2 / DAE-1B reports (items 2–4). '
+          'Rooms drive the Room No. list and occupancy rate.',
+      icon: Icons.assignment_rounded,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Icon(Icons.qr_code_scanner_rounded,
-              size: 15, color: AeDashTokens.accent),
-          const SizedBox(width: 6),
-          Text(
-            'Scan to request a stay',
-            style: AeDashTokens.body(
-              size: 12,
-              color: AeDashTokens.text,
-              weight: FontWeight.w700,
+          LayoutBuilder(builder: (context, c) {
+            if (c.maxWidth < 640) {
+              return Column(children: [
+                for (final f in fields) Padding(padding: const EdgeInsets.only(bottom: 10), child: f),
+              ]);
+            }
+            return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              for (var i = 0; i < fields.length; i++) ...[
+                if (i > 0) const SizedBox(width: 12),
+                Expanded(child: fields[i]),
+              ],
+            ]);
+          }),
+          const SizedBox(height: 6),
+          Container(
+            decoration: BoxDecoration(
+              color: AeDashTokens.mutedSurface,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: SwitchListTile(
+              value: _hostsMice,
+              onChanged: widget.saving ? null : (v) => setState(() => _hostsMice = v),
+              activeThumbColor: AeDashTokens.accent,
+              secondary: const Icon(Icons.groups_rounded, color: AeDashTokens.accent),
+              title: Text('We host events (MICE)', style: AeDashTokens.body(size: 14, color: AeDashTokens.text)),
+              subtitle: Text(
+                'Meetings, conventions, exhibitions, weddings, parties… '
+                'Turns on the Events log and the CUS MICE survey report.',
+                style: AeDashTokens.body(size: 12),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton.icon(
+              onPressed: widget.saving ? null : _save,
+              style: FilledButton.styleFrom(backgroundColor: AeDashTokens.accent),
+              icon: widget.saving
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.save_rounded, size: 18),
+              label: const Text('Save profile'),
             ),
           ),
         ],
@@ -547,8 +486,7 @@ class EstablishmentHoursCard extends StatelessWidget {
     );
     return AePanelCard(
       title: 'Check-in / check-out times',
-      subtitle: 'Guests arriving before check-in may be charged an extra night. '
-          'Checkout is due by the check-out time on their last day.',
+      subtitle: 'Shown to tourists on your map profile.',
       icon: Icons.schedule_rounded,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -573,89 +511,6 @@ class EstablishmentHoursCard extends StatelessWidget {
             const SizedBox(height: 12),
             const LinearProgressIndicator(minHeight: 2),
           ],
-        ],
-      ),
-    );
-  }
-}
-
-/// Total rooms input + Save.
-class EstablishmentRoomCountCard extends StatelessWidget {
-  const EstablishmentRoomCountCard({
-    super.key,
-    required this.controller,
-    required this.saving,
-    required this.onSave,
-  });
-
-  final TextEditingController controller;
-  final bool saving;
-  final VoidCallback onSave;
-
-  @override
-  Widget build(BuildContext context) {
-    final fieldBorder = OutlineInputBorder(
-      borderRadius: BorderRadius.circular(14),
-      borderSide: const BorderSide(color: AeDashTokens.border),
-    );
-    return AePanelCard(
-      title: 'Total rooms',
-      subtitle: 'Defines Room 1–N for the Rooms grid and occupancy. '
-          'Changes require confirmation and cannot drop below occupied rooms.',
-      icon: Icons.meeting_room_rounded,
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: controller,
-              keyboardType: TextInputType.number,
-              style: AeDashTokens.section(size: 15),
-              decoration: InputDecoration(
-                labelText: 'Room count',
-                labelStyle: AeDashTokens.body(size: 13),
-                prefixIcon: const Icon(Icons.bed_rounded,
-                    color: AeDashTokens.accent, size: 20),
-                filled: true,
-                fillColor: Colors.white,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 18),
-                border: fieldBorder,
-                enabledBorder: fieldBorder,
-                focusedBorder: fieldBorder.copyWith(
-                  borderSide:
-                      const BorderSide(color: AeDashTokens.accent, width: 1.4),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          FilledButton.icon(
-            onPressed: saving ? null : onSave,
-            style: FilledButton.styleFrom(
-              backgroundColor: AeDashTokens.accent,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              textStyle: AeDashTokens.body(
-                size: 14,
-                color: Colors.white,
-                weight: FontWeight.w700,
-              ),
-            ),
-            icon: saving
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.save_rounded, size: 18),
-            label: const Text('Save'),
-          ),
         ],
       ),
     );

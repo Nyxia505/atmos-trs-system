@@ -1,11 +1,9 @@
-import 'package:atmos_trs_system/models/establishment_stay_review.dart';
+import 'package:atmos_trs_system/config/ae_register_schema.dart';
 import 'package:atmos_trs_system/services/establishment_approval_service.dart';
-import 'package:atmos_trs_system/services/establishment_stay_review_service.dart';
-import 'package:atmos_trs_system/services/establishment_stay_service.dart';
-import 'package:atmos_trs_system/utils/establishment_dss_aggregates.dart';
-import 'package:atmos_trs_system/utils/establishment_room_analytics.dart';
 import 'package:atmos_trs_system/utils/checkin_visitor_count.dart';
+import 'package:atmos_trs_system/widgets/ae_register/ae_register_viewer_screen.dart';
 import 'package:atmos_trs_system/widgets/establishment_dss_charts.dart';
+import 'package:atmos_trs_system/widgets/establishment_insights_board.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
@@ -423,260 +421,49 @@ class _EstablishmentAnalyticsBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<EstablishmentStayRequest>>(
-      stream: EstablishmentStayService.watchForEstablishment(establishment.id),
-      builder: (context, staySnap) {
-        final stays = staySnap.data ?? const <EstablishmentStayRequest>[];
-        final dss = EstablishmentDssAggregates.build(stays);
-        final roomCount = establishment.roomCount ?? 0;
-        final roomAnalytics = roomCount > 0
-            ? EstablishmentRoomAnalyticsBuilder.build(
-                stays: stays,
-                roomCount: roomCount,
-                inventory: const {},
-                window: EstablishmentInsightsWindow.days30,
-              )
-            : null;
-
-        return StreamBuilder<EstablishmentStayReviewSummary>(
-          stream: EstablishmentStayReviewService.watchForEstablishment(
-            establishment.id,
-          ),
-          builder: (context, revSnap) {
-            final reviews =
-                revSnap.data ?? EstablishmentStayReviewSummary.empty;
-            final demo = dss.demographics;
-            final confirmed = stays.where((s) => s.countsForDae).length;
-            final pending =
-                stays.where((s) => s.isPending).length;
-            final wide = MediaQuery.sizeOf(context).width >= 900;
-
-            return ListView(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
-              children: [
-                Text(
-                  'Establishment analytics',
-                  style: GovernorDashboardTokens.heading(size: 18),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Confirmed stays only count for DAE. Pending desk queue is ops-only.',
+    final profile = AeRegisterViewerScreen.profileFor(
+      aeId: establishment.id,
+      aeName: establishment.businessName,
+      category: establishment.category,
+      municipalityId: establishment.municipalityId,
+      municipality: establishment.municipality,
+      totalRooms: establishment.roomCount,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Figures from the establishment\'s monthly DOT register (DAE-1B). '
+                  'Occupancy = rooms occupied ÷ rooms available; ALOS = guest-nights ÷ check-ins.',
                   style: GovernorDashboardTokens.body(size: 12.5),
                 ),
-                const SizedBox(height: 14),
-                _KpiStrip(
-                  items: [
-                    _Kpi('Confirmed stays', '$confirmed', Icons.verified_outlined),
-                    _Kpi('Pending', '$pending', Icons.hourglass_empty),
-                    _Kpi(
-                      'Guests (month)',
-                      '${demo.guests}',
-                      Icons.groups_outlined,
-                    ),
-                    _Kpi(
-                      'Reviews',
-                      '${reviews.reviewCount}',
-                      Icons.star_outline,
-                    ),
-                  ],
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                onPressed: () => AeRegisterViewerScreen.open(
+                  context,
+                  profile: profile,
+                  showEvents: establishment.hostsMice,
                 ),
-                if (roomAnalytics != null) ...[
-                  const SizedBox(height: 12),
-                  _KpiStrip(
-                    items: [
-                      _Kpi(
-                        'Room-nights (30d)',
-                        '${roomAnalytics.totalRoomNights}',
-                        Icons.meeting_room_outlined,
-                      ),
-                      _Kpi(
-                        'Guest-nights',
-                        '${roomAnalytics.guestNights}',
-                        Icons.nights_stay_outlined,
-                      ),
-                      _Kpi(
-                        'Occ. rate',
-                        roomAnalytics.periodOccupancyPct == null
-                            ? '—'
-                            : '${roomAnalytics.periodOccupancyPct!.round()}%',
-                        Icons.pie_chart_outline,
-                      ),
-                      _Kpi(
-                        'Avg stay',
-                        roomAnalytics.avgLengthOfStay == 0
-                            ? '—'
-                            : '${roomAnalytics.avgLengthOfStay.toStringAsFixed(1)} n',
-                        Icons.timelapse,
-                      ),
-                    ],
-                  ),
-                ],
-                const SizedBox(height: 14),
-                EstablishmentDssCharts.panel(
-                  title: 'Confirmed stays · 14 days',
-                  subtitle: 'Staff-confirmed / checked-out',
-                  height: 220,
-                  child: EstablishmentDssCharts.staysTrendLine(
-                    values: dss.staysTrend,
-                    labels: dss.dayLabels,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                if (wide)
-                  Row(
-                    children: [
-                      Expanded(
-                        child: EstablishmentDssCharts.panel(
-                          title: 'Guest sex mix',
-                          subtitle: 'Confirmed this month',
-                          height: 180,
-                          child: EstablishmentDssCharts.mixPie(
-                            aLabel: 'Male',
-                            aValue: demo.male,
-                            aColor: const Color(0xFF3B82F6),
-                            bLabel: 'Female',
-                            bValue: demo.female,
-                            bColor: const Color(0xFFEC4899),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: EstablishmentDssCharts.panel(
-                          title: 'Residency mix',
-                          subtitle: 'Confirmed this month',
-                          height: 180,
-                          child: EstablishmentDssCharts.mixPie(
-                            aLabel: 'Filipino',
-                            aValue: demo.filipino,
-                            aColor: GovernorDashboardTokens.primary,
-                            bLabel: 'Foreign',
-                            bValue: demo.foreign,
-                            bColor: const Color(0xFF0EA5E9),
-                          ),
-                        ),
-                      ),
-                    ],
-                  )
-                else ...[
-                  EstablishmentDssCharts.panel(
-                    title: 'Guest sex mix',
-                    subtitle: 'Confirmed this month',
-                    height: 180,
-                    child: EstablishmentDssCharts.mixPie(
-                      aLabel: 'Male',
-                      aValue: demo.male,
-                      aColor: const Color(0xFF3B82F6),
-                      bLabel: 'Female',
-                      bValue: demo.female,
-                      bColor: const Color(0xFFEC4899),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  EstablishmentDssCharts.panel(
-                    title: 'Residency mix',
-                    subtitle: 'Confirmed this month',
-                    height: 180,
-                    child: EstablishmentDssCharts.mixPie(
-                      aLabel: 'Filipino',
-                      aValue: demo.filipino,
-                      aColor: GovernorDashboardTokens.primary,
-                      bLabel: 'Foreign',
-                      bValue: demo.foreign,
-                      bColor: const Color(0xFF0EA5E9),
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 12),
-                EstablishmentDssCharts.panel(
-                  title: 'Peak load by weekday',
-                  subtitle: 'Guests this month',
-                  height: 180,
-                  child: EstablishmentDssCharts.weekdayBars(dss.weekdayGuests),
-                ),
-                if (roomAnalytics != null &&
-                    roomAnalytics.ranking.any((r) => r.roomNights > 0)) ...[
-                  const SizedBox(height: 12),
-                  EstablishmentDssCharts.panel(
-                    title: 'Rooms used most → least (30d)',
-                    subtitle: 'Room-nights from confirmed stays',
-                    height: 200,
-                    child: EstablishmentDssCharts.roomRankingBars(
-                      labels: [
-                        for (final r in roomAnalytics.ranking.take(10))
-                          'R${r.roomId}',
-                      ],
-                      values: [
-                        for (final r in roomAnalytics.ranking.take(10))
-                          r.roomNights,
-                      ],
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: GovernorDashboardTokens.border),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Guest reviews',
-                        style: GovernorDashboardTokens.sectionTitle(),
-                      ),
-                      const SizedBox(height: 6),
-                      if (reviews.reviewCount == 0)
-                        Text(
-                          'No checkout reviews yet.',
-                          style: GovernorDashboardTokens.body(size: 13),
-                        )
-                      else ...[
-                        Text(
-                          'Avg ${reviews.averageOverall.toStringAsFixed(1)}★ · '
-                          'Hotel ${reviews.averageHotelRating.toStringAsFixed(1)}★ · '
-                          'Room ${reviews.averageRoomRating.toStringAsFixed(1)}★',
-                          style: GovernorDashboardTokens.body(
-                            size: 13,
-                            color: GovernorDashboardTokens.text,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        for (final r in reviews.reviews.take(5)) ...[
-                          Text(
-                            r.authorName,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 13,
-                            ),
-                          ),
-                          if (r.roomNumbers.isNotEmpty)
-                            Text(
-                              'Room ${r.roomNumbers.join(', ')} · '
-                              '${r.averageRating.toStringAsFixed(1)}★',
-                              style: GovernorDashboardTokens.body(size: 12),
-                            ),
-                          if (r.comment.isNotEmpty)
-                            Text(
-                              r.comment,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: GovernorDashboardTokens.body(size: 12.5),
-                            ),
-                          const SizedBox(height: 8),
-                        ],
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            );
-          },
-        );
-      },
+                icon: const Icon(Icons.table_chart_rounded, size: 18),
+                label: const Text('Open register'),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: EstablishmentInsightsBoard(
+            profile: profile,
+            schema: AeRegisterSchema.forCategory(establishment.category),
+            embedded: true,
+          ),
+        ),
+      ],
     );
   }
 }

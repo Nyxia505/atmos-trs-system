@@ -240,6 +240,26 @@ class LguEventService {
     }
   }
 
+  /// Reserves a Firestore id so the photo can upload before the post is saved.
+  String newEventId() => _firestore.collection(collection).doc().id;
+
+  /// Starts the photo upload right away (e.g. when the LGU picks it) so
+  /// Publish only has to wait for the Firestore write.
+  Future<Map<String, dynamic>> prepareImageFields({
+    required String eventId,
+    required String municipalityId,
+    required Uint8List bytes,
+    String? contentType,
+  }) {
+    return _resolveImageFields(
+      eventId: eventId,
+      municipalityId: municipalityId,
+      bytes: bytes,
+      contentType: contentType,
+      requiredIfBytesPresent: true,
+    );
+  }
+
   /// Creates and auto-publishes an LGU event, then notifies installed tourist apps.
   Future<String?> createEvent({
     required String municipalityId,
@@ -247,27 +267,34 @@ class LguEventService {
     required String title,
     required String content,
     String type = typeEvent,
+    String? eventId,
     Uint8List? imageBytes,
     String? imageContentType,
+    Future<Map<String, dynamic>>? preparedImageFields,
   }) async {
     if (title.trim().isEmpty) return null;
     if (Firebase.apps.isEmpty) {
       throw StateError('Firebase is not initialized.');
     }
     final user = FirebaseAuth.instance.currentUser;
-    final docRef = _firestore.collection(collection).doc();
+    final reservedId = eventId?.trim() ?? '';
+    final docRef = reservedId.isNotEmpty
+        ? _firestore.collection(collection).doc(reservedId)
+        : _firestore.collection(collection).doc();
     final normalizedType = normalizeType(type);
     final munName = municipalityName.trim().isNotEmpty
         ? municipalityName.trim()
         : (user?.email ?? 'LGU');
 
-    final imageFields = await _resolveImageFields(
-      eventId: docRef.id,
-      municipalityId: municipalityId,
-      bytes: imageBytes,
-      contentType: imageContentType,
-      requiredIfBytesPresent: true,
-    );
+    final imageFields = preparedImageFields != null
+        ? await preparedImageFields
+        : await _resolveImageFields(
+            eventId: docRef.id,
+            municipalityId: municipalityId,
+            bytes: imageBytes,
+            contentType: imageContentType,
+            requiredIfBytesPresent: true,
+          );
 
     final data = <String, dynamic>{
       'title': title.trim(),
@@ -313,6 +340,7 @@ class LguEventService {
     String type = typeEvent,
     Uint8List? imageBytes,
     String? imageContentType,
+    Future<Map<String, dynamic>>? preparedImageFields,
     bool removeImage = false,
     /// Kept for call-site compatibility; edits no longer reset to pending.
     bool resubmitForApproval = false,
@@ -330,14 +358,17 @@ class LguEventService {
     if (removeImage) {
       updates['imageUrl'] = FieldValue.delete();
       updates['imageBase64'] = FieldValue.delete();
-    } else if (imageBytes != null && imageBytes.isNotEmpty) {
-      final imageFields = await _resolveImageFields(
-        eventId: eventId,
-        municipalityId: municipalityId,
-        bytes: imageBytes,
-        contentType: imageContentType,
-        requiredIfBytesPresent: true,
-      );
+    } else if (preparedImageFields != null ||
+        (imageBytes != null && imageBytes.isNotEmpty)) {
+      final imageFields = preparedImageFields != null
+          ? await preparedImageFields
+          : await _resolveImageFields(
+              eventId: eventId,
+              municipalityId: municipalityId,
+              bytes: imageBytes,
+              contentType: imageContentType,
+              requiredIfBytesPresent: true,
+            );
       updates.addAll(imageFields);
       if (!imageFields.containsKey('imageUrl')) {
         updates['imageUrl'] = FieldValue.delete();
@@ -455,8 +486,11 @@ class LguEventService {
           .toLowerCase()
           .replaceAll(RegExp(r'[^a-z0-9_-]+'), '_');
       final safeFolder = folder.isEmpty ? 'unknown' : folder;
+      // Unique name per upload: an abandoned pre-upload (dialog cancelled)
+      // must never overwrite the photo a live post still points to.
+      final stamp = DateTime.now().millisecondsSinceEpoch;
       final ref = FirebaseStorage.instance.ref().child(
-        'lgu_events/$safeFolder/$eventId.$ext',
+        'lgu_events/$safeFolder/${eventId}_$stamp.$ext',
       );
       final task = await ref.putData(
         bytes,

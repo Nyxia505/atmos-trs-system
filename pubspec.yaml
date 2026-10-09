@@ -3,7 +3,7 @@ description: "ATMOS TRS"
 
 publish_to: 'none'
 
-version: 1.0.2+3
+version: 1.0.7+8
 
 environment:
   sdk: ^3.11.0
@@ -68,6 +68,7 @@ dependencies:
   pointer_interceptor: ^0.10.1+2
   app_links: ^7.2.1
   play_install_referrer: ^0.5.0
+  crypto: ^3.0.7
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -139,7 +140,10 @@ flutter:
     - assets/images/lumantas river side garden.webp
     - assets/images/tripplan.png
     - assets/Onboarding_screen/
-    - assets/vr_tour/
+    # Unicode-capable font embedded in DOT report PDFs (default Helvetica lacks — – ’ • →).
+    - assets/fonts/noto_sans/
+    # Bundled official template used when the Supabase copy is missing.
+    - forms_format/CUS-FORM-MICE-UTILIZATION-SURVEY-FORM.xlsx
 
   fonts:
     - family: Sacrifice

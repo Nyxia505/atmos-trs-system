@@ -21,6 +21,8 @@ class EstablishmentLocationCapture extends StatelessWidget {
     this.required = true,
     this.accentColor,
     this.dashboardStyle = false,
+    this.pinIcon = Icons.hotel_rounded,
+    this.emptyPinMessage,
   });
 
   final double? latitude;
@@ -33,6 +35,43 @@ class EstablishmentLocationCapture extends StatelessWidget {
 
   /// Establishment dashboard layout: tinted status row + filled action.
   final bool dashboardStyle;
+
+  /// Icon drawn inside the map pin.
+  final IconData pinIcon;
+
+  /// Overrides the "Map pin required / No map pin yet" status text.
+  final String? emptyPinMessage;
+
+  String get _emptyText =>
+      emptyPinMessage ??
+      (required
+          ? 'Map pin required — tourists will see you on Explore.'
+          : 'No map pin yet.');
+
+  /// Reads the device position without any UI; null when unavailable.
+  static Future<({double latitude, double longitude})?>
+      readCurrentPosition() async {
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) return null;
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        return null;
+      }
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: LocationSettings(
+          accuracy: kIsWeb ? LocationAccuracy.medium : LocationAccuracy.high,
+          timeLimit: const Duration(seconds: 8),
+        ),
+      );
+      return (latitude: pos.latitude, longitude: pos.longitude);
+    } catch (_) {
+      return null;
+    }
+  }
 
   bool get _hasPin {
     final lat = latitude;
@@ -131,6 +170,7 @@ class EstablishmentLocationCapture extends StatelessWidget {
             initialLatitude: latitude,
             initialLongitude: longitude,
             accent: accent,
+            pinIcon: pinIcon,
             onSave: (pin) {
               onChanged(pin);
               Navigator.pop(ctx);
@@ -166,6 +206,7 @@ class EstablishmentLocationCapture extends StatelessWidget {
                   latitude: lat,
                   longitude: lng,
                   accent: accent,
+                  pinIcon: pinIcon,
                   interactive: false,
                 ),
               ),
@@ -234,9 +275,7 @@ class EstablishmentLocationCapture extends StatelessWidget {
             child: Text(
               _hasPin
                   ? 'Pin: ${lat!.toStringAsFixed(5)}, ${lng!.toStringAsFixed(5)}'
-                  : required
-                      ? 'Map pin required — tourists will see you on Explore.'
-                      : 'No map pin yet.',
+                  : _emptyText,
               style: TextStyle(
                 fontSize: 13.5,
                 fontWeight: FontWeight.w600,
@@ -345,9 +384,7 @@ class EstablishmentLocationCapture extends StatelessWidget {
         Text(
           _hasPin
               ? 'Pin: ${lat!.toStringAsFixed(5)}, ${lng!.toStringAsFixed(5)}'
-              : required
-                  ? 'Map pin required — tourists will see you on Explore.'
-                  : 'No map pin yet.',
+              : _emptyText,
           style: TextStyle(
             fontSize: 13,
             height: 1.35,
@@ -418,6 +455,7 @@ class _AdjustPinSheet extends StatefulWidget {
     required this.initialLatitude,
     required this.initialLongitude,
     required this.accent,
+    required this.pinIcon,
     required this.onSave,
     required this.onClose,
   });
@@ -425,6 +463,7 @@ class _AdjustPinSheet extends StatefulWidget {
   final double initialLatitude;
   final double initialLongitude;
   final Color accent;
+  final IconData pinIcon;
   final ValueChanged<({double latitude, double longitude})> onSave;
   final VoidCallback onClose;
 
@@ -557,8 +596,8 @@ class _AdjustPinSheetState extends State<_AdjustPinSheet> {
                                 ),
                               ],
                             ),
-                            child: const Icon(
-                              Icons.hotel_rounded,
+                            child: Icon(
+                              widget.pinIcon,
                               color: Colors.white,
                               size: 24,
                             ),
@@ -651,6 +690,7 @@ class _EstablishmentPinMap extends StatefulWidget {
     required this.latitude,
     required this.longitude,
     required this.accent,
+    this.pinIcon = Icons.hotel_rounded,
     this.interactive = true,
     this.showZoomControls = false,
   });
@@ -658,6 +698,7 @@ class _EstablishmentPinMap extends StatefulWidget {
   final double latitude;
   final double longitude;
   final Color accent;
+  final IconData pinIcon;
   final bool interactive;
   final bool showZoomControls;
 
@@ -714,8 +755,8 @@ class _EstablishmentPinMapState extends State<_EstablishmentPinMap> {
                         ),
                       ],
                     ),
-                    child: const Icon(
-                      Icons.hotel_rounded,
+                    child: Icon(
+                      widget.pinIcon,
                       color: Colors.white,
                       size: 22,
                     ),

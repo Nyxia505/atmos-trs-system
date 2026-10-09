@@ -14,8 +14,23 @@ class AuthService {
   /// Signs out (clears Firebase Auth session).
   static Future<void> signOut() => _auth.signOut();
 
-  /// Legacy Firebase email link reset (often lands in spam). Prefer
-  /// [PasswordResetService] OTP + push notification flow instead.
+  /// Deployed web app; mobile reset links continue here after Firebase's page.
+  static const String _hostedWebOrigin = 'https://atmos-trs-system.web.app';
+
+  /// Continue-URL problems where retrying without [ActionCodeSettings] lets
+  /// Firebase fall back to its default hosted "Reset password" page.
+  static const Set<String> _continueUrlErrorCodes = {
+    'unauthorized-continue-uri',
+    'invalid-continue-uri',
+    'missing-continue-uri',
+    'missing-android-pkg-name',
+    'missing-ios-bundle-id',
+    'invalid-dynamic-link-domain',
+    'argument-error',
+  };
+
+  /// Sends Firebase's password-reset email. The link opens a page where the
+  /// user chooses a new password (in-app on web, Firebase's hosted page on mobile).
   static Future<void> sendPasswordResetEmail(String email) async {
     final normalized = normalizeEmail(email);
     if (!isValidEmailFormat(normalized)) {
@@ -26,19 +41,32 @@ class AuthService {
     }
 
     ActionCodeSettings? actionCodeSettings;
-    final continueUrl = _passwordResetContinueUrl();
-    actionCodeSettings = ActionCodeSettings(
-      url: continueUrl,
-      handleCodeInApp: kIsWeb,
-      androidPackageName: kIsWeb ? null : 'com.atmos.trs',
-      androidInstallApp: !kIsWeb,
-      androidMinimumVersion: kIsWeb ? null : '1',
-    );
+    try {
+      actionCodeSettings = ActionCodeSettings(
+        url: _passwordResetContinueUrl(),
+        handleCodeInApp: kIsWeb,
+      );
+    } catch (e) {
+      debugPrint('[Auth] reset continue URL unavailable: $e');
+    }
 
-    await _auth.sendPasswordResetEmail(
-      email: normalized,
-      actionCodeSettings: actionCodeSettings,
-    );
+    if (actionCodeSettings != null) {
+      try {
+        await _auth.sendPasswordResetEmail(
+          email: normalized,
+          actionCodeSettings: actionCodeSettings,
+        );
+        return;
+      } on FirebaseAuthException catch (e) {
+        if (!_continueUrlErrorCodes.contains(e.code)) rethrow;
+        debugPrint(
+          '[Auth] reset email continue URL rejected (${e.code}); '
+          'retrying with Firebase default page.',
+        );
+      }
+    }
+
+    await _auth.sendPasswordResetEmail(email: normalized);
   }
 
   /// Completes a Firebase email-link reset using the `oobCode` from the email.
@@ -49,16 +77,18 @@ class AuthService {
     await _auth.confirmPasswordReset(code: oobCode.trim(), newPassword: newPassword);
   }
 
-  /// True when [code] is still valid for setting a new password.
-  static Future<void> verifyPasswordResetCode(String code) async {
-    await _auth.verifyPasswordResetCode(code.trim());
+  /// Validates [code] and returns the account email it resets.
+  static Future<String> verifyPasswordResetCode(String code) {
+    return _auth.verifyPasswordResetCode(code.trim());
   }
 
   /// Legacy helper — prefer [_passwordResetContinueUrl].
   static String passwordResetContinueUrl() => _passwordResetContinueUrl();
 
-  /// Where users land after finishing reset on Firebase's page (web only).
+  /// Where users land after the reset link. `Uri.base.origin` throws on
+  /// Android/iOS (non-http scheme), so mobile uses the hosted web app.
   static String _passwordResetContinueUrl() {
+    if (!kIsWeb) return '$_hostedWebOrigin/forgot-password';
     final origin = Uri.base.origin;
     final path = Uri.base.path;
     String basePath;
@@ -94,6 +124,12 @@ class AuthService {
         return 'This reset link has expired. Request a new one.';
       case 'invalid-action-code':
         return 'This reset link is invalid or already used. Request a new one.';
+      case 'unauthorized-continue-uri':
+      case 'invalid-continue-uri':
+        return 'Password reset is not configured for this website yet. '
+            'Please contact support or try again from the ATMOS app.';
+      case 'user-disabled':
+        return 'This account has been disabled. Please contact support.';
       case 'weak-password':
         return 'Password is too short. Use at least 6 characters.';
       default:

@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
+import 'package:atmos_trs_system/navigation/auth_navigation.dart';
 import 'package:atmos_trs_system/widgets/web_glass_auth_scaffold.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -91,13 +92,12 @@ class SignupAccountTypeScreen extends StatelessWidget {
                   _AccountTypeCard(
                     option: option,
                     glass: true,
-                    onTap: () => Navigator.pushNamed(context, option.route),
+                    onTap: () => openSignupStep(context, option.route),
                   ),
                   const SizedBox(height: 14),
                 ],
                 TextButton(
-                  onPressed: () =>
-                      Navigator.pushReplacementNamed(context, '/login'),
+                  onPressed: () => openLoginFromSignup(context),
                   child: Text.rich(
                     TextSpan(
                       style: TextStyle(
@@ -324,8 +324,7 @@ class SignupAccountTypeScreen extends StatelessWidget {
                         _AccountTypeCard(
                           option: option,
                           glass: false,
-                          onTap: () =>
-                              Navigator.pushNamed(context, option.route),
+                          onTap: () => openSignupStep(context, option.route),
                         ),
                         const SizedBox(height: 14),
                       ],
@@ -340,10 +339,7 @@ class SignupAccountTypeScreen extends StatelessWidget {
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 10),
                             child: GestureDetector(
-                              onTap: () => Navigator.pushReplacementNamed(
-                                context,
-                                '/login',
-                              ),
+                              onTap: () => openLoginFromSignup(context),
                               child: Text.rich(
                                 TextSpan(
                                   style: const TextStyle(

@@ -1,8 +1,8 @@
 /// VR tour URLs for in-app "Launch VR" / WebView flows.
 ///
-/// Oroquieta City Plaza — 360° tour hosted on [Clear Pano](https://tours.clearpano.com/DDf5wDIh).
+/// Oroquieta City Plaza — 360° tour hosted on [Clear Pano](https://tours.clearpano.com/aCxkEqVT).
 const String kOroquietaCityPlazaVrUrl =
-    'https://tours.clearpano.com/DDf5wDIh';
+    'https://tours.clearpano.com/aCxkEqVT';
 
 /// True when [url] is a tiiny.host owner preview (not usable by tourists in-app).
 bool isTiinyOwnerPreviewUrl(String? url) {
@@ -11,22 +11,7 @@ bool isTiinyOwnerPreviewUrl(String? url) {
   return uri.host == 'tiiny.host' && uri.path.startsWith('/manage');
 }
 
-/// Clear Pano tours are password-protected and usually blank inside WebView/iframes.
-bool isClearPanoTourUrl(String? url) {
-  final uri = Uri.tryParse(url?.trim() ?? '');
-  if (uri == null) return false;
-  final host = uri.host.toLowerCase();
-  return host == 'tours.clearpano.com' || host.endsWith('.clearpano.com');
-}
-
-/// Use the bundled Marzipano tour in-app (Oroquieta default / missing hosted URL).
-bool useBundledTourForUrl(String? url) {
-  final trimmed = url?.trim() ?? '';
-  if (trimmed.isEmpty || trimmed == kOroquietaCityPlazaVrUrl) return true;
-  return isClearPanoTourUrl(trimmed);
-}
-
-/// URL to open in WebView, or null to use bundled [kLocalVrTourAssetPath].
+/// URL to open in the in-app WebView, or null when no usable tour link exists.
 String? hostedVrUrlForLaunch(String? url) {
   final trimmed = url?.trim() ?? '';
   if (trimmed.isEmpty || isTiinyOwnerPreviewUrl(trimmed)) return null;
@@ -41,10 +26,6 @@ const String kOroquietaPlazaSpotDocId = 'oroquieta_city_boulevard_and_peoples_pa
 
 /// Default VR tour when no spot-specific link is set (Oroquieta City Plaza).
 const String kVrTourUrl = kOroquietaCityPlazaVrUrl;
-
-/// Legacy bundled Marzipano tour (unused — VR opens in browser via [kOroquietaCityPlazaVrUrl]).
-const String kLocalVrTourAssetPath = 'assets/vr_tour/index.html';
-
 /// Spot / municipality ids that should open [kOroquietaCityPlazaVrUrl].
 const Set<String> kOroquietaPlazaVrSpotIds = {
   'oro-4',

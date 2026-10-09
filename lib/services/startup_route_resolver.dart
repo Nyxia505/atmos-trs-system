@@ -10,7 +10,6 @@ import 'package:atmos_trs_system/config/user_profile_storage.dart';
 import 'package:atmos_trs_system/navigation/role_router.dart';
 import 'package:atmos_trs_system/services/dashboard_user_service.dart';
 import 'package:atmos_trs_system/services/mobile_onboarding_storage.dart';
-import 'package:atmos_trs_system/services/pending_establishment_stay_storage.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/tourist_profile_hydration.dart';
@@ -89,11 +88,10 @@ class StartupRouteResolver {
   }) async {
     final pendingSpot = await PendingSpotCheckInStorage.peek();
     final pendingLgu = await PendingLguCheckInStorage.peek();
-    final pendingEst = await PendingEstablishmentStayStorage.peek();
     if (firebaseUser == null) {
-      if (pendingSpot != null || pendingLgu != null || pendingEst != null) {
+      if (pendingSpot != null || pendingLgu != null) {
         // Web camera QR: show landing Get-app banner first; Continue → /qr-welcome.
-        // Native App Link: go straight to party / stay welcome fill-up.
+        // Native App Link: go straight to party welcome fill-up.
         return kIsWeb ? '/landing' : '/qr-welcome';
       }
       if (!kIsWeb && !await MobileOnboardingStorage.isComplete()) {
@@ -101,7 +99,7 @@ class StartupRouteResolver {
       }
       return route;
     }
-    if (pendingSpot != null || pendingLgu != null || pendingEst != null) {
+    if (pendingSpot != null || pendingLgu != null) {
       // Logged-in tourist with a camera/App-Link pending QR → resume fill-up.
       if (route == '/dashboard' ||
           route == '/verify-otp' ||

@@ -22,6 +22,7 @@ class PartyDemographicFields extends StatefulWidget {
     this.filipinoLabel = 'Filipino',
     this.foreignLabel = 'Foreign',
     this.partyHelperText = 'Total guests in this stay / visit',
+    this.minPartySize = 1,
   });
 
   final int initialPartySize;
@@ -39,6 +40,9 @@ class PartyDemographicFields extends StatefulWidget {
   final String foreignLabel;
   final String partyHelperText;
 
+  /// 0 allows "no companions" (Laag with Friends group check-in).
+  final int minPartySize;
+
   @override
   State<PartyDemographicFields> createState() => PartyDemographicFieldsState();
 }
@@ -50,6 +54,7 @@ class PartyDemographicValue {
     required this.femaleCount,
     required this.filipinoCount,
     required this.foreignCount,
+    this.minPartySize = 1,
   });
 
   final int partySize;
@@ -57,20 +62,26 @@ class PartyDemographicValue {
   final int femaleCount;
   final int filipinoCount;
   final int foreignCount;
+  final int minPartySize;
 
-  bool get sexValid =>
-      PartyCountComplements.sumsToTotal(partySize, maleCount, femaleCount);
+  bool get sexValid => partySize == 0
+      ? maleCount == 0 && femaleCount == 0
+      : PartyCountComplements.sumsToTotal(partySize, maleCount, femaleCount);
 
-  bool get residencyValid => PartyCountComplements.sumsToTotal(
-        partySize,
-        filipinoCount,
-        foreignCount,
-      );
+  bool get residencyValid => partySize == 0
+      ? filipinoCount == 0 && foreignCount == 0
+      : PartyCountComplements.sumsToTotal(
+          partySize,
+          filipinoCount,
+          foreignCount,
+        );
 
-  bool get isValid => sexValid && residencyValid && partySize >= 1;
+  bool get isValid => sexValid && residencyValid && partySize >= minPartySize;
 
   String? get validationMessage {
-    if (partySize < 1) return 'Party size must be at least 1.';
+    if (partySize < minPartySize) {
+      return 'Party size must be at least $minPartySize.';
+    }
     if (!sexValid) {
       return 'Male + Female must equal party size ($partySize).';
     }
@@ -96,7 +107,9 @@ class PartyDemographicFieldsState extends State<PartyDemographicFields> {
   @override
   void initState() {
     super.initState();
-    final party = widget.initialPartySize < 1 ? 1 : widget.initialPartySize;
+    final party = widget.initialPartySize < widget.minPartySize
+        ? widget.minPartySize
+        : widget.initialPartySize;
     var male = PartyCountComplements.clampKnown(party, widget.initialMale);
     var female = PartyCountComplements.clampKnown(party, widget.initialFemale);
     if (!PartyCountComplements.sumsToTotal(party, male, female)) {
@@ -140,8 +153,9 @@ class PartyDemographicFieldsState extends State<PartyDemographicFields> {
   }
 
   PartyDemographicValue get value {
-    final party = _parse(_partyCtrl, fallback: 1);
-    final p = party < 1 ? 1 : party;
+    final min = widget.minPartySize;
+    final party = _parse(_partyCtrl, fallback: min);
+    final p = party < min ? min : party;
     if (!widget.showResidency) {
       return PartyDemographicValue(
         partySize: p,
@@ -149,6 +163,7 @@ class PartyDemographicFieldsState extends State<PartyDemographicFields> {
         femaleCount: _parse(_femaleCtrl),
         filipinoCount: p,
         foreignCount: 0,
+        minPartySize: min,
       );
     }
     return PartyDemographicValue(
@@ -157,6 +172,7 @@ class PartyDemographicFieldsState extends State<PartyDemographicFields> {
       femaleCount: _parse(_femaleCtrl),
       filipinoCount: _parse(_filipinoCtrl),
       foreignCount: _parse(_foreignCtrl),
+      minPartySize: min,
     );
   }
 
@@ -177,9 +193,10 @@ class PartyDemographicFieldsState extends State<PartyDemographicFields> {
     if (_syncing) return;
     _syncing = true;
     try {
-      final partyRaw = _parse(_partyCtrl, fallback: 1);
-      final party = partyRaw < 1 ? 1 : partyRaw;
-      if (partyRaw < 1) _setText(_partyCtrl, 1);
+      final min = widget.minPartySize;
+      final partyRaw = _parse(_partyCtrl, fallback: min);
+      final party = partyRaw < min ? min : partyRaw;
+      if (partyRaw < min) _setText(_partyCtrl, min);
 
       if (_sexLastWasMale) {
         final m = PartyCountComplements.clampKnown(party, _parse(_maleCtrl));

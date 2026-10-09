@@ -1,16 +1,12 @@
 import 'package:flutter/material.dart';
 
-import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/models/establishment_map_pin.dart';
-import 'package:atmos_trs_system/models/establishment_stay_review.dart';
 import 'package:atmos_trs_system/services/establishment_gallery_service.dart';
 import 'package:atmos_trs_system/services/establishment_map_pins_service.dart';
-import 'package:atmos_trs_system/services/establishment_stay_review_service.dart';
-import 'package:atmos_trs_system/utils/establishment_capability.dart';
 import 'package:atmos_trs_system/widgets/misamis_occidental_explore_map.dart'
     show kEstablishmentMapPinColor;
 
-/// Full-screen tourist view of an approved establishment (gallery + stay reviews).
+/// Full-screen tourist view of an approved establishment (gallery + location).
 class EstablishmentPublicDetailScreen extends StatefulWidget {
   const EstablishmentPublicDetailScreen({
     super.key,
@@ -32,8 +28,6 @@ class _EstablishmentPublicDetailScreenState
   // Kept across gallery swipes (setState) so listeners are not re-created.
   late final Stream<List<String>> _galleryStream =
       EstablishmentGalleryService.watchUrls(widget.pin.id);
-  late final Stream<EstablishmentStayReviewSummary> _reviewsStream =
-      EstablishmentStayReviewService.watchForEstablishment(widget.pin.id);
 
   @override
   void initState() {
@@ -62,8 +56,6 @@ class _EstablishmentPublicDetailScreenState
     ];
     return parts.join(' · ');
   }
-
-  bool get _isLodging => EstablishmentCapability.isLodging(_pin.category);
 
   @override
   Widget build(BuildContext context) {
@@ -273,243 +265,14 @@ class _EstablishmentPublicDetailScreenState
                             ),
                           ],
                         ),
-                      const SizedBox(height: 12),
-                      Text(
-                        'Scan this establishment’s QR on arrival to request a stay. '
-                        'Reviews below are from guests who checked out.',
-                        style: TextStyle(
-                          fontSize: 13.5,
-                          height: 1.4,
-                          color: Colors.grey.shade700,
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      const Text(
-                        'Guest reviews',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFF111827),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 40),
                     ],
                   ),
-                ),
-              ),
-              SliverToBoxAdapter(
-                child: StreamBuilder<EstablishmentStayReviewSummary>(
-                  stream: _reviewsStream,
-                  builder: (context, snap) {
-                    final summary =
-                        snap.data ?? EstablishmentStayReviewSummary.empty;
-                    if (snap.connectionState == ConnectionState.waiting &&
-                        !snap.hasData) {
-                      return const Padding(
-                        padding: EdgeInsets.all(32),
-                        child: Center(
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      );
-                    }
-                    if (summary.reviewCount == 0) {
-                      return Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
-                        child: Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(18),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF8FAFC),
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: const Color(0xFFE2E8F0)),
-                          ),
-                          child: Text(
-                            'No guest reviews yet.',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Colors.grey.shade700,
-                            ),
-                          ),
-                        ),
-                      );
-                    }
-                    return Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: AppTheme.brandOrange
-                                  .withValues(alpha: 0.08),
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                color: AppTheme.brandOrange
-                                    .withValues(alpha: 0.25),
-                              ),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.star_rounded,
-                                  color: AppTheme.brandOrange,
-                                  size: 28,
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        '${summary.averageOverall.toStringAsFixed(1)} overall',
-                                        style: const TextStyle(
-                                          fontSize: 17,
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                      ),
-                                      Text(
-                                        _isLodging
-                                            ? 'Hotel ${summary.averageHotelRating.toStringAsFixed(1)}★ · '
-                                                'Room ${summary.averageRoomRating.toStringAsFixed(1)}★ · '
-                                                '${summary.reviewCount} review${summary.reviewCount == 1 ? '' : 's'}'
-                                            : '${summary.reviewCount} review${summary.reviewCount == 1 ? '' : 's'}',
-                                        style: TextStyle(
-                                          fontSize: 13,
-                                          color: Colors.grey.shade700,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          for (final r in summary.reviews)
-                            _ReviewTile(
-                              review: r,
-                              showRoomDetails: _isLodging,
-                            ),
-                        ],
-                      ),
-                    );
-                  },
                 ),
               ),
             ],
           );
         },
-      ),
-    );
-  }
-}
-
-class _ReviewTile extends StatelessWidget {
-  const _ReviewTile({
-    required this.review,
-    this.showRoomDetails = true,
-  });
-
-  final EstablishmentStayReview review;
-  final bool showRoomDetails;
-
-  @override
-  Widget build(BuildContext context) {
-    final rooms = review.roomNumbers
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
-    final roomLabel = rooms.isEmpty ? null : 'Room ${rooms.join(', ')}';
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 16,
-                backgroundColor:
-                    kEstablishmentMapPinColor.withValues(alpha: 0.15),
-                child: Text(
-                  review.authorName.isNotEmpty
-                      ? review.authorName[0].toUpperCase()
-                      : 'G',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: kEstablishmentMapPinColor,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      review.authorName,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14,
-                      ),
-                    ),
-                    Text(
-                      showRoomDetails
-                          ? (roomLabel == null
-                              ? 'Hotel ${review.hotelRating.toStringAsFixed(0)}★ · '
-                                  'Room ${review.roomRating.toStringAsFixed(0)}★'
-                              : 'Hotel ${review.hotelRating.toStringAsFixed(0)}★ · '
-                                  '$roomLabel: ${review.roomRating.toStringAsFixed(0)}★')
-                          : '${review.hotelRating.toStringAsFixed(0)}★ overall',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          if (showRoomDetails && roomLabel != null) ...[
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF1F5F9),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                'Reviewed $roomLabel',
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF475569),
-                ),
-              ),
-            ),
-          ],
-          if (review.comment.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-              review.comment,
-              style: const TextStyle(
-                fontSize: 14,
-                height: 1.4,
-                color: Color(0xFF1F2937),
-              ),
-            ),
-          ],
-        ],
       ),
     );
   }
