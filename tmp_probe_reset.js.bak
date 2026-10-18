@@ -1,0 +1,101 @@
+/**
+ * Find the API key embedded in Firebase password-reset links and print only
+ * its display name and referrer restrictions. Creates and deletes a temp user.
+ */
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const PROJECT = 'atmos-trs-system';
+const PROJECT_NUMBER = '760231001760';
+const CLIENT_ID = '563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com';
+const CLIENT_SECRET = 'j9iVZfS8kkCEFUPaAeJV0sAi';
+
+async function accessToken() {
+  const cfgPath = path.join(os.homedir(), '.config', 'configstore', 'firebase-tools.json');
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  const body = new URLSearchParams({
+    client_id: CLIENT_ID,
+    client_secret: CLIENT_SECRET,
+    refresh_token: cfg.tokens.refresh_token,
+    grant_type: 'refresh_token',
+  });
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  });
+  const json = await res.json();
+  if (!json.access_token) throw new Error('token exchange failed');
+  return json.access_token;
+}
+
+async function adminPost(token, urlPath, payload) {
+  const res = await fetch('https://identitytoolkit.googleapis.com/v1/' + urlPath, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + token,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json();
+  return { status: res.status, json };
+}
+
+async function main() {
+  const token = await accessToken();
+  const email = `atmos-pwreset-probe-${Date.now()}@misocc-seed.ph`;
+  const created = await adminPost(token, `projects/${PROJECT}/accounts`, {
+    email,
+    password: 'ProbeTest1!Aa',
+  });
+  if (created.status !== 200) {
+    console.log('create failed', created.status, JSON.stringify(created.json).slice(0, 250));
+    return;
+  }
+  const localId = created.json.localId;
+  try {
+    const link = await adminPost(token, `projects/${PROJECT}/accounts:sendOobCode`, {
+      requestType: 'PASSWORD_RESET',
+      email,
+      returnOobLink: true,
+    });
+    if (!link.json.oobLink) {
+      console.log('no link', link.status, JSON.stringify(link.json).slice(0, 250));
+      return;
+    }
+    const linkKey = new URL(link.json.oobLink).searchParams.get('apiKey');
+    const listRes = await fetch(
+      `https://apikeys.googleapis.com/v2/projects/${PROJECT_NUMBER}/locations/global/keys`,
+      { headers: { Authorization: 'Bearer ' + token } },
+    );
+    const list = await listRes.json();
+    for (const key of list.keys || []) {
+      const ks = await fetch(`https://apikeys.googleapis.com/v2/${key.name}/keyString`, {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      const body = await ks.json();
+      if (ks.status !== 200) {
+        console.log('lookup failed', key.displayName, ks.status);
+        continue;
+      }
+      if (body.keyString !== linkKey) continue;
+      const restrictions = key.restrictions || {};
+      console.log('matched', key.displayName);
+      console.log('resource', key.name);
+      console.log('browser', JSON.stringify(restrictions.browserKeyRestrictions || null));
+      console.log('android', JSON.stringify(restrictions.androidKeyRestrictions || null));
+      console.log('ios', JSON.stringify(restrictions.iosKeyRestrictions || null));
+      console.log('server', JSON.stringify(restrictions.serverKeyRestrictions || null));
+    }
+  } finally {
+    const del = await adminPost(token, `projects/${PROJECT}/accounts:delete`, { localId });
+    console.log('deleted', del.status === 200);
+  }
+}
+
+main().catch((e) => {
+  console.error(e.message);
+  process.exitCode = 1;
+});
