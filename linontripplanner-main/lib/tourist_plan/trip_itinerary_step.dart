@@ -41,8 +41,8 @@ class TripItineraryStep extends StatelessWidget {
                 const SizedBox(height: 6),
                 Text(
                   'Build your own plan: "Add nearest" picks the closest unvisited spot, '
-                  'or choose any with "Add another spot". "End day here" makes the last '
-                  'spot the start of the next day; new days are added until every spot is planned. '
+                  'or choose any with "Add another spot". "End day here" makes that '
+                  'spot the start of the next day. Days stay at the number you selected. '
                   'Each day holds up to ${TripWizardController.absoluteMaxSpotsPerDay} spots. '
                   'A spot used on one day will not show on other days.',
                   style: TextStyle(
@@ -111,6 +111,18 @@ class TripItineraryStep extends StatelessWidget {
                         ),
                       );
                     },
+                  ),
+                ],
+                if (wizard.dayCapacityWarning != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    wizard.dayCapacityWarning!,
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.35,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.orange.shade900,
+                    ),
                   ),
                 ],
                 if (wizard.unassignedSpots.isNotEmpty) ...[
@@ -361,7 +373,7 @@ class _DaySection extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
               child: Text(
                 'This day is full (maximum ${TripWizardController.absoluteMaxSpotsPerDay} spots). '
-                'Choose its last spot with "End day here" to continue on the next day.',
+                '${dayIndex < wizard.tripDays - 1 ? 'Use "End day here" so the next day starts from its last spot.' : 'Spots that do not fit stay unassigned. Add travel days to place them.'}',
                 style: TextStyle(
                   fontSize: 12,
                   color: AppColors.textGrey.withValues(alpha: 0.95),
@@ -1215,15 +1227,12 @@ class _TripSummaryCard extends StatelessWidget {
           ),
           _row('Entrances', formatFarePhp(wizard.entranceFeesTotal)),
           _row('Food (est.)', formatFarePhp(wizard.foodEstimatePhp)),
-          if (wizard.needsAccommodation)
-            _row(
-              'Lodging (est.)',
-              formatFarePhp(wizard.accommodationEstimatePhp),
-            ),
           const Divider(height: 20),
           _row(
             'Estimated overall',
-            formatFarePhp(wizard.estimatedTotalPhp),
+            formatFarePhp(
+              wizard.estimatedTotalPhp - wizard.accommodationEstimatePhp,
+            ),
             bold: true,
           ),
           _row('Your budget', formatFarePhp(wizard.budgetPhp.round())),

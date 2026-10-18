@@ -80,12 +80,36 @@ class AuthRoles {
     return resolveAppRole(fallbackRole: match?.role ?? 'tourist');
   }
 
+  /// ATMOS staff who manage the trip-planner catalog. Their Firestore role
+  /// stays unchanged so ATMOS routing is not rewritten to `admin`.
+  static bool isAtmosStaffAdminRole(String? raw) {
+    final role = (raw ?? '')
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[\s-]+'), '_');
+    const roles = {
+      'governor',
+      'provincial_tourism',
+      'tourism_province',
+      'tourism',
+      'tourism_office',
+      'lgu_tourism',
+      'admin',
+      'municipal_manager',
+      'municipalmanager',
+    };
+    return roles.contains(role);
+  }
+
   /// Governor portal + full content management.
   static bool canAccessAdminDashboard([AppUser? user]) {
-    final role = user != null ? roleForUser(user) : currentRole();
+    final resolved =
+        user ?? findAppUserByFirebaseUid(FirebaseAuth.instance.currentUser?.uid);
+    final role = roleForUser(resolved);
     if (role == AppRole.admin || role == AppRole.municipalManager) {
       return true;
     }
+    if (isAtmosStaffAdminRole(resolved?.role)) return true;
     final email = FirebaseAuth.instance.currentUser?.email ?? '';
     return AdminAccountsService.emailMatchesDefaultAdmin(email) ||
         isRegisteredAdminEmail(email);

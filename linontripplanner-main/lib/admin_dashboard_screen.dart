@@ -12,12 +12,17 @@ import 'firestore_loader.dart';
 import 'municipality_bus_terminals.dart';
 import 'services/admin_session_bootstrap.dart';
 import 'services/auth_roles.dart';
+import 'municipality_performance.dart';
+import 'trip_planner_analytics_tab.dart';
+import 'services/public_firestore_read.dart';
 import 'services/reports/report_check_ins.dart';
 import 'services/storage_image_upload.dart';
 import 'services/spot_ratings_store.dart';
+import 'services/bus_location_store.dart';
 import 'services/tourism_session.dart' show tourismCatalogRevision;
 import 'admin_announcements_tab.dart';
 import 'admin_event_form_page.dart';
+import 'admin_bus_locations_tab.dart';
 import 'admin_matrix_fares_tab.dart';
 import 'admin_reports_tab.dart';
 import 'tourist_registry_tab.dart';
@@ -39,23 +44,65 @@ final RouteObserver<PageRoute<dynamic>> tourismAdminRouteObserver =
 const Color _kPortalIconBlue = Color(0xFF42A5F5);
 const Color _kTrendGreen = Color(0xFF66BB6A);
 
-/// Sidebar + header titles (same order as governor tab indices).
+/// Sidebar titles. Indices match [_buildGovernorTabBody].
 const _kGovernorNavItems = [
-  (icon: Icons.dashboard_rounded, label: 'Dashboard'),
-  (icon: Icons.insights_outlined, label: 'Analytics'),
-  (icon: Icons.star_outline_rounded, label: 'Featured'),
+  (icon: Icons.dashboard_rounded, label: 'Overview Dashboard'),
+  (icon: Icons.people_outline_rounded, label: 'Tourist Monitoring'),
   (icon: Icons.place_outlined, label: 'Tourist Spots'),
-  (icon: Icons.location_city_outlined, label: 'Municipalities'),
-  (icon: Icons.campaign_outlined, label: 'Announcements'),
-  (icon: Icons.event_outlined, label: 'Events'),
-  (icon: Icons.people_outline_rounded, label: 'Tourists'),
-  (icon: Icons.fact_check_outlined, label: 'Check-ins'),
-  (icon: Icons.view_in_ar, label: 'VR Tour'),
-  (icon: Icons.assessment_outlined, label: 'Reports'),
+  (icon: Icons.star_outline_rounded, label: 'Featured Destinations'),
+  (icon: Icons.view_in_ar_outlined, label: 'Destinations & VR Tours'),
+  (icon: Icons.location_city_outlined, label: 'Municipality Performance'),
+  (icon: Icons.route_outlined, label: 'Trip Planner Analytics'),
   (icon: Icons.grid_on_outlined, label: 'Matrix Fares'),
-  (icon: Icons.qr_code_scanner_rounded, label: 'Spots & QR Code'),
+  (icon: Icons.campaign_outlined, label: 'Events & Announcements'),
+  (icon: Icons.storefront_outlined, label: 'Establishments'),
+  (icon: Icons.insights_outlined, label: 'Tourism Insights'),
+  (icon: Icons.assessment_outlined, label: 'DOT Reports'),
+  (icon: Icons.warning_amber_rounded, label: 'Alerts & Quality'),
   (icon: Icons.settings_outlined, label: 'Settings'),
 ];
+
+const _kNavSections = <({String? title, List<int> indices})>[
+  (title: null, indices: [0]),
+  (title: 'Visitors', indices: [1, 5, 6]),
+  (title: 'Places', indices: [2, 3, 4, 8, 9]),
+  (title: 'Reports', indices: [7, 10, 11, 12]),
+  (title: 'System', indices: [13]),
+];
+
+String _portalPageTitle(int selected) {
+  if (selected >= 0 && selected < _kGovernorNavItems.length) {
+    return _kGovernorNavItems[selected].label;
+  }
+  return switch (selected) {
+    14 => 'Bus stops',
+    15 => 'Spots & QR',
+    16 => 'QR check-in history',
+    _ => 'OPTACA Portal',
+  };
+}
+
+String? _portalPageSubtitle(int selected) {
+  return switch (selected) {
+    1 => 'Registered tourists and recorded QR check-ins',
+    2 => 'Spot catalog used by the public app and QR check-in',
+    3 => 'Spots highlighted on the tourist home screen',
+    4 => 'Virtual tours linked to destinations',
+    5 => 'Recorded QR arrivals by municipality',
+    6 => 'Saved trip plans. Separate from QR arrivals.',
+    7 => 'Fare matrix for the trip planner',
+    8 => 'Public announcements and events',
+    9 => 'Accommodation establishments on file',
+    10 => 'Provincial figures from recorded visits',
+    11 => 'Filled DOT forms from current ATMOS data',
+    12 => 'Spots missing an image, coordinates, or municipality',
+    13 => 'Bus stops and spot QR tools',
+    14 => 'Stops used by the trip planner bus route',
+    15 => 'QR codes for tourist spots',
+    16 => 'Each row is one recorded QR check-in',
+    _ => null,
+  };
+}
 
 String _slug(String name) {
   return name
@@ -78,43 +125,55 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   /// Tab changes use this notifier so the heavy content area rebuilds without
   /// rebuilding the entire scaffold (smoother on web).
   final ValueNotifier<int> _tabIndex = ValueNotifier<int>(0);
+  bool _navCollapsed = false;
 
   void _onGovernorDataChanged() => setState(() {});
 
   Widget _buildGovernorTabBody(int index) {
     switch (index) {
       case 0:
-        return _OverviewTab();
+        return _OverviewTab(onOpen: (index) => _tabIndex.value = index);
       case 1:
-        return _AnalyticsTab(onChanged: _onGovernorDataChanged);
+        return _TouristMonitoringHost(
+          onOpenCheckIns: () => _tabIndex.value = 16,
+        );
       case 2:
-        return AdminFeaturedSpotsTab(onChanged: _onGovernorDataChanged);
-      case 3:
         return _SpotsListTab(onChanged: _onGovernorDataChanged);
+      case 3:
+        return AdminFeaturedSpotsTab(onChanged: _onGovernorDataChanged);
       case 4:
-        return _MunicipalitiesListTab(onChanged: _onGovernorDataChanged);
-      case 5:
-        return AdminAnnouncementsTab(onChanged: _onGovernorDataChanged);
-      case 6:
-        return _EventsListTab(onChanged: _onGovernorDataChanged);
-      case 7:
-        return const TouristRegistryTab();
-      case 8:
-        return const _AdminCheckInsTab();
-      case 9:
         return const _AdminVrTourTab();
-      case 10:
-        return AdminReportsTab(
-          onOpenMatrixFares: () => _tabIndex.value = 11,
-        );
-      case 11:
+      case 5:
+        return _MunicipalitiesListTab(onChanged: _onGovernorDataChanged);
+      case 6:
+        return const TripPlannerAnalyticsTab();
+      case 7:
         return const AdminMatrixFaresTab();
-      case 12:
-        return _AdminSpotsQrTab(
-          onOpenSpotsTab: () => _tabIndex.value = 3,
+      case 8:
+        return _EventsAndAnnouncementsHost(onChanged: _onGovernorDataChanged);
+      case 9:
+        return const _PortalEstablishmentsTab();
+      case 10:
+        return _AnalyticsTab(onChanged: _onGovernorDataChanged);
+      case 11:
+        return AdminReportsTab(
+          onOpenMatrixFares: () => _tabIndex.value = 7,
         );
+      case 12:
+        return const _AlertsQualityTab();
       case 13:
-        return _AdminSettingsTab();
+        return _AdminSettingsTab(
+          onOpenBusStops: () => _tabIndex.value = 14,
+          onOpenSpotsQr: () => _tabIndex.value = 15,
+        );
+      case 14:
+        return const AdminBusLocationsTab();
+      case 15:
+        return _AdminSpotsQrTab(
+          onOpenSpotsTab: () => _tabIndex.value = 2,
+        );
+      case 16:
+        return const _AdminCheckInsTab();
       default:
         return const SizedBox.shrink();
     }
@@ -124,6 +183,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      BusLocationStore.instance.ensureListening();
       prefetchAdminDashboardCatalogs().then((_) {
         if (mounted) setState(() {});
       });
@@ -140,11 +200,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (selected != 0) _GovernorPageHeader(title: _kGovernorNavItems[selected].label),
+        if (selected != 0)
+          _GovernorPageHeader(
+            title: _portalPageTitle(selected),
+            subtitle: _portalPageSubtitle(selected),
+          ),
         Expanded(
           child: RepaintBoundary(
             child: ColoredBox(
-              color: AppColors.planPageBg,
+              color: OptacaAdminTheme.background,
               child: _DeferredGovernorTabContent(
                 index: selected,
                 builder: _buildGovernorTabBody,
@@ -158,7 +222,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
+    return Theme(
+      data: OptacaAdminTheme.theme(Theme.of(context)),
+      child: LayoutBuilder(
       builder: (context, constraints) {
         final useDrawer = constraints.maxWidth < TourismBreakpoints.adminDrawer;
         return ValueListenableBuilder<int>(
@@ -176,21 +242,25 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               onSelect: selectTab,
               onLogout: () => performTourismLogout(context),
               fullWidth: useDrawer,
+              collapsed: !useDrawer && _navCollapsed,
+              onToggleCollapse: useDrawer
+                  ? null
+                  : () => setState(() => _navCollapsed = !_navCollapsed),
             );
 
             if (useDrawer) {
               return Scaffold(
-                backgroundColor: AppColors.planPageBg,
+                backgroundColor: OptacaAdminTheme.background,
                 drawer: Drawer(
                   width: (constraints.maxWidth * 0.86).clamp(260.0, 320.0),
                   child: sidebar,
                 ),
                 appBar: AppBar(
-                  backgroundColor: AppColors.primary,
+                  backgroundColor: OptacaAdminTheme.primary,
                   foregroundColor: Colors.white,
                   elevation: 0,
                   title: Text(
-                    _kGovernorNavItems[selected].label,
+                    _portalPageTitle(selected),
                     style: TourismAppTheme.adminAppBar.titleTextStyle,
                   ),
                 ),
@@ -199,7 +269,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             }
 
             return Scaffold(
-              backgroundColor: AppColors.planPageBg,
+              backgroundColor: OptacaAdminTheme.background,
               body: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -211,6 +281,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           },
         );
       },
+      ),
     );
   }
 }
@@ -262,7 +333,7 @@ class _DeferredGovernorTabContentState extends State<_DeferredGovernorTabContent
   Widget build(BuildContext context) {
     if (!_showHeavy) {
       return const ColoredBox(
-        color: AppColors.planPageBg,
+        color: OptacaAdminTheme.background,
         child: SizedBox.expand(),
       );
     }
@@ -275,178 +346,145 @@ class _GovernorSidebar extends StatelessWidget {
   final ValueChanged<int> onSelect;
   final VoidCallback onLogout;
   final bool fullWidth;
+  final bool collapsed;
+  final VoidCallback? onToggleCollapse;
 
   const _GovernorSidebar({
     required this.selectedIndex,
     required this.onSelect,
     required this.onLogout,
     this.fullWidth = false,
+    this.collapsed = false,
+    this.onToggleCollapse,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
       decoration: const BoxDecoration(
-        gradient: TourismPlanUi.primaryGradient,
+        gradient: OptacaAdminTheme.sidebarGradient,
       ),
       child: SafeArea(
         child: SizedBox(
-          width: fullWidth ? double.infinity : 280,
+          width: fullWidth ? double.infinity : (collapsed ? 76 : 268),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 16, 20),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    IconButton(
-                      icon: const Icon(
-                        Icons.arrow_back_ios_new_rounded,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                      onPressed: onLogout,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                        minWidth: 36,
-                        minHeight: 36,
-                      ),
-                    ),
-                    Expanded(
-                      child: Row(
+                padding: EdgeInsets.fromLTRB(collapsed ? 8 : 16, 16, collapsed ? 8 : 12, 12),
+                child: collapsed
+                    ? Column(
+                        children: [
+                          const Icon(Icons.public_rounded, color: Colors.white, size: 28),
+                          if (onToggleCollapse != null)
+                            IconButton(
+                              tooltip: 'Expand menu',
+                              onPressed: onToggleCollapse,
+                              icon: const Icon(Icons.keyboard_double_arrow_right_rounded, color: Colors.white),
+                            ),
+                        ],
+                      )
+                    : Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Container(
-                            padding: const EdgeInsets.all(6),
+                            padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
                               color: Colors.white.withValues(alpha: 0.2),
-                              shape: BoxShape.circle,
+                              borderRadius: BorderRadius.circular(12),
                             ),
-                            child: const Icon(
-                              Icons.public_rounded,
-                              color: Colors.white,
-                              size: 28,
-                            ),
+                            child: const Icon(Icons.public_rounded, color: Colors.white, size: 22),
                           ),
                           const SizedBox(width: 10),
-                          Expanded(
+                          const Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text(
-                                  'ATMOS TRS',
+                                Text(
+                                  'OPTACA Portal',
                                   style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w800,
                                     color: Colors.white,
                                     height: 1.1,
                                   ),
                                 ),
+                                SizedBox(height: 4),
                                 Text(
-                                  'OPTACA Portal',
+                                  'Provincial Tourism',
                                   style: TextStyle(
                                     fontSize: 12,
-                                    color: Colors.white.withValues(alpha: 0.92),
+                                    color: Colors.white,
                                     fontWeight: FontWeight.w500,
                                   ),
                                 ),
                               ],
                             ),
                           ),
-                          _GovernorSidebarAvatar(),
+                          if (onToggleCollapse != null)
+                            IconButton(
+                              tooltip: 'Collapse menu',
+                              onPressed: onToggleCollapse,
+                              icon: const Icon(
+                                Icons.keyboard_double_arrow_left_rounded,
+                                color: Colors.white,
+                              ),
+                            ),
                         ],
                       ),
-                    ),
-                  ],
-                ),
               ),
-              Expanded(
-                child: ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  itemCount: _kGovernorNavItems.length,
-                  itemBuilder: (context, index) {
-                    final item = _kGovernorNavItems[index];
-                    final selected = selectedIndex == index;
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: () => onSelect(index),
-                          borderRadius: BorderRadius.circular(14),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 12,
-                            ),
-                            decoration: BoxDecoration(
-                              color: selected
-                                  ? Colors.white
-                                  : Colors.transparent,
-                              borderRadius: BorderRadius.circular(14),
-                              boxShadow: selected
-                                  ? [
-                                      BoxShadow(
-                                        color: Colors.black.withValues(
-                                          alpha: 0.12,
-                                        ),
-                                        blurRadius: 12,
-                                        offset: const Offset(0, 4),
-                                      ),
-                                    ]
-                                  : null,
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  item.icon,
-                                  size: 22,
-                                  color: selected
-                                      ? AppColors.primary
-                                      : Colors.white,
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Text(
-                                    item.label,
-                                    style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: selected
-                                          ? FontWeight.w700
-                                          : FontWeight.w500,
-                                      color: selected
-                                          ? AppColors.primary
-                                          : Colors.white,
-                                    ),
-                                  ),
-                                ),
-                              ],
+              Expanded(child: _navList()),
+              if (!collapsed)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.landscape_outlined, color: Colors.white),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Explore Misamis Occidental',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
                             ),
                           ),
                         ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                child: OutlinedButton(
-                  onPressed: onLogout,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    side: const BorderSide(color: Colors.white, width: 1.5),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(24),
+                      ],
                     ),
                   ),
-                  child: const Text(
-                    'Logout',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
                 ),
+              Padding(
+                padding: EdgeInsets.fromLTRB(collapsed ? 8 : 16, 8, collapsed ? 8 : 16, 16),
+                child: collapsed
+                    ? IconButton(
+                        tooltip: 'Logout',
+                        onPressed: onLogout,
+                        icon: const Icon(Icons.logout_rounded, color: Colors.white),
+                      )
+                    : FilledButton.icon(
+                        onPressed: onLogout,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: OptacaAdminTheme.primary,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                        ),
+                        icon: const Icon(Icons.logout_rounded, size: 18),
+                        label: const Text(
+                          'Logout',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
               ),
             ],
           ),
@@ -454,61 +492,331 @@ class _GovernorSidebar extends StatelessWidget {
       ),
     );
   }
+
+  Widget _navList() {
+    return ListView(
+      padding: EdgeInsets.symmetric(horizontal: collapsed ? 8 : 12),
+      children: [
+        for (final section in _kNavSections) ...[
+          if (!collapsed && section.title != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 14, 12, 6),
+              child: Text(
+                section.title!.toUpperCase(),
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.72),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6,
+                ),
+              ),
+            ),
+          for (final index in section.indices) _navTile(index),
+        ],
+      ],
+    );
+  }
+
+  Widget _navTile(int index) {
+    final item = _kGovernorNavItems[index];
+    final selected = selectedIndex == index;
+    final tile = Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => onSelect(index),
+          borderRadius: BorderRadius.circular(12),
+          hoverColor: selected
+              ? OptacaAdminTheme.lightOrange
+              : Colors.white.withValues(alpha: 0.14),
+          splashColor: Colors.white.withValues(alpha: 0.2),
+          highlightColor: Colors.white.withValues(alpha: 0.08),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            padding: EdgeInsets.symmetric(
+              horizontal: collapsed ? 0 : 12,
+              vertical: collapsed ? 10 : 11,
+            ),
+            decoration: BoxDecoration(
+              color: selected ? Colors.white : Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              mainAxisAlignment: collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
+              children: [
+                Icon(
+                  item.icon,
+                  size: 22,
+                  color: selected ? OptacaAdminTheme.primary : Colors.white,
+                ),
+                if (!collapsed) ...[
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      item.label,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        height: 1.2,
+                        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                        color: selected ? OptacaAdminTheme.primary : Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (!collapsed) return tile;
+    return Tooltip(message: item.label, child: tile);
+  }
 }
 
-class _GovernorSidebarAvatar extends StatelessWidget {
+class _GovernorPageHeader extends StatelessWidget {
+  final String title;
+  final String? subtitle;
+
+  const _GovernorPageHeader({required this.title, this.subtitle});
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 44,
-      height: 44,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: Colors.white,
-        border: Border.all(color: Colors.white, width: 2),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.15),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      alignment: Alignment.center,
-      child: const Text(
-        'G',
-        style: TextStyle(
-          fontSize: 18,
-          fontWeight: FontWeight.bold,
-          color: Color(0xFF9E9E9E),
+    return Material(
+      color: OptacaAdminTheme.background,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(24, 18, 24, 16),
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: OptacaAdminTheme.border)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: OptacaAdminTheme.text,
+                height: 1.15,
+              ),
+            ),
+            if (subtitle != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                subtitle!,
+                style: const TextStyle(
+                  fontSize: 13,
+                  height: 1.35,
+                  color: OptacaAdminTheme.textMuted,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );
   }
 }
 
-class _GovernorPageHeader extends StatelessWidget {
-  final String title;
+class _TouristMonitoringHost extends StatelessWidget {
+  const _TouristMonitoringHost({required this.onOpenCheckIns});
 
-  const _GovernorPageHeader({required this.title});
+  final VoidCallback onOpenCheckIns;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      decoration: const BoxDecoration(
-        color: AppColors.primary,
-        borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
-      ),
-      padding: const EdgeInsets.fromLTRB(28, 18, 28, 22),
-      child: Text(
-        title,
-        style: const TextStyle(
-          fontSize: 22,
-          fontWeight: FontWeight.bold,
-          color: Colors.white,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerRight,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: TextButton.icon(
+              onPressed: onOpenCheckIns,
+              icon: const Icon(Icons.fact_check_outlined),
+              label: const Text('QR check-in history'),
+            ),
+          ),
         ),
-      ),
+        const Expanded(child: TouristRegistryTab()),
+      ],
+    );
+  }
+}
+
+/// Shows the existing announcements page or the existing events page.
+/// Only one is mounted, so the two lists do not share a scroll controller.
+class _EventsAndAnnouncementsHost extends StatefulWidget {
+  const _EventsAndAnnouncementsHost({required this.onChanged});
+
+  final VoidCallback onChanged;
+
+  @override
+  State<_EventsAndAnnouncementsHost> createState() =>
+      _EventsAndAnnouncementsHostState();
+}
+
+class _EventsAndAnnouncementsHostState extends State<_EventsAndAnnouncementsHost> {
+  int _page = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child: SegmentedButton<int>(
+            segments: const [
+              ButtonSegment(value: 0, label: Text('Announcements')),
+              ButtonSegment(value: 1, label: Text('Events')),
+            ],
+            selected: {_page},
+            onSelectionChanged: (next) {
+              setState(() => _page = next.first);
+            },
+          ),
+        ),
+        Expanded(
+          child: _page == 0
+              ? AdminAnnouncementsTab(onChanged: widget.onChanged)
+              : _EventsListTab(onChanged: widget.onChanged),
+        ),
+      ],
+    );
+  }
+}
+
+class _PortalEstablishmentsTab extends StatefulWidget {
+  const _PortalEstablishmentsTab();
+
+  @override
+  State<_PortalEstablishmentsTab> createState() =>
+      _PortalEstablishmentsTabState();
+}
+
+class _PortalEstablishmentsTabState extends State<_PortalEstablishmentsTab> {
+  late final Future<PublicFirestoreDocs> _load =
+      fetchPublicFirestoreCollection('accommodation_establishments');
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<PublicFirestoreDocs>(
+      future: _load,
+      builder: (context, snap) {
+        if (snap.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final docs = snap.data?.docs ?? const <PublicFirestoreDoc>[];
+        if (docs.isEmpty) {
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.all(32),
+              child: Text(
+                'No establishment records are available to this account.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppColors.textGrey),
+              ),
+            ),
+          );
+        }
+        return ListView.separated(
+          padding: const EdgeInsets.all(20),
+          itemCount: docs.length,
+          separatorBuilder: (_, _) => const SizedBox(height: 8),
+          itemBuilder: (context, index) {
+            final data = docs[index].data();
+            final name = (data['name'] ?? data['establishmentName'] ?? 'Establishment')
+                .toString();
+            final place = (data['municipality'] ?? data['location'] ?? '').toString();
+            final category = (data['category'] ?? data['type'] ?? '').toString();
+            return Material(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              child: ListTile(
+                title: Text(name),
+                subtitle: Text([place, category].where((s) => s.isNotEmpty).join(' · ')),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _AlertsQualityTab extends StatelessWidget {
+  const _AlertsQualityTab();
+
+  @override
+  Widget build(BuildContext context) {
+    final missingImage = <String>[];
+    final missingCoordinates = <String>[];
+    final missingMunicipality = <String>[];
+    for (final spot in allSpots) {
+      if (spot.imagePath.trim().isEmpty) missingImage.add(spot.displayName);
+      if (spot.latitude == null || spot.longitude == null) {
+        missingCoordinates.add(spot.displayName);
+      }
+      if (spot.location.trim().isEmpty) missingMunicipality.add(spot.displayName);
+    }
+    final groups = [
+      (title: 'Missing image', icon: Icons.image_not_supported_outlined, names: missingImage),
+      (title: 'Missing coordinates', icon: Icons.wrong_location_outlined, names: missingCoordinates),
+      (title: 'Missing municipality', icon: Icons.location_off_outlined, names: missingMunicipality),
+    ];
+    final total = missingImage.length + missingCoordinates.length + missingMunicipality.length;
+    if (total == 0) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: Text(
+            'No data-quality alerts in the loaded spots.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.textGrey),
+          ),
+        ),
+      );
+    }
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        Text(
+          '$total item${total == 1 ? '' : 's'} to review',
+          style: const TextStyle(color: AppColors.textGrey, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 12),
+        for (final group in groups)
+          if (group.names.isNotEmpty) ...[
+            Material(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              clipBehavior: Clip.antiAlias,
+              child: ExpansionTile(
+                leading: Icon(group.icon, color: const Color(0xFFC2410C)),
+                title: Text(group.title, style: const TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: Text('${group.names.length} spot${group.names.length == 1 ? '' : 's'}'),
+                children: [
+                  for (final name in group.names)
+                    ListTile(
+                      dense: true,
+                      tileColor: Colors.white,
+                      title: Text(name),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
+      ],
     );
   }
 }
@@ -516,7 +824,9 @@ class _GovernorPageHeader extends StatelessWidget {
 // ─── Overview ───────────────────────────────────────────────────────────
 
 class _OverviewTab extends StatelessWidget {
-  const _OverviewTab();
+  const _OverviewTab({required this.onOpen});
+
+  final ValueChanged<int> onOpen;
 
   DateTime? _qrCheckInDateTime(Map<String, dynamic> raw) {
     dynamic read(Map<String, dynamic> d, String key) => d[key];
@@ -619,18 +929,69 @@ class _OverviewTab extends StatelessWidget {
         final activeSpots = allSpots.length;
         final monthlyVisits = _visitsPerMonthFromCheckIns(docs);
 
+        final upcomingEvents = tourismEvents
+            .where((event) => !event.dateTime.isBefore(now))
+            .length;
+
         return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: OptacaAdminTheme.border),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 4,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: OptacaAdminTheme.primary,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Good day, Provincial Tourism',
+                        style: TextStyle(
+                          color: OptacaAdminTheme.text,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          height: 1.15,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${_monthLabels[now.month - 1]} ${now.day}, ${now.year} · Misamis Occidental',
+                        style: const TextStyle(
+                          color: OptacaAdminTheme.textMuted,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
           LayoutBuilder(
             builder: (context, c) {
               final w = c.maxWidth;
-              final cols = w >= 1100 ? 4 : (w >= 700 ? 2 : 1);
+              final cols = w >= 1200 ? 5 : (w >= 700 ? 2 : 1);
               final children = [
                 _PortalStatCard(
-                  title: 'Total Tourists',
+                  title: 'Registered Tourists',
                   value: totalTourists,
                   icon: Icons.groups_2_outlined,
                   iconBg: AppColors.primary.withValues(alpha: 0.12),
@@ -652,35 +1013,59 @@ class _OverviewTab extends StatelessWidget {
                   iconColor: AppColors.primary,
                 ),
                 _PortalStatCard(
-                  title: 'Active Spots',
+                  title: 'Active Tourist Spots',
                   value: activeSpots,
                   icon: Icons.location_on_outlined,
                   iconBg: AppColors.primary.withValues(alpha: 0.12),
                   iconColor: AppColors.primary,
                 ),
+                _PortalStatCard(
+                  title: 'Upcoming Events',
+                  value: upcomingEvents,
+                  icon: Icons.event_outlined,
+                  iconBg: _kTrendGreen.withValues(alpha: 0.15),
+                  iconColor: _kTrendGreen,
+                ),
               ];
-              if (cols == 4) {
+              if (cols >= 5) {
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    for (var i = 0; i < 4; i++) ...[
-                      if (i > 0) const SizedBox(width: 16),
+                    for (var i = 0; i < children.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 12),
                       Expanded(child: children[i]),
                     ],
                   ],
                 );
               }
-              return Wrap(
-                spacing: 16,
-                runSpacing: 16,
-                children: children
-                    .map(
-                      (ch) => SizedBox(
-                        width: cols == 2 ? (w - 20 - 16) / 2 : w,
-                        child: ch,
+              if (cols == 2) {
+                return Column(
+                  children: [
+                    for (var i = 0; i < children.length; i += 2) ...[
+                      if (i > 0) const SizedBox(height: 16),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(child: children[i]),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: i + 1 < children.length
+                                ? children[i + 1]
+                                : const SizedBox.shrink(),
+                          ),
+                        ],
                       ),
-                    )
-                    .toList(),
+                    ],
+                  ],
+                );
+              }
+              return Column(
+                children: [
+                  for (var i = 0; i < children.length; i++) ...[
+                    if (i > 0) const SizedBox(height: 16),
+                    children[i],
+                  ],
+                ],
               );
             },
           ),
@@ -720,43 +1105,38 @@ class _OverviewTab extends StatelessWidget {
           const SizedBox(height: 24),
           Container(
             padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.08),
-                  blurRadius: 20,
-                  offset: const Offset(0, 6),
-                ),
-              ],
-            ),
+            decoration: TourismPlanUi.planCardDecoration(),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Icon(Icons.info_outline, color: AppColors.primary, size: 22),
-                    const SizedBox(width: 8),
-                    const Text(
-                      'Quick actions',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textDark,
-                      ),
-                    ),
-                  ],
+                const Text(
+                  'Go to',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textDark,
+                  ),
                 ),
                 const SizedBox(height: 12),
-                const Text(
-                  'Use the sidebar to manage Featured spots, Tourist spots, Municipalities, Announcements, Events, and Tourists. '
-                  'Tourist spots use Location to link to a municipality name.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: AppColors.textGrey,
-                    height: 1.5,
-                  ),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final action in const [
+                      (index: 1, icon: Icons.people_outline_rounded, label: 'Tourist Monitoring'),
+                      (index: 5, icon: Icons.location_city_outlined, label: 'Municipality Performance'),
+                      (index: 6, icon: Icons.route_outlined, label: 'Trip Planner Analytics'),
+                      (index: 11, icon: Icons.assessment_outlined, label: 'DOT Reports'),
+                      (index: 12, icon: Icons.warning_amber_rounded, label: 'Alerts & Quality'),
+                    ])
+                      ActionChip(
+                        avatar: Icon(action.icon, size: 18, color: AppColors.primary),
+                        label: Text(action.label),
+                        backgroundColor: Colors.white,
+                        side: BorderSide(color: AppColors.primary.withValues(alpha: 0.35)),
+                        onPressed: () => onOpen(action.index),
+                      ),
+                  ],
                 ),
               ],
             ),
@@ -804,12 +1184,6 @@ class _PortalStatCard extends StatelessWidget {
                 ),
                 child: Icon(icon, color: iconColor, size: 22),
               ),
-              const Spacer(),
-              Icon(
-                Icons.show_chart_rounded,
-                size: 18,
-                color: _kTrendGreen.withValues(alpha: 0.85),
-              ),
             ],
           ),
           const SizedBox(height: 16),
@@ -825,6 +1199,8 @@ class _PortalStatCard extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w600,
@@ -835,40 +1211,13 @@ class _PortalStatCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               subtitle!,
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 11,
-                color: _kTrendGreen.withValues(alpha: 0.95),
+                color: AppColors.textGrey,
                 fontWeight: FontWeight.w500,
               ),
             ),
           ],
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: _kTrendGreen.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.trending_up_rounded,
-                  size: 14,
-                  color: _kTrendGreen.withValues(alpha: 0.9),
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  'Trend',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: _kTrendGreen.withValues(alpha: 0.95),
-                  ),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );
@@ -891,12 +1240,12 @@ class _TouristArrivalsCard extends StatelessWidget {
         trailing: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
-            color: AppColors.planPageBg,
+            color: OptacaAdminTheme.background,
             borderRadius: BorderRadius.circular(20),
             border: Border.all(color: const Color(0xFFE0E0E0)),
           ),
           child: const Text(
-            'This Month',
+            'By month',
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
@@ -922,12 +1271,12 @@ class _TouristArrivalsCard extends StatelessWidget {
       trailing: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: AppColors.planPageBg,
+          color: OptacaAdminTheme.background,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: const Color(0xFFE0E0E0)),
         ),
         child: const Text(
-          'This Month',
+          'By month',
           style: TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.w600,
@@ -1114,9 +1463,9 @@ class _TopCategoriesDonutCard extends StatelessWidget {
           style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600),
         ),
       ),
-      child: Row(
-        children: [
-          SizedBox(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final pie = SizedBox(
             height: 180,
             width: 180,
             child: PieChart(
@@ -1140,50 +1489,65 @@ class _TopCategoriesDonutCard extends StatelessWidget {
                 }),
               ),
             ),
-          ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (var i = 0; i < top.length; i++)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 10,
-                          height: 10,
-                          decoration: BoxDecoration(
-                            color: colors[i % colors.length],
-                            shape: BoxShape.circle,
-                          ),
+          );
+          final legend = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var i = 0; i < top.length; i++)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: colors[i % colors.length],
+                          shape: BoxShape.circle,
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            top[i].key,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: AppColors.textDark,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        Text(
-                          '${(top[i].value / total * 100).toStringAsFixed(0)}%',
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          top[i].key,
                           style: const TextStyle(
                             fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.textGrey,
+                            color: AppColors.textDark,
                           ),
+                          overflow: TextOverflow.ellipsis,
                         ),
-                      ],
-                    ),
+                      ),
+                      Text(
+                        '${(top[i].value / total * 100).toStringAsFixed(0)}%',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textGrey,
+                        ),
+                      ),
+                    ],
                   ),
+                ),
+            ],
+          );
+          if (constraints.maxWidth < 420) {
+            return Column(
+              children: [
+                pie,
+                const SizedBox(height: 12),
+                legend,
               ],
-            ),
-          ),
-        ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              pie,
+              const SizedBox(width: 12),
+              Expanded(child: legend),
+            ],
+          );
+        },
       ),
     );
   }
@@ -1958,33 +2322,30 @@ class _HighRatingSpotsCard extends StatelessWidget {
 
 // ─── Featured list ──────────────────────────────────────────────────────
 
-/// Featured spots shown on the Trip Planner home banner.
 class AdminFeaturedSpotsTab extends StatefulWidget {
   final VoidCallback onChanged;
 
   const AdminFeaturedSpotsTab({super.key, required this.onChanged});
 
   @override
-  State<AdminFeaturedSpotsTab> createState() => _AdminFeaturedSpotsTabState();
+  State<AdminFeaturedSpotsTab> createState() => _FeaturedListTabState();
 }
 
-class _AdminFeaturedSpotsTabState extends State<AdminFeaturedSpotsTab> {
+class _FeaturedListTabState extends State<AdminFeaturedSpotsTab> {
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     _loading = featuredSpots.isEmpty;
-    _refresh(silent: true);
+    _refresh(silent: featuredSpots.isNotEmpty);
   }
 
   Future<void> _refresh({bool silent = false}) async {
-    if (!silent && featuredSpots.isEmpty && mounted) {
-      setState(() => _loading = true);
-    }
+    if (!silent && mounted) setState(() => _loading = true);
     try {
       await loadFeaturedSpotsFromFirestore().timeout(
-        const Duration(seconds: 8),
+        const Duration(seconds: 25),
       );
     } catch (e, st) {
       debugPrint('Featured spots load: $e\n$st');
@@ -1995,9 +2356,12 @@ class _AdminFeaturedSpotsTabState extends State<AdminFeaturedSpotsTab> {
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        RefreshIndicator(
+    if (_loading) {
+      return const Center(
+        child: CircularProgressIndicator(color: AppColors.primary),
+      );
+    }
+    return RefreshIndicator(
       color: AppColors.primary,
       onRefresh: _refresh,
       child: Stack(
@@ -2120,15 +2484,6 @@ class _AdminFeaturedSpotsTabState extends State<AdminFeaturedSpotsTab> {
         ),
       ],
     ),
-        ),
-        if (_loading)
-          const Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: LinearProgressIndicator(minHeight: 3),
-          ),
-      ],
     );
   }
 }
@@ -2420,6 +2775,9 @@ class _MunicipalitiesListTab extends StatefulWidget {
 class _MunicipalitiesListTabState extends State<_MunicipalitiesListTab>
     with RouteAware {
   bool _routeCovered = false;
+  final TextEditingController _search = TextEditingController();
+  String? _compareLeft;
+  String? _compareRight;
 
   @override
   void didChangeDependencies() {
@@ -2433,6 +2791,7 @@ class _MunicipalitiesListTabState extends State<_MunicipalitiesListTab>
 
   @override
   void dispose() {
+    _search.dispose();
     tourismAdminRouteObserver.unsubscribe(this);
     super.dispose();
   }
@@ -2448,75 +2807,233 @@ class _MunicipalitiesListTabState extends State<_MunicipalitiesListTab>
   }
 
   static String _touristCountLine(int n) {
-    if (n == 1) return '1 tourist';
-    return '$n tourists';
+    if (n == 1) return '1 arrival';
+    return '$n arrivals';
+  }
+
+  void _openPerformance(Municipality municipality) {
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => MunicipalityPerformancePage(
+          municipality: municipality,
+          onChanged: widget.onChanged,
+          onManageSpots: () {
+            Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => _AdminMunicipalitySpotsScreen(
+                  municipality: municipality,
+                  onChanged: widget.onChanged,
+                ),
+              ),
+            );
+          },
+          onEditSpot: (spot) async {
+            final index = allSpots.indexOf(spot);
+            await Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => AdminSpotFormPage(
+                  existing: spot,
+                  index: index >= 0 ? index : null,
+                ),
+              ),
+            );
+            widget.onChanged();
+          },
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     if (_routeCovered) {
       return const ColoredBox(
-        color: AppColors.planPageBg,
+        color: OptacaAdminTheme.background,
         child: SizedBox.expand(),
       );
     }
 
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection(kTouristCollection)
-          .snapshots(),
-      builder: (context, touristSnap) {
-        final counts = touristSnap.hasData
-            ? touristCountsPerMunicipalityFromTouristDocs(
-                touristSnap.data!.docs,
-              )
-            : <String, int>{
-                for (final m in sortedMunicipalities) m.name: 0,
-              };
+      stream: FirebaseFirestore.instance.collection(kQrCheckInsCollection).snapshots(),
+      builder: (context, snap) {
+        final arrivals = snap.hasData
+            ? recordedArrivalsFromCheckIns(snap.data!.docs)
+            : const <RecordedArrival>[];
+        final counts = snap.hasData
+            ? arrivalCountsByMunicipality(arrivals)
+            : const <String, int>{};
+        final query = _search.text.trim().toLowerCase();
+        final visible = municipalities.where((municipality) {
+          if (query.isEmpty) return true;
+          return municipality.name.toLowerCase().contains(query) ||
+              municipality.shortName.toLowerCase().contains(query);
+        }).toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
+        final ranks = rankMunicipalities(counts);
+        final names = municipalities.map((municipality) => municipality.name).toList()..sort();
+        List<RecordedArrival> forName(String? name) => [
+              for (final arrival in arrivals)
+                if (arrival.municipalityName == name) arrival,
+            ];
 
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
           child: Stack(
             clipBehavior: Clip.none,
             children: [
-              if (sortedMunicipalities.isNotEmpty)
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    const maxContent = 1180.0;
-                    final w = constraints.maxWidth;
-                    final contentW = w > maxContent ? maxContent : w;
-                    final cols = w >= 1000 ? 3 : (w >= 640 ? 2 : 1);
-                    final rowExtent = cols == 1 ? 102.0 : 108.0;
-                    return Align(
-                      alignment: Alignment.topCenter,
-                      child: SizedBox(
-                        width: contentW,
-                        child: GridView.builder(
-                          padding: const EdgeInsets.only(bottom: 80),
-                          gridDelegate:
-                              SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: cols,
-                            mainAxisSpacing: 12,
-                            crossAxisSpacing: 12,
-                            mainAxisExtent: rowExtent,
-                          ),
-                          itemCount: sortedMunicipalities.length,
-                          itemBuilder: (context, index) {
-                            final m = sortedMunicipalities[index];
-                            final realIndex = municipalities.indexOf(m);
-                            final n = counts[m.name] ?? 0;
-                            return _AdminMunicipalityGridCard(
-                              municipality: m,
-                              realIndex: realIndex,
-                              touristLabel: _touristCountLine(n),
-                              onChanged: widget.onChanged,
-                            );
-                          },
+              Column(
+                children: [
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final button = FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppColors.primary,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                         ),
+                        onPressed: !snap.hasData || snap.hasError
+                            ? null
+                            : () {
+                                showDialog<void>(
+                                  context: context,
+                                  builder: (dialogContext) => Dialog(
+                                    child: ConstrainedBox(
+                                      constraints: const BoxConstraints(
+                                        maxWidth: 520,
+                                        maxHeight: 640,
+                                      ),
+                                      child: SingleChildScrollView(
+                                        padding: const EdgeInsets.all(8),
+                                        child: MunicipalityRankingList(
+                                          ranks: ranks,
+                                          onOpen: (municipality) {
+                                            Navigator.pop(dialogContext);
+                                            _openPerformance(municipality);
+                                          },
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                        icon: const Icon(Icons.leaderboard_outlined, size: 18),
+                        label: const Text('Arrival ranking'),
+                      );
+                      final search = TextField(
+                        controller: _search,
+                        onChanged: (_) => setState(() {}),
+                        decoration: InputDecoration(
+                          hintText: 'Search municipalities',
+                          prefixIcon: const Icon(Icons.search),
+                          isDense: true,
+                          filled: true,
+                          fillColor: Colors.white,
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      );
+                      if (constraints.maxWidth < 560) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            search,
+                            const SizedBox(height: 8),
+                            button,
+                          ],
+                        );
+                      }
+                      return Row(
+                        children: [
+                          Expanded(child: search),
+                          const SizedBox(width: 8),
+                          button,
+                        ],
+                      );
+                    },
+                  ),
+                  if (snap.hasError)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: Text(
+                        'Recorded arrivals could not be loaded. Counts are not shown.',
+                        style: TextStyle(color: AppColors.textGrey),
                       ),
-                    );
-                  },
-                ),
+                    )
+                  else if (!snap.hasData)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: LinearProgressIndicator(minHeight: 2),
+                    ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView(
+                      padding: const EdgeInsets.only(bottom: 80),
+                      children: [
+                        MunicipalityComparisonPanel(
+                          left: _compareLeft,
+                          right: _compareRight,
+                          choices: names,
+                          leftArrivals: counts[_compareLeft] ?? 0,
+                          rightArrivals: counts[_compareRight] ?? 0,
+                          leftMonthly: monthlyArrivalCounts(forName(_compareLeft)),
+                          rightMonthly: monthlyArrivalCounts(forName(_compareRight)),
+                          leftGrowth: _compareLeft == null
+                              ? null
+                              : recordedArrivalGrowthLabel(forName(_compareLeft), null),
+                          rightGrowth: _compareRight == null
+                              ? null
+                              : recordedArrivalGrowthLabel(forName(_compareRight), null),
+                          onLeft: (value) => setState(() => _compareLeft = value),
+                          onRight: (value) => setState(() => _compareRight = value),
+                        ),
+                        const SizedBox(height: 12),
+                        if (visible.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Text(
+                              'No municipalities match these filters.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: AppColors.textGrey),
+                            ),
+                          )
+                        else
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              final cols = constraints.maxWidth >= 720 ? 2 : 1;
+                              return GridView.builder(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: cols,
+                                  mainAxisSpacing: 12,
+                                  crossAxisSpacing: 12,
+                                  mainAxisExtent: cols == 1 ? 102 : 108,
+                                ),
+                                itemCount: visible.length,
+                                itemBuilder: (context, index) {
+                                  final municipality = visible[index];
+                                  final realIndex = municipalities.indexOf(municipality);
+                                  final count = counts[municipality.name];
+                                  return _AdminMunicipalityGridCard(
+                                    municipality: municipality,
+                                    realIndex: realIndex,
+                                    touristLabel: !snap.hasData || snap.hasError
+                                        ? '— arrivals'
+                                        : _touristCountLine(count ?? 0),
+                                    onChanged: widget.onChanged,
+                                    onOpen: () => _openPerformance(municipality),
+                                  );
+                                },
+                              );
+                            },
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
               if (municipalities.isEmpty)
                 const Center(
                   child: Text(
@@ -2614,7 +3131,7 @@ class _AdminMunicipalitySpotsScreenState extends State<_AdminMunicipalitySpotsSc
   Widget build(BuildContext context) {
     if (_loading) {
       return Scaffold(
-        backgroundColor: AppColors.planPageBg,
+        backgroundColor: OptacaAdminTheme.background,
         appBar: AppBar(
           backgroundColor: AppColors.primary,
           foregroundColor: Colors.white,
@@ -2628,7 +3145,7 @@ class _AdminMunicipalitySpotsScreenState extends State<_AdminMunicipalitySpotsSc
     final spots = _spotsInMunicipality();
 
     return Scaffold(
-      backgroundColor: AppColors.planPageBg,
+      backgroundColor: OptacaAdminTheme.background,
       appBar: AppBar(
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
@@ -2849,26 +3366,15 @@ class _AdminMunicipalityGridCard extends StatelessWidget {
   final int realIndex;
   final String touristLabel;
   final VoidCallback onChanged;
+  final VoidCallback onOpen;
 
   const _AdminMunicipalityGridCard({
     required this.municipality,
     required this.realIndex,
     required this.touristLabel,
     required this.onChanged,
+    required this.onOpen,
   });
-
-  Future<void> _openSpotsForMunicipality(BuildContext context) async {
-    await Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (_) => _AdminMunicipalitySpotsScreen(
-          municipality: municipality,
-          onChanged: onChanged,
-        ),
-      ),
-    );
-    onChanged();
-  }
 
   Future<void> _openEdit(BuildContext context) async {
     await Navigator.push<void>(
@@ -2912,7 +3418,7 @@ class _AdminMunicipalityGridCard extends StatelessWidget {
                   message:
                       'Tap to view tourist spots in this ${isCity ? 'city' : 'municipality'}',
                   child: InkWell(
-                    onTap: () => _openSpotsForMunicipality(context),
+                    onTap: onOpen,
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
                       child: Row(
@@ -3070,7 +3576,7 @@ class _AppUsersManagementScreenState extends State<AppUsersManagementScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.planPageBg,
+      backgroundColor: OptacaAdminTheme.background,
       appBar: AppBar(
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
@@ -4353,16 +4859,15 @@ class _AdminMunicipalityFormPageState extends State<AdminMunicipalityFormPage> {
       imagePath: _imagePath ?? '',
       description: '',
       spots: const [],
-      busTerminal: widget.existing?.busTerminal ??
-          defaultBusTerminalFor(
-            Municipality(
-              name: name,
-              shortName: name,
-              imagePath: '',
-              description: '',
-              spots: const [],
-            ),
-          ),
+      busTerminal: defaultBusTerminalFor(
+        Municipality(
+          name: name,
+          shortName: name,
+          imagePath: '',
+          description: '',
+          spots: const [],
+        ),
+      ),
     );
     if (widget.index != null) {
       municipalities[widget.index!] = m;
@@ -5410,6 +5915,14 @@ class _AdminSpotsQrTabState extends State<_AdminSpotsQrTab> {
 }
 
 class _AdminSettingsTab extends StatefulWidget {
+  const _AdminSettingsTab({
+    this.onOpenBusStops,
+    this.onOpenSpotsQr,
+  });
+
+  final VoidCallback? onOpenBusStops;
+  final VoidCallback? onOpenSpotsQr;
+
   @override
   State<_AdminSettingsTab> createState() => _AdminSettingsTabState();
 }
@@ -5487,6 +6000,36 @@ class _AdminSettingsTabState extends State<_AdminSettingsTab> {
                   color: AppColors.textGrey,
                 ),
                 onTap: () {},
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: Icon(
+                  Icons.directions_bus_outlined,
+                  color: AppColors.primary.withValues(alpha: 0.9),
+                ),
+                title: const Text('Bus stops'),
+                subtitle: const Text(
+                  'Existing bus stop records',
+                  style: TextStyle(fontSize: 13),
+                ),
+                trailing: const Icon(
+                  Icons.chevron_right,
+                  color: AppColors.textGrey,
+                ),
+                onTap: widget.onOpenBusStops,
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: Icon(
+                  Icons.qr_code_scanner_rounded,
+                  color: AppColors.primary.withValues(alpha: 0.9),
+                ),
+                title: const Text('Spots & QR Code'),
+                trailing: const Icon(
+                  Icons.chevron_right,
+                  color: AppColors.textGrey,
+                ),
+                onTap: widget.onOpenSpotsQr,
               ),
               const Divider(height: 1),
               ListTile(

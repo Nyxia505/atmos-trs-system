@@ -20,6 +20,17 @@ bool isLikelyAdminSession() {
   return AuthRoles.canAccessAdminDashboard();
 }
 
+Future<String?> _claimRoleRaw() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return null;
+  try {
+    final result = await user.getIdTokenResult();
+    final raw = result.claims?['role'];
+    if (raw is String && raw.trim().isNotEmpty) return raw;
+  } catch (_) {}
+  return null;
+}
+
 /// After sign-in: JWT role first, then Firestore — avoids sending tourists to admin UI.
 Future<bool> resolveOpenAdminDashboardAfterLogin() async {
   final user = FirebaseAuth.instance.currentUser;
@@ -30,11 +41,14 @@ Future<bool> resolveOpenAdminDashboardAfterLogin() async {
 
   try {
     await refreshAuthRoleClaims();
+    final claimRole = await _claimRoleRaw();
+    if (AuthRoles.isAtmosStaffAdminRole(claimRole)) return true;
+
     final role = await AuthRoles.currentRoleAsync();
     if (role == AppRole.admin || role == AppRole.municipalManager) {
       return true;
     }
-    if (role == AppRole.tourist || role == AppRole.user) {
+    if (role == AppRole.tourist) {
       return false;
     }
   } catch (e) {

@@ -36,32 +36,23 @@ Future<PublicFirestoreDocs> fetchPublicFirestoreCollection(
   String collectionPath, {
   int maxAttempts = 2,
 }) async {
+  var restAlreadyDenied = false;
   if (kIsWeb) {
-    for (var restAttempt = 0; restAttempt < 3; restAttempt++) {
-      try {
-        if (restAttempt > 0) {
-          await Future<void>.delayed(Duration(milliseconds: 400 * restAttempt));
-        }
-        return await _fetchPublicCollectionViaRest(collectionPath);
-      } catch (e) {
-        final denied = e.toString().contains('permission-denied') ||
-            e.toString().contains('403');
-        if (denied && restAttempt < 2) {
-          if (kDebugMode) {
-            debugPrint(
-              'fetchPublicFirestoreCollection: REST deny for "$collectionPath" '
-              '— retry ${restAttempt + 1}/3',
-            );
-          }
-          continue;
-        }
-        if (kDebugMode) {
-          debugPrint(
-            'fetchPublicFirestoreCollection: REST failed for "$collectionPath" '
-            '($e) — trying SDK',
-          );
-        }
-        break;
+    try {
+      return await _fetchPublicCollectionViaRest(collectionPath);
+    } catch (e) {
+      restAlreadyDenied = e.toString().contains('permission-denied') ||
+          e.toString().contains('403');
+      // A 403 is the rules answer. Retrying the same unauthenticated REST
+      // call cannot succeed, so fall through to the signed-in SDK once.
+      if (kDebugMode) {
+        debugPrint(
+          restAlreadyDenied
+              ? 'fetchPublicFirestoreCollection: REST denied "$collectionPath" '
+                  '— trying signed-in SDK'
+              : 'fetchPublicFirestoreCollection: REST failed for "$collectionPath" '
+                  '($e) — trying SDK',
+        );
       }
     }
   }
@@ -73,6 +64,10 @@ Future<PublicFirestoreDocs> fetchPublicFirestoreCollection(
     );
   } on FirebaseException catch (e) {
     if (e.code != 'permission-denied') rethrow;
+    if (restAlreadyDenied) {
+      // Web already got 403 from REST. Calling it again only repeats the error.
+      throw e;
+    }
     if (kDebugMode) {
       debugPrint(
         'fetchPublicFirestoreCollection: SDK denied for "$collectionPath" — '
@@ -108,9 +103,7 @@ Future<PublicFirestoreDocs> fetchPublicFirestoreQuery(
 
     for (final source in sources) {
       try {
-        final snap = await query
-            .get(GetOptions(source: source))
-            .timeout(const Duration(seconds: 6));
+        final snap = await query.get(GetOptions(source: source));
         // After a server permission-denied, an empty cache must not look like a
         // successful "0 documents" load (that wipes in-memory catalogs).
         if (lastDenied != null &&
@@ -159,9 +152,7 @@ Future<PublicFirestoreDocs> _fetchPublicCollectionViaRest(
     'pageSize': '300',
   });
 
-  final response = await http
-      .get(uri)
-      .timeout(const Duration(seconds: 8));
+  final response = await http.get(uri);
   if (response.statusCode != 200) {
     throw FirebaseException(
       plugin: 'cloud_firestore',

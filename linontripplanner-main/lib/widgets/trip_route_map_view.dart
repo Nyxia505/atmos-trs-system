@@ -2,9 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' show LatLng;
 
 import '../data.dart';
-import '../municipal_road_distances.dart' show RoadRouteDirection;
+import '../municipal_road_distances.dart'
+    show
+        RoadRouteDirection,
+        municipalitiesOnRoadBetween,
+        roadTableIndexFor;
 import '../municipality_coordinates.dart' show getMunicipalityCoordinates;
 import '../road_route_service.dart';
+import '../services/bus_location_store.dart';
 import '../tourist_plan/tourist_travel_estimates.dart' show formatHoursMinutes;
 import 'trip_route_osm_map_view.dart';
 
@@ -21,6 +26,18 @@ class TripRouteMapView extends StatefulWidget {
   /// Which way around the provincial loop to draw (null = shortest road).
   final RoadRouteDirection? direction;
 
+  /// Visit order for the line currently on screen. When set, the polyline
+  /// follows these stops only (one day, or the whole itinerary).
+  final List<RoadStop>? visitStops;
+
+  final LatLng? startPinPoint;
+  final String startPinTitle;
+  final String startPinDetail;
+  final LatLng? endPinPoint;
+  final String endPinTitle;
+  final String endPinDetail;
+  final List<TripBusMarker> busMarkers;
+
   const TripRouteMapView({
     super.key,
     required this.start,
@@ -30,6 +47,14 @@ class TripRouteMapView extends StatefulWidget {
     this.exactBudgetSpotNames = const <String>{},
     this.compact = false,
     this.direction,
+    this.visitStops,
+    this.startPinPoint,
+    this.startPinTitle = 'Starting Point',
+    this.startPinDetail = '',
+    this.endPinPoint,
+    this.endPinTitle = 'End Point',
+    this.endPinDetail = '',
+    this.busMarkers = const [],
   });
 
   @override
@@ -53,16 +78,81 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
     _fetchDirections();
   }
 
+  @override
+  void didUpdateWidget(TripRouteMapView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.direction != widget.direction ||
+        oldWidget.start.name != widget.start.name ||
+        oldWidget.end.name != widget.end.name ||
+        _stopKey(oldWidget.visitStops) != _stopKey(widget.visitStops) ||
+        !_sameSpotNames(oldWidget.spots, widget.spots)) {
+      _fetchDirections();
+    }
+  }
+
+  String _stopKey(List<RoadStop>? stops) {
+    if (stops == null) return '';
+    return stops
+        .map(
+          (s) =>
+              '${s.place}:${s.point.latitude.toStringAsFixed(5)},${s.point.longitude.toStringAsFixed(5)}',
+        )
+        .join('|');
+  }
+
+  bool _sameSpotNames(List<TouristSpot> a, List<TouristSpot> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].name != b[i].name) return false;
+    }
+    return true;
+  }
+
   Future<void> _fetchDirections() async {
+    final direction = widget.direction;
     final stops = _routeStops;
-    if (stops.length < 2) return;
+    if (widget.visitStops == null && direction != null) {
+      final towns = municipalitiesOnRoadBetween(
+        widget.start,
+        widget.end,
+        direction: direction,
+      );
+      if (towns == null || towns.length < 2) {
+        if (!mounted) return;
+        setState(() {
+          _loadingDirections = false;
+          _roadRoutePoints = null;
+          _routeKm = null;
+          _routeMinutes = null;
+          _directionsFailed = true;
+          _directionsErrorStatus = 'NO_ROUTE';
+          _directionsErrorMessage =
+              'No ${direction.name} route from ${widget.start.name} to ${widget.end.name}.';
+        });
+        return;
+      }
+    }
+    if (stops.length < 2) {
+      if (!mounted) return;
+      setState(() {
+        _loadingDirections = false;
+        _roadRoutePoints = null;
+        _routeKm = null;
+        _routeMinutes = null;
+        _directionsFailed = false;
+        _directionsErrorStatus = null;
+        _directionsErrorMessage = null;
+      });
+      return;
+    }
     setState(() {
       _loadingDirections = true;
+      _roadRoutePoints = null;
       _directionsFailed = false;
       _directionsErrorStatus = null;
       _directionsErrorMessage = null;
     });
-    final result = await getRoadRouteThroughStops(
+    final result = await getOrderedRoadRoute(
       stops,
       direction: widget.direction,
     );
@@ -103,7 +193,65 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
 
   /// Start → spots → end, each tagged with its municipality so the routing
   /// request passes through every town between consecutive stops.
+  ///
+  /// When a coastal or highland route is selected, stops come only from that
+  /// path: bus terminals in route order, then spots whose municipality is on
+  /// the path. Spots on the other route are left off so the line cannot jump
+  /// onto it.
   List<RoadStop> get _routeStops {
+    final visit = widget.visitStops;
+    if (visit != null) return _orderedStops(visit);
+    final direction = widget.direction;
+    if (direction != null) return _stopsOnSelectedRoute(direction);
+    return _orderedStops(_allStops);
+  }
+
+  List<RoadStop> _stopsOnSelectedRoute(RoadRouteDirection direction) {
+    final towns = municipalitiesOnRoadBetween(
+      widget.start,
+      widget.end,
+      direction: direction,
+    );
+    if (towns == null || towns.length < 2) return const [];
+    final onPath = <int>{
+      for (final m in towns)
+        if (roadTableIndexFor(m.name) != null) roadTableIndexFor(m.name)!,
+    };
+    final spotsByTown = <int, List<LatLng>>{};
+    for (final s in widget.spots) {
+      final idx = roadTableIndexFor(s.location);
+      if (idx == null || !onPath.contains(idx)) continue;
+      if (s.latitude == null || s.longitude == null) continue;
+      (spotsByTown[idx] ??= []).add(LatLng(s.latitude!, s.longitude!));
+    }
+    final raw = <RoadStop>[];
+    for (final town in towns) {
+      final idx = roadTableIndexFor(town.name);
+      final buses = BusLocationStore.instance.alongMunicipalities(
+        [town.name],
+        direction,
+      );
+      if (buses.isEmpty) {
+        final center = getMunicipalityCoordinates(town);
+        if (center != null) raw.add((place: town.name, point: center));
+      } else {
+        for (final bus in buses) {
+          raw.add((
+            place: town.name,
+            point: LatLng(bus.latitude, bus.longitude),
+          ));
+        }
+      }
+      if (idx != null) {
+        for (final point in spotsByTown[idx] ?? const <LatLng>[]) {
+          raw.add((place: town.name, point: point));
+        }
+      }
+    }
+    return _orderedStops(raw);
+  }
+
+  List<RoadStop> get _allStops {
     final raw = <RoadStop>[];
     final start = _startPosition;
     final end = _endPosition;
@@ -114,22 +262,14 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
       }
     }
     if (end != null) raw.add((place: widget.end.name, point: end));
+    return raw;
+  }
+
+  List<RoadStop> _orderedStops(List<RoadStop> raw) {
     final deduped = <RoadStop>[];
     for (final stop in raw) {
       if (deduped.isEmpty || !_samePosition(stop.point, deduped.last.point)) {
         deduped.add(stop);
-      }
-    }
-    return deduped;
-  }
-
-  List<LatLng> get _routePointsForDirections {
-    final raw = _fullRoutePoints;
-    if (raw.isEmpty) return raw;
-    final deduped = <LatLng>[raw.first];
-    for (final p in raw.skip(1)) {
-      if (!_samePosition(p, deduped.last)) {
-        deduped.add(p);
       }
     }
     return deduped;
@@ -158,7 +298,8 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
   }
 
   Widget _buildMapWidget() {
-    final line = _roadRoutePoints ?? _routePointsForDirections;
+    // Only the road geometry from the routing service is drawn.
+    final line = _roadRoutePoints ?? const <LatLng>[];
     final map = TripRouteOsmMapView(
       key: _osmMapKey,
       start: widget.start,
@@ -168,7 +309,18 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
       exactBudgetSpotNames: widget.exactBudgetSpotNames,
       compact: widget.compact,
       routeLinePoints: line,
-      roadFollowing: _roadRoutePoints != null && _roadRoutePoints!.length >= 2,
+      roadFollowing: line.length >= 2,
+      startPinPoint: widget.visitStops != null
+          ? widget.startPinPoint
+          : (widget.startPinPoint ?? _startPosition),
+      startPinTitle: widget.startPinTitle,
+      startPinDetail: widget.startPinDetail,
+      endPinPoint: widget.visitStops != null
+          ? widget.endPinPoint
+          : (widget.endPinPoint ?? _endPosition),
+      endPinTitle: widget.endPinTitle,
+      endPinDetail: widget.endPinDetail,
+      busMarkers: widget.busMarkers,
     );
     return widget.compact ? IgnorePointer(child: map) : map;
   }
@@ -237,7 +389,7 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
               ),
             ),
           ),
-        if (_directionsFailed && hasRoute && _roadRoutePoints == null)
+        if (_directionsFailed && _roadRoutePoints == null)
           Positioned(
             left: 16,
             right: 16,
@@ -268,6 +420,8 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
                       ? 'Enable Directions API on this key in Google Cloud, then tap to retry.'
                       : _directionsErrorStatus == 'NO_GOOGLE_MAPS'
                       ? 'Route service is still loading. Tap to retry.'
+                      : _directionsErrorStatus == 'NO_ROUTE'
+                      ? 'No valid road route was found. Tap to retry.'
                       : 'Road route: ${_directionsErrorStatus ?? "tap to retry"}',
                   style: const TextStyle(
                     color: AppColors.textGrey,
@@ -279,7 +433,7 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
               ),
             ),
           ),
-        if (!hasRoute && !widget.compact)
+        if (!hasRoute && !_directionsFailed && !widget.compact)
           Positioned(
             left: 16,
             right: 16,

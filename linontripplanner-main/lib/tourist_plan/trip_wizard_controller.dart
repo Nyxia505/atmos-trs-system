@@ -6,7 +6,6 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../algorithms/day_itinerary_planner.dart';
 import '../algorithms/nearest_neighbor_itinerary.dart';
-import '../algorithms/on_device_trip_planner.dart';
 import '../data.dart';
 import '../municipal_road_distances.dart';
 import '../municipality_bus_terminals.dart';
@@ -101,7 +100,10 @@ class TripWizardController extends ChangeNotifier {
   /// Keep [explicitDayCount] aligned with inclusive arrival→departure.
   void syncDayCountFromDates() {
     if (arrivalDate == null || departureDate == null) return;
-    explicitDayCount = tripDays.clamp(1, 30);
+    final d = departureDate!.difference(arrivalDate!).inDays + 1;
+    explicitDayCount = d < 1 ? 1 : d;
+    _userDayCount = explicitDayCount!;
+    _syncAssignmentsToSelectedDays();
   }
 
   bool get needsAccommodation => nights >= 1;
@@ -116,6 +118,7 @@ class TripWizardController extends ChangeNotifier {
     if (budgetPhp <= 0) return false;
     if (travelers < 1) return false;
     if (interests.isEmpty) return false;
+    if (routeOptions.isNotEmpty && routeDirection == null) return false;
     return true;
   }
 
@@ -133,6 +136,9 @@ class TripWizardController extends ChangeNotifier {
     if (budgetPhp <= 0) return 'Enter a total budget greater than PHP 0.';
     if (travelers < 1) return 'Enter at least 1 traveler.';
     if (interests.isEmpty) return 'Select at least one interest / category.';
+    if (routeOptions.isNotEmpty && routeDirection == null) {
+      return 'Select Coastal or Highland route.';
+    }
     return null;
   }
 
@@ -184,7 +190,7 @@ class TripWizardController extends ChangeNotifier {
     arrivalDate = DateTime(d.year, d.month, d.day);
     if (departureDate != null && departureDate!.isBefore(arrivalDate!)) {
       // Keep trip length if we already know days; else at least 1 day.
-      final keep = (explicitDayCount ?? tripDays).clamp(1, 30);
+      final keep = explicitDayCount ?? tripDays;
       departureDate = arrivalDate!.add(Duration(days: keep - 1));
     } else if (departureDate == null &&
         explicitDayCount != null &&
@@ -209,12 +215,15 @@ class TripWizardController extends ChangeNotifier {
 
   /// Sets trip length and end date from an inclusive day count.
   /// Example: arrival Aug 27 + 4 days → end Aug 30.
+  /// Assign Days always follows this count. Spots on removed days become unassigned.
   void setDayCount(int days) {
-    explicitDayCount = days.clamp(1, 30);
+    final n = days < 1 ? 1 : days;
+    explicitDayCount = n;
     if (arrivalDate != null) {
-      departureDate =
-          arrivalDate!.add(Duration(days: explicitDayCount! - 1));
+      departureDate = arrivalDate!.add(Duration(days: n - 1));
     }
+    _userDayCount = n;
+    _syncAssignmentsToSelectedDays();
     notifyListeners();
   }
 
@@ -310,6 +319,7 @@ class TripWizardController extends ChangeNotifier {
   void clearSelected() {
     selectedSpots.clear();
     daySpotAssignments = [];
+    _clearOrderLocks();
     notifyListeners();
   }
 
@@ -486,15 +496,59 @@ class TripWizardController extends ChangeNotifier {
 
   final Set<int> _endedDays = {};
 
+  /// Days the user reordered by hand. Nearest-road routing leaves these as-is.
+  final Set<int> _orderLockedDays = {};
+
+  /// Spot the user confirmed as the last stop of a day.
+  final Map<int, String> _lockedEndSpotNames = {};
+
+  Set<int> get orderLockedDays => Set<int>.unmodifiable(_orderLockedDays);
+
+  Map<int, String> get lockedEndSpotNames =>
+      Map<int, String>.unmodifiable(_lockedEndSpotNames);
+
+  void _clearOrderLocks() {
+    _orderLockedDays.clear();
+    _lockedEndSpotNames.clear();
+  }
+
+  /// Saves the road nearest-neighbor visit order. Locked days stay as the
+  /// user arranged them. The last spot of each day is the next day's start.
+  /// Never creates a day past the selected travel days.
+  void applyRoadVisitOrder(List<List<TouristSpot>> ordered) {
+    var changed = false;
+    final limit = tripDays;
+    for (var i = 0; i < ordered.length && i < limit; i++) {
+      while (daySpotAssignments.length <= i && daySpotAssignments.length < limit) {
+        daySpotAssignments.add(<TouristSpot>[]);
+      }
+      if (i >= daySpotAssignments.length) break;
+      if (_orderLockedDays.contains(i)) continue;
+      final next = List<TouristSpot>.from(ordered[i]);
+      final prev = daySpotAssignments[i];
+      final same = prev.length == next.length &&
+          [
+            for (var k = 0; k < prev.length; k++) prev[k].name == next[k].name,
+          ].every((sameName) => sameName);
+      if (same) continue;
+      daySpotAssignments[i] = next;
+      changed = true;
+    }
+    if (changed) notifyListeners();
+  }
+
   /// True after the user picked the final spot of [dayIndex].
   bool isDayEnded(int dayIndex) =>
       _endedDays.contains(dayIndex) &&
       dayIndex < daySpotAssignments.length &&
       daySpotAssignments[dayIndex].isNotEmpty;
 
+  /// Shown when selected spots do not fit in the chosen travel days.
+  String? dayCapacityWarning;
+
   /// The user picks [last] as the final spot of [dayIndex]: it moves to the
-  /// end of the day and the next day starts from it. When this was the last
-  /// day and unvisited spots remain, a new day is added (no day limit).
+  /// end of the day and the next existing day starts from it. This never adds
+  /// a day beyond the selected travel days.
   void endDayAt(int dayIndex, TouristSpot last) {
     _ensureDayBuckets();
     if (dayIndex < 0 || dayIndex >= daySpotAssignments.length) return;
@@ -503,35 +557,26 @@ class TripWizardController extends ChangeNotifier {
     if (i < 0) return;
     day.add(day.removeAt(i));
     _endedDays.add(dayIndex);
-    if (dayIndex == daySpotAssignments.length - 1 && unvisitedSpotCount > 0) {
-      daySpotAssignments.add(<TouristSpot>[]);
-      _setDayCount(daySpotAssignments.length);
+    _lockedEndSpotNames[dayIndex] = last.name;
+    if (dayIndex >= tripDays - 1 && unvisitedSpotCount > 0) {
+      dayCapacityWarning =
+          'Some spots do not fit in $tripDays day${tripDays == 1 ? '' : 's'}. '
+          'They stay unassigned. Add travel days or remove destinations.';
     }
     notifyListeners();
   }
 
-  /// Moves the end date so the trip has exactly [days] days.
-  void _setDayCount(int days) {
-    final a = arrivalDate;
-    if (a != null) departureDate = a.add(Duration(days: days - 1));
-    explicitDayCount = days;
-    _plannedRouteKey = _routeKey;
-  }
-
-  /// Drops empty days at the end that the Nearest Neighbor flow added and
-  /// that no ended day leads into any more.
+  /// Drops empty day columns that were added past the selected travel days.
+  /// Does not change the dates the user chose.
   void _trimAddedEmptyDays() {
     if (_userDayCount < 1) return;
-    var changed = false;
     while (daySpotAssignments.length > 1 &&
         daySpotAssignments.length > _userDayCount &&
         daySpotAssignments.last.isEmpty &&
         !isDayEnded(daySpotAssignments.length - 2)) {
       _endedDays.remove(daySpotAssignments.length - 1);
       daySpotAssignments.removeLast();
-      changed = true;
     }
-    if (changed) _setDayCount(daySpotAssignments.length);
   }
 
   bool _isNearTripStart(TouristSpot spot) {
@@ -649,6 +694,7 @@ class TripWizardController extends ChangeNotifier {
       daySpotAssignments = List.generate(tripDays, (_) => <TouristSpot>[]);
       spotStartMinutesOverride.clear();
       _endedDays.clear();
+      _clearOrderLocks();
       _userDayCount = tripDays;
       algorithmInsight = null;
       _plannedRouteKey = routeKey;
@@ -662,7 +708,7 @@ class TripWizardController extends ChangeNotifier {
   String? _plannedRouteKey;
 
   String get _routeKey =>
-      '${start?.name}|${end?.name}|$tripDays|${selectedRouteDirection?.name}';
+      '${start?.name}|${end?.name}|${selectedRouteDirection?.name}';
 
   /// Day count the user chose in step 1; days past it were added by the
   /// Nearest Neighbor flow and are removed again when no longer needed.
@@ -779,6 +825,7 @@ class TripWizardController extends ChangeNotifier {
       daySpotAssignments = [
         for (final day in plan.days) List<TouristSpot>.from(day),
       ];
+      _clearOrderLocks();
       algorithmInsight = plan.insight;
 
       await prefs.recordTripInputs(
@@ -789,6 +836,7 @@ class TripWizardController extends ChangeNotifier {
     } catch (e, st) {
       debugPrint('DayItineraryPlanner failed: $e\n$st');
       daySpotAssignments = _fallbackDistribute(tripDays);
+      _clearOrderLocks();
       algorithmInsight =
           'Algorithm unavailable - used a simple day split. You can still edit.';
     } finally {
@@ -847,30 +895,50 @@ class TripWizardController extends ChangeNotifier {
         daySpotAssignments.add(<TouristSpot>[]);
       }
     } else {
-      // Merge overflow days into earlier days without exceeding the per-day cap.
-      final keep = daySpotAssignments.sublist(0, days);
-      final overflow = <TouristSpot>[];
-      for (var i = days; i < daySpotAssignments.length; i++) {
-        overflow.addAll(daySpotAssignments[i]);
+      _dropDaysBeyond(days);
+    }
+  }
+
+  /// Drops day columns past [days]. Their spots stay in [selectedSpots] so
+  /// they show as unassigned instead of disappearing or landing on an extra day.
+  void _syncAssignmentsToSelectedDays() {
+    final days = tripDays;
+    if (days < 1) return;
+    _userDayCount = days;
+    if (daySpotAssignments.isEmpty) {
+      daySpotAssignments = List.generate(days, (_) => <TouristSpot>[]);
+      return;
+    }
+    if (daySpotAssignments.length < days) {
+      while (daySpotAssignments.length < days) {
+        daySpotAssignments.add(<TouristSpot>[]);
       }
-      for (final spot in overflow) {
-        var placed = false;
-        for (final day in keep) {
-          if (day.length >= absoluteMaxSpotsPerDay) continue;
-          if (day.any((s) => s.name == spot.name)) {
-            placed = true;
-            break;
-          }
-          day.add(spot);
-          placed = true;
-          break;
-        }
-        // Unplaced spots stay in selectedSpots only (unassigned).
-        if (!placed) {
-          // already in selectedSpots
-        }
-      }
-      daySpotAssignments = keep;
+      return;
+    }
+    if (daySpotAssignments.length > days) {
+      _dropDaysBeyond(days);
+    }
+  }
+
+  void _dropDaysBeyond(int days) {
+    var removed = 0;
+    for (var i = days; i < daySpotAssignments.length; i++) {
+      removed += daySpotAssignments[i].length;
+      _endedDays.remove(i);
+      _orderLockedDays.remove(i);
+      _lockedEndSpotNames.remove(i);
+    }
+    daySpotAssignments = daySpotAssignments.sublist(0, days);
+    spotStartMinutesOverride.removeWhere((key, _) {
+      final day = int.tryParse(key.split('|').first);
+      return day != null && day >= days;
+    });
+    dayStartMinutes.removeWhere((day, _) => day >= days);
+    if (removed > 0) {
+      dayCapacityWarning =
+          '$removed spot${removed == 1 ? '' : 's'} from the removed days '
+          '${removed == 1 ? 'is' : 'are'} unassigned. '
+          'Place ${removed == 1 ? 'it' : 'them'} on Day 1–$days, or add travel days.';
     }
   }
 
@@ -916,8 +984,13 @@ class TripWizardController extends ChangeNotifier {
     if (dayIndex < 0 || dayIndex >= daySpotAssignments.length) return;
     daySpotAssignments[dayIndex].removeWhere((s) => s.name == spot.name);
     spotStartMinutesOverride.remove('$dayIndex|${spot.name}');
+    if (_lockedEndSpotNames[dayIndex] == spot.name) {
+      _lockedEndSpotNames.remove(dayIndex);
+    }
     if (daySpotAssignments[dayIndex].isEmpty) {
       _endedDays.remove(dayIndex);
+      _orderLockedDays.remove(dayIndex);
+      _lockedEndSpotNames.remove(dayIndex);
       _trimAddedEmptyDays();
     }
     notifyListeners();
@@ -933,15 +1006,17 @@ class TripWizardController extends ChangeNotifier {
     if (target < 0 || target >= day.length) return;
     final item = day.removeAt(oldIndex);
     day.insert(target, item);
+    _orderLockedDays.add(dayIndex);
+    _lockedEndSpotNames.remove(dayIndex);
     notifyListeners();
   }
 
   Future<void> redistributeEvenly() => suggestRouteDayPlan();
 
-  /// Nearest Neighbor plan over every route spot: Day 1 starts at the trip
-  /// start, each day takes the closest unvisited spot until it holds
+  /// Nearest Neighbor plan within the selected travel days. Day 1 starts at
+  /// the trip start, each day takes the closest unvisited spots until it holds
   /// [absoluteMaxSpotsPerDay], and the next day starts from its last spot.
-  /// Days are added until every spot is visited.
+  /// Spots that do not fit stay selected but unassigned.
   Future<void> suggestRouteDayPlan() async {
     loadingDayPlan = true;
     notifyListeners();
@@ -958,31 +1033,38 @@ class TripWizardController extends ChangeNotifier {
         maxSpotsPerDay: absoluteMaxSpotsPerDay,
       );
 
-      final userDays = _userDayCount > 0 ? _userDayCount : tripDays;
-      final dayCount = math.max(planned.length, math.max(1, userDays));
-      daySpotAssignments = [
-        for (var d = 0; d < dayCount; d++)
-          d < planned.length ? planned[d] : <TouristSpot>[],
+      final userDays = tripDays < 1 ? 1 : tripDays;
+      final kept = planned.take(userDays).toList();
+      final overflow = [
+        for (final day in planned.skip(userDays)) ...day,
       ];
-      _endedDays
-        ..clear()
-        ..addAll([for (var d = 0; d < planned.length; d++) d]);
+      daySpotAssignments = [
+        for (var d = 0; d < userDays; d++)
+          d < kept.length ? List<TouristSpot>.from(kept[d]) : <TouristSpot>[],
+      ];
+      _endedDays.clear();
+      _clearOrderLocks();
       spotStartMinutesOverride.clear();
-      _setDayCount(dayCount);
+      _userDayCount = userDays;
 
-      // Keep selectedSpots in sync with what's on the days.
       selectedSpots
         ..clear()
         ..addAll([for (final d in planned) ...d]);
 
-      final total = selectedSpots.length;
-      final added = planned.length - userDays;
-      algorithmInsight = total == 0
+      final placed = kept.fold<int>(0, (sum, day) => sum + day.length);
+      if (overflow.isNotEmpty) {
+        dayCapacityWarning =
+            '${overflow.length} spot${overflow.length == 1 ? '' : 's'} '
+            'do not fit in $userDays day${userDays == 1 ? '' : 's'}. '
+            'They are unassigned. Add travel days or remove destinations.';
+      } else {
+        dayCapacityWarning = null;
+      }
+      algorithmInsight = placed == 0
           ? null
-          : 'Planned all $total spots by nearest next stop over '
-              '${planned.length} day${planned.length == 1 ? '' : 's'}. '
-              'Each day starts where the previous day ended'
-              '${added > 0 ? '; $added day${added == 1 ? ' was' : 's were'} added so every spot fits' : ''}.';
+          : 'Planned $placed spot${placed == 1 ? '' : 's'} by nearest next stop '
+              'across $userDays day${userDays == 1 ? '' : 's'}. '
+              'Each day starts where the previous day ended.';
     } finally {
       loadingDayPlan = false;
       notifyListeners();
@@ -995,6 +1077,7 @@ class TripWizardController extends ChangeNotifier {
       day.clear();
     }
     _endedDays.clear();
+    _clearOrderLocks();
     _trimAddedEmptyDays();
     algorithmInsight = null;
     notifyListeners();
@@ -1320,12 +1403,7 @@ class TripWizardController extends ChangeNotifier {
     while (copy.length < days) {
       copy.add(<TouristSpot>[]);
     }
-    if (copy.length > days) {
-      for (var i = days; i < copy.length; i++) {
-        copy[days - 1].addAll(copy[i]);
-      }
-      return copy.sublist(0, days);
-    }
+    if (copy.length > days) return copy.sublist(0, days);
     return copy;
   }
 

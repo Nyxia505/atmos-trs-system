@@ -4,6 +4,7 @@ import 'package:latlong2/latlong.dart' as ll;
 
 import 'data.dart';
 import 'municipality_coordinates.dart' show misamisOccidentalCenter;
+import 'services/bus_location_store.dart';
 import 'services/tourism_session.dart';
 import 'spot_detail_screen.dart';
 import 'widgets/bus_terminal_map_markers.dart';
@@ -31,12 +32,15 @@ class _MappingScreenState extends State<MappingScreen> {
   void initState() {
     super.initState();
     tourismCatalogRevision.addListener(_onCatalogRevision);
+    BusLocationStore.instance.revision.addListener(_onCatalogRevision);
+    BusLocationStore.instance.ensureListening();
     _loadMarkers();
   }
 
   @override
   void dispose() {
     tourismCatalogRevision.removeListener(_onCatalogRevision);
+    BusLocationStore.instance.revision.removeListener(_onCatalogRevision);
     super.dispose();
   }
 

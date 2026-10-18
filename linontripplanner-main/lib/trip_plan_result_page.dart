@@ -164,6 +164,18 @@ class _TripPlanResultPageState extends State<TripPlanResultPage> {
     return start;
   }
 
+  void _applyOrderedDays(List<List<TouristSpot>> days) {
+    final next = [for (final day in days) ...day];
+    final same = next.length == _itinerarySpots.length &&
+        [
+          for (var i = 0; i < next.length; i++)
+            next[i].name == _itinerarySpots[i].name,
+        ].every((sameName) => sameName);
+    if (same) return;
+    setState(() => _itinerarySpots = next);
+    _refreshAfterItineraryEdit();
+  }
+
   void _refreshAfterItineraryEdit() {
     setState(() {
       _itineraryMunicipalities =
@@ -707,6 +719,10 @@ class _TripPlanResultPageState extends State<TripPlanResultPage> {
                 start: widget.start,
                 end: widget.end,
                 spots: _itinerarySpots,
+                spotDays: [
+                  for (var d = 0; d < _days; d++) _spotsForDay(d),
+                ],
+                onOrderSaved: _applyOrderedDays,
                 budget: widget.budget,
                 exactBudgetSpotNames: widget.exactBudgetSpotNames,
                 routeFareBreakdown: _effectiveItineraryTransportFare,

@@ -113,14 +113,114 @@ List<LatLng> roadWaypointsForStops(
   return out;
 }
 
+final Map<String, DirectionsResult> _roadRouteCache = {};
+final Map<String, Future<DirectionsResult>> _roadRouteInFlight = {};
+
+String _roadRouteCacheKey(List<LatLng> waypoints) => waypoints
+    .map((p) => '${p.latitude.toStringAsFixed(5)},${p.longitude.toStringAsFixed(5)}')
+    .join(';');
+
+void _rememberRoadRoute(String key, DirectionsResult result) {
+  if (result.polyline == null || result.polyline!.length < 2) return;
+  if (_roadRouteCache.length >= 80 && !_roadRouteCache.containsKey(key)) {
+    _roadRouteCache.remove(_roadRouteCache.keys.first);
+  }
+  _roadRouteCache[key] = result;
+}
+
 /// Road polyline (plus distance / time) through [stops] and every town between
 /// them on the road network.
 Future<DirectionsResult> getRoadRouteThroughStops(
   List<RoadStop> stops, {
   RoadRouteDirection? direction,
-}) {
-  return getDirectionsRoute(
-    roadWaypointsForStops(stops, direction: direction),
+}) async {
+  final waypoints = roadWaypointsForStops(stops, direction: direction);
+  final key = _roadRouteCacheKey(waypoints);
+  final cached = _roadRouteCache[key];
+  if (cached != null) return cached;
+  final pending = _roadRouteInFlight[key];
+  if (pending != null) return pending;
+  final future = getDirectionsRoute(waypoints);
+  _roadRouteInFlight[key] = future;
+  try {
+    final result = await future;
+    _rememberRoadRoute(key, result);
+    return result;
+  } finally {
+    if (identical(_roadRouteInFlight[key], future)) {
+      _roadRouteInFlight.remove(key);
+    }
+  }
+}
+
+/// Shortest valid road path between each consecutive pair in [stops], joined
+/// into one line. A chosen [direction] is required for every leg; this never
+/// substitutes the other way around the province, and it never returns a
+/// straight line when a leg has no road geometry.
+Future<DirectionsResult> getOrderedRoadRoute(
+  List<RoadStop> stops, {
+  RoadRouteDirection? direction,
+}) async {
+  if (stops.length < 2) {
+    return const DirectionsResult(
+      errorStatus: 'NO_ROUTE',
+      errorMessage: 'Not enough stops for a road route.',
+    );
+  }
+  final merged = <LatLng>[];
+  var meters = 0.0;
+  var seconds = 0.0;
+  var haveMeters = true;
+  var haveSeconds = true;
+  for (var i = 0; i < stops.length - 1; i++) {
+    final from = stops[i];
+    final to = stops[i + 1];
+    final fromIdx = roadTableIndexFor(from.place);
+    final toIdx = roadTableIndexFor(to.place);
+    if (direction != null &&
+        fromIdx != null &&
+        toIdx != null &&
+        fromIdx != toIdx &&
+        !hasRoadPathBetween(from.place, to.place, direction: direction)) {
+      final way = direction.name;
+      return DirectionsResult(
+        errorStatus: 'NO_ROUTE',
+        errorMessage:
+            'No valid $way road route from ${from.place} to ${to.place}.',
+      );
+    }
+    final leg = await getRoadRouteThroughStops(
+      [from, to],
+      direction: direction,
+    );
+    final segment = leg.polyline;
+    if (segment == null || segment.length < 2) {
+      return DirectionsResult(
+        errorStatus: leg.errorStatus ?? 'NO_ROUTE',
+        errorMessage: leg.errorMessage ??
+            'No valid road route from ${from.place} to ${to.place}.',
+      );
+    }
+    if (merged.isEmpty) {
+      merged.addAll(segment);
+    } else {
+      merged.addAll(segment.skip(1));
+    }
+    if (leg.distanceMeters == null) {
+      haveMeters = false;
+    } else {
+      meters += leg.distanceMeters!;
+    }
+    if (leg.durationSeconds == null) {
+      haveSeconds = false;
+    } else {
+      seconds += leg.durationSeconds!;
+    }
+  }
+  return DirectionsResult(
+    polyline: merged,
+    distanceMeters: haveMeters ? meters : null,
+    durationSeconds: haveSeconds ? seconds : null,
   );
 }
 

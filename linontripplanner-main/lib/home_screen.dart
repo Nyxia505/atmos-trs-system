@@ -459,6 +459,7 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               Image.asset(
                 'assets/images/tripplan.png',
+                package: 'trip_plan',
                 height: compactHeader ? 48 : 64,
                 filterQuality: FilterQuality.high,
               ),

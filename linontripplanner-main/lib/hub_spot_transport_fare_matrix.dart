@@ -175,6 +175,7 @@ List<HubSpotTransportFee> buildHubSpotTransportFeesFromMatrix() {
     final muni = _municipalityByName(row.municipalityName);
     if (muni == null) continue;
     final hub = defaultBusTerminalFor(muni) ?? transportEndpointFor(muni);
+    if (hub == null) continue;
     for (final direction in HubSpotLegDirection.values) {
       fees.add(
         hubSpotFeeFromMatrixRow(

@@ -81,6 +81,7 @@ class AuthLoginPhotoBackground extends StatelessWidget {
         Positioned.fill(
           child: Image.asset(
             AuthDesign.loginBackgroundAsset,
+            package: 'trip_plan',
             fit: BoxFit.cover,
             alignment: Alignment.center,
           ),
@@ -156,6 +157,7 @@ class AuthLoginBrandHeader extends StatelessWidget {
         children: [
           Image.asset(
             'assets/images/tripplan.png',
+            package: 'trip_plan',
             width: 120,
             height: 120,
             fit: BoxFit.contain,

@@ -15,6 +15,7 @@ import 'package:atmos_trs_system/services/registration_rollback_service.dart';
 import 'package:atmos_trs_system/navigation/auth_navigation.dart';
 import 'package:atmos_trs_system/navigation/login_route_args.dart';
 import 'package:atmos_trs_system/navigation/trip_planner_access.dart';
+import 'package:atmos_trs_system/navigation/tripplan_entry_screen.dart';
 import 'package:atmos_trs_system/navigation/pending_checkin_navigation.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
@@ -460,6 +461,16 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<bool> _denyNonTouristTripPlanner(String route) async {
     if (_loginRouteArgs?.returnFeature != LoginRouteArgs.featureItinerary) {
       return false;
+    }
+    if (await TripPlannerAccess.isCatalogAdmin()) {
+      await LandingIntentService.clear();
+      if (!mounted) return true;
+      await Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder: (_) => const TripPlanEntryScreen(adminDashboard: true),
+        ),
+      );
+      return true;
     }
     if (route == '/dashboard' || route == '/verify-otp') return false;
     await LandingIntentService.clear();

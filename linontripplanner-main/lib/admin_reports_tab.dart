@@ -12,6 +12,13 @@ import 'widgets/reports/report_filter_bar.dart';
 import 'widgets/reports/report_preview_page.dart';
 import 'widgets/tourism_plan_ui.dart';
 
+/// Supplies the province-wide DOT Excel / PDF panel. The trip planner package
+/// cannot import that panel, so the host app sets this before the portal opens.
+typedef AdminDotReportsBuilder = Widget Function(
+  BuildContext context,
+  ReportFilters filters,
+);
+
 /// Admin Reports tab: report cards, filters, analytics, preview, and export.
 ///
 /// Report data and analytics come from [ReportsService]; file generation and
@@ -19,6 +26,9 @@ import 'widgets/tourism_plan_ui.dart';
 class AdminReportsTab extends StatefulWidget {
   /// Opens the Matrix Fares management tab, when the dashboard provides it.
   final VoidCallback? onOpenMatrixFares;
+
+  /// Host-app DOT forms (Excel and PDF). Null keeps the existing reports only.
+  static AdminDotReportsBuilder? dotReportsBuilder;
 
   const AdminReportsTab({super.key, this.onOpenMatrixFares});
 
@@ -287,6 +297,7 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final pad = constraints.maxWidth < 620 ? 14.0 : 20.0;
+        final dotReports = AdminReportsTab.dotReportsBuilder;
         return SingleChildScrollView(
           padding: EdgeInsets.fromLTRB(pad, 20, pad, 36),
           child: Column(
@@ -320,6 +331,10 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
                   _load();
                 },
               ),
+              if (dotReports != null) ...[
+                const SizedBox(height: 16),
+                dotReports(context, _filters),
+              ],
               const SizedBox(height: 16),
               _analytics(),
             ],

@@ -73,21 +73,8 @@ Future<void> persistLongTermStaffRoleClaims({int maxAttempts = 4}) async {
 ///
 /// These must not be rewritten to `admin`. [AppRole.fromString] maps
 /// `governor` to admin, and saving that value would break ATMOS routing.
-bool isAtmosCatalogStaffRole(String? raw) {
-  final role = (raw ?? '')
-      .trim()
-      .toLowerCase()
-      .replaceAll(RegExp(r'[\s-]+'), '_');
-  const roles = {
-    'governor',
-    'provincial_tourism',
-    'tourism_province',
-    'tourism',
-    'tourism_office',
-    'lgu_tourism',
-  };
-  return roles.contains(role);
-}
+bool isAtmosCatalogStaffRole(String? raw) =>
+    AuthRoles.isAtmosStaffAdminRole(raw);
 
 /// Ensures `users/{uid}` has permanent staff/admin role and JWT claims before catalog writes.
 Future<void> ensurePermanentStaffRoleForCatalogWrite() async {

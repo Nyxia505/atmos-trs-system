@@ -362,13 +362,9 @@ Future<void> loadMunicipalitiesFromFirestore() async {
             '')
         .trim();
 
-    final busTerminal =
-        busTerminalFromFirestoreDoc(d) ??
-        (idx >= 0
-            ? defaultBusTerminalFor(municipalities[idx])
-            : (name.isNotEmpty
-                ? kDefaultMunicipalityBusTerminals[name]
-                : null));
+    final busTerminal = idx >= 0
+        ? defaultBusTerminalFor(municipalities[idx])
+        : null;
 
     if (idx >= 0) {
       final existing = municipalities[idx];
@@ -675,15 +671,6 @@ Future<void> loadEventsFromFirestore() async {
     } catch (e) {
       lastError = e;
       final denied = e.toString().contains('permission-denied');
-      if (denied && attempt < 2) {
-        if (kDebugMode) {
-          debugPrint(
-            'loadEventsFromFirestore: permission-denied, retry '
-            '${attempt + 1}/3',
-          );
-        }
-        continue;
-      }
       if (_isNonPermissionRecoverableFirestoreError(e) || denied) {
         logRecoverableFirestoreLoad('loadEventsFromFirestore', e);
         if (tourismEvents.isEmpty) {

@@ -185,3 +185,119 @@ abstract final class TourismAppTheme {
         iconTheme: IconThemeData(color: Colors.white),
       );
 }
+
+/// Visual system for the OPTACA admin portal only. Does not change behavior.
+abstract final class OptacaAdminTheme {
+  static const primary = Color(0xFFFF7900);
+  static const secondary = Color(0xFFFF963F);
+  static const lightOrange = Color(0xFFFFF1E6);
+  static const background = Color(0xFFF7F8FA);
+  static const card = Color(0xFFFFFFFF);
+  static const text = Color(0xFF20242C);
+  static const textMuted = Color(0xFF6B7280);
+  static const border = Color(0xFFE8EBF0);
+
+  static const sidebarGradient = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [secondary, primary],
+  );
+
+  static ThemeData theme(ThemeData base) {
+    final scheme = ColorScheme.fromSeed(
+      seedColor: primary,
+      brightness: Brightness.light,
+      primary: primary,
+      onPrimary: Colors.white,
+      surface: card,
+    );
+    return base.copyWith(
+      scaffoldBackgroundColor: background,
+      colorScheme: scheme,
+      textTheme: base.textTheme.apply(
+        bodyColor: text,
+        displayColor: text,
+      ),
+      cardTheme: const CardThemeData(
+        color: card,
+        elevation: 0,
+        margin: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(16)),
+          side: BorderSide(color: border),
+        ),
+      ),
+      dividerTheme: const DividerThemeData(color: border, thickness: 1, space: 1),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: card,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        hintStyle: const TextStyle(color: textMuted, fontSize: 14),
+        labelStyle: const TextStyle(color: textMuted, fontWeight: FontWeight.w600),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: border),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: primary, width: 1.4),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: primary,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          textStyle: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: primary,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          textStyle: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: primary,
+          side: const BorderSide(color: primary),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          foregroundColor: primary,
+          textStyle: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+      ),
+      chipTheme: ChipThemeData(
+        backgroundColor: lightOrange,
+        side: const BorderSide(color: border),
+        labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: text),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
+      floatingActionButtonTheme: const FloatingActionButtonThemeData(
+        backgroundColor: primary,
+        foregroundColor: Colors.white,
+        elevation: 2,
+      ),
+      progressIndicatorTheme: const ProgressIndicatorThemeData(color: primary),
+      dialogTheme: const DialogThemeData(
+        backgroundColor: card,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(16)),
+        ),
+      ),
+    );
+  }
+}

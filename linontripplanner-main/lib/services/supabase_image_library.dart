@@ -136,7 +136,12 @@ const Map<String, String> _municipalityKnownProfilePaths = {
 const Set<String> _blacklistedObjectPathSuffixes = {
   'oroquieta_city_plaza.jpeg',
   'oroquieta_city_plaza.jpg',
+  'images/calamba.jpg',
 };
+
+/// True for Storage files the web image decoder cannot read.
+bool isUndecodableTourismImage(String pathOrUrl) =>
+    _isBlacklistedStoragePath(pathOrUrl);
 
 /// Curated Firestore spot name → `tourist-images/...` object path.
 /// Keys are [normalizeSupabaseImageKey] of the spot title (and short aliases).

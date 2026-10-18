@@ -620,11 +620,26 @@ class _LandingPageState extends State<LandingPage> {
 
   Future<void> _openPlanItinerary({String? municipalityName}) async {
     _pauseHeroVideoForAuthNavigation();
+    // Signed-in catalog admins (OPTACA, governor, LGU) open the Trip Planner
+    // admin dashboard from the home card. Do this before the tourist check,
+    // which otherwise sends staff into the ATMOS role app.
+    if (_isLoggedIn && await TripPlannerAccess.isCatalogAdmin()) {
+      await LandingIntentService.clear();
+      if (!mounted) return;
+      await LandingIntentNavigation.openPlanner(context);
+      return;
+    }
     final access = _isLoggedIn
         ? await TripPlannerAccess.evaluate()
         : TripPlannerAccessResult.signedOut;
     if (!mounted) return;
     if (access == TripPlannerAccessResult.denied) {
+      if (await TripPlannerAccess.isCatalogAdmin()) {
+        await LandingIntentService.clear();
+        if (!mounted) return;
+        await LandingIntentNavigation.openPlanner(context);
+        return;
+      }
       await LandingIntentService.clear();
       if (!mounted) return;
       final route = await _authorizedDashboardRoute();

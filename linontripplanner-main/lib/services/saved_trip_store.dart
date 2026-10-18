@@ -1,9 +1,14 @@
 import 'dart:convert';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data.dart';
+
+/// Finished plans from Plan my trip → Finish.
+const String kTouristTripCollection = 'tourist_trip';
 
 /// One finished trip plan saved from Plan my trip → Finish.
 class SavedTripPlan {
@@ -21,6 +26,10 @@ class SavedTripPlan {
   /// Spot names per day (resolve via [allSpots] when displaying).
   final List<List<String>> daySpotNames;
 
+  /// `coastal` or `highland` only when the tourist selected that route.
+  /// Empty when the choice was not stored. Analytics must not infer it.
+  final String routeType;
+
   const SavedTripPlan({
     required this.id,
     required this.createdAt,
@@ -34,10 +43,22 @@ class SavedTripPlan {
     required this.budgetPhp,
     required this.estimatedTotalPhp,
     required this.daySpotNames,
+    this.routeType = '',
   });
 
   int get spotCount =>
       daySpotNames.fold<int>(0, (sum, day) => sum + day.length);
+
+  /// Where [dayIndex] begins: the trip start, or the previous day's last spot.
+  String _startsFrom(int dayIndex) {
+    if (dayIndex <= 0) return startName;
+    for (var d = dayIndex - 1; d >= 0; d--) {
+      if (d < daySpotNames.length && daySpotNames[d].isNotEmpty) {
+        return daySpotNames[d].last;
+      }
+    }
+    return startName;
+  }
 
   List<List<TouristSpot>> resolveDays() {
     return [
@@ -62,7 +83,14 @@ class SavedTripPlan {
         'transportMode': transportMode,
         'budgetPhp': budgetPhp,
         'estimatedTotalPhp': estimatedTotalPhp,
-        'daySpotNames': daySpotNames,
+        if (routeType == 'coastal' || routeType == 'highland')
+          'routeType': routeType,
+        // Firestore rejects nested arrays, so each day is a map.
+        // [startsFrom] is the previous day's last spot (the trip start on day 1).
+        'daySpotNames': [
+          for (var i = 0; i < daySpotNames.length; i++)
+            {'spots': daySpotNames[i], 'startsFrom': _startsFrom(i)},
+        ],
       };
 
   factory SavedTripPlan.fromJson(Map<String, dynamic> json) {
@@ -72,6 +100,11 @@ class SavedTripPlan {
       for (final d in daysRaw) {
         if (d is List) {
           days.add(d.map((e) => '$e').toList());
+        } else if (d is Map) {
+          final spots = d['spots'];
+          if (spots is List) {
+            days.add(spots.map((e) => '$e').toList());
+          }
         }
       }
     }
@@ -88,8 +121,18 @@ class SavedTripPlan {
       budgetPhp: (json['budgetPhp'] as num?)?.toDouble() ?? 0,
       estimatedTotalPhp: (json['estimatedTotalPhp'] as num?)?.toInt() ?? 0,
       daySpotNames: days,
+      routeType: _storedRouteType(json),
     );
   }
+}
+
+/// Only a route type the tourist actually chose. Never inferred.
+String _storedRouteType(Map<String, dynamic> json) {
+  for (final key in const ['routeType', 'routeDirection', 'direction']) {
+    final value = '${json[key] ?? ''}'.trim().toLowerCase();
+    if (value == 'coastal' || value == 'highland') return value;
+  }
+  return '';
 }
 
 /// Persists finished trips and notifies the Trips tab.
@@ -121,10 +164,45 @@ class SavedTripStore {
                 (e) => SavedTripPlan.fromJson(Map<String, dynamic>.from(e)),
               ),
         );
+      await _mergeFromFirestore();
       revision.value++;
     } catch (e) {
       debugPrint('SavedTripStore load failed: $e');
     }
+  }
+
+  Future<void> _mergeFromFirestore() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return;
+    final snap = await FirebaseFirestore.instance
+        .collection(kTouristTripCollection)
+        .where('touristId', isEqualTo: uid)
+        .get();
+    final ids = trips.map((t) => t.id).toSet();
+    for (final doc in snap.docs) {
+      final trip = SavedTripPlan.fromJson(doc.data());
+      if (trip.id.isEmpty || !ids.add(trip.id)) continue;
+      trips.add(trip);
+    }
+    trips.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  }
+
+  Future<void> _writeFirestore(SavedTripPlan trip) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) {
+      throw StateError('Sign in to save your trip.');
+    }
+    final id = trip.id.trim().isEmpty
+        ? FirebaseFirestore.instance.collection(kTouristTripCollection).doc().id
+        : trip.id.trim();
+    await FirebaseFirestore.instance
+        .collection(kTouristTripCollection)
+        .doc(id)
+        .set({
+      ...trip.toJson(),
+      'id': id,
+      'touristId': uid,
+    });
   }
 
   Future<void> _persist() async {
@@ -135,7 +213,9 @@ class SavedTripStore {
   }
 
   Future<SavedTripPlan> save(SavedTripPlan trip) async {
+    await _writeFirestore(trip);
     await ensureLoaded();
+    trips.removeWhere((t) => t.id == trip.id);
     trips.insert(0, trip);
     revision.value++;
     await _persist();
@@ -144,9 +224,20 @@ class SavedTripStore {
 
   Future<void> remove(String id) async {
     await ensureLoaded();
+    final existing = trips.where((t) => t.id == id).toList();
     trips.removeWhere((t) => t.id == id);
     revision.value++;
     await _persist();
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty || existing.isEmpty) return;
+    try {
+      await FirebaseFirestore.instance
+          .collection(kTouristTripCollection)
+          .doc(id)
+          .delete();
+    } catch (e) {
+      debugPrint('SavedTripStore firebase remove failed: $e');
+    }
   }
 }
 

@@ -93,18 +93,15 @@ class _AdminAnnouncementsTabState extends State<AdminAnnouncementsTab> {
   void initState() {
     super.initState();
     _loading = buildNewsFeedItemsSorted().isEmpty;
-    _load(silent: true);
+    _load(silent: !_loading);
   }
 
   Future<void> _load({bool silent = false}) async {
-    if (!silent && buildNewsFeedItemsSorted().isEmpty && mounted) {
-      setState(() => _loading = true);
-    }
+    if (!silent && mounted) setState(() => _loading = true);
     try {
-      await Future.wait([
-        loadEventsFromFirestore().timeout(const Duration(seconds: 8)),
-        loadAnnouncementsFromFirestore().timeout(const Duration(seconds: 8)),
-      ]);
+      await loadAdminGovernorCatalogsFromFirestore().timeout(
+        const Duration(seconds: 30),
+      );
     } catch (e, st) {
       debugPrint('Announcements feed load: $e\n$st');
     } finally {
@@ -114,10 +111,11 @@ class _AdminAnnouncementsTabState extends State<AdminAnnouncementsTab> {
 
   @override
   Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
     final feed = buildNewsFeedItemsSorted();
     return Stack(
-      children: [
-        Stack(
       children: [
         if (feed.isNotEmpty)
           ListView.builder(
@@ -410,15 +408,6 @@ class _AdminAnnouncementsTabState extends State<AdminAnnouncementsTab> {
             ],
           ),
         ),
-      ],
-        ),
-        if (_loading)
-          const Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: LinearProgressIndicator(minHeight: 3),
-          ),
       ],
     );
   }

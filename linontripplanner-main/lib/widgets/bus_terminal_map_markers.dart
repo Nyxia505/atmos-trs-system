@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart' as ll;
 
 import '../data.dart';
 import '../municipality_bus_terminals.dart' show showsBusTerminalPin;
+import '../services/bus_location_store.dart';
 import 'google_map_pin_icons.dart';
 
 /// [municipality]'s bus terminal or stop when it should appear on maps.
@@ -52,28 +53,46 @@ Future<Set<gmaps.Marker>> buildGoogleBusTerminalMarkersAsync(
   final stopIcon = await GoogleMapPinIcons.busStop();
 
   final markers = <gmaps.Marker>{};
-  for (final m in municipalities) {
-    final terminal = busTerminalForMap(m);
-    final pos = busTerminalLatLng(m);
-    if (terminal == null || pos == null) continue;
-
-    final id = m.name.replaceAll(RegExp(r'[^\w]'), '_');
+  for (final loc in BusLocationStore.instance.active) {
+    final m = _municipalityNamed(municipalities, loc.municipality);
+    final terminal = MunicipalityBusTerminal(
+      name: loc.name,
+      latitude: loc.latitude,
+      longitude: loc.longitude,
+      kind: loc.locationType,
+    );
     final icon = terminal.kind == 'stop' ? stopIcon : terminalIcon;
     markers.add(
       gmaps.Marker(
-        markerId: gmaps.MarkerId('bus_$id'),
-        position: pos,
+        markerId: gmaps.MarkerId('bus_${loc.id}'),
+        position: gmaps.LatLng(loc.latitude, loc.longitude),
         icon: icon,
         infoWindow: gmaps.InfoWindow(
           title: busTerminalMarkerTitle(terminal),
-          snippet: busTerminalMarkerSnippet(m, terminal),
+          snippet: m == null
+              ? '${terminal.name} · ${loc.municipality}'
+              : busTerminalMarkerSnippet(m, terminal),
         ),
-        onTap: onTap == null ? null : () => onTap(m),
+        onTap: onTap == null || m == null ? null : () => onTap(m),
         zIndex: 2,
       ),
     );
   }
   return markers;
+}
+
+Municipality? _municipalityNamed(
+  Iterable<Municipality> municipalities,
+  String name,
+) {
+  final key = busLocationMunicipalityKey(name);
+  for (final m in municipalities) {
+    if (busLocationMunicipalityKey(m.name) == key ||
+        busLocationMunicipalityKey(m.shortName) == key) {
+      return m;
+    }
+  }
+  return null;
 }
 
 /// FlutterMap markers for bus terminals / stops.
@@ -82,20 +101,25 @@ List<Marker> buildOsmBusTerminalMarkers(
   void Function(Municipality municipality)? onTap,
 }) {
   final markers = <Marker>[];
-  for (final m in municipalities) {
-    final terminal = busTerminalForMap(m);
-    final pos = busTerminalLatLng(m);
-    if (terminal == null || pos == null) continue;
-
-    final point = ll.LatLng(pos.latitude, pos.longitude);
-    final label = busTerminalMarkerSnippet(m, terminal);
+  for (final loc in BusLocationStore.instance.active) {
+    final m = _municipalityNamed(municipalities, loc.municipality);
+    final terminal = MunicipalityBusTerminal(
+      name: loc.name,
+      latitude: loc.latitude,
+      longitude: loc.longitude,
+      kind: loc.locationType,
+    );
+    final point = ll.LatLng(loc.latitude, loc.longitude);
+    final label = m == null
+        ? '${terminal.name} · ${loc.municipality}'
+        : busTerminalMarkerSnippet(m, terminal);
     markers.add(
       Marker(
         point: point,
         width: 44,
         height: 44,
         child: GestureDetector(
-          onTap: onTap == null ? null : () => onTap(m),
+          onTap: onTap == null || m == null ? null : () => onTap(m),
           child: Tooltip(
             message: '${busTerminalMarkerTitle(terminal)}\n$label',
             child: Icon(

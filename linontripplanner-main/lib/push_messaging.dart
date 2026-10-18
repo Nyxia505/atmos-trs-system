@@ -55,7 +55,7 @@ Future<void> _initLocalNotifications() async {
   );
 
   await _localNotifications.initialize(
-    initSettings,
+    settings: initSettings,
     onDidReceiveNotificationResponse: (_) {},
   );
 
@@ -108,10 +108,10 @@ void _showForegroundNotification(RemoteMessage message) {
   if (body == null || body.isEmpty) return;
   final id = _foregroundNotificationId++;
   _localNotifications.show(
-    id,
-    title,
-    body,
-    NotificationDetails(
+    id: id,
+    title: title,
+    body: body,
+    notificationDetails: NotificationDetails(
       android: AndroidNotificationDetails(
         kAndroidNotificationChannelId,
         kAndroidNotificationChannelName,
