@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:atmos_trs_system/utils/csv_file_download.dart';
 import 'package:atmos_trs_system/utils/xlsx_file_download.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:atmos_trs_system/widgets/atmos_table_kit.dart';
 import 'package:flutter/material.dart';
 
 const Color _kReportTextDark = Color(0xFF1A1A1A);
@@ -551,36 +552,41 @@ class _ReportDocumentParser {
             ),
           ),
           for (final row in table.rows)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                border: Border(top: BorderSide(color: Colors.grey.shade200)),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    flex: 3,
-                    child: Text(
-                      row.$1,
-                      style: const TextStyle(
-                        color: _kReportTextDark,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: AtmosHoverLift(
+                radius: BorderRadius.circular(10),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: Text(
+                          row.$1,
+                          style: const TextStyle(
+                            color: _kReportTextDark,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      row.$2,
-                      textAlign: TextAlign.right,
-                      style: TextStyle(
-                        color: accentColor,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
+                      Container(width: 1, height: 22, color: kAtmosTableGrid),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          row.$2,
+                          textAlign: TextAlign.right,
+                          style: TextStyle(
+                            color: accentColor,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           if (table.grandTotal != null)

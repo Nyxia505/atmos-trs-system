@@ -1,4 +1,5 @@
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
+import 'package:atmos_trs_system/models/municipality.dart';
 
 /// Normalizes municipality ID for consistent storage and querying.
 /// - Trims and lowercases.
@@ -63,6 +64,21 @@ Set<String> misamisOccidentalMunicipalityIdSet() {
   return {
     for (final m in getMisamisOccidentalMunicipalities()) normalizeMunicipalityId(m.id),
   };
+}
+
+/// Municipalities that do not yet have an LGU office record.
+List<Municipality> municipalitiesWithoutOffice(
+  List<Municipality> all,
+  Iterable<String> takenMunicipalityIds,
+) {
+  final taken = {
+    for (final id in takenMunicipalityIds) normalizeMunicipalityId(id),
+  }..remove('');
+  return [
+    for (final municipality in all)
+      if (!taken.contains(normalizeMunicipalityId(municipality.id)))
+        municipality,
+  ];
 }
 
 /// True when [municipalityId] matches one of the 17 Misamis Occidental LGUs.

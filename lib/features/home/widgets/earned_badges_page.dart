@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart'
     as activity;
 import 'package:atmos_trs_system/widgets/tourist_full_page.dart';
@@ -25,10 +26,6 @@ const _kBadgeDefs = <_BadgeDef>[
   _BadgeDef('travel_guru', 'Travel Guru', 25, Icons.workspace_premium_rounded,
       [Color(0xFFC084FC), Color(0xFF7C3AED)]),
 ];
-
-const _kInk = Color(0xFF0F172A);
-const _kMuted = Color(0xFF64748B);
-const _kBorder = Color(0xFFE2E8F0);
 
 /// Full-screen tourist badges: progress summary + locked / unlocked grid.
 class EarnedBadgesPage extends StatelessWidget {
@@ -81,13 +78,13 @@ class EarnedBadgesPage extends StatelessWidget {
                   ),
                 ),
               ),
-              const SliverPadding(
-                padding: EdgeInsets.fromLTRB(20, 14, 20, 10),
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(20, 14, 20, 10),
                 sliver: SliverToBoxAdapter(
                   child: Text(
                     'All badges',
                     style: TextStyle(
-                      color: _kInk,
+                      color: AppTheme.textPrimary,
                       fontSize: 16,
                       fontWeight: FontWeight.w800,
                     ),
@@ -152,9 +149,9 @@ class _SummaryCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.cardBackground,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: _kBorder),
+        border: Border.all(color: AppTheme.border),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.04),
@@ -179,14 +176,14 @@ class _SummaryCard extends StatelessWidget {
                         value: total == 0 ? 0 : unlocked / total,
                         strokeWidth: 6,
                         strokeCap: StrokeCap.round,
-                        backgroundColor: const Color(0xFFFFEDD5),
-                        color: const Color(0xFFF97316),
+                        backgroundColor: AppTheme.primary.withValues(alpha: 0.22),
+                        color: AppTheme.primary,
                       ),
                     ),
                     Text(
                       '$unlocked/$total',
-                      style: const TextStyle(
-                        color: _kInk,
+                      style: TextStyle(
+                        color: AppTheme.textPrimary,
                         fontSize: 15,
                         fontWeight: FontWeight.w800,
                       ),
@@ -203,8 +200,8 @@ class _SummaryCard extends StatelessWidget {
                       unlocked == 0
                           ? 'No badges yet'
                           : '$unlocked ${unlocked == 1 ? 'badge' : 'badges'} unlocked',
-                      style: const TextStyle(
-                        color: _kInk,
+                      style: TextStyle(
+                        color: AppTheme.textPrimary,
                         fontSize: 17,
                         fontWeight: FontWeight.w800,
                       ),
@@ -212,7 +209,7 @@ class _SummaryCard extends StatelessWidget {
                     const SizedBox(height: 3),
                     Text(
                       '$visited ${visited == 1 ? 'spot' : 'spots'} visited so far',
-                      style: const TextStyle(color: _kMuted, fontSize: 13),
+                      style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 13),
                     ),
                   ],
                 ),
@@ -223,20 +220,20 @@ class _SummaryCard extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: const Color(0xFFFFF7ED),
+              color: AppTheme.primary.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFFFED7AA)),
+              border: Border.all(color: AppTheme.primary.withValues(alpha: 0.35)),
             ),
             child: n == null
-                ? const Row(
+                ? Row(
                     children: [
-                      Icon(Icons.celebration_rounded, color: Color(0xFFEA580C)),
-                      SizedBox(width: 10),
+                      Icon(Icons.celebration_rounded, color: AppTheme.primary),
+                      const SizedBox(width: 10),
                       Expanded(
                         child: Text(
                           'You unlocked every badge. Amazing explorer!',
                           style: TextStyle(
-                            color: Color(0xFF9A3412),
+                            color: AppTheme.textPrimary,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -248,13 +245,13 @@ class _SummaryCard extends StatelessWidget {
                     children: [
                       Row(
                         children: [
-                          Icon(n.icon, size: 18, color: const Color(0xFFEA580C)),
+                          Icon(n.icon, size: 18, color: AppTheme.primary),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
                               'Next: ${n.name}',
-                              style: const TextStyle(
-                                color: Color(0xFF9A3412),
+                              style: TextStyle(
+                                color: AppTheme.textPrimary,
                                 fontWeight: FontWeight.w800,
                               ),
                             ),
@@ -263,8 +260,8 @@ class _SummaryCard extends StatelessWidget {
                             left == 0
                                 ? 'On your next check-in'
                                 : '$left more ${left == 1 ? 'spot' : 'spots'}',
-                            style: const TextStyle(
-                              color: Color(0xFFC2410C),
+                            style: TextStyle(
+                              color: AppTheme.primary,
                               fontSize: 12,
                               fontWeight: FontWeight.w700,
                             ),
@@ -277,8 +274,8 @@ class _SummaryCard extends StatelessWidget {
                         child: LinearProgressIndicator(
                           value: progress,
                           minHeight: 8,
-                          backgroundColor: const Color(0xFFFED7AA),
-                          color: const Color(0xFFF97316),
+                          backgroundColor: AppTheme.border,
+                          color: AppTheme.primary,
                         ),
                       ),
                     ],
@@ -311,10 +308,10 @@ class _BadgeTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 16, 12, 12),
       decoration: BoxDecoration(
-        color: isEarned ? Colors.white : const Color(0xFFF8FAFC),
+        color: isEarned ? AppTheme.cardBackground : AppTheme.surfaceMuted,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: isEarned ? def.colors.last.withValues(alpha: 0.35) : _kBorder,
+          color: isEarned ? def.colors.last.withValues(alpha: 0.35) : AppTheme.border,
         ),
         boxShadow: isEarned
             ? [
@@ -343,12 +340,12 @@ class _BadgeTile extends StatelessWidget {
                           colors: def.colors,
                         )
                       : null,
-                  color: isEarned ? null : const Color(0xFFE2E8F0),
+                  color: isEarned ? null : AppTheme.border,
                 ),
                 child: Icon(
                   def.icon,
                   size: 30,
-                  color: isEarned ? Colors.white : const Color(0xFF94A3B8),
+                  color: isEarned ? Colors.white : AppTheme.unselectedMuted,
                 ),
               ),
               if (!isEarned)
@@ -358,14 +355,14 @@ class _BadgeTile extends StatelessWidget {
                   child: Container(
                     padding: const EdgeInsets.all(4),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: AppTheme.cardBackground,
                       shape: BoxShape.circle,
-                      border: Border.all(color: _kBorder),
+                      border: Border.all(color: AppTheme.border),
                     ),
-                    child: const Icon(
+                    child: Icon(
                       Icons.lock_rounded,
                       size: 12,
-                      color: _kMuted,
+                      color: AppTheme.unselectedMuted,
                     ),
                   ),
                 ),
@@ -378,7 +375,7 @@ class _BadgeTile extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: isEarned ? _kInk : _kMuted,
+              color: isEarned ? AppTheme.textPrimary : AppTheme.unselectedMuted,
               fontSize: 14.5,
               fontWeight: FontWeight.w800,
             ),
@@ -389,7 +386,7 @@ class _BadgeTile extends StatelessWidget {
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: _kMuted, fontSize: 11.5, height: 1.3),
+            style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 11.5, height: 1.3),
           ),
           const Spacer(),
           if (isEarned)
@@ -427,15 +424,15 @@ class _BadgeTile extends StatelessWidget {
                   child: LinearProgressIndicator(
                     value: progress,
                     minHeight: 6,
-                    backgroundColor: const Color(0xFFE2E8F0),
-                    color: const Color(0xFF94A3B8),
+                    backgroundColor: AppTheme.border,
+                    color: AppTheme.unselectedMuted,
                   ),
                 ),
                 const SizedBox(height: 5),
                 Text(
                   '${visited.clamp(0, def.need)} / ${def.need} spots',
-                  style: const TextStyle(
-                    color: _kMuted,
+                  style: TextStyle(
+                    color: AppTheme.unselectedMuted,
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
                   ),

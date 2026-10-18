@@ -102,7 +102,7 @@ class TouristCard extends StatelessWidget {
                     Text(
                       spot.name,
                       style: const TextStyle(
-                        color: Color(0xFF111827),
+                        color: AppTheme.textPrimary,
                         fontWeight: FontWeight.bold,
                         fontSize: 14,
                       ),

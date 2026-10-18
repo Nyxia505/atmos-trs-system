@@ -18,10 +18,13 @@ import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/provincial_report_builder.dart';
+import 'package:atmos_trs_system/widgets/atmos_table_kit.dart';
 import 'package:atmos_trs_system/utils/visit_stats.dart';
 import 'package:atmos_trs_system/widgets/dot_report_export_panel.dart';
+import 'package:atmos_trs_system/widgets/optaca_accounts_panel.dart';
+import 'package:atmos_trs_system/widgets/optaca_enroll_attraction_dialog.dart';
 import 'package:atmos_trs_system/widgets/optaca_establishment_review_panel.dart';
-import 'package:atmos_trs_system/widgets/optaca_report_review_panel.dart';
+import 'package:atmos_trs_system/widgets/optaca_stakeholder_reports_panel.dart';
 import 'package:atmos_trs_system/widgets/report_export_preview.dart';
 import 'package:atmos_trs_system/widgets/ui_skeleton.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -97,6 +100,7 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
     _NavItem(Icons.event_rounded, 'Events & Campaigns'),
     _NavItem(Icons.assessment_rounded, 'DOT Reports'),
     _NavItem(Icons.hotel_rounded, 'Establishments'),
+    _NavItem(Icons.manage_accounts_rounded, 'Accounts'),
     _NavItem(Icons.warning_amber_rounded, 'Alerts & Quality'),
     _NavItem(Icons.settings_rounded, 'Settings'),
   ];
@@ -108,8 +112,9 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
   static const _eventsIndex = 4;
   static const _reportsIndex = 5;
   static const _establishmentsIndex = 6;
-  static const _alertsIndex = 7;
-  static const _settingsIndex = 8;
+  static const _accountsIndex = 7;
+  static const _alertsIndex = 8;
+  static const _settingsIndex = 9;
   static const _bottomNavItemCount = 5;
 
   static const _categories = [
@@ -498,6 +503,7 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
       _eventsIndex => _buildEventsTab(),
       _reportsIndex => _buildReportsTab(),
       _establishmentsIndex => _buildEstablishmentsTab(),
+      _accountsIndex => const OptacaAccountsPanel(),
       _alertsIndex => _buildAlertsTab(),
       _settingsIndex => _buildSettingsTab(),
       _ => _buildDashboardTab(),
@@ -1280,11 +1286,14 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
           icon: Icons.place_rounded,
           title: 'Destinations',
           subtitle:
-              'Province-wide inventory of tourist spots across Misamis Occidental.',
-          trailing: _softChip(
-            label: 'Read-only · LGUs manage spots',
-            color: GovernorDashboardTokens.subtitle,
-            icon: Icons.lock_outline_rounded,
+              'Enroll a new attraction and its check-in QR, or review spots across the province.',
+          trailing: FilledButton.icon(
+            onPressed: () => showOptacaEnrollAttractionDialog(
+              context: context,
+              onEnrolled: _loadData,
+            ),
+            icon: const Icon(Icons.qr_code_2_rounded),
+            label: const Text('Enroll attraction QR'),
           ),
         ),
         const SizedBox(height: 16),
@@ -1590,12 +1599,13 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
         : 'active';
     final v = _categoryVisual(category);
 
-    return Container(
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: AtmosHoverLift(
+      radius: BorderRadius.circular(12),
+      restColor: striped ? GovernorDashboardTokens.background : Colors.white,
+      child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: striped ? GovernorDashboardTokens.background : Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
-      ),
       child: Row(
         children: [
           Expanded(
@@ -1690,6 +1700,8 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
             child: Center(child: _featuredSwitch(s)),
           ),
         ],
+      ),
+      ),
       ),
     );
   }
@@ -2525,7 +2537,7 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
         ),
         const SizedBox(height: 8),
         Text(
-          'Event approval remains with the Governor workflow. This office monitors status and runs provincial campaigns.',
+          'LGUs write and publish their own event announcements. This office can view them and still runs provincial campaigns.',
           style: GovernorDashboardTokens.body(size: 12.5),
         ),
         const SizedBox(height: 14),
@@ -2765,6 +2777,10 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
           style: GovernorDashboardTokens.body(),
         ),
         const SizedBox(height: 12),
+        _panel(
+          OptacaStakeholderReportsPanel(spots: _spots),
+        ),
+        const SizedBox(height: 12),
         _buildOptacaDotReportExports(),
         const SizedBox(height: 28),
         _panel(
@@ -2838,12 +2854,6 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
               ),
             ],
           ),
-        ),
-        const SizedBox(height: 28),
-        OptacaReportReviewPanel(
-          primaryColor: AppTheme.brandOrange,
-          textDark: GovernorDashboardTokens.text,
-          textMuted: GovernorDashboardTokens.subtitle,
         ),
       ],
     );

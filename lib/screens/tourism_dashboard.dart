@@ -23,6 +23,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'package:atmos_trs_system/widgets/atmos_table_kit.dart';
 import 'package:atmos_trs_system/widgets/ui_skeleton.dart';
 import 'package:atmos_trs_system/services/dashboard_stats_cache.dart';
 import 'package:atmos_trs_system/widgets/app_search_bar.dart';
@@ -38,9 +39,12 @@ import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/tourist_id_helper.dart';
 import 'package:atmos_trs_system/models/tourist_spot.dart';
 import 'package:atmos_trs_system/navigation/post_logout_navigation.dart';
+import 'package:atmos_trs_system/services/spot_category_service.dart';
 import 'package:atmos_trs_system/services/tourist_spots_firestore_service.dart';
 import 'package:atmos_trs_system/utils/csv_file_download.dart';
 import 'package:atmos_trs_system/utils/checkin_visitor_count.dart';
+import 'package:atmos_trs_system/utils/visit_analytics.dart';
+import 'package:atmos_trs_system/widgets/visit_analytics_board.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
 import 'package:atmos_trs_system/utils/production_data_filters.dart';
 import 'package:atmos_trs_system/utils/visit_stats.dart';
@@ -48,17 +52,15 @@ import 'package:atmos_trs_system/services/vr_tour_firestore_service.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:atmos_trs_system/widgets/dot_report_export_panel.dart';
-import 'package:atmos_trs_system/widgets/lgu_submit_report_to_optaca_panel.dart';
 import 'package:atmos_trs_system/widgets/lgu_establishment_registry_panel.dart';
 import 'package:atmos_trs_system/services/dae3_auto_report_service.dart';
 import 'package:atmos_trs_system/widgets/lgu_events_panel.dart';
 import 'package:atmos_trs_system/widgets/spot_location_picker.dart';
 import 'package:atmos_trs_system/widgets/spot_photos_editor.dart';
+import 'package:atmos_trs_system/services/supabase_storage_upload.dart';
 import 'package:atmos_trs_system/services/lgu_event_service.dart';
 import 'package:atmos_trs_system/widgets/lgu_debug_data_dialogs.dart';
 import 'package:atmos_trs_system/widgets/chart_transition.dart';
-import 'package:atmos_trs_system/utils/trend_range.dart';
-
 class LguDashboard extends StatefulWidget {
   const LguDashboard({super.key});
 
@@ -71,7 +73,6 @@ class _LguDashboardState extends State<LguDashboard>
   int _selectedIndex = 0;
   bool _isSidebarExpanded = true;
   bool _didInitializeSidebarForViewport = false;
-  TrendRange _lguTrendRange = TrendRange.days14;
   late AnimationController _animationController;
 
   // Theme — premium LGU tourism dashboard
@@ -120,12 +121,14 @@ class _LguDashboardState extends State<LguDashboard>
   static const String _fallbackLguScenicAsset =
       'assets/images/capitol lp bg.png';
 
-  /// Hero photos must match the logged-in LGU
-  /// (Oroquieta Plaza for Oroquieta — never Tangub/Ozamiz landmarks).
+  /// Hero photos must match the logged-in LGU.
   String get _dashboardHeroImageAsset {
-    switch (normalizeMunicipalityId(_storedMunicipalityId)) {
-      case 'oroquieta':
-        return 'assets/images/oroquieta City plaza.jpeg';
+    final id = normalizeMunicipalityId(_storedMunicipalityId);
+    final name = (_municipalityName ?? '').trim().toLowerCase();
+    if (id == 'oroquieta' || name.contains('oroquieta')) {
+      return 'assets/images/iloveoro.jpg';
+    }
+    switch (id) {
       case 'ozamiz':
         return 'assets/images/ozamis city.webp';
       case 'tangub':
@@ -197,24 +200,6 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
-  /// Makes DataTables stretch to the available width (avoids shrink-wrap white gaps).
-  Widget _fullWidthScrollableTable({required Widget table}) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final minW = constraints.maxWidth.isFinite && constraints.maxWidth > 0
-            ? constraints.maxWidth
-            : 0.0;
-        return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minWidth: minW),
-            child: table,
-          ),
-        );
-      },
-    );
-  }
-
   /// Large rounded UI (dashboard reference): main panel.
 
   // Data states — staged loading for smooth post-login paint
@@ -251,8 +236,8 @@ class _LguDashboardState extends State<LguDashboard>
   List<Map<String, dynamic>> _lguEvents = [];
   final Set<String> _seenCrossLguEventIds = {};
   Set<String> _knownPublishedEventIds = {};
-  /// 0 Province Live, 1 My posts — for Events fragment tabs.
-  int _eventsPanelTab = 0;
+  /// 0 Province Live, 1 My posts, 2 Calendar.
+  int _eventsPanelTab = 2;
 
   /// For real-time check-in notifications: newest check-in doc id we've seen.
   String? _lastSeenCheckInId;
@@ -266,6 +251,8 @@ class _LguDashboardState extends State<LguDashboard>
   _touristRegistrationsSubscription;
   bool _touristRegistrationStreamPrimed = false;
   StreamSubscription<List<TouristSpot>>? _touristSpotsSubscription;
+  StreamSubscription<List<String>>? _spotCategoriesSubscription;
+  List<String> _savedSpotCategories = const [];
   String? _storedMunicipalityId;
   List<TouristSpot> _allTouristSpots = [];
 
@@ -322,14 +309,13 @@ class _LguDashboardState extends State<LguDashboard>
   static const int _eventsIndex = 7;
   static const int _settingsIndex = 8;
 
-  final List<String> _categories = [
-    'All',
-    'Beach',
-    'Falls',
-    'Historical',
-    'Mountain',
-    'Resort',
-  ];
+  List<String> get _categories => [
+        'All',
+        ...SpotCategoryNames.merge(
+          saved: _savedSpotCategories,
+          fromSpots: _touristSpots.map((spot) => spot.category),
+        ),
+      ];
   @override
   void initState() {
     super.initState();
@@ -339,6 +325,7 @@ class _LguDashboardState extends State<LguDashboard>
     );
     _animationController.forward();
     _subscribeToTouristSpots();
+    _subscribeToSpotCategories();
     unawaited(_loadTourismSettings());
     // Paint cached KPIs and start network load in parallel (don't gate on prefs I/O).
     unawaited(_restoreLguStatsCache());
@@ -348,7 +335,13 @@ class _LguDashboardState extends State<LguDashboard>
   Future<void> _restoreLguStatsCache() async {
     var munId = await SessionStorage.getStoredMunicipalityId();
     final cached = await DashboardStatsCache.loadLgu(munId);
-    if (cached == null || !mounted) return;
+    if (!mounted) return;
+    final storedEarly = munId?.trim() ?? '';
+    if (storedEarly.isNotEmpty &&
+        (_storedMunicipalityId == null || _storedMunicipalityId!.isEmpty)) {
+      setState(() => _storedMunicipalityId = storedEarly);
+    }
+    if (cached == null) return;
     setState(() {
       _todayCheckIns = cached.todayCheckIns;
       _totalTourists = cached.totalTourists;
@@ -357,11 +350,30 @@ class _LguDashboardState extends State<LguDashboard>
       if (cached.municipalityName != null) {
         _municipalityName = cached.municipalityName;
       }
+      final stored = munId?.trim() ?? '';
+      if (stored.isNotEmpty) {
+        _storedMunicipalityId = stored;
+      } else {
+        final fromName = _municipalityIdForName(_municipalityName);
+        if (fromName != null) _storedMunicipalityId = fromName;
+      }
       if (cached.profileName != null && cached.profileName!.isNotEmpty) {
         _profileName = cached.profileName!;
       }
       _hasCachedStats = true;
     });
+  }
+
+  String? _municipalityIdForName(String? name) {
+    final raw = name?.trim().toLowerCase() ?? '';
+    if (raw.isEmpty || raw == 'lgu') return null;
+    for (final m in getMisamisOccidentalMunicipalities()) {
+      final label = m.name.toLowerCase();
+      if (label == raw || raw.contains(label) || label.contains(raw)) {
+        return m.id;
+      }
+    }
+    return null;
   }
 
   Future<void> _saveLguStatsCache() async {
@@ -627,6 +639,7 @@ class _LguDashboardState extends State<LguDashboard>
     _qrCheckInsLguSubscription?.cancel();
     _touristRegistrationsSubscription?.cancel();
     _touristSpotsSubscription?.cancel();
+    _spotCategoriesSubscription?.cancel();
     _lguEventsSubscription?.cancel();
     _animationController.dispose();
     _checkInsSearchController.dispose();
@@ -1027,11 +1040,10 @@ class _LguDashboardState extends State<LguDashboard>
     _lastSeenCheckInId = newFirstId;
     _checkIns = checkIns;
 
-    final checkInUserIds = _checkIns
-        .map((c) => c['userId']?.toString().trim())
-        .whereType<String>()
-        .where((id) => id.isNotEmpty)
-        .toSet();
+    final checkInUserIds = <String>{};
+    for (final c in _checkIns) {
+      _addCheckInPersonUids(c, checkInUserIds);
+    }
     try {
       _rebuildTouristProfileIndex();
       final missingIds = checkInUserIds
@@ -1324,9 +1336,18 @@ class _LguDashboardState extends State<LguDashboard>
         .listen(
       (snapshot) async {
         if (!mounted) return;
-        final list = snapshot.docs
-            .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
-            .toList();
+        final list = snapshot.docs.map((d) {
+          final raw = d.data();
+          final data = <String, dynamic>{
+            for (final entry in raw.entries)
+              if (entry.key != 'imageBase64' &&
+                  entry.key != 'image_base64' &&
+                  entry.key != 'galleryBase64')
+                entry.key: entry.value,
+          };
+          data['id'] = d.id;
+          return data;
+        }).toList();
 
         final previousPublished = Set<String>.from(_knownPublishedEventIds);
         final wasPrimed = _lguEventsStreamPrimed;
@@ -1337,6 +1358,11 @@ class _LguDashboardState extends State<LguDashboard>
                 (e['id']?.toString() ?? '').isNotEmpty)
               e['id'].toString(),
         };
+
+        final unchanged = _lguEvents.length == list.length &&
+            _knownPublishedEventIds.length == publishedIds.length &&
+            _knownPublishedEventIds.containsAll(publishedIds);
+        if (unchanged && wasPrimed) return;
 
         setState(() {
           _lguEvents = list;
@@ -1538,6 +1564,7 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   void _rebuildTouristProfileIndex() {
+    final kept = Map<String, Map<String, dynamic>>.from(_touristProfileByUid);
     _touristProfileByUid.clear();
     for (final t in _tourists) {
       final uid =
@@ -1545,6 +1572,9 @@ class _LguDashboardState extends State<LguDashboard>
       if (uid.isNotEmpty) {
         _touristProfileByUid[uid] = t;
       }
+    }
+    for (final entry in kept.entries) {
+      _touristProfileByUid.putIfAbsent(entry.key, () => entry.value);
     }
   }
 
@@ -1554,14 +1584,9 @@ class _LguDashboardState extends State<LguDashboard>
     }
     final missing = <String>{};
     for (final c in _checkIns) {
-      final uid =
-          c['userId']?.toString().trim() ??
-          c['tourist_id']?.toString().trim() ??
-          '';
-      if (uid.isNotEmpty && !_touristProfileByUid.containsKey(uid)) {
-        missing.add(uid);
-      }
+      _addCheckInPersonUids(c, missing);
     }
+    missing.removeWhere(_touristProfileByUid.containsKey);
     if (missing.isEmpty) return;
 
     final extraTourists = await _fetchTouristDocsByIds(
@@ -1695,29 +1720,8 @@ class _LguDashboardState extends State<LguDashboard>
 
   /// Builds visitor rows from real QR check-ins (works even when tourists/ reads are denied).
   void _mergeVisitorsFromCheckIns() {
-    final byUid = <String, Map<String, dynamic>>{};
-    for (final t in _filterRealTourists(_tourists)) {
-      final uid =
-          (t['firebaseUid'] ?? t['id'] ?? '').toString().trim();
-      if (uid.isNotEmpty) byUid[uid] = t;
-    }
-    for (final c in _filterRealCheckIns(_checkIns)) {
-      final uid =
-          (c['userId'] ?? c['tourist_id'] ?? '').toString().trim();
-      if (uid.isEmpty || byUid.containsKey(uid)) continue;
-      final name = c['touristName']?.toString().trim() ?? '';
-      final email = c['touristEmail']?.toString().trim() ?? '';
-      byUid[uid] = <String, dynamic>{
-        'id': uid,
-        'firebaseUid': uid,
-        'fullName': name.isNotEmpty ? name : 'Visitor',
-        'name': name.isNotEmpty ? name : 'Visitor',
-        'email': email,
-        'status': 'Active',
-        'fromQrCheckIn': true,
-      };
-    }
-    _tourists = _mergeTouristVisitsFromCheckIns(byUid.values.toList());
+    final registered = _filterRealTourists(_tourists);
+    _tourists = _mergeTouristVisitsFromCheckIns(registered);
     _totalTourists = _tourists.length;
   }
 
@@ -1779,6 +1783,84 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
+  /// Scanner plus every "Laag with Friends" member on this check-in.
+  void _addCheckInPersonUids(Map<String, dynamic> c, Set<String> into) {
+    for (final key in ['userId', 'tourist_id', 'user_id']) {
+      final id = c[key]?.toString().trim() ?? '';
+      if (id.isNotEmpty) into.add(id);
+    }
+    final listed = c['groupMemberUids'];
+    if (listed is List) {
+      for (final id in listed) {
+        final uid = id?.toString().trim() ?? '';
+        if (uid.isNotEmpty) into.add(uid);
+      }
+    }
+    for (final member in _groupMemberMaps(c)) {
+      final uid = member['uid']?.toString().trim() ?? '';
+      if (uid.isNotEmpty) into.add(uid);
+    }
+  }
+
+  List<Map<String, dynamic>> _groupMemberMaps(Map<String, dynamic> c) {
+    final raw = c['groupMembers'];
+    if (raw is! List) return const [];
+    return [
+      for (final m in raw)
+        if (m is Map) Map<String, dynamic>.from(m),
+    ];
+  }
+
+  /// One table row per person who has an account. A group scan is stored as
+  /// one document (visitor headcount includes everyone); companions without
+  /// the app stay on the leader's row.
+  List<Map<String, dynamic>> _expandGroupVisitRows(
+    List<Map<String, dynamic>> checkIns,
+  ) {
+    final out = <Map<String, dynamic>>[];
+    for (final c in checkIns) {
+      final members = _groupMemberMaps(c)
+          .where((m) => (m['uid']?.toString().trim() ?? '').isNotEmpty)
+          .toList();
+      if (members.length < 2) {
+        out.add(c);
+        continue;
+      }
+      final leaderUid =
+          (c['groupLeaderUid'] ?? c['userId'] ?? '').toString().trim();
+      final party = checkInVisitorCount(c);
+      final companionRaw = c['companionCount'];
+      final companions = companionRaw is num
+          ? (companionRaw < 0 ? 0 : companionRaw.round())
+          : (party - members.length).clamp(0, 1000);
+      for (final member in members) {
+        final uid = member['uid'].toString().trim();
+        final isLeader = uid == leaderUid || (leaderUid.isEmpty && uid == c['userId']);
+        final row = Map<String, dynamic>.from(c);
+        row.remove('touristProfile');
+        row.remove('profilePhotoUrl');
+        row.remove('profileImageBase64');
+        row.remove('touristEmail');
+        row.remove('touristName');
+        row.remove('tourist_name');
+        row.remove('touristFullName');
+        row.remove('fullName');
+        row.remove('email');
+        row.remove('groupMembers');
+        row['userId'] = uid;
+        row['user_id'] = uid;
+        row['tourist_id'] = uid;
+        final memberTouristId = member['touristId']?.toString().trim() ?? '';
+        row['touristId'] = memberTouristId;
+        final visitors = 1 + (isLeader ? companions : 0);
+        row['partySize'] = visitors;
+        row['visitorCount'] = visitors;
+        out.add(_enrichCheckInWithTouristProfile(row));
+      }
+    }
+    return out;
+  }
+
   /// Privacy-safe display ID for a visit row (never name / email / Firebase UID).
   String _displayTouristIdFromCheckIn(Map<String, dynamic> c) {
     final profile = c['touristProfile'];
@@ -1838,7 +1920,9 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   /// Derives per-tourist visit counts from currently loaded `_checkIns`.
-  /// This keeps "Visits" in the tourists table aligned with QR check-ins.
+  ///
+  /// Only registered profiles are listed. A QR scan without a home-address
+  /// registration stays a visit; it is not turned into a blank Foreign row.
   List<Map<String, dynamic>> _mergeTouristVisitsFromCheckIns(
     List<Map<String, dynamic>> tourists,
   ) {
@@ -1846,13 +1930,11 @@ class _LguDashboardState extends State<LguDashboard>
 
     final Map<String, int> visitsByUid = <String, int>{};
     for (final c in _realCheckIns) {
-      final uid =
-          (c['userId']?.toString().trim() ??
-                  c['tourist_id']?.toString().trim() ??
-                  '')
-              .trim();
-      if (uid.isEmpty) continue;
-      visitsByUid[uid] = (visitsByUid[uid] ?? 0) + 1;
+      final uids = <String>{};
+      _addCheckInPersonUids(c, uids);
+      for (final uid in uids) {
+        visitsByUid[uid] = (visitsByUid[uid] ?? 0) + 1;
+      }
     }
 
     return tourists.map((t) {
@@ -1866,73 +1948,20 @@ class _LguDashboardState extends State<LguDashboard>
     }).toList();
   }
 
-  /// Display label for analytics "top spots" (name over raw spot id).
-  String _analyticsSpotLabel(Map<String, dynamic> c) {
-    final spotName = c['spot_name']?.toString().trim();
-    if (spotName != null && spotName.isNotEmpty) return spotName;
-    final loc = c['location']?.toString().trim();
-    if (loc != null && loc.isNotEmpty) return loc;
-    final spotId =
-        c['spotId']?.toString().trim() ?? c['spot_id']?.toString().trim() ?? '';
-    if (spotId.isNotEmpty) {
-      for (final s in _touristSpots) {
-        if (s.id == spotId) return s.name.isNotEmpty ? s.name : spotId;
-      }
-      return spotId.replaceAll('_', ' ');
-    }
-    return 'Unknown spot';
-  }
+  VisitAnalyticsSnapshot get _lguVisitAnalytics => VisitAnalyticsSnapshot.build(
+        checkIns: _realCheckIns,
+        tourists: _realTouristsList,
+        parseTime: _parseCheckInTimestamp,
+      );
 
-  int get _lguAnalyticsDailyAvg {
-    if (_realCheckIns.isEmpty) return 0;
-    final dates = <DateTime>{};
-    for (final c in _realCheckIns) {
-      final d = _parseCheckInTimestamp(c);
-      if (d != null) dates.add(DateTime(d.year, d.month, d.day));
-    }
-    if (dates.isEmpty) return 0;
-    final min = dates.reduce((a, b) => a.isBefore(b) ? a : b);
-    final max = dates.reduce((a, b) => a.isAfter(b) ? a : b);
-    final days = max.difference(min).inDays + 1;
-    final visitors = sumCheckInVisitors(_realCheckIns);
-    return days > 0 ? (visitors / days).round() : visitors;
-  }
+  int get _lguAnalyticsDailyAvg => _lguVisitAnalytics.dailyAverage;
 
-  String get _lguAnalyticsPeakHour {
-    final byHour = <int, int>{};
-    for (final c in _realCheckIns) {
-      final d = _parseCheckInTimestamp(c);
-      if (d != null) {
-        final h = d.hour;
-        byHour[h] = (byHour[h] ?? 0) + checkInVisitorCount(c);
-      }
-    }
-    if (byHour.isEmpty) return '?';
-    final top = byHour.entries.reduce((a, b) => a.value >= b.value ? a : b);
-    final h = top.key;
-    final end = (h + 1) % 24;
-    final am2 = end < 12 ? 'AM' : 'PM';
-    final s = h == 0 ? 12 : (h > 12 ? h - 12 : h);
-    final e = end == 0 ? 12 : (end > 12 ? end - 12 : end);
-    return '$s-$e $am2';
-  }
+  String get _lguAnalyticsPeakHour => _lguVisitAnalytics.peakHour;
 
   String get _lguAnalyticsTopOrigin {
-    final counts = <String, int>{};
-    for (final t in _realTouristsList) {
-      final o = _getTouristOrigin(t).trim();
-      if (o.isNotEmpty && o != '?') {
-        counts[o] = (counts[o] ?? 0) + 1;
-      } else {
-        final one = t['nationality']?.toString().trim();
-        if (one != null && one.isNotEmpty) {
-          counts[one] = (counts[one] ?? 0) + 1;
-        }
-      }
-    }
-    if (counts.isEmpty) return '?';
-    final top = counts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
-    return _compactOriginForAnalyticsCard(top);
+    final origin = _lguVisitAnalytics.topOrigin;
+    if (origin == '—') return '?';
+    return _compactOriginForAnalyticsCard(origin);
   }
 
   /// Short label for analytics cards (avoids overflow on long addresses).
@@ -1948,25 +1977,6 @@ class _LguDashboardState extends State<LguDashboard>
     if (parts.length == 1) return parts.first;
     if (parts.length == 2) return '${parts[0]}\n${parts[1]}';
     return '${parts[0]}\n${parts[1]}';
-  }
-
-  TrendSeries get _lguAnalyticsTrend => TrendBuckets.build(
-        _realCheckIns.map(_parseCheckInTimestamp),
-        _lguTrendRange,
-      );
-
-  List<Map<String, dynamic>> get _lguAnalyticsTopSpots {
-    final byLabel = <String, int>{};
-    for (final c in _realCheckIns) {
-      final label = _analyticsSpotLabel(c);
-      if (label.isNotEmpty) {
-        byLabel[label] = (byLabel[label] ?? 0) + 1;
-      }
-    }
-    return byLabel.entries
-        .map((e) => {'name': e.key, 'visits': e.value})
-        .toList()
-      ..sort((a, b) => (b['visits'] as int).compareTo(a['visits'] as int));
   }
 
   void _toggleSidebar() {
@@ -2991,6 +3001,16 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
+  Widget _dashboardHeroImage() {
+    return Image.asset(
+      _dashboardHeroImageAsset,
+      fit: BoxFit.cover,
+      alignment: Alignment.center,
+      gaplessPlayback: true,
+      errorBuilder: (_, __, ___) => Container(color: _tintOrange),
+    );
+  }
+
   Widget _buildDashboardHeroBanner({required String cityLabel}) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(24),
@@ -3074,30 +3094,23 @@ class _LguDashboardState extends State<LguDashboard>
                   ),
                 ),
               ),
-              if (!_isMobile)
-                Expanded(
-                  flex: 5,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Image.network(
-                        SupabaseStorageConfig.resolve(_dashboardHeroImageAsset),
-                        fit: BoxFit.cover,
-                        alignment: Alignment.center,
-                        errorBuilder: (_, __, ___) =>
-                            Container(color: _tintOrange),
-                      ),
-                      DecoratedBox(
+              Expanded(
+                flex: _isMobile ? 4 : 5,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    _dashboardHeroImage(),
+                      const DecoratedBox(
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
                             begin: Alignment.centerLeft,
                             end: Alignment.centerRight,
                             colors: [
-                              const Color(0xFFFFE7D1),
-                              const Color(0xFFFFE7D1).withValues(alpha: 0.55),
-                              Colors.transparent,
+                              Color(0xFFFFE7D1),
+                              Color(0x99FFE7D1),
+                              Color(0x00FFE7D1),
                             ],
-                            stops: const [0.0, 0.22, 0.55],
+                            stops: [0.0, 0.12, 0.38],
                           ),
                         ),
                       ),
@@ -3332,6 +3345,7 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   Widget _buildDashboardTouristsTable(List<Map<String, dynamic>> recent) {
+    const idColumnWidth = 156.0;
     return Column(
       children: [
         Padding(
@@ -3339,8 +3353,12 @@ class _LguDashboardState extends State<LguDashboard>
           child: Row(
             children: [
               const SizedBox(width: 44),
-              Expanded(flex: 3, child: _tableHeader('Tourist ID')),
-              Expanded(flex: 2, child: _tableHeader('Registration Date')),
+              SizedBox(
+                width: idColumnWidth,
+                child: _tableHeader('Tourist ID'),
+              ),
+              const SizedBox(width: 17),
+              Expanded(child: _tableHeader('Registration Date')),
               const SizedBox(width: 44),
             ],
           ),
@@ -3352,19 +3370,16 @@ class _LguDashboardState extends State<LguDashboard>
 
           return Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: Material(
+            child: AtmosHoverLift(
+              radius: BorderRadius.circular(16),
+              restColor: index.isEven ? const Color(0xFFFAFAFA) : Colors.white,
+              child: Material(
               color: Colors.transparent,
               child: InkWell(
                 onTap: () => _showTouristDetailsDialog(t),
                 borderRadius: BorderRadius.circular(16),
-                hoverColor: _tintOrange.withValues(alpha: 0.55),
-                child: Ink(
-                  decoration: BoxDecoration(
-                    color:
-                        index.isEven ? const Color(0xFFFAFAFA) : Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Padding(
+                hoverColor: Colors.transparent,
+                child: Padding(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 8,
                       vertical: 10,
@@ -3373,12 +3388,16 @@ class _LguDashboardState extends State<LguDashboard>
                       children: [
                         _buildVisitPrivacyAvatar(radius: 18),
                         const SizedBox(width: 8),
-                        Expanded(
-                          flex: 3,
-                          child: _buildVisitTouristIdChip(id, maxWidth: 260),
+                        SizedBox(
+                          width: idColumnWidth,
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: _buildVisitTouristIdChip(id),
+                          ),
                         ),
+                        Container(width: 1, height: 28, color: kAtmosTableGrid),
+                        const SizedBox(width: 16),
                         Expanded(
-                          flex: 2,
                           child: Text(
                             _formatRegisteredDateOnlyDisplay(regDt),
                             style: GoogleFonts.inter(
@@ -3609,27 +3628,27 @@ class _LguDashboardState extends State<LguDashboard>
               onTap: _showNotificationsDialog,
               onColoredHeader: true,
             ),
-            if (showAddSpotButton) ...[
-              const SizedBox(width: 8),
-              TextButton.icon(
-                onPressed: _showAddSpotDialog,
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('Add Spot'),
-                style: TextButton.styleFrom(
-                  foregroundColor: _primaryOrange,
-                  backgroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 10,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(24),
-                  ),
-                ),
-              ),
-            ],
             const SizedBox(width: 8),
             _buildDesktopHeaderProfileMenu(onColoredHeader: true),
+          ],
+          if (!_isMobile && showAddSpotButton) ...[
+            const SizedBox(width: 8),
+            TextButton.icon(
+              onPressed: _showAddSpotDialog,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Add Spot'),
+              style: TextButton.styleFrom(
+                foregroundColor: _primaryOrange,
+                backgroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(24),
+                ),
+              ),
+            ),
           ],
           if (_isMobile && showAddSpotButton)
             IconButton(
@@ -4466,22 +4485,21 @@ class _LguDashboardState extends State<LguDashboard>
 
   // ==================== CHECK-INS SECTION ====================
   Widget _buildCheckInsContent() {
-    final filteredCheckIns = _checkIns.where((c) {
-      final searchQuery = _checkInsSearchController.text.toLowerCase();
+    final dated = _checkIns.where(_matchesCheckInDateFilter).toList();
+    final visitRows = _expandGroupVisitRows(dated);
+    final loadedRows = _expandGroupVisitRows(_checkIns);
+    final searchQuery = _checkInsSearchController.text.toLowerCase();
+    final filteredCheckIns = visitRows.where((c) {
       final id = _displayTouristIdFromCheckIn(c).toLowerCase();
-      final matchesSearch =
-          searchQuery.isEmpty ||
+      return searchQuery.isEmpty ||
           id.contains(searchQuery) ||
           (c['touristId']?.toString() ?? '').toLowerCase().contains(
             searchQuery,
           ) ||
+          (c['groupName']?.toString() ?? '').toLowerCase().contains(searchQuery) ||
           (c['location']?.toString() ?? '').toLowerCase().contains(searchQuery) ||
           (c['spot_name']?.toString() ?? '').toLowerCase().contains(searchQuery) ||
           (c['spotId']?.toString() ?? '').toLowerCase().contains(searchQuery);
-
-      final matchesDate = _matchesCheckInDateFilter(c);
-
-      return matchesSearch && matchesDate;
     }).toList();
 
     final munLabel =
@@ -4506,6 +4524,15 @@ class _LguDashboardState extends State<LguDashboard>
             children: [
               _buildLguVisitsSummaryBar(
                 VisitStats.fromCheckIns(filteredCheckIns),
+                loaded: VisitStats.fromCheckIns(loadedRows),
+                todayCount: loadedRows.where((c) {
+                  final t = _parseCheckInTimestamp(c);
+                  if (t == null) return false;
+                  final now = DateTime.now();
+                  return t.year == now.year &&
+                      t.month == now.month &&
+                      t.day == now.day;
+                }).length,
               ),
               const SizedBox(height: 10),
               _buildCheckInDateFilterBar(),
@@ -4581,16 +4608,21 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
-  Widget _buildLguVisitsSummaryBar(VisitStats visible) {
+  Widget _buildLguVisitsSummaryBar(
+    VisitStats visible, {
+    VisitStats? loaded,
+    int? todayCount,
+  }) {
     final munLabel =
         (_municipalityName ?? _storedMunicipalityId ?? 'Your LGU').trim();
-    final today = _checkIns.where((c) {
-      final t = _parseCheckInTimestamp(c);
-      if (t == null) return false;
-      final now = DateTime.now();
-      return t.year == now.year && t.month == now.month && t.day == now.day;
-    }).length;
-    final loaded = VisitStats.fromCheckIns(_checkIns);
+    final today = todayCount ??
+        _checkIns.where((c) {
+          final t = _parseCheckInTimestamp(c);
+          if (t == null) return false;
+          final now = DateTime.now();
+          return t.year == now.year && t.month == now.month && t.day == now.day;
+        }).length;
+    loaded ??= VisitStats.fromCheckIns(_checkIns);
     final capped = _checkIns.length >= _qrCheckInFetchLimit
         ? ' · latest $_qrCheckInFetchLimit'
         : '';
@@ -4816,139 +4848,49 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   Widget _buildCheckInsTable(List<Map<String, dynamic>> checkIns) {
-    const headerBg = Color(0xFFF9FAFB);
-    const stripe = Color(0xFFF3F4F6);
-    const tableHeadingStyle = TextStyle(
-      color: _textDark,
-      fontWeight: FontWeight.w800,
-      fontSize: 12,
-      letterSpacing: 0.35,
-    );
-
-    const minTableWidth = 720.0;
-
-    return SizedBox(
-      width: double.infinity,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            border: Border.all(color: _kAnalyticsSurfaceBorder, width: 1),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.05),
-                blurRadius: 14,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final cw = constraints.maxWidth;
-              final tableWidth = cw.isFinite && cw > minTableWidth
-                  ? cw
-                  : minTableWidth;
-
-              return SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: SizedBox(
-                  width: tableWidth,
-                  child: DataTable(
-                    headingRowColor: WidgetStateProperty.all(headerBg),
-                    headingRowHeight: 48,
-                    dataRowMinHeight: 54,
-                    dataRowMaxHeight: 88,
-                    horizontalMargin: 20,
-                    columnSpacing: 28,
-                    headingTextStyle: tableHeadingStyle,
-                    dataTextStyle: const TextStyle(
-                      color: _textDark,
-                      fontSize: 13,
-                    ),
-                    dividerThickness: 1,
-                    border: TableBorder(
-                      horizontalInside: BorderSide(
-                        color: _kAnalyticsSurfaceBorder,
-                      ),
-                      top: BorderSide(color: _kAnalyticsSurfaceBorder),
-                      bottom: BorderSide(color: _kAnalyticsSurfaceBorder),
-                    ),
-                    columns: [
-                      const DataColumn(label: Text('Tourist ID')),
-                      const DataColumn(label: Text('Location')),
-                      const DataColumn(label: Text('Time')),
-                      DataColumn(
-                        label: SizedBox(
-                          width: 88,
-                          child: Center(
-                            child: Text('Actions', style: tableHeadingStyle),
-                          ),
-                        ),
-                      ),
-                    ],
-                    rows: [
-                      for (var i = 0; i < checkIns.length; i++)
-                        _buildCheckInDataRow(checkIns[i], i, stripe),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      ),
-    );
-  }
-
-  DataRow _buildCheckInDataRow(
-    Map<String, dynamic> c,
-    int index,
-    Color stripeColor,
-  ) {
-    final rowBg = index.isOdd ? stripeColor : const Color(0xFFFFFFFF);
-    return DataRow(
-      color: WidgetStateProperty.all(rowBg),
-      cells: [
-        DataCell(_buildCheckInTouristCell(c)),
-        DataCell(
-          Text(
-            c['location']?.toString() ?? '',
-            style: const TextStyle(color: _textDark),
-          ),
-        ),
-        DataCell(
-          Text(
-            _formatTime(c['timestamp']),
-            style: const TextStyle(color: _textMuted, fontSize: 13),
-          ),
-        ),
-        DataCell(
-          SizedBox(
-            width: 88,
-            child: Center(
-              child: Tooltip(
-                message: 'View details',
-                child: Material(
-                  color: _primaryOrange.withValues(alpha: 0.12),
+    return AtmosResponsiveTable(
+      columns: const [
+        AtmosTableColumn('Tourist ID', flex: 3, minWidth: 200),
+        AtmosTableColumn('Location', flex: 3, minWidth: 160),
+        AtmosTableColumn('Time', flex: 2, minWidth: 140),
+        AtmosTableColumn('Actions', minWidth: 96, align: Alignment.center),
+      ],
+      rows: [
+        for (final c in checkIns)
+          [
+            _buildCheckInTouristCell(c),
+            Text(
+              c['location']?.toString() ?? '',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: _textDark),
+            ),
+            Text(
+              _formatTime(c['timestamp']),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: _textMuted, fontSize: 13),
+            ),
+            Tooltip(
+              message: 'View details',
+              child: Material(
+                color: _primaryOrange.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+                child: InkWell(
+                  onTap: () => _showCheckInDetailsDialog(c),
                   borderRadius: BorderRadius.circular(12),
-                  child: InkWell(
-                    onTap: () => _showCheckInDetailsDialog(c),
-                    borderRadius: BorderRadius.circular(12),
-                    child: const Padding(
-                      padding: EdgeInsets.all(8),
-                      child: Icon(
-                        Icons.visibility_rounded,
-                        color: _primaryOrange,
-                        size: 20,
-                      ),
+                  child: const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Icon(
+                      Icons.visibility_rounded,
+                      color: _primaryOrange,
+                      size: 20,
                     ),
                   ),
                 ),
               ),
             ),
-          ),
-        ),
+          ],
       ],
     );
   }
@@ -5015,6 +4957,11 @@ class _LguDashboardState extends State<LguDashboard>
               checkIn['location']?.toString() ?? '—',
             ),
             _buildDetailRow('Time', _formatTime(checkIn['timestamp'])),
+            if ((checkIn['groupName']?.toString().trim() ?? '').isNotEmpty)
+              _buildDetailRow(
+                'Group',
+                checkIn['groupName'].toString(),
+              ),
           ],
         ),
         actions: [
@@ -5191,7 +5138,7 @@ class _LguDashboardState extends State<LguDashboard>
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                       label: Text(
-                        _isBackfillingSpotQr ? 'Syncing?' : 'Full sync',
+                        _isBackfillingSpotQr ? 'Syncing…' : 'Full sync',
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
                     ),
@@ -5278,7 +5225,7 @@ class _LguDashboardState extends State<LguDashboard>
                           ),
                         ),
                         label: Text(
-                          _isBackfillingSpotQr ? 'Syncing?' : 'Full sync',
+                          _isBackfillingSpotQr ? 'Syncing…' : 'Full sync',
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                       ),
@@ -5475,8 +5422,9 @@ class _LguDashboardState extends State<LguDashboard>
       child: _buildFramedContentShell(
         title: 'Tourist Spots',
         subtitle:
-            'One place for destinations ? edit spot details, paste VR tour URLs, '
+            'One place for destinations: edit spot details, paste VR tour URLs, '
             'and manage QR codes',
+        showAddSpotButton: true,
         body: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: EdgeInsets.all(_isMobile ? 10 : 12),
@@ -5734,10 +5682,7 @@ class _LguDashboardState extends State<LguDashboard>
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(16),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: () => _showEditSpotDialog(spot),
-        child: Container(
+      child: Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
@@ -5910,7 +5855,7 @@ class _LguDashboardState extends State<LguDashboard>
                       color: _primaryOrange,
                     ),
                     label: Text(
-                      'Edit details',
+                      'Edit spot & QR',
                       style: TextStyle(
                         color: _primaryOrange,
                         fontWeight: FontWeight.w700,
@@ -5942,7 +5887,6 @@ class _LguDashboardState extends State<LguDashboard>
           );
         },
       ),
-        ),
       ),
     );
   }
@@ -5971,6 +5915,92 @@ class _LguDashboardState extends State<LguDashboard>
         behavior: SnackBarBehavior.floating,
       ),
     );
+  }
+
+  void _subscribeToSpotCategories() {
+    _spotCategoriesSubscription?.cancel();
+    _spotCategoriesSubscription =
+        SpotCategoryService.instance.watchCustomNames().listen(
+      (names) {
+        if (!mounted) return;
+        setState(() => _savedSpotCategories = names);
+      },
+      onError: (Object _) {},
+    );
+  }
+
+  Future<String?> _promptNewSpotCategory(BuildContext dialogContext) async {
+    final controller = TextEditingController();
+    final entered = await showDialog<String>(
+      context: dialogContext,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _cardBg,
+        title: Text(
+          'New category',
+          style: GoogleFonts.inter(
+            color: _textDark,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          style: TextStyle(color: _textDark),
+          decoration: const InputDecoration(
+            hintText: 'Category name',
+            filled: true,
+          ),
+          onSubmitted: (value) => Navigator.pop(ctx, value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: _textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: _primaryOrange),
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      controller.dispose();
+    });
+    if (entered == null || !mounted) return null;
+
+    final result = await SpotCategoryService.instance.add(entered);
+    if (!mounted) return null;
+    if (!result.ok || result.name == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result.error ?? 'Could not add that category.'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return null;
+    }
+
+    final name = result.name!;
+    setState(() {
+      _savedSpotCategories = [
+        ..._savedSpotCategories,
+        name,
+      ];
+    });
+    if (result.alreadyExists) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$name is already in the list.'),
+          backgroundColor: _primaryOrange,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+    return name;
   }
 
   void _showGenerateSpotQrDialog({
@@ -6090,21 +6120,45 @@ class _LguDashboardState extends State<LguDashboard>
                         ),
                         child: DropdownButtonHideUnderline(
                           child: DropdownButton<String>(
-                            value: selectedCategory,
+                            value: _categories.contains(selectedCategory)
+                                ? selectedCategory
+                                : 'Beach',
                             isExpanded: true,
-                            items: _categories
-                                .where((c) => c != 'All')
-                                .map(
-                                  (c) => DropdownMenuItem(
-                                    value: c,
-                                    child: Text(c),
+                            items: [
+                              ..._categories
+                                  .where((c) => c != 'All')
+                                  .map(
+                                    (c) => DropdownMenuItem(
+                                      value: c,
+                                      child: Text(c),
+                                    ),
                                   ),
-                                )
-                                .toList(),
+                              DropdownMenuItem(
+                                value: SpotCategoryService.addNewValue,
+                                child: Text(
+                                  '+ Add New Category',
+                                  style: TextStyle(
+                                    color: _primaryOrange,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ],
                             onChanged: saving
                                 ? null
-                                : (v) {
+                                : (v) async {
                                     if (v == null) return;
+                                    if (v == SpotCategoryService.addNewValue) {
+                                      final created =
+                                          await _promptNewSpotCategory(
+                                        dialogContext,
+                                      );
+                                      if (created == null) return;
+                                      setDialogState(
+                                        () => selectedCategory = created,
+                                      );
+                                      return;
+                                    }
                                     setDialogState(
                                       () => selectedCategory = v,
                                     );
@@ -6551,119 +6605,48 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   Widget _buildSpotsTable(List<TouristSpot> spots) {
-    return _fullWidthScrollableTable(
-      table: DataTable(
-        headingRowColor: WidgetStateProperty.all(Colors.grey.shade100),
-        dataTextStyle: const TextStyle(color: _textDark, fontSize: 13),
-        dividerThickness: 0,
-        columns: const [
-          DataColumn(
-            label: Text(
-              'Spot Name',
-              style: TextStyle(
-                color: _textDark,
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
+    return AtmosResponsiveTable(
+      columns: const [
+        AtmosTableColumn('Spot Name', flex: 3, minWidth: 180),
+        AtmosTableColumn('Category', flex: 2, minWidth: 120),
+        AtmosTableColumn('Location', flex: 2, minWidth: 140),
+        AtmosTableColumn('VR', minWidth: 88),
+        AtmosTableColumn('Status', minWidth: 120),
+        AtmosTableColumn('Actions', flex: 2, minWidth: 180),
+      ],
+      rows: [
+        for (final s in spots)
+          [
+            Text(
+              s.name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: _textDark, fontWeight: FontWeight.w600),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                s.category,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.blue, fontSize: 12),
               ),
             ),
-          ),
-          DataColumn(
-            label: Text(
-              'Category',
-              style: TextStyle(
-                color: _textDark,
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-              ),
+            Text(
+              s.municipality,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: _textDark),
             ),
-          ),
-          DataColumn(
-            label: Text(
-              'Location',
-              style: TextStyle(
-                color: _textDark,
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-              ),
-            ),
-          ),
-          DataColumn(
-            label: Text(
-              'VR',
-              style: TextStyle(
-                color: _textDark,
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-              ),
-            ),
-          ),
-          DataColumn(
-            label: Text(
-              'Status',
-              style: TextStyle(
-                color: _textDark,
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-              ),
-            ),
-          ),
-          DataColumn(
-            label: Text(
-              'Actions',
-              style: TextStyle(
-                color: _textDark,
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-              ),
-            ),
-          ),
-        ],
-        rows: spots
-            .map(
-              (s) => DataRow(
-                cells: [
-                  DataCell(
-                    Text(
-                      s.name,
-                      style: const TextStyle(
-                        color: _textDark,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        s.category,
-                        style: const TextStyle(
-                          color: Colors.blue,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      s.municipality,
-                      style: const TextStyle(color: _textDark),
-                    ),
-                  ),
-                  DataCell(_buildSpotVrBadge(s)),
-                  DataCell(_buildStatusBadge(s.status)),
-                  DataCell(Row(children: _buildSpotActionButtons(s))),
-                ],
-              ),
-            )
-            .toList(),
-      ),
+            _buildSpotVrBadge(s),
+            _buildStatusBadge(s.status),
+            Wrap(spacing: 4, children: _buildSpotActionButtons(s)),
+          ],
+      ],
     );
   }
 
@@ -6928,7 +6911,8 @@ class _LguDashboardState extends State<LguDashboard>
     final nameController = TextEditingController(text: spot.name);
     final cityController = TextEditingController(text: spot.municipality);
     final descriptionController = TextEditingController(text: spot.description);
-    var photos = spot.imageUrls;
+    final originalPhotos = List<String>.from(spot.imageUrls);
+    var photos = List<String>.from(originalPhotos);
     final vrLinkController = TextEditingController(text: spot.vrLink ?? '');
     final dotCodeController = TextEditingController(text: spot.dotAttractionCode);
     final latController = TextEditingController(
@@ -6937,20 +6921,40 @@ class _LguDashboardState extends State<LguDashboard>
     final lngController = TextEditingController(
       text: _formatCoordForField(spot.longitude),
     );
-    String selectedCategory = spot.category;
+    String selectedCategory = spot.category.trim().isEmpty
+        ? 'Beach'
+        : spot.category.trim();
     final categoryOptions = <String>{
       ..._categories.where((c) => c != 'All'),
-      if (spot.category.trim().isNotEmpty) spot.category,
+      if (selectedCategory.isNotEmpty) selectedCategory,
     }.toList();
+    if (!categoryOptions.contains(selectedCategory) &&
+        categoryOptions.isNotEmpty) {
+      selectedCategory = categoryOptions.first;
+    }
 
+    final hostContext = context;
     showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minWidth: 440, maxWidth: 520),
-            child: AlertDialog(
+      context: hostContext,
+      useRootNavigator: true,
+      barrierDismissible: true,
+      builder: (dialogContext) {
+        final screen = MediaQuery.sizeOf(dialogContext);
+        final dialogWidth = math.min(
+          520.0,
+          math.max(screen.width - 96, 160.0),
+        );
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            final safeCategory = categoryOptions.contains(selectedCategory)
+                ? selectedCategory
+                : (categoryOptions.isEmpty ? null : categoryOptions.first);
+            return AlertDialog(
               backgroundColor: _cardBg,
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
               title: Text(
                 'Edit Tourist Spot',
                 style: TextStyle(
@@ -6959,7 +6963,13 @@ class _LguDashboardState extends State<LguDashboard>
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              content: SingleChildScrollView(
+              content: SizedBox(
+                width: dialogWidth,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: math.max(240.0, screen.height * 0.62),
+                  ),
+                  child: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -6976,18 +6986,39 @@ class _LguDashboardState extends State<LguDashboard>
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: DropdownButton<String>(
-                        value: selectedCategory,
+                        value: safeCategory,
                         isExpanded: true,
                         dropdownColor: _cardBg,
                         underline: const SizedBox(),
                         style: TextStyle(color: _textDark, fontSize: 16),
-                        items: categoryOptions
-                            .map(
-                              (c) => DropdownMenuItem(value: c, child: Text(c)),
-                            )
-                            .toList(),
-                        onChanged: (value) =>
-                            setDialogState(() => selectedCategory = value!),
+                        items: [
+                          ...categoryOptions.map(
+                            (c) => DropdownMenuItem(value: c, child: Text(c)),
+                          ),
+                          DropdownMenuItem(
+                            value: SpotCategoryService.addNewValue,
+                            child: Text(
+                              '+ Add New Category',
+                              style: TextStyle(
+                                color: _primaryOrange,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                        onChanged: (value) async {
+                          if (value == null) return;
+                          if (value == SpotCategoryService.addNewValue) {
+                            final created = await _promptNewSpotCategory(dialogContext);
+                            if (created == null) return;
+                            if (!categoryOptions.contains(created)) {
+                              categoryOptions.add(created);
+                            }
+                            setDialogState(() => selectedCategory = created);
+                            return;
+                          }
+                          setDialogState(() => selectedCategory = value);
+                        },
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -7006,6 +7037,9 @@ class _LguDashboardState extends State<LguDashboard>
                     const SizedBox(height: 16),
                     SpotPhotosEditor(
                       spotId: spot.id,
+                      municipalityId: spot.municipalityId.isNotEmpty
+                          ? spot.municipalityId
+                          : spot.municipality,
                       initialUrls: photos,
                       accentColor: _primaryOrange,
                       onChanged: (urls) => photos = urls,
@@ -7032,10 +7066,12 @@ class _LguDashboardState extends State<LguDashboard>
                     ),
                   ],
                 ),
+                  ),
+                ),
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () => Navigator.pop(dialogContext),
                   child: const Text(
                     'Cancel',
                     style: TextStyle(color: _textMuted),
@@ -7074,7 +7110,8 @@ class _LguDashboardState extends State<LguDashboard>
                           'latitude': lat,
                           'longitude': lng,
                           'image_url': photos.isNotEmpty ? photos.first : null,
-                          'gallery': photos,
+                          'image': photos.isNotEmpty ? photos.first : null,
+                          'gallery': photos.take(TouristSpot.maxImages).toList(),
                           'vr_link': vrLinkController.text.trim().isNotEmpty
                               ? vrLinkController.text.trim()
                               : null,
@@ -7094,18 +7131,27 @@ class _LguDashboardState extends State<LguDashboard>
                           'hasVR': vrLinkController.text.trim().isNotEmpty,
                         });
                     if (ok) {
+                      await SupabaseStorageUpload.deleteReplacedSpotPhotos(
+                        spotId: spot.id,
+                        previousUrls: originalPhotos,
+                        nextUrls: photos,
+                      );
                       final vr = vrLinkController.text.trim();
-                      if (vr.isNotEmpty) {
-                        await VrTourFirestoreService.syncAnalyticsDocForSpot(
-                          spotId: spot.id,
-                          spotName: nameController.text.trim(),
-                          vrUrl: vr,
-                          municipalityId: municipalityId,
-                        );
-                      } else {
-                        await VrTourFirestoreService.clearVrLinkForSpot(
-                          spot.id,
-                        );
+                      try {
+                        if (vr.isNotEmpty) {
+                          await VrTourFirestoreService.syncAnalyticsDocForSpot(
+                            spotId: spot.id,
+                            spotName: nameController.text.trim(),
+                            vrUrl: vr,
+                            municipalityId: municipalityId,
+                          );
+                        } else {
+                          await VrTourFirestoreService.clearVrLinkForSpot(
+                            spot.id,
+                          );
+                        }
+                      } catch (e) {
+                        debugPrint('[LguDashboard] VR sync after edit failed: $e');
                       }
                       await _loadData();
                     }
@@ -7116,13 +7162,14 @@ class _LguDashboardState extends State<LguDashboard>
                           latitude: lat,
                           longitude: lng,
                         );
-                    Navigator.pop(context);
+                    Navigator.pop(dialogContext);
                     if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      ScaffoldMessenger.of(hostContext).showSnackBar(
                         SnackBar(
                           content: Text(
                             !ok
-                                ? 'Failed to update. Check Firebase.'
+                                ? (TouristSpotsFirestoreService.lastUpdateError ??
+                                    'Failed to update. Check Firebase.')
                                 : needsReprint
                                     ? 'Spot updated. The pin moved — download '
                                         'and re-post the new QR (PNG/PDF); the '
@@ -7143,10 +7190,10 @@ class _LguDashboardState extends State<LguDashboard>
                   child: const Text('Save'),
                 ),
               ],
-            ),
-          ),
-        ),
-      ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -7273,10 +7320,10 @@ class _LguDashboardState extends State<LguDashboard>
         ),
         const SizedBox(height: 4),
         Text(
-          'Place the pin where the QR is posted. Tourists must be within '
-          '${kQrScanSpotMaxDistanceMeters.round()} m to check in and get a '
-          '"QR near you" alert within '
-          '${(kNearbySpotNotifyRadiusMeters / 1000).toStringAsFixed(0)} km.',
+          'Place the pin on the plaza grounds. Other spots: tourists must be within '
+          '${kQrScanSpotMaxDistanceMeters.round()} m. Oroquieta City Plaza allows '
+          '${kQrScanPlazaGroundsMaxDistanceMeters.round()} m, so the flagpole, seawall, '
+          'food court, and food bazaar can all check in from one pin.',
           style: TextStyle(color: _textMuted, fontSize: 11, height: 1.35),
         ),
         const SizedBox(height: 12),
@@ -7658,152 +7705,95 @@ class _LguDashboardState extends State<LguDashboard>
   Widget _buildTouristsTable(List<Map<String, dynamic>> tourists) {
     final sorted = _sortedTouristsByRegistrationDate(tourists);
 
-    return SizedBox(
-      width: double.infinity,
-      child: Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 12,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: _fullWidthScrollableTable(
-          table: DataTable(
-            headingRowColor: WidgetStateProperty.all(Colors.grey.shade50),
-            headingTextStyle: const TextStyle(
-              color: _textDark,
-              fontWeight: FontWeight.w700,
-              fontSize: 13,
-            ),
-            dataTextStyle: const TextStyle(color: _textDark, fontSize: 14),
-            dividerThickness: 0,
-            horizontalMargin: 20,
-            columnSpacing: 28,
-            columns: const [
-              DataColumn(label: Text('Tourist ID')),
-              DataColumn(label: Text('Type')),
-              DataColumn(label: Text('Origin')),
-              DataColumn(label: Text('Date')),
-              DataColumn(label: Text('Time')),
-              DataColumn(label: Text('Visits')),
-              DataColumn(label: Text('Actions')),
-            ],
-            rows: sorted.map((t) {
-              final touristId = TouristIdHelper.displayForTourist(t);
-              final origin = _getTouristOrigin(t);
-              final visits = t['totalVisits'] ?? t['visits'] ?? 0;
-              final regDt = _registeredDateTimeNullableFromTourist(t);
-              final isLocal =
-                  t['isLocal'] == true || t['localOrForeign'] == 'Local';
-
-              return DataRow(
-                cells: [
-                  DataCell(
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _buildVisitPrivacyAvatar(radius: 16),
-                        const SizedBox(width: 10),
-                        _buildVisitTouristIdChip(touristId, maxWidth: 180),
-                      ],
-                    ),
-                  ),
-                  DataCell(
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isLocal
-                            ? Colors.green.withValues(alpha: 0.12)
-                            : Colors.purple.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(28),
-                      ),
-                      child: Text(
-                        isLocal ? 'Local' : 'Foreign',
-                        style: TextStyle(
-                          color: isLocal
-                              ? const Color(0xFF16A34A)
-                              : const Color(0xFF7C3AED),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      origin,
-                      style: TextStyle(
-                        color: origin == '?' ? _textMuted : _textDark,
-                        fontSize: 13,
-                        fontStyle: origin == '?' ? FontStyle.italic : null,
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      _formatRegisteredDateOnlyDisplay(regDt),
-                      style: const TextStyle(color: _textDark, fontSize: 13),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      _formatRegisteredTimeOnlyDisplay(regDt),
-                      style: const TextStyle(color: _textDark, fontSize: 13),
-                    ),
-                  ),
-                  DataCell(
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0EA5E9).withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(28),
-                      ),
-                      child: Text(
-                        '$visits',
-                        style: const TextStyle(
-                          color: Color(0xFF0284C7),
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    IconButton(
-                      onPressed: () => _showTouristDetailsDialog(t),
-                      icon: const Icon(
-                        Icons.visibility_rounded,
-                        color: Color(0xFF0EA5E9),
-                        size: 20,
-                      ),
-                      tooltip: 'View Details',
-                      style: IconButton.styleFrom(
-                        backgroundColor: const Color(
-                          0xFF0EA5E9,
-                        ).withValues(alpha: 0.1),
-                      ),
-                    ),
-                  ),
+    return AtmosResponsiveTable(
+      columns: const [
+        AtmosTableColumn('Tourist ID', flex: 3, minWidth: 200),
+        AtmosTableColumn('Type', minWidth: 100),
+        AtmosTableColumn('Origin', flex: 2, minWidth: 140),
+        AtmosTableColumn('Date', minWidth: 120),
+        AtmosTableColumn('Time', minWidth: 110),
+        AtmosTableColumn('Visits', minWidth: 80, align: Alignment.center),
+        AtmosTableColumn('Actions', minWidth: 72, align: Alignment.center),
+      ],
+      rows: [
+        for (final t in sorted)
+          () {
+            final touristId = TouristIdHelper.displayForTourist(t);
+            final origin = _getTouristOrigin(t);
+            final visits = t['totalVisits'] ?? t['visits'] ?? 0;
+            final regDt = _registeredDateTimeNullableFromTourist(t);
+            final isLocal = t['isLocal'] == true || t['localOrForeign'] == 'Local';
+            return <Widget>[
+              Row(
+                children: [
+                  _buildVisitPrivacyAvatar(radius: 16),
+                  const SizedBox(width: 10),
+                  Flexible(child: _buildVisitTouristIdChip(touristId, maxWidth: 180)),
                 ],
-              );
-            }).toList(),
-          ),
-        ),
-      ),
-      ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: isLocal ? Colors.green.withValues(alpha: 0.12) : Colors.purple.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(28),
+                ),
+                child: Text(
+                  isLocal ? 'Local' : 'Foreign',
+                  style: TextStyle(
+                    color: isLocal ? const Color(0xFF16A34A) : const Color(0xFF7C3AED),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              Text(
+                origin,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: origin == '?' ? _textMuted : _textDark,
+                  fontSize: 13,
+                  fontStyle: origin == '?' ? FontStyle.italic : null,
+                ),
+              ),
+              Text(
+                _formatRegisteredDateOnlyDisplay(regDt),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: _textDark, fontSize: 13),
+              ),
+              Text(
+                _formatRegisteredTimeOnlyDisplay(regDt),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: _textDark, fontSize: 13),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0EA5E9).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(28),
+                ),
+                child: Text(
+                  '$visits',
+                  style: const TextStyle(
+                    color: Color(0xFF0284C7),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              IconButton(
+                onPressed: () => _showTouristDetailsDialog(t),
+                icon: const Icon(Icons.visibility_rounded, color: Color(0xFF0EA5E9), size: 20),
+                tooltip: 'View Details',
+                style: IconButton.styleFrom(
+                  backgroundColor: const Color(0xFF0EA5E9).withValues(alpha: 0.1),
+                ),
+              ),
+            ];
+          }(),
+      ],
     );
   }
 
@@ -8133,12 +8123,7 @@ class _LguDashboardState extends State<LguDashboard>
 
   void _showTouristsExportOrganizedDialog(String csv) {
     final textStyle = TextStyle(color: _textDark, fontSize: 13);
-    final headerStyle = TextStyle(
-      color: _textDark,
-      fontWeight: FontWeight.w700,
-      fontSize: 12,
-    );
-    final rows = <DataRow>[];
+    final rows = <List<Widget>>[];
     for (final t in _tourists) {
       final name = _getTouristDisplayName(t);
       final touristId = TouristIdHelper.displayForTourist(t);
@@ -8152,23 +8137,25 @@ class _LguDashboardState extends State<LguDashboard>
       final regDt = _registeredDateTimeNullableFromTourist(t);
       final dateStr = _formatRegisteredDateOnlyDisplay(regDt);
       final timeStr = _formatRegisteredTimeOnlyDisplay(regDt);
-      rows.add(
-        DataRow(
-          cells: [
-            DataCell(Text(touristId, style: textStyle)),
-            DataCell(Text(name, style: textStyle)),
-            DataCell(Text(email, style: textStyle)),
-            DataCell(Text(mobile, style: textStyle)),
-            DataCell(Text(nationality, style: textStyle)),
-            DataCell(Text(isLocal ? 'Local' : 'Foreign', style: textStyle)),
-            DataCell(Text(origin, style: textStyle)),
-            DataCell(Text(visits, style: textStyle)),
-            DataCell(Text(status, style: textStyle)),
-            DataCell(Text(dateStr, style: textStyle)),
-            DataCell(Text(timeStr, style: textStyle)),
-          ],
-        ),
-      );
+      Widget cell(String value) => Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: textStyle,
+          );
+      rows.add([
+        cell(touristId),
+        cell(name),
+        cell(email),
+        cell(mobile),
+        cell(nationality),
+        cell(isLocal ? 'Local' : 'Foreign'),
+        cell(origin),
+        cell(visits),
+        cell(status),
+        cell(dateStr),
+        cell(timeStr),
+      ]);
     }
 
     final w = MediaQuery.of(context).size.width;
@@ -8214,61 +8201,22 @@ class _LguDashboardState extends State<LguDashboard>
                           style: TextStyle(color: _textMuted, fontSize: 16),
                         ),
                       )
-                    : Scrollbar(
-                        thumbVisibility: true,
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: SingleChildScrollView(
-                            child: DataTable(
-                              headingRowColor: WidgetStateProperty.all<Color>(
-                                const Color(0xFFFFEDD5),
-                              ),
-                              dataRowMinHeight: 44,
-                              horizontalMargin: 16,
-                              columnSpacing: 20,
-                              dividerThickness: 0,
-                              border: const TableBorder(),
-                              columns: [
-                                DataColumn(
-                                  label: Text('Tourist ID', style: headerStyle),
-                                ),
-                                DataColumn(
-                                  label: Text('Full name', style: headerStyle),
-                                ),
-                                DataColumn(
-                                  label: Text('Email', style: headerStyle),
-                                ),
-                                DataColumn(
-                                  label: Text('Mobile', style: headerStyle),
-                                ),
-                                DataColumn(
-                                  label: Text(
-                                    'Nationality',
-                                    style: headerStyle,
-                                  ),
-                                ),
-                                DataColumn(
-                                  label: Text('Type', style: headerStyle),
-                                ),
-                                DataColumn(
-                                  label: Text('Origin', style: headerStyle),
-                                ),
-                                DataColumn(
-                                  label: Text('Visits', style: headerStyle),
-                                ),
-                                DataColumn(
-                                  label: Text('Status', style: headerStyle),
-                                ),
-                                DataColumn(
-                                  label: Text('Date', style: headerStyle),
-                                ),
-                                DataColumn(
-                                  label: Text('Time', style: headerStyle),
-                                ),
-                              ],
-                              rows: rows,
-                            ),
-                          ),
+                    : SingleChildScrollView(
+                        child: AtmosResponsiveTable(
+                        columns: const [
+                          AtmosTableColumn('Tourist ID', minWidth: 120),
+                          AtmosTableColumn('Full name', flex: 2, minWidth: 150),
+                          AtmosTableColumn('Email', flex: 2, minWidth: 160),
+                          AtmosTableColumn('Mobile', minWidth: 120),
+                          AtmosTableColumn('Nationality', minWidth: 120),
+                          AtmosTableColumn('Type', minWidth: 90),
+                          AtmosTableColumn('Origin', flex: 2, minWidth: 140),
+                          AtmosTableColumn('Visits', minWidth: 72, align: Alignment.centerRight),
+                          AtmosTableColumn('Status', minWidth: 90),
+                          AtmosTableColumn('Date', minWidth: 110),
+                          AtmosTableColumn('Time', minWidth: 90),
+                        ],
+                        rows: rows,
                         ),
                       ),
               ),
@@ -8314,7 +8262,7 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   // ==================== ANALYTICS (LGU-scoped) ====================
-  /// 0 = Overview, 1 = DOT exports, 2 = Submit to OPTACA
+  /// 0 = Overview, 1 = DOT exports
   int _analyticsTab = 0;
 
   Widget _buildAnalyticsContent() {
@@ -8373,13 +8321,9 @@ class _LguDashboardState extends State<LguDashboard>
                       key: const ValueKey('analytics-overview'),
                       child: _buildAnalyticsOverviewScroll(city),
                     ),
-                  1 => KeyedSubtree(
+                  _ => KeyedSubtree(
                       key: const ValueKey('analytics-exports'),
                       child: _buildAnalyticsExportsScroll(),
-                    ),
-                  _ => KeyedSubtree(
-                      key: const ValueKey('analytics-optaca'),
-                      child: _buildAnalyticsOptacaSubmitScroll(),
                     ),
                 },
               ),
@@ -8457,32 +8401,7 @@ class _LguDashboardState extends State<LguDashboard>
           chip('Overview', Icons.insights_rounded, 0),
           const SizedBox(width: 6),
           chip('DOT exports', Icons.description_outlined, 1),
-          const SizedBox(width: 6),
-          chip('OPTACA', Icons.send_rounded, 2),
         ],
-      ),
-    );
-  }
-
-  Widget _buildAnalyticsOptacaSubmitScroll() {
-    return SingleChildScrollView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: EdgeInsets.fromLTRB(
-        _isMobile ? 16 : 24,
-        16,
-        _isMobile ? 16 : 24,
-        28,
-      ),
-      child: LguSubmitReportToOptacaPanel(
-        municipalityId: _storedMunicipalityId ?? '',
-        municipalityName: (_municipalityName ?? _storedMunicipalityId ?? 'LGU')
-            .trim(),
-        checkIns: _realCheckIns,
-        submittedByName: _profileName,
-        parseTimestamp: _parseCheckInTimestamp,
-        primaryColor: _primaryOrange,
-        textDark: _textDark,
-        textMuted: _textMuted,
       ),
     );
   }
@@ -8535,28 +8454,12 @@ class _LguDashboardState extends State<LguDashboard>
               style: TextStyle(color: _textMuted, fontSize: 12.5, height: 1.35),
             ),
             const SizedBox(height: 12),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final sideBySide = !_isMobile && constraints.maxWidth >= 980;
-                if (!sideBySide) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _buildLguVisitorTrendsChart(),
-                      const SizedBox(height: 14),
-                      _buildLguTopSpotsChart(),
-                    ],
-                  );
-                }
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(flex: 5, child: _buildLguVisitorTrendsChart()),
-                    const SizedBox(width: 14),
-                    Expanded(flex: 4, child: _buildLguTopSpotsChart()),
-                  ],
-                );
-              },
+            VisitAnalyticsBoard(
+              checkIns: _realCheckIns,
+              tourists: _realTouristsList,
+              parseTime: _parseCheckInTimestamp,
+              rankSpots: true,
+              rankingTitle: 'Top spots',
             ),
           ],
         ),
@@ -8894,298 +8797,6 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
-  Widget _buildLguTrendRangePicker() {
-    return PopupMenuButton<TrendRange>(
-      tooltip: 'Change range',
-      initialValue: _lguTrendRange,
-      position: PopupMenuPosition.under,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      onSelected: (r) => setState(() => _lguTrendRange = r),
-      itemBuilder: (context) => [
-        for (final r in TrendRange.values)
-          PopupMenuItem<TrendRange>(
-            value: r,
-            height: 40,
-            child: Text(
-              r.label,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight:
-                    r == _lguTrendRange ? FontWeight.w700 : FontWeight.w500,
-                color: r == _lguTrendRange ? _primaryOrange : _textDark,
-              ),
-            ),
-          ),
-      ],
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: _kAnalyticsSurfaceBorder),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.calendar_today_outlined,
-              size: 13,
-              color: _textMuted,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              _lguTrendRange.label,
-              style: const TextStyle(
-                color: _textDark,
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const Icon(
-              Icons.keyboard_arrow_down_rounded,
-              size: 16,
-              color: _textMuted,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLguVisitorTrendsChart() {
-    final series = _lguAnalyticsTrend;
-    final values = [for (final v in series.values) v.toDouble()];
-    return Container(
-      padding: EdgeInsets.all(_isMobile ? 14 : 18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _kAnalyticsSurfaceBorder),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x08000000),
-            blurRadius: 12,
-            offset: Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Visitor trends',
-                      style: TextStyle(
-                        color: _textDark,
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Visits per ${_lguTrendRange.bucketNoun} · '
-                      '${_lguTrendRange.label.toLowerCase()}',
-                      style: const TextStyle(
-                        color: _textMuted,
-                        fontSize: 12,
-                        height: 1.35,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              _buildLguTrendRangePicker(),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF7ED),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.trending_up_rounded,
-                      size: 14,
-                      color: Color(0xFFC2410C),
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      'Total ${series.total}',
-                      style: const TextStyle(
-                        color: Color(0xFFC2410C),
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          _AnalyticsTrendChart(
-            values: values,
-            labels: _lguTrendRange == TrendRange.thisYear
-                ? series.labels
-                : series.tooltips,
-            tooltips: series.tooltips,
-            emptyMessage:
-                'No check-ins ${_lguTrendRange.label.toLowerCase()}',
-            color: _primaryOrange,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLguTopSpotsChart() {
-    final spots = _lguAnalyticsTopSpots.take(8).toList();
-    final maxVisits = spots.isEmpty ? 1 : (spots.first['visits'] as int);
-
-    return Container(
-      padding: EdgeInsets.all(_isMobile ? 14 : 18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _kAnalyticsSurfaceBorder),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x08000000),
-            blurRadius: 12,
-            offset: Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Most visited spots',
-                  style: TextStyle(
-                    color: _textDark,
-                    fontSize: 14.5,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF1F5F9),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Text(
-                  '${spots.length} listed',
-                  style: const TextStyle(
-                    color: _textMuted,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          if (spots.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 28),
-              child: Center(
-                child: Text(
-                  'No check-in data yet',
-                  style: TextStyle(color: _textMuted, fontSize: 13),
-                ),
-              ),
-            )
-          else
-            ...spots.asMap().entries.map((entry) {
-              final index = entry.key;
-              final spot = entry.value;
-              final visits = spot['visits'] as int;
-              final isTop = index == 0;
-              return Padding(
-                padding: EdgeInsets.only(
-                  bottom: index == spots.length - 1 ? 0 : 12,
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 28,
-                      height: 28,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: isTop ? _primaryOrange : const Color(0xFFF1F5F9),
-                        borderRadius: BorderRadius.circular(9),
-                      ),
-                      child: Text(
-                        '${index + 1}',
-                        style: TextStyle(
-                          color: isTop ? Colors.white : _textMuted,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            spot['name'] as String,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: _textDark,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(height: 7),
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(999),
-                            child: LinearProgressIndicator(
-                              value: maxVisits > 0 ? visits / maxVisits : 0,
-                              backgroundColor: const Color(0xFFF1F5F9),
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                isTop
-                                    ? _primaryOrange
-                                    : _primaryOrange.withValues(alpha: 0.55),
-                              ),
-                              minHeight: 7,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      '$visits',
-                      style: TextStyle(
-                        color: isTop ? _primaryOrange : _textDark,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }),
-        ],
-      ),
-    );
-  }
-
   // ==================== REPORTS SECTION ====================
   Future<void> _captureReportsSectionScreenshot() async {
     if (_reportsScreenshotBusy) return;
@@ -9292,23 +8903,15 @@ class _LguDashboardState extends State<LguDashboard>
     return _buildFramedContentShell(
       title: 'Events & Posts',
       subtitle: '$scope — live province feed (auto-published)',
-      body: RefreshIndicator(
-        onRefresh: () async {
-          LguEventService.invalidateEventsCache();
-          await _loadData();
-        },
-        color: _primaryOrange,
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.all(_isMobile ? 14 : 20),
-          child: LguEventsPanel(
-            key: const ValueKey('lgu-events-panel'),
-            municipalityId: _storedMunicipalityId,
-            municipalityName: _municipalityName,
-            primaryColor: _primaryOrange,
-            initialTabIndex: _eventsPanelTab,
-            showChrome: false,
-          ),
+      body: Padding(
+        padding: EdgeInsets.all(_isMobile ? 14 : 20),
+        child: LguEventsPanel(
+          key: const ValueKey('lgu-events-panel'),
+          municipalityId: _storedMunicipalityId,
+          municipalityName: _municipalityName,
+          primaryColor: _primaryOrange,
+          initialTabIndex: _eventsPanelTab,
+          showChrome: false,
         ),
       ),
     );

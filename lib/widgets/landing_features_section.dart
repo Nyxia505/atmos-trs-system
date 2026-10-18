@@ -6,20 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 /// "Why Choose ATMOS-TRS?" section rebuilt from the approved Features design.
 class LandingFeaturesSection extends StatelessWidget {
-  const LandingFeaturesSection({
-    super.key,
-    required this.onQrLearnMore,
-    required this.onExploreVirtualTour,
-    required this.onSeeHowItWorks,
-    required this.onDigitalIdLearnMore,
-    required this.onStartPlanning,
-  });
-
-  final VoidCallback onQrLearnMore;
-  final VoidCallback onExploreVirtualTour;
-  final VoidCallback onSeeHowItWorks;
-  final VoidCallback onDigitalIdLearnMore;
-  final VoidCallback onStartPlanning;
+  const LandingFeaturesSection({super.key});
 
   static const Color page = Color(0xFFFFF8F4);
   static const Color navy = Color(0xFF1E293B);
@@ -34,8 +21,6 @@ class LandingFeaturesSection extends StatelessWidget {
         title: 'QR Code Registration',
         body:
             'Quick and easy tourist registration with unique QR code identification for a faster, safer, and more convenient travel experience.',
-        button: 'Learn More',
-        onPressed: onQrLearnMore,
         art: const _QrPhoneArt(),
       ),
       _FeatureOffer(
@@ -43,8 +28,6 @@ class LandingFeaturesSection extends StatelessWidget {
         title: '360° Virtual Tours',
         body:
             'Explore destinations in immersive 360° virtual tours before you visit and discover the beauty of Misamis Occidental.',
-        button: 'Explore Now',
-        onPressed: onExploreVirtualTour,
         art: const _VrPhoneArt(),
       ),
       _FeatureOffer(
@@ -52,8 +35,6 @@ class LandingFeaturesSection extends StatelessWidget {
         title: 'Smart Check-ins',
         body:
             'Scan your QR at tourist spots with GPS verification for a seamless and secure check-in experience.',
-        button: 'See How It Works',
-        onPressed: onSeeHowItWorks,
         art: const _CheckInPhoneArt(),
       ),
       _FeatureOffer(
@@ -61,8 +42,6 @@ class LandingFeaturesSection extends StatelessWidget {
         title: 'Digital Tourist ID',
         body:
             'Your unique digital identification for all tourist activities, making your travels more personalized, organized, and secure.',
-        button: 'Learn More',
-        onPressed: onDigitalIdLearnMore,
         art: const _TouristIdArt(),
       ),
       _FeatureOffer(
@@ -70,8 +49,6 @@ class LandingFeaturesSection extends StatelessWidget {
         title: 'Itinerary Planner',
         body:
             'Plan and organize your travel itinerary with day-by-day destinations, travel estimates, and personalized recommendations.',
-        button: 'Start Planning',
-        onPressed: onStartPlanning,
         art: const _ItineraryMapArt(),
       ),
     ];
@@ -103,16 +80,12 @@ class _FeatureOffer {
     required this.icon,
     required this.title,
     required this.body,
-    required this.button,
-    required this.onPressed,
     required this.art,
   });
 
   final IconData icon;
   final String title;
   final String body;
-  final String button;
-  final VoidCallback onPressed;
   final Widget art;
 }
 
@@ -369,18 +342,6 @@ class _FeatureCardState extends State<_FeatureCard> {
                       height: 1.45,
                     ),
                   ),
-                  const SizedBox(height: 14),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: _PeachPillButton(
-                        label: widget.offer.button,
-                        onPressed: widget.offer.onPressed,
-                      ),
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -398,44 +359,6 @@ class _FeatureCardState extends State<_FeatureCard> {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _PeachPillButton extends StatelessWidget {
-  const _PeachPillButton({required this.label, required this.onPressed});
-
-  final String label;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return TextButton(
-      onPressed: onPressed,
-      style: TextButton.styleFrom(
-        backgroundColor: const Color(0xFFFFF1E8),
-        foregroundColor: LandingFeaturesSection.orange,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        minimumSize: const Size(44, 36),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            maxLines: 1,
-            style: GoogleFonts.montserrat(
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              color: LandingFeaturesSection.orange,
-            ),
-          ),
-          const SizedBox(width: 4),
-          const Icon(Icons.arrow_forward_rounded, size: 16),
-        ],
       ),
     );
   }

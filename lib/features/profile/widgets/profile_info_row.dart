@@ -1,3 +1,4 @@
+import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:flutter/material.dart';
 
 class ProfileInfoRow extends StatelessWidget {
@@ -16,9 +17,6 @@ class ProfileInfoRow extends StatelessWidget {
   final bool dense;
   final int maxLines;
 
-  static const _labelColor = Color(0xFF6B7280);
-  static const _valueColor = Color(0xFF111827);
-
   @override
   Widget build(BuildContext context) {
     final vertical = dense ? 8.0 : 12.0;
@@ -28,7 +26,7 @@ class ProfileInfoRow extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (icon != null) ...[
-            Icon(icon, size: 20, color: const Color(0xFF9CA3AF)),
+            Icon(icon, size: 20, color: AppTheme.unselectedMuted),
             const SizedBox(width: 12),
           ],
           Expanded(
@@ -40,7 +38,7 @@ class ProfileInfoRow extends StatelessWidget {
                   style: TextStyle(
                     fontSize: dense ? 11 : 12,
                     fontWeight: FontWeight.w600,
-                    color: _labelColor,
+                    color: AppTheme.unselectedMuted,
                     letterSpacing: 0.2,
                   ),
                 ),
@@ -52,7 +50,7 @@ class ProfileInfoRow extends StatelessWidget {
                   style: TextStyle(
                     fontSize: dense ? 14 : 15,
                     fontWeight: FontWeight.w600,
-                    color: _valueColor,
+                    color: AppTheme.textPrimary,
                     height: 1.35,
                   ),
                 ),
@@ -86,9 +84,9 @@ class ProfileSectionCard extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.cardBackground,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        border: Border.all(color: AppTheme.border),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.04),
@@ -117,17 +115,17 @@ class ProfileSectionCard extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w800,
-                        color: Color(0xFF111827),
+                        color: AppTheme.textPrimary,
                       ),
                     ),
                     Text(
                       subtitle,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
-                        color: Color(0xFF6B7280),
+                        color: AppTheme.unselectedMuted,
                       ),
                     ),
                   ],

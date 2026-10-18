@@ -227,14 +227,14 @@ class _ExploreMisOccScreenState extends State<ExploreMisOccScreen> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.8),
+                color: AppTheme.cardBackground,
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
                 '© OpenStreetMap',
                 style: TextStyle(
                   fontSize: 10,
-                  color: Colors.grey.shade700,
+                  color: AppTheme.unselectedMuted,
                 ),
               ),
             ),
@@ -255,7 +255,7 @@ class _ExploreMisOccScreenState extends State<ExploreMisOccScreen> {
           decoration: BoxDecoration(
             color: AppTheme.cardBackground,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-            border: Border.all(color: Colors.white.withOpacity(0.06)),
+            border: Border.all(color: AppTheme.border),
           ),
           child: Column(
             children: [
@@ -349,10 +349,10 @@ class _ExploreMisOccScreenState extends State<ExploreMisOccScreen> {
                   duration: const Duration(milliseconds: 200),
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   decoration: BoxDecoration(
-                    color: selected ? AppTheme.primary : Colors.white,
+                    color: selected ? AppTheme.primary : AppTheme.cardBackground,
                     borderRadius: BorderRadius.circular(24),
                     border: Border.all(
-                      color: selected ? AppTheme.primary : Colors.white.withOpacity(0.9),
+                      color: selected ? AppTheme.primary : AppTheme.border,
                     ),
                   ),
                   child: Row(
@@ -361,7 +361,7 @@ class _ExploreMisOccScreenState extends State<ExploreMisOccScreen> {
                       Icon(
                         icons[c]!,
                         size: 18,
-                        color: selected ? Colors.white : AppTheme.unselectedMuted,
+                        color: selected ? AppTheme.onPrimary : AppTheme.textPrimary,
                       ),
                       const SizedBox(width: 6),
                       Text(
@@ -369,7 +369,7 @@ class _ExploreMisOccScreenState extends State<ExploreMisOccScreen> {
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                          color: selected ? Colors.white : AppTheme.unselectedMuted,
+                          color: selected ? AppTheme.onPrimary : AppTheme.textPrimary,
                         ),
                       ),
                     ],
@@ -412,7 +412,7 @@ class _MunicipalityListTile extends StatelessWidget {
               : AppTheme.scaffoldBackground.withOpacity(0.6),
           borderRadius: BorderRadius.circular(_kRadius),
           border: Border.all(
-            color: isSelected ? AppTheme.primary : Colors.white.withOpacity(0.08),
+            color: isSelected ? AppTheme.primary : AppTheme.border,
           ),
         ),
         child: Material(
@@ -436,8 +436,8 @@ class _MunicipalityListTile extends StatelessWidget {
                       children: [
                         Text(
                           municipality.name,
-                          style: const TextStyle(
-                            color: Colors.white,
+                          style: TextStyle(
+                            color: AppTheme.textPrimary,
                             fontWeight: FontWeight.w600,
                             fontSize: 15,
                           ),
@@ -484,7 +484,7 @@ class _MarkerPreviewSheet extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppTheme.cardBackground,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        border: Border.all(color: Colors.white.withOpacity(0.06)),
+        border: Border.all(color: AppTheme.border),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -503,8 +503,8 @@ class _MarkerPreviewSheet extends StatelessWidget {
           const SizedBox(height: 16),
           Text(
             municipality.name,
-            style: const TextStyle(
-              color: Colors.white,
+            style: TextStyle(
+              color: AppTheme.textPrimary,
               fontWeight: FontWeight.w700,
               fontSize: 18,
             ),
@@ -569,7 +569,7 @@ class _MunicipalityDetailsSheet extends StatelessWidget {
           decoration: BoxDecoration(
             color: AppTheme.cardBackground,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-            border: Border.all(color: Colors.white.withOpacity(0.06)),
+            border: Border.all(color: AppTheme.border),
           ),
           child: ListView(
             controller: scrollController,
@@ -588,8 +588,8 @@ class _MunicipalityDetailsSheet extends StatelessWidget {
               const SizedBox(height: 16),
               Text(
                 municipality.name,
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: AppTheme.textPrimary,
                   fontWeight: FontWeight.w700,
                   fontSize: 22,
                 ),
@@ -624,10 +624,10 @@ class _MunicipalityDetailsSheet extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 24),
-              const Text(
+              Text(
                 'Top tourist spots',
                 style: TextStyle(
-                  color: Colors.white,
+                  color: AppTheme.textPrimary,
                   fontWeight: FontWeight.w600,
                   fontSize: 16,
                 ),
@@ -647,7 +647,10 @@ class _MunicipalityDetailsSheet extends StatelessWidget {
                       child: ListTile(
                         contentPadding: EdgeInsets.zero,
                         leading: Icon(Icons.place, color: AppTheme.primary.withOpacity(0.9), size: 22),
-                        title: Text(spot.name, style: const TextStyle(color: Colors.white, fontSize: 14)),
+                        title: Text(
+                          spot.name,
+                          style: TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+                        ),
                         subtitle: spot.category.isNotEmpty
                             ? Text(spot.category, style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 12))
                             : null,

@@ -231,31 +231,48 @@ class LguDebugDataService {
           ? (spotIds ?? const <String>[])
           : const <String>[];
       LguDebugSeedResult? result;
-      if (useCloud) {
-        try {
-          result = await _seedOneViaCloud(
-            municipalityId: target.id,
-            localCount: local,
-            foreignCount: foreign,
-            spotIds: munSpotIds,
-            checkInsPerTourist: perTourist,
-          );
-        } on FirebaseFunctionsException catch (e) {
-          debugPrint('[LguDebugData] seed CF: ${e.code} ${e.message}');
-          if (!_isFunctionsUnavailable(e)) {
-            throw StateError(userFacingError(e));
+      try {
+        result = await _seedOnClient(
+          municipalityId: target.id,
+          seedAllMunicipalities: false,
+          localCount: local,
+          foreignCount: foreign,
+          spotIds: munSpotIds,
+          checkInsPerTourist: perTourist,
+        );
+        useCloud = false;
+      } catch (e) {
+        debugPrint('[LguDebugData] client seed failed for ${target.name}: $e');
+        // A StateError is already the message we want (quota, validation).
+        // The cloud seed function often answers "internal" and hides that.
+        if (e is! StateError && useCloud) {
+          try {
+            result = await _seedOneViaCloud(
+              municipalityId: target.id,
+              localCount: local,
+              foreignCount: foreign,
+              spotIds: munSpotIds,
+              checkInsPerTourist: perTourist,
+            );
+          } on FirebaseFunctionsException catch (cloudError) {
+            debugPrint(
+              '[LguDebugData] seed CF: ${cloudError.code} ${cloudError.message}',
+            );
+            if (_isFunctionsUnavailable(cloudError)) {
+              throw StateError(_describeSeedError(e, target.name));
+            }
+            throw StateError(userFacingError(cloudError));
+          } catch (cloudError) {
+            debugPrint('[LguDebugData] seed CF failed: $cloudError');
+            throw StateError(_describeSeedError(e, target.name));
           }
-          useCloud = false;
+        } else {
+          throw StateError(_describeSeedError(e, target.name));
         }
       }
-      result ??= await _seedOnClient(
-        municipalityId: target.id,
-        seedAllMunicipalities: false,
-        localCount: local,
-        foreignCount: foreign,
-        spotIds: munSpotIds,
-        checkInsPerTourist: perTourist,
-      );
+      if (result == null) {
+        throw StateError('Could not seed ${target.name}.');
+      }
       seededTourists += result.seededTourists;
       seededCheckIns += result.seededCheckIns;
       perMunicipality[target.id] = {
@@ -530,15 +547,21 @@ class LguDebugDataService {
             ? munName
             : _foreignNationalities[i % _foreignNationalities.length].$4;
 
+        final displayId = seedTouristDisplayId(uid);
+        final dateOfBirth = _seedDateOfBirth(i);
+        final registeredAt = Timestamp.fromDate(
+          DateTime.now().subtract(Duration(days: 30 - (i % 28))),
+        );
         enqueueSet(_db.collection('tourists').doc(uid), {
           'firebaseUid': uid,
-          'touristId': uid,
+          'touristId': displayId,
           'firstName': fn,
           'lastName': ln,
           'fullName': '$fn $ln',
           'email': email,
           'authEmail': email,
           'sex': sex,
+          'dateOfBirth': dateOfBirth,
           'nationality': nationality,
           'country': country,
           'province': province,
@@ -555,7 +578,8 @@ class LguDebugDataService {
           'source': 'lgu_debug_seed',
           'seedTag': 'lgu_analytics_debug_v2_address',
           'updatedAt': FieldValue.serverTimestamp(),
-          'createdAt': FieldValue.serverTimestamp(),
+          'createdAt': registeredAt,
+          'registeredAt': registeredAt,
         });
 
         enqueueSet(_db.collection('users').doc(uid), {
@@ -563,6 +587,7 @@ class LguDebugDataService {
           'email': email,
           'role': 'tourist',
           'fullName': '$fn $ln',
+          'dateOfBirth': dateOfBirth,
           if (isLocal) 'municipalityId': munId,
           if (isLocal) 'municipality': munName,
           'isVerified': true,
@@ -580,6 +605,7 @@ class LguDebugDataService {
             'uid': uid,
             'name': '$fn $ln',
             'sex': sex,
+            'dateOfBirth': dateOfBirth,
             'nationality': nationality,
             'country': country,
             'province': province,
@@ -613,6 +639,7 @@ class LguDebugDataService {
             'userId': uid,
             'user_id': uid,
             'tourist_id': uid,
+            'touristId': displayId,
             'touristName': '$fn $ln',
             'tourist_name': '$fn $ln',
             'touristEmail': email,
@@ -636,6 +663,7 @@ class LguDebugDataService {
             'filipinoCount': isLocal ? partySize : 0,
             'foreignCount': isLocal ? 0 : partySize,
             'touristSex': sex,
+            'touristDateOfBirth': dateOfBirth,
             'touristCountry': country,
             'touristProvince': province,
             'touristCity': city,
@@ -771,6 +799,13 @@ class LguDebugDataService {
     return lgus * touristsPerMunicipality * (2 + 2 * checkInsPerTourist);
   }
 
+  /// Spots in one LGU, used by the debug seed chips.
+  static Future<List<({String id, String name})>> listSpots(
+    String municipalityId,
+  ) {
+    return _loadSpots(normalizeMunicipalityId(municipalityId), const []);
+  }
+
   static Future<List<({String id, String name})>> _loadSpots(
     String municipalityId,
     List<String> spotIdsFilter,
@@ -798,6 +833,32 @@ class LguDebugDataService {
       }
     }
     return out;
+  }
+
+  /// Same shape as [TouristIdHelper.generate]: `MO-` plus 8 hex characters.
+  /// Kept identical to `seedTouristDisplayId` in functions/index.js.
+  static String seedTouristDisplayId(String uid) {
+    var hash = 0;
+    for (final unit in uid.codeUnits) {
+      hash = (hash * 33 + unit) & 0xffffffff;
+    }
+    final hex = hash.toRadixString(16).padLeft(8, '0');
+    return 'MO-${hex.substring(hex.length - 8).toUpperCase()}';
+  }
+
+  /// ISO date so Age Range charts can bucket seeded visitors.
+  static String _seedDateOfBirth(int index) {
+    const ages = [16, 21, 28, 33, 41, 52, 61];
+    final age = ages[index % ages.length];
+    final now = DateTime.now();
+    final birth = DateTime(
+      now.year - age,
+      (index % 12) + 1,
+      (index % 27) + 1,
+    );
+    final month = birth.month.toString().padLeft(2, '0');
+    final day = birth.day.toString().padLeft(2, '0');
+    return '${birth.year}-$month-$day';
   }
 
   static String _displayName(String municipalityId) {
@@ -875,9 +936,21 @@ class LguDebugDataService {
       );
       for (final uid in touristIds) {
         try {
-          await _db.collection('users').doc(uid).delete();
-          await _db.collection('tourists').doc(uid).delete();
-          tourists += 1;
+          final user = await _db.collection('users').doc(uid).get();
+          final tourist = await _db.collection('tourists').doc(uid).get();
+          if (user.exists) {
+            await user.reference.delete();
+          }
+          if (tourist.exists) {
+            await tourist.reference.delete();
+            tourists += 1;
+          }
+        } catch (_) {}
+      }
+      for (var g = 1; g <= 12; g++) {
+        try {
+          await _db.collection('tourist_groups').doc('seed_group_${municipalityId}_$g').delete();
+          await _db.collection('qr_checkins').doc('seed_group_${municipalityId}_$g').delete();
         } catch (_) {}
       }
     } else {
@@ -914,6 +987,70 @@ class LguDebugDataService {
       );
     }
     return total;
+  }
+
+  static const String establishmentSeedTag = 'lgu_debug_establishment';
+
+  /// Demo lodging businesses for this LGU. Same collection a real signup writes.
+  static Future<int> seedEstablishments({
+    required String municipalityId,
+    required String municipalityName,
+  }) async {
+    final mun = normalizeMunicipalityId(municipalityId);
+    if (mun.isEmpty) {
+      throw StateError('Choose a municipality before seeding establishments.');
+    }
+    const samples = <(String, String, int)>[
+      ('Harbor View Hotel', 'Hotel', 24),
+      ('Bay Resort', 'Resort', 18),
+      ('Plaza Inn', 'Hotel', 12),
+    ];
+    final name = municipalityName.trim().isEmpty ? _displayName(mun) : municipalityName.trim();
+    for (var i = 0; i < samples.length; i++) {
+      final id = 'seed_est_${mun}_${i + 1}';
+      final sample = samples[i];
+      await _db.collection('accommodation_establishments').doc(id).set({
+        'id': id,
+        'businessName': '$name ${sample.$1}',
+        'name': '$name ${sample.$1}',
+        'category': sample.$2,
+        'type': sample.$2,
+        'ownerName': 'Seed Owner',
+        'municipality': name,
+        'municipalityId': mun,
+        'status': 'active',
+        'email': 'seed.est.$mun.${i + 1}@misocc-seed.ph',
+        'contactNumber': '0900000000${i + 1}',
+        'barangay': 'Poblacion',
+        'roomCount': sample.$3,
+        'checkInTime': '14:00',
+        'checkOutTime': '12:00',
+        'source': 'lgu_debug_seed',
+        'seedTag': establishmentSeedTag,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+    return samples.length;
+  }
+
+  /// Deletes only debug-seeded establishments for this LGU. Real hotels stay.
+  static Future<int> clearSeedEstablishments({
+    required String municipalityId,
+  }) async {
+    final mun = normalizeMunicipalityId(municipalityId);
+    if (mun.isEmpty) return 0;
+    var deleted = 0;
+    for (var i = 1; i <= 12; i++) {
+      final id = 'seed_est_${mun}_$i';
+      final doc = await _db.collection('accommodation_establishments').doc(id).get();
+      if (!doc.exists) continue;
+      final tag = doc.data()?['seedTag']?.toString() ?? '';
+      if (tag != establishmentSeedTag) continue;
+      await doc.reference.delete();
+      deleted += 1;
+    }
+    return deleted;
   }
 
   /// Loads counts for the Debug hub charts (best-effort, capped reads).
@@ -1042,6 +1179,28 @@ class LguDebugDataService {
         (e.message ?? '').toLowerCase().contains('not been deployed');
   }
 
+  static String _describeSeedError(Object error, String municipalityName) {
+    if (error is StateError && error.message.trim().isNotEmpty) {
+      return error.message;
+    }
+    if (error is FirebaseException) {
+      if (error.code == 'permission-denied') {
+        return 'Firestore blocked seeding $municipalityName. '
+            'Sign in as Governor, OPTACA, or that LGU, then try again.';
+      }
+      if (error.code == 'resource-exhausted') return _writeQuotaMessage;
+      final detail = (error.message ?? '').trim();
+      return 'Could not seed $municipalityName (${error.code}).'
+          '${detail.isEmpty ? '' : ' $detail'}';
+    }
+    final text = error.toString().replaceFirst('Bad state: ', '').trim();
+    if (text.isEmpty || text.toLowerCase() == 'internal') {
+      return 'Could not seed $municipalityName. Turn off “Seed all municipalities” '
+          'and try this LGU with a smaller count.';
+    }
+    return 'Could not seed $municipalityName. $text';
+  }
+
   static int _asInt(dynamic v) {
     if (v is int) return v;
     if (v is num) return v.toInt();
@@ -1060,9 +1219,12 @@ class LguDebugDataService {
         return e.message ?? 'Invalid seed / clear options.';
       case 'deadline-exceeded':
         return 'Timed out — try a smaller seed count or clear one LGU first.';
+      case 'internal':
+      case 'unavailable':
       case 'not-found':
-        return 'Debug Cloud Functions are not deployed yet. '
-            'Client fallback will be used when possible.';
+        return 'The server seed is unavailable. Seeding from this browser '
+            'will be used instead. If it still fails, seed one municipality '
+            'with a smaller count.';
       default:
         return e.message?.trim().isNotEmpty == true
             ? e.message!

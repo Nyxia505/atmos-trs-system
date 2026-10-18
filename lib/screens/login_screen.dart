@@ -14,11 +14,13 @@ import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/services/registration_rollback_service.dart';
 import 'package:atmos_trs_system/navigation/auth_navigation.dart';
 import 'package:atmos_trs_system/navigation/login_route_args.dart';
+import 'package:atmos_trs_system/navigation/trip_planner_access.dart';
 import 'package:atmos_trs_system/navigation/pending_checkin_navigation.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/landing_intent_service.dart';
 import 'package:atmos_trs_system/widgets/atmos_brand_title.dart';
+import 'package:atmos_trs_system/widgets/trip_plan_auth_brand.dart';
 import 'package:atmos_trs_system/widgets/web_glass_auth_scaffold.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -41,6 +43,10 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscurePassword = true;
   LoginRouteArgs? _loginRouteArgs;
 
+  /// ATMOS login always offers Sign Up (Tourist and Establishment).
+  /// Trip Planner still offers tourist signup.
+  bool get _showCreateAccount => true;
+
   @override
   void initState() {
     super.initState();
@@ -56,6 +62,7 @@ class _LoginScreenState extends State<LoginScreen> {
     } else {
       unawaited(_applyPendingLandingIntentArgs());
     }
+    unawaited(_applyQrTouristEntryIfNeeded());
     if (args is String && args.trim().isNotEmpty) {
       _emailController.text = normalizeEmail(args);
     } else if (args is Map) {
@@ -162,6 +169,25 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _applyQrTouristEntryIfNeeded() async {
+    final feature = _loginRouteArgs?.returnFeature;
+    if (feature == LoginRouteArgs.featureItinerary ||
+        feature == LoginRouteArgs.featureVr ||
+        feature == LoginRouteArgs.featureQr) {
+      return;
+    }
+    final spot = await PendingSpotCheckInStorage.peek();
+    final lgu = await PendingLguCheckInStorage.peek();
+    if (!mounted || (spot == null && lgu == null)) return;
+    setState(() {
+      _loginRouteArgs = const LoginRouteArgs(
+        loginOnly: true,
+        returnFeature: LoginRouteArgs.featureQr,
+        touristOnlySignup: true,
+      );
+    });
+  }
+
   Future<void> _applyPendingLandingIntentArgs() async {
     final pending = await LandingIntentService.peek();
     if (pending == null) return;
@@ -171,8 +197,11 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _continueTouristNavigation(String route) async {
-    // Web landing "login only then return to feature" stays on the website flow.
-    if (kIsWeb && await _completeLoginOnlyFeatureReturn(route)) {
+    // Landing Trip Planner returns here on web and mobile. VR stays web-only.
+    final itineraryReturn =
+        _loginRouteArgs?.returnFeature == LoginRouteArgs.featureItinerary;
+    if ((kIsWeb || itineraryReturn) &&
+        await _completeLoginOnlyFeatureReturn(route)) {
       return;
     }
 
@@ -180,6 +209,8 @@ class _LoginScreenState extends State<LoginScreen> {
     // Clear any leftover VR / Trip Planner landing intent so it does not hijack nav.
     await LandingIntentService.clear();
 
+    if (!mounted) return;
+    if (await openQrDestinationIfPending(context)) return;
     if (!mounted) return;
     await navigateToPendingSpotCheckInOrDashboard(
       context,
@@ -225,6 +256,31 @@ class _LoginScreenState extends State<LoginScreen> {
       }
       AuthConfig.currentUserUid = uid;
 
+      final profile = await UserDirectoryService.getProfileByUid(
+        uid,
+        preferServer: true,
+      );
+      final accountStatus = (profile?.status ?? '').trim().toLowerCase();
+      if (accountStatus == 'inactive' ||
+          accountStatus == 'disabled' ||
+          accountStatus == 'deactivated') {
+        try {
+          await FirebaseAuth.instance.signOut();
+        } catch (_) {}
+        AuthConfig.currentUserUid = null;
+        setState(() => _isLoading = false);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'This account is deactivated. Contact the Provincial Tourism Office.',
+            ),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+        return;
+      }
+
       final route = await LoginFlowService.resolveRouteFast(
         uid: uid,
         email: email,
@@ -255,7 +311,12 @@ class _LoginScreenState extends State<LoginScreen> {
             backgroundColor: Color(0xFFFF6B00),
           ),
         );
-        Navigator.pushReplacementNamed(context, '/signup');
+        Navigator.pushReplacementNamed(
+          context,
+          _loginRouteArgs?.touristOnlySignup == true
+              ? '/signup-tourist'
+              : '/signup',
+        );
         return;
       }
 
@@ -267,6 +328,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
       setState(() => _isLoading = false);
       if (!mounted) return;
+
+      if (await _denyNonTouristTripPlanner(route)) return;
 
       final isStaff = route == '/governor-dashboard' ||
           route == '/lgu-dashboard' ||
@@ -282,6 +345,7 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
       if (route == '/verify-otp') {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
@@ -290,6 +354,7 @@ class _LoginScreenState extends State<LoginScreen> {
             backgroundColor: Color(0xFFFF6B00),
           ),
         );
+        if (!mounted) return;
         Navigator.pushReplacementNamed(context, route);
         return;
       }
@@ -389,6 +454,20 @@ class _LoginScreenState extends State<LoginScreen> {
     }
     if (raw != null && raw.isNotEmpty) return raw;
     return 'Login failed (${e.code}).';
+  }
+
+  /// Establishment and LGU accounts stay signed in but cannot open Trip Planner.
+  Future<bool> _denyNonTouristTripPlanner(String route) async {
+    if (_loginRouteArgs?.returnFeature != LoginRouteArgs.featureItinerary) {
+      return false;
+    }
+    if (route == '/dashboard' || route == '/verify-otp') return false;
+    await LandingIntentService.clear();
+    if (!mounted) return true;
+    await TripPlannerAccess.showDenied(context);
+    if (!mounted) return true;
+    Navigator.pop(context);
+    return true;
   }
 
   /// After login-only VR/itinerary auth, pop back to landing with the feature id.
@@ -534,6 +613,9 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Widget _buildHeaderBranding({bool compact = false}) {
+    if (_loginRouteArgs?.usesTripPlannerBranding == true) {
+      return TripPlanAuthBrand(compact: compact, onDark: true);
+    }
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -648,8 +730,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
   /// Desktop/tablet wide (≥1024px): glassmorphism card over full-screen background.
   Widget _buildDesktopGlassLayout(BuildContext context) {
-    final loginOnly = _loginRouteArgs?.loginOnly == true;
-
     return WebGlassAuthScaffold(
       child: WebGlassAuthCard(
         child: Padding(
@@ -662,10 +742,31 @@ class _LoginScreenState extends State<LoginScreen> {
               children: [
                 Align(
                   alignment: Alignment.centerLeft,
-                  child: WebGlassBackButton(onPressed: _goBackToLanding),
+                  child: TextButton(
+                    key: const Key('back-to-landing-button'),
+                    onPressed: _goBackToLanding,
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 4,
+                      ),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text(
+                      'Back',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 20),
-                const WebGlassLogoHeader(),
+                _loginRouteArgs?.usesTripPlannerBranding == true
+                    ? const TripPlanAuthBrand(onDark: true)
+                    : const WebGlassLogoHeader(),
                 const SizedBox(height: 28),
                 _buildGlassFieldLabel('Email Address', required: true),
                 const SizedBox(height: 10),
@@ -770,7 +871,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   isLoading: _isLoading,
                   onPressed: _isLoading ? null : _login,
                 ),
-                if (!loginOnly) ...[
+                if (_showCreateAccount) ...[
                   const SizedBox(height: 24),
                   Center(
                     child: Wrap(
@@ -926,28 +1027,26 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
           ),
-          // Airplane + dotted flight path (TOP-LEFT)
           Positioned(
-            top: topPad + 8,
-            left: 12,
-            child: const CustomPaint(
-              size: Size(92, 48),
-              painter: _FlightPathPainter(),
-            ),
-          ),
-          // Back control — absolute so branding stays centered like the mock
-          Positioned(
-            top: topPad + 2,
-            left: 4,
-            child: IconButton(
+            top: topPad + 6,
+            left: 8,
+            child: TextButton(
               key: const Key('back-to-landing-button'),
-              icon: Icon(
-                Icons.arrow_back_ios_new_rounded,
-                color: Colors.white.withValues(alpha: 0.85),
-                size: 18,
-              ),
               onPressed: _goBackToLanding,
-              tooltip: 'Back to home',
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text(
+                'Back',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 15,
+                  letterSpacing: 0.2,
+                ),
+              ),
             ),
           ),
           // Centered logo + titles
@@ -967,7 +1066,6 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Widget _buildLoginForm() {
-    final loginOnly = _loginRouteArgs?.loginOnly == true;
     final subtitle = _loginRouteArgs?.subtitle;
 
     return Form(
@@ -1161,7 +1259,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
             ),
           ),
-          if (!loginOnly) ...[
+          if (_showCreateAccount) ...[
             const SizedBox(height: 22),
             Center(
               child: Wrap(
@@ -1226,62 +1324,6 @@ class _LoginHeroWaveClipper extends CustomClipper<Path> {
 
   @override
   bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
-}
-
-/// White airplane silhouette + curved dotted flight path (top-left of mock).
-class _FlightPathPainter extends CustomPainter {
-  const _FlightPathPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final dashPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.82)
-      ..strokeWidth = 1.7
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    final path = Path()
-      ..moveTo(2, size.height * 0.78)
-      ..quadraticBezierTo(
-        size.width * 0.28,
-        size.height * 0.08,
-        size.width * 0.62,
-        size.height * 0.42,
-      );
-
-    for (final metric in path.computeMetrics()) {
-      var distance = 0.0;
-      const dash = 3.5;
-      const gap = 4.5;
-      while (distance < metric.length) {
-        final next = (distance + dash).clamp(0.0, metric.length);
-        canvas.drawPath(metric.extractPath(distance, next), dashPaint);
-        distance += dash + gap;
-      }
-    }
-
-    // Airplane silhouette near end of trail
-    final tip = Offset(size.width * 0.70, size.height * 0.38);
-    canvas.save();
-    canvas.translate(tip.dx, tip.dy);
-    canvas.rotate(-0.55);
-    final plane = Path()
-      ..moveTo(10, 0)
-      ..lineTo(-8, 5)
-      ..lineTo(-4, 1.2)
-      ..lineTo(-12, -1)
-      ..lineTo(-4, -1.2)
-      ..lineTo(-7, -5.5)
-      ..close();
-    canvas.drawPath(
-      plane,
-      Paint()..color = Colors.white.withValues(alpha: 0.95),
-    );
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 /// Soft Misamis Occidental tourism motifs under the floating login card.

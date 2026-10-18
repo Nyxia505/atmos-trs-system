@@ -317,7 +317,9 @@ service cloud.firestore {
     }
     match /announcements/{docId} {
       allow read: if true;
-      allow create, update, delete: if canManagePublicCatalog() || isLguStaff();
+      // Municipal tourism offices write event announcements.
+      // Governor and OPTACA can read them.
+      allow create, update, delete: if isLguTourismFromUserDoc();
     }
     match /transportation_fees/{docId} {
       allow read: if true;

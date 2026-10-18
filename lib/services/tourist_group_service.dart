@@ -2,9 +2,11 @@ import 'dart:math';
 
 import 'package:atmos_trs_system/config/user_profile_storage.dart';
 import 'package:atmos_trs_system/models/tourist_group.dart';
+import 'package:atmos_trs_system/services/user_activity_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Thrown with a tourist-friendly message when a group action fails.
 class TouristGroupException implements Exception {
@@ -186,6 +188,190 @@ class TouristGroupService {
     final g = TouristGroup.fromDoc(doc);
     if (g.joinCode.toUpperCase() != normalizeCode(code)) return null;
     return g;
+  }
+
+  /// Registered tourist account for a Tourist ID or personal tourist QR.
+  static Future<({String uid, TouristGroupMember member})?> lookupRegisteredTourist(
+    String raw,
+  ) async {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+    var touristId = trimmed;
+    if (trimmed.startsWith('{')) {
+      try {
+        final decoded = trimmed;
+        final idMatch = RegExp(
+          '"tourist_id"\\s*:\\s*"([^"]+)"',
+          caseSensitive: false,
+        ).firstMatch(decoded);
+        touristId = idMatch?.group(1)?.trim() ?? trimmed;
+      } catch (_) {}
+    }
+    final code = touristId.trim();
+    if (code.isEmpty) return null;
+
+    Future<({String uid, TouristGroupMember member})?> fromDoc(
+      DocumentSnapshot<Map<String, dynamic>> doc,
+    ) async {
+      if (!doc.exists) return null;
+      final data = doc.data();
+      if (data == null) return null;
+      final role = (data['role'] ?? 'tourist').toString().trim().toLowerCase();
+      if (role.isNotEmpty && role != 'tourist') return null;
+      final member = TouristGroupMember.fromTouristDoc(doc.id, data);
+      if (member.name.isEmpty && member.touristId.isEmpty) return null;
+      return (uid: doc.id, member: member);
+    }
+
+    final byId = await _db
+        .collection('tourists')
+        .where('touristId', isEqualTo: code)
+        .limit(1)
+        .get();
+    if (byId.docs.isNotEmpty) {
+      return fromDoc(byId.docs.first);
+    }
+    if (!code.contains('-') && code.length >= 20) {
+      return fromDoc(await _db.collection('tourists').doc(code).get());
+    }
+    return null;
+  }
+
+  /// Leader invites a registered tourist. They must accept before check-in.
+  static Future<void> inviteByTouristId(TouristGroup group, String rawId) async {
+    final uid = _requireUid();
+    if (!group.isLeader(uid) || !group.isActive) {
+      throw const TouristGroupException(
+        'Only the group leader can invite people.',
+      );
+    }
+    final found = await lookupRegisteredTourist(rawId);
+    if (found == null) {
+      throw const TouristGroupException(
+        'No registered tourist account has that Tourist ID.',
+      );
+    }
+    if (found.uid == uid) {
+      throw const TouristGroupException('You are already the group leader.');
+    }
+    if (group.hasMember(found.uid) || group.hasPendingInvite(found.uid)) {
+      throw const TouristGroupException(
+        'That tourist is already in this group or has a pending invite.',
+      );
+    }
+    final seats = group.memberCount + group.pendingInvites.length;
+    if (seats >= TouristGroup.maxMembers) {
+      throw const TouristGroupException(
+        'This group is full (${TouristGroup.maxMembers} members).',
+      );
+    }
+    await _col.doc(group.id).update({
+      'pendingInviteUids': FieldValue.arrayUnion([found.uid]),
+      'pendingInvites.${found.uid}': {
+        ...found.member.toProfileMap(),
+        'status': 'invited',
+        if (found.member.touristId.isNotEmpty) 'touristId': found.member.touristId,
+        'invitedAt': FieldValue.serverTimestamp(),
+      },
+    });
+  }
+
+  /// Accepts a pending invite and shares my registration snapshot.
+  static Future<void> acceptInvite(TouristGroup group) async {
+    final uid = _requireUid();
+    if (!group.hasPendingInvite(uid)) {
+      throw const TouristGroupException('This invitation is no longer active.');
+    }
+    if (!group.isActive) {
+      throw const TouristGroupException(
+        'This group has already ended. Ask your friend to create a new one.',
+      );
+    }
+    await _exitCurrentGroups(uid);
+    final me = await _selfSnapshot(uid);
+    await _col.doc(group.id).update({
+      'memberUids': FieldValue.arrayUnion([uid]),
+      'members.$uid': me.toGroupMap(),
+      'pendingInviteUids': FieldValue.arrayRemove([uid]),
+      'pendingInvites.$uid': FieldValue.delete(),
+    });
+  }
+
+  static Future<void> cancelInvite(TouristGroup group, String memberUid) async {
+    final uid = _requireUid();
+    if (!group.isLeader(uid)) return;
+    await _col.doc(group.id).update({
+      'pendingInviteUids': FieldValue.arrayRemove([memberUid]),
+      'pendingInvites.$memberUid': FieldValue.delete(),
+    });
+  }
+
+  static Future<void> declineInvite(TouristGroup group) async {
+    final uid = _requireUid();
+    await _col.doc(group.id).update({
+      'pendingInviteUids': FieldValue.arrayRemove([uid]),
+      'pendingInvites.$uid': FieldValue.delete(),
+    });
+  }
+
+  static Stream<List<TouristGroup>> watchMyInvites() {
+    final uid = _uid;
+    if (uid == null || uid.isEmpty) return Stream.value(const []);
+    return _col
+        .where('pendingInviteUids', arrayContains: uid)
+        .where('status', isEqualTo: 'active')
+        .limit(5)
+        .snapshots()
+        .map(
+          (snap) => snap.docs
+              .map(TouristGroup.fromDoc)
+              .where((g) => g.isActive && g.hasPendingInvite(uid))
+              .toList(),
+        );
+  }
+
+  /// Copies group check-in notices into this phone's notification list.
+  static Future<void> deliverMyCheckInNotices() async {
+    final uid = _uid;
+    if (uid == null || uid.isEmpty) return;
+    try {
+      final groups = await _groupsWithMember(uid);
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'laag_notice_seen_$uid';
+      final seen = prefs.getStringList(key)?.toSet() ?? <String>{};
+      var changed = false;
+      for (final g in groups) {
+        final doc = await _col.doc(g.id).get();
+        final raw = doc.data()?['notices'];
+        if (raw is! Map) continue;
+        for (final entry in raw.entries) {
+          final id = entry.key.toString();
+          if (seen.contains(id)) continue;
+          final value = entry.value;
+          if (value is! Map) continue;
+          final notice = Map<String, dynamic>.from(value);
+          if (notice['uid']?.toString() != uid) continue;
+          await UserActivityService.addNotificationIfAbsent(
+            id: id,
+            title: notice['title']?.toString() ?? 'Group check-in',
+            message: notice['message']?.toString() ??
+                'You were checked in with ${g.name}.',
+            type: NotificationType.system,
+          );
+          seen.add(id);
+          changed = true;
+        }
+      }
+      if (changed) {
+        final list = seen.toList();
+        await prefs.setStringList(
+          key,
+          list.length > 80 ? list.sublist(list.length - 80) : list,
+        );
+      }
+    } catch (e) {
+      debugPrint('[TouristGroup] notice delivery skipped: $e');
+    }
   }
 
   /// Joins [group] and shares my demographic snapshot with it.

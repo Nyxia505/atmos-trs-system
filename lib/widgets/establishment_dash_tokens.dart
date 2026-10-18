@@ -233,7 +233,11 @@ class AeEmptyState extends StatelessWidget {
           Text(
             message,
             textAlign: TextAlign.center,
-            style: AeDashTokens.body(size: 12.5),
+            style: AeDashTokens.body(
+              size: 13.5,
+              weight: FontWeight.w600,
+              color: const Color(0xFF334155),
+            ),
           ),
         ],
       ),

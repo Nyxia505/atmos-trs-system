@@ -18,6 +18,8 @@ import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:uuid/uuid.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_barangays.dart';
 import 'package:atmos_trs_system/navigation/auth_navigation.dart';
+import 'package:atmos_trs_system/screens/verify_otp_screen.dart';
+import 'package:atmos_trs_system/navigation/login_route_args.dart';
 import 'package:atmos_trs_system/widgets/web_glass_auth_scaffold.dart';
 import 'package:atmos_trs_system/widgets/tourist_signup_chrome.dart';
 import 'package:atmos_trs_system/widgets/signup_legal_consent.dart';
@@ -224,7 +226,6 @@ class _SignupScreenState extends State<SignupScreen> {
   final List<String> _sexOptions = [
     'Male',
     'Female',
-    'Prefer not to say',
   ];
   static const String _dualCitizenNationalityLabel = 'Filipino (dual citizen)';
 
@@ -919,6 +920,20 @@ class _SignupScreenState extends State<SignupScreen> {
 
   bool get _legalReviewComplete => _hasReviewedPrivacy && _hasReviewedTerms;
 
+  String _legalContinueMessage() {
+    final stillClosed = <String>[
+      if (!_hasReviewedPrivacy) 'Data Privacy',
+      if (!_hasReviewedTerms) 'Terms and Conditions',
+    ];
+    if (stillClosed.isNotEmpty) {
+      final list = stillClosed.length == 1
+          ? stillClosed.single
+          : '${stillClosed[0]} and ${stillClosed[1]}';
+      return 'Tap $list, scroll to the end of each policy, then continue.';
+    }
+    return 'Step 2: Check the box to agree to the policies, then tap Next.';
+  }
+
   Widget _buildLegalExpansionCard({
     required String title,
     required String subtitle,
@@ -927,6 +942,7 @@ class _SignupScreenState extends State<SignupScreen> {
     required bool reviewed,
     required ValueChanged<bool> onExpandedChanged,
     required List<String> bullets,
+    VoidCallback? onScrolledToEnd,
   }) {
     return SignupLegalExpansionCard(
       title: title,
@@ -935,6 +951,7 @@ class _SignupScreenState extends State<SignupScreen> {
       expanded: expanded,
       reviewed: reviewed,
       onExpandedChanged: onExpandedChanged,
+      onScrolledToEnd: onScrolledToEnd,
       bullets: bullets,
       onDark: _isDesktopGlass,
     );
@@ -945,6 +962,7 @@ class _SignupScreenState extends State<SignupScreen> {
       agreed: _agreeToTerms,
       canAgree: _legalReviewComplete,
       onDark: _isDesktopGlass,
+      lockedHint: '',
       onChanged: (v) => setState(() => _agreeToTerms = v),
     );
   }
@@ -959,25 +977,11 @@ class _SignupScreenState extends State<SignupScreen> {
 
     if (_currentStep == 0) {
       if (_personalDetailsSubStep == 0) {
-        if (!_legalReviewComplete) {
+        if (!_legalReviewComplete || !_agreeToTerms) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text(
-                'Please open and read both the Data Privacy and Terms sections.',
-              ),
-              backgroundColor: Colors.red.shade700,
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-          return;
-        }
-        if (!_agreeToTerms) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text(
-                'Please agree to the Terms and Conditions and Data Privacy Policy.',
-              ),
-              backgroundColor: Colors.red.shade700,
+              content: Text(_legalContinueMessage()),
+              backgroundColor: Colors.orange.shade800,
               behavior: SnackBarBehavior.floating,
             ),
           );
@@ -1039,16 +1043,16 @@ class _SignupScreenState extends State<SignupScreen> {
   bool get _passwordsMismatch =>
       _passwordController.text != _confirmPasswordController.text;
 
-  /// Brings the user back to Confirm Password (Contact & Address sub-step)
-  /// with the error inline and the text selected so it can be retyped in place.
+  /// Scrolls Confirm Password into view and shows the mismatch inline.
+  /// Does not select the obscured text — a full selection on a password
+  /// field stops the browser input from accepting further edits.
   void _focusConfirmPasswordMismatch() {
     if (_personalDetailsSubStep != 3) {
       setState(() => _personalDetailsSubStep = 3);
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final field = _confirmPasswordFieldKey.currentState;
-      field?.validate();
+      _confirmPasswordFieldKey.currentState?.validate();
       final fieldContext = _confirmPasswordFieldKey.currentContext;
       if (fieldContext != null) {
         Scrollable.ensureVisible(
@@ -1057,19 +1061,25 @@ class _SignupScreenState extends State<SignupScreen> {
           duration: const Duration(milliseconds: 250),
         );
       }
-      _confirmPasswordFocus.requestFocus();
-      _confirmPasswordController.selection = TextSelection(
-        baseOffset: 0,
-        extentOffset: _confirmPasswordController.text.length,
-      );
+      if (!_confirmPasswordFocus.hasFocus) {
+        _confirmPasswordFocus.requestFocus();
+      }
     });
   }
 
-  void _onPasswordFieldsChanged() {
+  /// Re-checks the match after the password field changes, without rebuilding
+  /// the field that currently has the cursor.
+  void _onPasswordEdited() {
     ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
-    if (_confirmPasswordController.text.isNotEmpty) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_confirmPasswordController.text.isEmpty) return;
       _confirmPasswordFieldKey.currentState?.validate();
-    }
+    });
+  }
+
+  void _onConfirmPasswordEdited() {
+    ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
   }
 
   void _submitCurrentStepFromKeyboard() {
@@ -1815,7 +1825,7 @@ class _SignupScreenState extends State<SignupScreen> {
       }
 
       if (emailChanged && registrationOtp != null) {
-        _updateSubmitPhase('Sending email code…');
+        _updateSubmitPhase('Sending verification email...');
         final delivery = await OtpDeliveryService.deliverVerificationCode(
           uid: regUid,
           email: contactEmail,
@@ -1826,14 +1836,6 @@ class _SignupScreenState extends State<SignupScreen> {
           trySms: false,
           otpAlreadyInFirestore: true,
           emailInBackground: true,
-        ).timeout(
-          const Duration(seconds: 5),
-          onTimeout: () => const OtpDeliveryResult(
-            emailSent: false,
-            emailError: 'Delivery timed out',
-            otpAlreadyInFirestore: true,
-            emailDeliveryPending: true,
-          ),
         );
         emailDeliveryFailed = !delivery.canCompleteRegistration;
         if (!mounted) return;
@@ -1857,16 +1859,17 @@ class _SignupScreenState extends State<SignupScreen> {
 
       _setSubmitting(false);
       if (!mounted) return;
-      Navigator.pushReplacementNamed(
-        context,
-        '/verify-otp',
-        arguments: <String, dynamic>{
-          'contactEmail': contactEmail,
-          'fromSignup': true,
-          'otpAlreadySent': otpAlreadySent || !emailChanged,
-          'emailDeliveryFailed': emailDeliveryFailed,
-          'authDeferred': stillDeferred,
-        },
+      Navigator.of(context).pushReplacement(
+        verificationHandoffRoute(
+          builder: (_) => const VerifyOtpScreen(),
+          arguments: <String, dynamic>{
+            'contactEmail': contactEmail,
+            'fromSignup': true,
+            'otpAlreadySent': otpAlreadySent || !emailChanged,
+            'emailDeliveryFailed': emailDeliveryFailed,
+            'authDeferred': stillDeferred,
+          },
+        ),
       );
       debugPrint('[REG] ========== pending edit end ==========');
     } finally {
@@ -1911,7 +1914,7 @@ class _SignupScreenState extends State<SignupScreen> {
       // Decline OS/browser "save password?" prompts (esp. Chrome) for shared/public devices.
       TextInput.finishAutofillContext(shouldSave: false);
 
-      _setSubmitting(true, phase: 'Preparing verification…');
+      _setSubmitting(true, phase: 'Creating your account...');
 
       if (Firebase.apps.isEmpty) {
         _registrationSnack(
@@ -2052,7 +2055,7 @@ class _SignupScreenState extends State<SignupScreen> {
 
     // --- STEP 4: email Inbox only (no on-device OTP popup) ---
     // Do NOT sync FCM / write users|tourists stubs until after OTP verification.
-    _updateSubmitPhase('Sending email code…');
+    _updateSubmitPhase('Sending verification email...');
     debugPrint('[REG] STEP 4: OTP email delivery (Inbox only, no local popup)');
     final delivery = await OtpDeliveryService.deliverVerificationCode(
       uid: regUid,
@@ -2064,17 +2067,6 @@ class _SignupScreenState extends State<SignupScreen> {
       trySms: false,
       otpAlreadyInFirestore: true,
       emailInBackground: true,
-    ).timeout(
-      const Duration(seconds: 5),
-      onTimeout: () {
-        debugPrint('[REG] STEP 4 timeout — continuing with saved OTP');
-        return const OtpDeliveryResult(
-          emailSent: false,
-          emailError: 'Delivery timed out',
-          otpAlreadyInFirestore: true,
-          emailDeliveryPending: true,
-        );
-      },
     );
     // OTP already in Firestore — never roll back for delivery hiccups.
     if (delivery.emailSent) {
@@ -2197,17 +2189,17 @@ class _SignupScreenState extends State<SignupScreen> {
             snackOk ? Colors.green.shade700 : Colors.orange.shade800,
       );
       if (!mounted) return;
-      Navigator.pushReplacementNamed(
-        context,
-        '/verify-otp',
-        arguments: <String, dynamic>{
-          'contactEmail': contactEmail,
-          'fromSignup': true,
-          'otpAlreadySent': true,
-          // Only true when OTP missing AND delivery failed — not for background send.
-          'emailDeliveryFailed': !delivery.canCompleteRegistration,
-          'authDeferred': true,
-        },
+      Navigator.of(context).pushReplacement(
+        verificationHandoffRoute(
+          builder: (_) => const VerifyOtpScreen(),
+          arguments: <String, dynamic>{
+            'contactEmail': contactEmail,
+            'fromSignup': true,
+            'otpAlreadySent': true,
+            'emailDeliveryFailed': !delivery.canCompleteRegistration,
+            'authDeferred': true,
+          },
+        ),
       );
     }
       debugPrint('[REG] ========== registration end ==========');
@@ -2474,6 +2466,11 @@ class _SignupScreenState extends State<SignupScreen> {
     );
   }
 
+  bool get _tripPlannerSignup =>
+      LoginRouteArgs.from(ModalRoute.of(context)?.settings.arguments)
+          ?.usesTripPlannerBranding ==
+      true;
+
   bool get _isDesktopGlass =>
       MediaQuery.sizeOf(context).width >= kWebGlassAuthBreakpoint;
 
@@ -2698,7 +2695,10 @@ class _SignupScreenState extends State<SignupScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  const TouristSignupBrandRow(onDark: true),
+                  TouristSignupBrandRow(
+                    onDark: true,
+                    tripPlanner: _tripPlannerSignup,
+                  ),
                   const SizedBox(height: 16),
                   Text(
                     'Step $_displayStepNumber',
@@ -2784,55 +2784,73 @@ class _SignupScreenState extends State<SignupScreen> {
                       ),
                     ),
                     Padding(
-                      padding: EdgeInsets.fromLTRB(16, topPad + 4, 16, 40),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.arrow_back_ios_new_rounded,
-                                  color: Colors.white,
-                                  size: 18,
-                                ),
-                                onPressed: () => Navigator.pop(context),
-                                tooltip: 'Back',
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(
-                                  minWidth: 36,
-                                  minHeight: 36,
-                                ),
+                      padding: EdgeInsets.fromLTRB(16, topPad + 4, 16, 36),
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          return FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.topCenter,
+                            child: SizedBox(
+                              width: constraints.maxWidth,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      IconButton(
+                                        icon: const Icon(
+                                          Icons.arrow_back_ios_new_rounded,
+                                          color: Colors.white,
+                                          size: 18,
+                                        ),
+                                        onPressed: () => Navigator.pop(context),
+                                        tooltip: 'Back',
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(
+                                          minWidth: 36,
+                                          minHeight: 36,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Expanded(
+                                        child: TouristSignupBrandRow(
+                                          onDark: true,
+                                          tripPlanner: _tripPlannerSignup,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Step $_displayStepNumber',
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      fontSize: 28,
+                                      fontWeight: FontWeight.w800,
+                                      color: Colors.white,
+                                      letterSpacing: 0.2,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Registration',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.white.withValues(
+                                        alpha: 0.92,
+                                      ),
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
                               ),
-                              const SizedBox(width: 4),
-                              const Expanded(
-                                child: TouristSignupBrandRow(onDark: true),
-                              ),
-                            ],
-                          ),
-                          const Spacer(),
-                          Text(
-                            'Step $_displayStepNumber',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.white,
-                              letterSpacing: 0.2,
                             ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            'Registration',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Colors.white.withValues(alpha: 0.92),
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
+                          );
+                        },
                       ),
                     ),
                   ],
@@ -2893,16 +2911,28 @@ class _SignupScreenState extends State<SignupScreen> {
           'Open both sections below, then agree to continue.',
           Icons.verified_user_outlined,
         ),
+        Text(
+          'Step 1: Tap each section below to read the policies.',
+          style: TextStyle(
+            fontSize: 13.5,
+            height: 1.35,
+            fontWeight: FontWeight.w700,
+            color: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
+          ),
+        ),
+        const SizedBox(height: 10),
         _buildLegalExpansionCard(
           title: 'Data Privacy (RA 10173)',
           subtitle: 'How we collect and use your information',
           icon: Icons.shield_outlined,
           expanded: _privacySectionExpanded,
           reviewed: _hasReviewedPrivacy,
-          onExpandedChanged: (v) => setState(() {
-            _privacySectionExpanded = v;
-            if (v) _hasReviewedPrivacy = true;
-          }),
+          onExpandedChanged: (v) =>
+              setState(() => _privacySectionExpanded = v),
+          onScrolledToEnd: () {
+            if (_hasReviewedPrivacy) return;
+            setState(() => _hasReviewedPrivacy = true);
+          },
           bullets: const [
             'We collect personal data only for tourist registration, QR check-in, '
                 'and LGU / provincial tourism reporting in Misamis Occidental.',
@@ -2923,10 +2953,11 @@ class _SignupScreenState extends State<SignupScreen> {
           icon: Icons.description_outlined,
           expanded: _termsSectionExpanded,
           reviewed: _hasReviewedTerms,
-          onExpandedChanged: (v) => setState(() {
-            _termsSectionExpanded = v;
-            if (v) _hasReviewedTerms = true;
-          }),
+          onExpandedChanged: (v) => setState(() => _termsSectionExpanded = v),
+          onScrolledToEnd: () {
+            if (_hasReviewedTerms) return;
+            setState(() => _hasReviewedTerms = true);
+          },
           bullets: const [
             'You confirm that all information you provide is true, complete, '
                 'and updated.',
@@ -2941,6 +2972,18 @@ class _SignupScreenState extends State<SignupScreen> {
           ],
         ),
         const SizedBox(height: 18),
+        if (_legalReviewComplete) ...[
+          Text(
+            'Step 2: Check the box below to agree and continue.',
+            style: TextStyle(
+              fontSize: 13.5,
+              height: 1.35,
+              fontWeight: FontWeight.w700,
+              color: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
         _buildTermsConsentAgreementCard(),
         const SizedBox(height: 28),
         _buildPersonalDetailsNavButtons(showBack: false),
@@ -3295,8 +3338,10 @@ class _SignupScreenState extends State<SignupScreen> {
           child: TextFormField(
             controller: _passwordController,
             obscureText: _obscurePassword,
+            enableInteractiveSelection: true,
+            autovalidateMode: AutovalidateMode.onUserInteraction,
             textInputAction: TextInputAction.next,
-            onChanged: (_) => _onPasswordFieldsChanged(),
+            onChanged: (_) => _onPasswordEdited(),
             onFieldSubmitted: (_) => _focusNextFormField(),
             onEditingComplete: _focusNextFormField,
             autofillHints: const [],
@@ -3346,9 +3391,10 @@ class _SignupScreenState extends State<SignupScreen> {
             controller: _confirmPasswordController,
             focusNode: _confirmPasswordFocus,
             obscureText: _obscureConfirmPassword,
+            enableInteractiveSelection: true,
             autovalidateMode: AutovalidateMode.onUserInteraction,
             textInputAction: TextInputAction.next,
-            onChanged: (_) => _onPasswordFieldsChanged(),
+            onChanged: (_) => _onConfirmPasswordEdited(),
             onFieldSubmitted: (_) => _focusNextFormField(),
             onEditingComplete: _focusNextFormField,
             autofillHints: const [],

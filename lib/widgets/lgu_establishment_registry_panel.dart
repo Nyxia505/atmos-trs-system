@@ -554,7 +554,7 @@ class _KpiCardState extends State<_KpiCard> {
   @override
   Widget build(BuildContext context) {
     final c = widget.color;
-    final active = widget.selected || (_hover && widget.onTap != null);
+    const glow = Color(0xFFF97316);
     return MouseRegion(
       cursor: widget.onTap == null
           ? SystemMouseCursors.basic
@@ -564,20 +564,27 @@ class _KpiCardState extends State<_KpiCard> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOutCubic,
+          transform: Matrix4.translationValues(0, _hover ? -3 : 0, 0),
           padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
           decoration: BoxDecoration(
-            color: widget.selected ? c.withValues(alpha: 0.06) : Colors.white,
+            color: Color.alphaBlend(
+              glow.withValues(alpha: _hover ? 0.06 : 0),
+              widget.selected ? c.withValues(alpha: 0.06) : Colors.white,
+            ),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: widget.selected ? c.withValues(alpha: 0.55) : _kBorder,
+              color: _hover
+                  ? glow.withValues(alpha: 0.38)
+                  : (widget.selected ? c.withValues(alpha: 0.55) : _kBorder),
               width: widget.selected ? 1.5 : 1,
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: active ? 0.07 : 0.03),
-                blurRadius: active ? 14 : 8,
-                offset: Offset(0, active ? 5 : 2),
+                color: glow.withValues(alpha: _hover ? 0.16 : 0),
+                blurRadius: 14,
+                offset: Offset(0, _hover ? 6 : 0),
               ),
             ],
           ),
@@ -801,20 +808,25 @@ class _EstablishmentCardState extends State<_EstablishmentCard> {
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
+        duration: const Duration(milliseconds: 200),
         curve: Curves.easeOutCubic,
-        transform: Matrix4.translationValues(0, _hover ? -2 : 0, 0),
+        transform: Matrix4.translationValues(0, _hover ? -3 : 0, 0),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Color.alphaBlend(
+            const Color(0xFFF97316).withValues(alpha: _hover ? 0.05 : 0),
+            Colors.white,
+          ),
           borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: _hover ? statusColor.withValues(alpha: 0.35) : _kBorder,
+            color: _hover ? const Color(0xFFF97316).withValues(alpha: 0.36) : _kBorder,
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: _hover ? 0.08 : 0.035),
-              blurRadius: _hover ? 18 : 10,
-              offset: Offset(0, _hover ? 8 : 3),
+              color: _hover
+                  ? const Color(0xFFF97316).withValues(alpha: 0.16)
+                  : Colors.black.withValues(alpha: 0.035),
+              blurRadius: _hover ? 14 : 10,
+              offset: Offset(0, _hover ? 6 : 3),
             ),
           ],
         ),

@@ -69,6 +69,26 @@ Future<void> persistLongTermStaffRoleClaims({int maxAttempts = 4}) async {
   }
 }
 
+/// ATMOS staff roles that may edit the trip-planner catalog.
+///
+/// These must not be rewritten to `admin`. [AppRole.fromString] maps
+/// `governor` to admin, and saving that value would break ATMOS routing.
+bool isAtmosCatalogStaffRole(String? raw) {
+  final role = (raw ?? '')
+      .trim()
+      .toLowerCase()
+      .replaceAll(RegExp(r'[\s-]+'), '_');
+  const roles = {
+    'governor',
+    'provincial_tourism',
+    'tourism_province',
+    'tourism',
+    'tourism_office',
+    'lgu_tourism',
+  };
+  return roles.contains(role);
+}
+
 /// Ensures `users/{uid}` has permanent staff/admin role and JWT claims before catalog writes.
 Future<void> ensurePermanentStaffRoleForCatalogWrite() async {
   final auth = FirebaseAuth.instance.currentUser;
@@ -96,6 +116,9 @@ Future<void> ensurePermanentStaffRoleForCatalogWrite() async {
       FirebaseFirestore.instance.collection(_kUsersCollection).doc(uid);
   final snap = await userRef.get();
   final data = snap.data();
+  if (isAtmosCatalogStaffRole(data?['role'] as String?)) {
+    return;
+  }
   var role = AppRole.fromString(data?['role'] as String?);
   final appUser = findAppUserByFirebaseUid(uid);
   if (role == AppRole.user || role == AppRole.tourist) {

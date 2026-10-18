@@ -99,10 +99,11 @@ class _CoachMarkLayerState extends State<_CoachMarkLayer>
   )..repeat();
   late final AnimationController _transition = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 380),
+    duration: const Duration(milliseconds: 300),
   )..value = 1;
 
   int _index = 0;
+  bool _movingForward = true;
   Rect? _fromRect;
   Rect? _shownRect;
   bool _closed = false;
@@ -203,6 +204,7 @@ class _CoachMarkLayerState extends State<_CoachMarkLayer>
     }
     setState(() {
       _advancing = false;
+      _movingForward = true;
       _fromRect = _shownRect;
       _index = next;
     });
@@ -210,6 +212,29 @@ class _CoachMarkLayerState extends State<_CoachMarkLayer>
       if (mounted) _revealTarget();
     });
     _transition.forward(from: 0);
+  }
+
+  void _back() {
+    if (_closed || _advancing || _index <= 0) return;
+    final previous = _previousAvailable(_index - 1);
+    if (previous < 0) return;
+    setState(() {
+      _movingForward = false;
+      _fromRect = _shownRect;
+      _index = previous;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _revealTarget();
+    });
+    _transition.forward(from: 0);
+  }
+
+  int _previousAvailable(int from) {
+    for (var i = from; i >= 0; i--) {
+      final step = widget.steps[i];
+      if (step.target == null || _isAvailable(step)) return i;
+    }
+    return -1;
   }
 
   void _close(bool skipped) {
@@ -287,7 +312,11 @@ class _CoachMarkLayerState extends State<_CoachMarkLayer>
         step: step,
         stepNumber: _visibleNumber(),
         stepCount: _visibleCount(),
+        isFirst: _index <= 0,
         isLast: _isLast,
+        motion: _transition,
+        movingForward: _movingForward,
+        onBack: _back,
         onNext: _next,
         onSkip: () => _close(true),
       ),
@@ -341,7 +370,11 @@ class _CoachCard extends StatelessWidget {
     required this.step,
     required this.stepNumber,
     required this.stepCount,
+    required this.isFirst,
     required this.isLast,
+    required this.motion,
+    required this.movingForward,
+    required this.onBack,
     required this.onNext,
     required this.onSkip,
   });
@@ -349,7 +382,11 @@ class _CoachCard extends StatelessWidget {
   final CoachStep step;
   final int stepNumber;
   final int stepCount;
+  final bool isFirst;
   final bool isLast;
+  final Animation<double> motion;
+  final bool movingForward;
+  final VoidCallback onBack;
   final VoidCallback onNext;
   final VoidCallback onSkip;
 
@@ -358,8 +395,21 @@ class _CoachCard extends StatelessWidget {
     final theme = Theme.of(context);
     final accent = theme.colorScheme.primary;
     final isIntro = step.target == null;
+    final forwardLabel = isLast ? 'Finish' : (step.primaryLabel ?? 'Next');
+    final curved = CurvedAnimation(
+      parent: motion,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
 
-    return Material(
+    return FadeTransition(
+      opacity: curved,
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: Offset(movingForward ? 0.08 : -0.08, 0.04),
+          end: Offset.zero,
+        ).animate(curved),
+        child: Material(
       color: theme.colorScheme.surface,
       elevation: 12,
       borderRadius: BorderRadius.circular(18),
@@ -433,6 +483,11 @@ class _CoachCard extends StatelessWidget {
             const SizedBox(height: 8),
             Row(
               children: [
+                if (!isFirst)
+                  TextButton(
+                    onPressed: onBack,
+                    child: const Text('Back'),
+                  ),
                 if (!isLast)
                   TextButton(
                     onPressed: onSkip,
@@ -440,33 +495,37 @@ class _CoachCard extends StatelessWidget {
                   ),
                 const Spacer(),
                 if (step.requireTap)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.touch_app_rounded, size: 18, color: accent),
-                        const SizedBox(width: 6),
-                        Text(
-                          'Tap the highlighted button',
-                          style: theme.textTheme.labelLarge?.copyWith(
-                            color: accent,
-                            fontWeight: FontWeight.w700,
+                  Flexible(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.touch_app_rounded, size: 18, color: accent),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              'Tap the highlighted button',
+                              style: theme.textTheme.labelLarge?.copyWith(
+                                color: accent,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   )
                 else
                   FilledButton(
                     onPressed: onNext,
-                    child: Text(
-                      step.primaryLabel ?? (isLast ? 'Done' : 'Next'),
-                    ),
+                    child: Text(forwardLabel),
                   ),
               ],
             ),
           ],
+        ),
+      ),
         ),
       ),
     );

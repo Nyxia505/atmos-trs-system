@@ -8,6 +8,8 @@ import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
 import 'package:atmos_trs_system/models/municipality.dart';
+import 'package:atmos_trs_system/services/lgu_office_registry_service.dart';
+import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/services/otp_delivery_service.dart';
 import 'package:atmos_trs_system/services/otp_service.dart';
 import 'package:atmos_trs_system/services/pending_lgu_registration_cache.dart';
@@ -46,6 +48,9 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
   String? _municipalityId;
   late final List<Municipality> _municipalities =
       List<Municipality>.unmodifiable(getMisamisOccidentalMunicipalities());
+  Set<String> _takenMunicipalityIds = {};
+  bool _loadingOffices = true;
+  bool _officeListKnown = false;
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
   bool _agreeToTerms = false;
@@ -62,6 +67,34 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
       kIsWeb && MediaQuery.sizeOf(context).width >= kWebGlassAuthBreakpoint;
 
   bool get _legalReviewComplete => _privacyOpened && _termsOpened;
+
+  List<Municipality> get _openMunicipalities => municipalitiesWithoutOffice(
+        _municipalities,
+        _takenMunicipalityIds,
+      );
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadTakenOffices());
+  }
+
+  Future<void> _loadTakenOffices() async {
+    final taken = await LguOfficeRegistryService.takenMunicipalityIds();
+    if (!mounted) return;
+    setState(() {
+      _loadingOffices = false;
+      if (taken != null) {
+        _officeListKnown = true;
+        _takenMunicipalityIds = taken;
+        final open = municipalitiesWithoutOffice(_municipalities, taken);
+        if (_municipalityId != null &&
+            open.every((m) => m.id != _municipalityId)) {
+          _municipalityId = null;
+        }
+      }
+    });
+  }
 
   Municipality? get _selectedMunicipality {
     final id = _municipalityId;
@@ -222,6 +255,14 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
     final contactPerson = _contactPersonController.text.trim();
     final contact = composeE164Mobile(_contactDialCode, _contactController.text);
     final mun = _selectedMunicipality!;
+
+    await _loadTakenOffices();
+    if (!mounted) return;
+    if (_officeListKnown &&
+        _openMunicipalities.every((m) => m.id != mun.id)) {
+      _snack('${mun.name} already has a tourism office account.');
+      return;
+    }
 
     setState(() => _submitting = true);
     String? createdUid;
@@ -439,44 +480,91 @@ class _LguSignupScreenState extends State<LguSignupScreen> {
           ),
           const SizedBox(height: 20),
           _sectionLabel('Municipality / City'),
-          DropdownButtonFormField<String>(
-            // ignore: deprecated_member_use
-            value: _municipalityId,
-            isExpanded: true,
-            hint: _dropdownHint('Select your municipality'),
-            decoration: _dec(
-              hint: 'Select your municipality',
-              icon: Icons.location_city,
-            ).copyWith(hintText: null),
-            dropdownColor: Colors.white,
-            iconEnabledColor:
-                _isDesktopGlass ? Colors.white : const Color(0xFF78716C),
-            style: _fieldTextStyle,
-            selectedItemBuilder: (_) => [
-              for (final m in _municipalities)
-                Align(
-                  alignment: AlignmentDirectional.centerStart,
-                  child: Text(
-                    m.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: _fieldTextStyle,
+          if (_loadingOffices)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Text(
+                'Checking which municipalities are still open…',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: _isDesktopGlass
+                      ? Colors.white
+                      : const Color(0xFF78716C),
+                ),
+              ),
+            )
+          else if (_officeListKnown && _openMunicipalities.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                'Every municipality already has a tourism office account.',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: _isDesktopGlass
+                      ? Colors.white
+                      : const Color(0xFF1C1917),
+                ),
+              ),
+            )
+          else
+            DropdownButtonFormField<String>(
+              // ignore: deprecated_member_use
+              value: _openMunicipalities.any((m) => m.id == _municipalityId)
+                  ? _municipalityId
+                  : null,
+              isExpanded: true,
+              hint: _dropdownHint('Select your municipality'),
+              decoration: _dec(
+                hint: 'Select your municipality',
+                icon: Icons.location_city,
+              ).copyWith(hintText: null),
+              dropdownColor: Colors.white,
+              iconEnabledColor:
+                  _isDesktopGlass ? Colors.white : const Color(0xFF78716C),
+              style: _fieldTextStyle,
+              selectedItemBuilder: (_) => [
+                for (final m in _openMunicipalities)
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: Text(
+                      m.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: _fieldTextStyle,
+                    ),
                   ),
+              ],
+              items: [
+                for (final m in _openMunicipalities)
+                  DropdownMenuItem<String>(
+                    value: m.id,
+                    child: Text(m.name, style: _dropdownItemStyle),
+                  ),
+              ],
+              onChanged: _submitting
+                  ? null
+                  : (v) => setState(() => _municipalityId = v),
+              validator: (v) =>
+                  (v == null || v.isEmpty) ? 'Required' : null,
+            ),
+          if (!_loadingOffices &&
+              _officeListKnown &&
+              _openMunicipalities.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'Municipalities that already have an office account are hidden.',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: _isDesktopGlass
+                      ? Colors.white70
+                      : const Color(0xFF78716C),
                 ),
-            ],
-            items: [
-              for (final m in _municipalities)
-                DropdownMenuItem<String>(
-                  value: m.id,
-                  child: Text(m.name, style: _dropdownItemStyle),
-                ),
-            ],
-            onChanged: _submitting
-                ? null
-                : (v) => setState(() => _municipalityId = v),
-            validator: (v) =>
-                (v == null || v.isEmpty) ? 'Required' : null,
-          ),
+              ),
+            ),
           const SizedBox(height: 12),
           _sectionLabel('Tourism Office Name'),
           TextFormField(

@@ -11,6 +11,7 @@ import 'package:atmos_trs_system/services/qr_location_prompt.dart';
 import 'package:atmos_trs_system/services/tourist_group_service.dart';
 import 'package:atmos_trs_system/widgets/laag_group_checkin_toggle.dart';
 import 'package:atmos_trs_system/widgets/party_demographic_fields.dart';
+import 'package:atmos_trs_system/widgets/visit_origin_breakdown_fields.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 
 /// Check-in page for a Firestore [SpotInfo] after QR scan (logged-in flow).
@@ -34,6 +35,7 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
   static const Color _textDark = Color(0xFF111827);
   bool _submitting = false;
   var _demoKey = GlobalKey<PartyDemographicFieldsState>();
+  var _originKey = GlobalKey<VisitOriginBreakdownFieldsState>();
   PartyDemographicValue _demo = const PartyDemographicValue(
     partySize: 1,
     maleCount: 0,
@@ -63,6 +65,7 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
       if (_groupMode) {
         _demo = kNoCompanions;
         _demoKey = GlobalKey<PartyDemographicFieldsState>();
+        _originKey = GlobalKey<VisitOriginBreakdownFieldsState>();
       }
     });
   }
@@ -72,6 +75,7 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
       _useGroup = v;
       _demo = _groupMode ? kNoCompanions : kSoloParty;
       _demoKey = GlobalKey<PartyDemographicFieldsState>();
+      _originKey = GlobalKey<VisitOriginBreakdownFieldsState>();
     });
   }
 
@@ -96,9 +100,26 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
       showQRCheckInErrorDialog(
         context,
         demo.validationMessage ??
-            'Enter party size with Male/Female and Filipino/Foreign counts.',
+            'Enter party size with Male and Female counts.',
       );
       return;
+    }
+    Map<String, dynamic>? origin;
+    if (demo.partySize > 0) {
+      final originState = _originKey.currentState;
+      if (originState == null) {
+        showQRCheckInErrorDialog(
+          context,
+          'Enter where each person in the party lives.',
+        );
+        return;
+      }
+      final originError = originState.validate();
+      if (originError != null) {
+        showQRCheckInErrorDialog(context, originError);
+        return;
+      }
+      origin = originState.value.toMap();
     }
 
     setState(() => _submitting = true);
@@ -137,8 +158,9 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
         partySize: demo.partySize,
         femaleCount: demo.femaleCount,
         maleCount: demo.maleCount,
-        filipinoCount: demo.filipinoCount,
-        foreignCount: demo.foreignCount,
+        filipinoCount: origin == null ? demo.filipinoCount : 0,
+        foreignCount: origin == null ? demo.foreignCount : 0,
+        originBreakdown: origin,
         group: _groupMode ? _group : null,
         isDemoQr: widget.isDemoQr,
         onBeforeDialog: _clearSubmitting,
@@ -224,8 +246,8 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
                     Text(
                       _groupMode
                           ? kCompanionsHelpText
-                          : 'Enter total guests, then gender and Filipino/Foreign. '
-                              'One side auto-fills the other. Include yourself.',
+                          : 'Enter the party size and male/female counts, then '
+                              'where each person lives. Include yourself.',
                       style: TextStyle(
                         color: AppTheme.unselectedMuted,
                         fontSize: 13,
@@ -244,8 +266,22 @@ class _SpotCheckInScreenState extends State<SpotCheckInScreen> {
                       partyHelperText: _groupMode
                           ? 'People with you who don\'t have the app (0 if none)'
                           : 'Total guests in this stay / visit',
+                      showResidency: false,
                       onChanged: (v) => setState(() => _demo = v),
                     ),
+                    if (_demo.partySize > 0) ...[
+                      const SizedBox(height: 20),
+                      VisitOriginBreakdownFields(
+                        key: _originKey,
+                        spotMunicipality: s.municipality.trim().isNotEmpty
+                            ? s.municipality.trim()
+                            : s.municipalityId,
+                        partySize: _demo.partySize,
+                        maleCount: _demo.maleCount,
+                        femaleCount: _demo.femaleCount,
+                        prefillScanner: !_groupMode,
+                      ),
+                    ],
                   ],
                 ),
               ),

@@ -14,8 +14,10 @@ import 'package:atmos_trs_system/services/welcome_notification_service.dart';
 import 'package:atmos_trs_system/services/notification_badge_notifier.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
 import 'package:atmos_trs_system/services/tourist_activity_firestore_sync.dart';
+import 'package:atmos_trs_system/services/tourist_group_service.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart'
     show UserActivityService;
+import 'package:atmos_trs_system/widgets/save_spot_notice.dart';
 import 'package:atmos_trs_system/features/home/home_screen.dart';
 import 'package:atmos_trs_system/features/explore/explore_screen.dart';
 import 'package:atmos_trs_system/features/navigation/placeholder_pages.dart';
@@ -81,6 +83,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
         TouristActivityFirestoreSync.resetMergeCache();
         await TouristActivityFirestoreSync.mergeFromCloud(uid);
         await UserActivityService.syncVisitedSpotsFromQrCheckins();
+        await TouristGroupService.deliverMyCheckInNotices();
       }());
       AnnouncementNotificationSync.syncPublishedAnnouncementsToLocal(
         userId: uid,
@@ -150,10 +153,12 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       ];
 
   void _onNavTap(int index) {
+    if (index != _currentIndex) SaveSpotNotice.dismiss();
     setState(() => _currentIndex = index);
     if (index == 0) {
       // Returning to Home — refresh Visited count from check-ins.
       unawaited(UserActivityService.syncVisitedSpotsFromQrCheckins());
+      unawaited(TouristGroupService.deliverMyCheckInNotices());
     }
     if (index == 3) {
       _badge.refresh();
@@ -238,7 +243,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
                 ),
                 Expanded(
                   child: ColoredBox(
-                    color: Colors.white,
+                    color: AppTheme.pageBackground,
                     child: _tabBody(pages),
                   ),
                 ),
@@ -271,7 +276,7 @@ class _SidebarNav extends StatelessWidget {
       width: 80,
       decoration: BoxDecoration(
         color: AppTheme.cardBackground,
-        border: Border(right: BorderSide(color: Colors.grey.shade300)),
+        border: Border(right: BorderSide(color: AppTheme.border)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.06),

@@ -70,6 +70,52 @@ service cloud.firestore {
       return isProvincialStaff() || isLguTourismFromUserDoc();
     }
 
+    function lguCatalogName(id) {
+      return id == 'oroquieta' ? 'Oroquieta City'
+        : id == 'ozamiz' ? 'Ozamis City'
+        : id == 'tangub' ? 'Tangub City'
+        : id == 'aloran' ? 'Aloran'
+        : id == 'baliangao' ? 'Baliangao'
+        : id == 'bonifacio' ? 'Bonifacio'
+        : id == 'calamba' ? 'Calamba'
+        : id == 'clarin' ? 'Clarin'
+        : id == 'concepcion' ? 'Concepcion'
+        : id == 'dvc' ? 'Don Victoriano Chiongbian'
+        : id == 'jimenez' ? 'Jimenez'
+        : id == 'lopezjaena' ? 'Lopez Jaena'
+        : id == 'panaon' ? 'Panaon'
+        : id == 'plaridel' ? 'Plaridel'
+        : id == 'sapangdalaga' ? 'Sapang Dalaga'
+        : id == 'sinacaban' ? 'Sinacaban'
+        : id == 'tudela' ? 'Tudela'
+        : '';
+    }
+
+    function isLguOfficeRole(role) {
+      return role.matches('(?i)^\\s*tourism(_office)?\\s*$')
+        || role.matches('(?i)^\\s*lgu\\s*tourism\\s*$')
+        || role.matches('(?i)^\\s*tourism\\s*office\\s*$');
+    }
+
+    function holderOwnsLguOffice(uid, municipalityId) {
+      let data = get(/databases/$(database)/documents/users/$(uid)).data;
+      let stored = data.get('municipalityId', '') == 'ozamis'
+        ? 'ozamiz'
+        : data.get('municipalityId', '');
+      let name = data.get('municipality', '').lower();
+      let catalog = lguCatalogName(municipalityId).lower();
+      return catalog.size() > 0 && (
+        (stored.size() > 0 && stored == municipalityId)
+        || (stored.size() == 0 && (
+          name == catalog
+          || (municipalityId == 'ozamiz' && (
+            name == 'ozamiz city' || name == 'ozamis' || name == 'ozamiz'
+          ))
+          || (municipalityId == 'dvc' && name == 'don victoriano')
+        ))
+      );
+    }
+
     function touristRegisteredInLguMunicipality() {
       return isLguTourismFromUserDoc()
         && resource.data.get('registrationMunicipalityId', '') == lguMunicipalityId();
@@ -140,8 +186,9 @@ service cloud.firestore {
 
     match /announcements/{announcementId} {
       allow read: if true;
-      // LGU staff create/edit events; Governor (provincial staff) approve/reject/publish.
-      allow create, update, delete: if isLguStaff();
+      // Event announcements belong to the municipal tourism office.
+      // Governor and OPTACA may read them, not edit them.
+      allow create, update, delete: if isLguTourismFromUserDoc();
     }
 
     match /users/{userId} {
@@ -198,6 +245,29 @@ service cloud.firestore {
         );
     }
 
+    function isLaagMemberCheckIn() {
+      let data = request.resource.data;
+      let group = get(/databases/$(database)/documents/tourist_groups/$(data.groupId)).data;
+      let member = group.members[data.userId];
+      return data.get('source', '') == 'laag_group'
+        && data.groupId is string
+        && data.partySize == 1
+        && data.visitorCount == 1
+        && !data.keys().hasAny(['groupMembers'])
+        && data.userId is string
+        && data.tourist_id == data.userId
+        && data.user_id == data.userId
+        && exists(/databases/$(database)/documents/tourist_groups/$(data.groupId))
+        && group.leaderUid == request.auth.uid
+        && group.status == 'active'
+        && group.expiresAt > request.time
+        && group.memberUids.hasAny([data.userId])
+        && (
+          !('status' in member)
+          || member.status == 'accepted'
+        );
+    }
+
     match /tourist_groups/{groupId} {
       allow get: if isSignedIn();
       // Join-by-code lookup only (small result sets).
@@ -223,7 +293,7 @@ service cloud.firestore {
       allow update: if isSignedIn()
         && resource.data.leaderUid != request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['memberUids', 'members'])
+             .hasOnly(['memberUids', 'members', 'pendingInviteUids', 'pendingInvites'])
         && request.resource.data.memberUids.toSet()
              .difference(resource.data.memberUids.toSet())
              .union(resource.data.memberUids.toSet()
@@ -231,6 +301,13 @@ service cloud.firestore {
              .hasOnly([request.auth.uid])
         && request.resource.data.members.diff(resource.data.members)
              .affectedKeys().hasOnly([request.auth.uid])
+        && request.resource.data.get('pendingInvites', {}).diff(resource.data.get('pendingInvites', {}))
+             .affectedKeys().hasOnly([request.auth.uid])
+        && request.resource.data.get('pendingInviteUids', []).toSet()
+             .difference(resource.data.get('pendingInviteUids', []).toSet())
+             .union(resource.data.get('pendingInviteUids', []).toSet()
+               .difference(request.resource.data.get('pendingInviteUids', []).toSet()))
+             .hasOnly([request.auth.uid])
         && (
           !request.resource.data.memberUids.hasAll([request.auth.uid])
           || (
@@ -245,7 +322,9 @@ service cloud.firestore {
     match /qr_checkins/{docId} {
       // Signed-in read: LGU dashboards + tourists viewing own history (client filters by municipality).
       allow get, list: if isSignedIn();
-      allow create: if (isQrCheckInOwner() && isValidGroupCheckIn()) || isLguStaff();
+      allow create: if (isQrCheckInOwner() && isValidGroupCheckIn())
+                    || isLaagMemberCheckIn()
+                    || isLguStaff();
       allow update: if isSignedIn()
                     && (resource.data.get('tourist_id', '') == request.auth.uid
                         || isLguStaff());
@@ -258,6 +337,12 @@ service cloud.firestore {
       allow create: if isCheckInOwner() || isLguStaff();
       allow update: if false;
       allow delete: if isLguStaff();
+    }
+
+    /// Landing page total only. No names, emails, or other tourist fields.
+    match /public_stats/landing {
+      allow read: if true;
+      allow write: if false;
     }
 
     match /tourist_spots/{spotId} {
@@ -481,6 +566,77 @@ service cloud.firestore {
 
     match /establishment_stay_reviews/{reviewId} {
       allow read, delete: if isLguStaff();
+    }
+
+    /// Which municipality already has an LGU tourism office.
+    /// Signup reads this while logged out. User profiles are not modified.
+    match /lgu_offices/{municipalityId} {
+      allow read: if true;
+      allow create: if isSignedIn()
+        && lguCatalogName(municipalityId).size() > 0
+        && request.resource.data.keys().hasOnly([
+          'municipalityId', 'municipality', 'holderUid'
+        ])
+        && request.resource.data.municipalityId == municipalityId
+        && request.resource.data.municipality == lguCatalogName(municipalityId)
+        && request.resource.data.holderUid is string
+        && request.resource.data.holderUid.size() > 0
+        && (
+          request.resource.data.holderUid == request.auth.uid
+          || isProvincialStaff()
+        )
+        && exists(/databases/$(database)/documents/users/$(request.resource.data.holderUid))
+        && isLguOfficeRole(
+          get(/databases/$(database)/documents/users/$(request.resource.data.holderUid)).data.get('role', '')
+        )
+        && holderOwnsLguOffice(
+          request.resource.data.holderUid,
+          municipalityId
+        );
+      allow update, delete: if false;
+    }
+
+    /// Trip Planner catalogs the Governor edits from the dashboard.
+    match /featured_spots/{docId} {
+      allow read: if true;
+      allow write: if isLguStaff();
+    }
+
+    match /events/{docId} {
+      allow read: if true;
+      allow write: if isLguStaff();
+    }
+
+    match /transportation_fees/{docId} {
+      allow read: if true;
+      allow write: if isLguStaff();
+    }
+
+    match /hub_spot_transport_fees/{docId} {
+      allow read: if true;
+      allow write: if isLguStaff();
+    }
+
+    match /municipal_road_distances/{docId} {
+      allow read: if true;
+      allow write: if isLguStaff();
+    }
+
+    /// Custom tourist-spot categories created from Add QR Code.
+    match /spot_categories/{categoryId} {
+      allow read: if true;
+      allow create: if isLguStaff()
+        && request.resource.data.keys().hasAll(['name', 'nameKey', 'createdByUid'])
+        && request.resource.data.name is string
+        && request.resource.data.nameKey is string
+        && request.resource.data.name.size() >= 2
+        && request.resource.data.name.size() <= 40
+        && request.resource.data.name.lower() != 'all'
+        && request.resource.data.nameKey == categoryId
+        && request.resource.data.nameKey.matches('^[a-z0-9_]+$')
+        && request.resource.data.nameKey.size() >= 2
+        && request.resource.data.createdByUid == request.auth.uid;
+      allow update, delete: if false;
     }
 
     match /{document=**} {

@@ -243,12 +243,31 @@ Future<Uint8List> buildDotReportPdfBytes({
     }
   }
 
+  // Portrait pages are narrower than the old landscape layout, so wide
+  // forms use a smaller type size and tighter cell padding.
   final bodySize = colCount > 14
-      ? 6.5
+      ? 6.0
       : colCount > 10
-          ? 7.5
-          : 8.5;
+          ? 6.5
+          : colCount > 7
+              ? 7.5
+              : 8.5;
   final headSize = bodySize + 0.3;
+  final cellPadH = colCount > 10 ? 2.0 : 4.0;
+
+  String headerLines(String text) {
+    final parts = text.trim().split(RegExp(r'\s+'));
+    if (parts.length <= 1 || text.trim().length <= 8) return text;
+    return parts.join('\n');
+  }
+
+  int longestWord(String text) {
+    var longest = 0;
+    for (final word in text.split(RegExp(r'\s+'))) {
+      if (word.length > longest) longest = word.length;
+    }
+    return longest;
+  }
 
   pw.Widget cell(
     String text, {
@@ -257,17 +276,17 @@ Future<Uint8List> buildDotReportPdfBytes({
     bool bold = false,
     PdfColor? color,
   }) {
-    final alignRight = numericCols.contains(col);
-    final alignCenter = emptyCols.contains(col);
+    final alignCenter =
+        header || numericCols.contains(col) || emptyCols.contains(col);
+    final shown = header ? headerLines(text) : text;
     return pw.Padding(
-      padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+      padding: pw.EdgeInsets.symmetric(
+        horizontal: cellPadH,
+        vertical: header ? 6 : 3,
+      ),
       child: pw.Text(
-        t(text),
-        textAlign: alignRight
-            ? pw.TextAlign.right
-            : alignCenter
-                ? pw.TextAlign.center
-                : pw.TextAlign.left,
+        t(shown),
+        textAlign: alignCenter ? pw.TextAlign.center : pw.TextAlign.left,
         style: pw.TextStyle(
           fontSize: header ? headSize : bodySize,
           fontWeight:
@@ -282,58 +301,72 @@ Future<Uint8List> buildDotReportPdfBytes({
         for (var c = 0; c < colCount; c++) c < r.length ? r[c] : '',
       ];
 
-  pw.Widget buildTable() {
-    return pw.Table(
-      border: pw.TableBorder(
-        horizontalInside: pw.BorderSide(color: _kBorder, width: 0.5),
-        bottom: pw.BorderSide(color: _kBorder, width: 0.5),
+  final columnWidths = <int, pw.TableColumnWidth>{
+    for (var c = 0; c < colCount; c++)
+      c: pw.FlexColumnWidth(
+        c == 0
+            ? 2.6
+            : numericCols.contains(c) || emptyCols.contains(c)
+                ? (longestWord(preview.headers[c]) >= 8 ? 1.7 : 1.15)
+                : 1.7,
       ),
-      defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
-      columnWidths: {
-        for (var c = 0; c < colCount; c++)
-          c: pw.FlexColumnWidth(
-            numericCols.contains(c) || emptyCols.contains(c)
-                ? 1
-                : c == 0
-                    ? 3.2
-                    : 1.8,
-          ),
-      },
+  };
+
+  pw.Widget buildTable() {
+    return pw.Column(
       children: [
-        pw.TableRow(
-          repeat: true,
-          decoration: pw.BoxDecoration(color: _kAccent),
+        pw.Table(
+          border: const pw.TableBorder(
+            verticalInside: pw.BorderSide(color: PdfColors.white, width: 0.9),
+          ),
+          defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
+          columnWidths: columnWidths,
           children: [
-            for (var c = 0; c < colCount; c++)
-              cell(
-                preview.headers[c],
-                col: c,
-                header: true,
-                color: PdfColors.white,
+            pw.TableRow(
+              decoration: pw.BoxDecoration(color: _kAccent),
+              children: [
+                for (var c = 0; c < colCount; c++)
+                  cell(
+                    preview.headers[c],
+                    col: c,
+                    header: true,
+                    color: PdfColors.white,
+                  ),
+              ],
+            ),
+          ],
+        ),
+        pw.Table(
+          border: pw.TableBorder(
+            horizontalInside: pw.BorderSide(color: _kBorder, width: 0.5),
+            bottom: pw.BorderSide(color: _kBorder, width: 0.5),
+          ),
+          defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
+          columnWidths: columnWidths,
+          children: [
+            for (var i = 0; i < preview.rows.length; i++)
+              pw.TableRow(
+                decoration: i.isOdd ? pw.BoxDecoration(color: _kZebra) : null,
+                children: [
+                  for (final (c, v) in padRow(preview.rows[i]).indexed)
+                    cell(v, col: c),
+                ],
+              ),
+            if (preview.footer != null)
+              pw.TableRow(
+                decoration: pw.BoxDecoration(
+                  color: _kAccentSoft,
+                  border: pw.Border(
+                    top: pw.BorderSide(color: _kAccentLine, width: 1),
+                  ),
+                ),
+                children: [
+                  for (final (c, v) in padRow(preview.footer!).indexed)
+                    cell(v, col: c, bold: true),
+                ],
               ),
           ],
         ),
-        for (var i = 0; i < preview.rows.length; i++)
-          pw.TableRow(
-            decoration: i.isOdd ? pw.BoxDecoration(color: _kZebra) : null,
-            children: [
-              for (final (c, v) in padRow(preview.rows[i]).indexed)
-                cell(v, col: c),
-            ],
-          ),
-        if (preview.footer != null)
-          pw.TableRow(
-            decoration: pw.BoxDecoration(
-              color: _kAccentSoft,
-              border: pw.Border(
-                top: pw.BorderSide(color: _kAccentLine, width: 1),
-              ),
-            ),
-            children: [
-              for (final (c, v) in padRow(preview.footer!).indexed)
-                cell(v, col: c, bold: true),
-            ],
-          ),
       ],
     );
   }
@@ -489,7 +522,7 @@ Future<Uint8List> buildDotReportPdfBytes({
 
   doc.addPage(
     pw.MultiPage(
-      pageFormat: paperSize.pageFormat.landscape,
+      pageFormat: paperSize.pageFormat,
       margin: const pw.EdgeInsets.fromLTRB(30, 26, 30, 22),
       header: (context) =>
           context.pageNumber == 1 ? firstPageHeader() : continuationHeader(),

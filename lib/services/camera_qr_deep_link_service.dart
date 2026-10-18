@@ -98,7 +98,7 @@ class CameraQrDeepLinkService {
     final role = await SessionStorage.getStoredRole();
 
     if (uid == null || uid.isEmpty || user == null) {
-      nav.pushNamedAndRemoveUntil('/qr-welcome', (r) => false);
+      nav.pushNamedAndRemoveUntil('/login', (r) => false);
       return;
     }
 

@@ -1,6 +1,7 @@
 import 'dart:async' show unawaited;
 
 import 'package:atmos_trs_system/config/qr_scan_geofence_config.dart';
+import 'package:atmos_trs_system/models/visit_origin_breakdown.dart';
 import 'package:atmos_trs_system/services/notification_firestore_service.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
@@ -91,6 +92,7 @@ class PendingCheckinCompletionService {
       maleCount: spot.maleCount,
       filipinoCount: spot.filipinoCount,
       foreignCount: spot.foreignCount,
+      originBreakdown: VisitOriginBreakdown.tryParse(spot.originJson)?.toMap(),
     );
     switch (result) {
       case QRCheckInSuccess(:final welcomeMessage):
@@ -167,6 +169,7 @@ class PendingCheckinCompletionService {
       maleCount: lgu.maleCount,
       filipinoCount: lgu.filipinoCount,
       foreignCount: lgu.foreignCount,
+      originBreakdown: VisitOriginBreakdown.tryParse(lgu.originJson)?.toMap(),
     );
     switch (result) {
       case QRCheckInSuccess(:final welcomeMessage):

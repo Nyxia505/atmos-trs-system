@@ -109,16 +109,17 @@ const List<AppFaqItem> kAppFaqItems = [
     question: 'What is my Tourist QR code?',
     keywords: ['qr', 'qr code', 'tourist id', 'digital id'],
     answer:
-        'Your Tourist QR code is your unique digital ID in ATMOS-TRS. Open Account (Profile) '
-        'to view or show it at check-in. Staff or spot scanners use it to record your visit.',
+        'Your Tourist QR code is your unique digital tourist ID in ATMOS-TRS. Open Account '
+        'to view it. Check-in is separate: while you are signed in, scan the QR shown at '
+        'the tourist spot or municipality.',
     answerFil:
-        'Ang Tourist QR code ay iyong unique digital ID sa ATMOS-TRS. Buksan ang Account '
-        '(Profile) para makita o ipakita sa check-in. Ginagamit ito ng staff o scanner '
-        'para i-record ang visit mo.',
+        'Ang Tourist QR code ay iyong unique digital tourist ID sa ATMOS-TRS. Buksan ang Account '
+        'para makita ito. Hiwalay ang check-in: habang naka-sign in ka, i-scan ang QR na '
+        'ipinapakita sa tourist spot o municipality.',
     answerCeb:
-        'Ang Tourist QR code mao ang imong unique digital ID sa ATMOS-TRS. Ablihi ang Account '
-        '(Profile) aron makita o ipakita sa check-in. Gigamit kini sa staff o scanner aron '
-        'i-record ang imong visit.',
+        'Ang Tourist QR code mao ang imong unique digital tourist ID sa ATMOS-TRS. Ablihi ang '
+        'Account aron makita kini. Lahi ang check-in: samtang naka-sign in ka, i-scan ang QR '
+        'nga gipakita sa tourist spot o municipality.',
   ),
   AppFaqItem(
     icon: Icons.qr_code_scanner_rounded,
@@ -126,22 +127,22 @@ const List<AppFaqItem> kAppFaqItems = [
     keywords: ['check in', 'checkin', 'check-in', 'scan', 'mag check in'],
     answer:
         'To check in:\n'
-        '1. Go to the tourist spot or LGU checkpoint\n'
-        '2. Either show your personal QR (Profile) OR scan the spot QR via the Scan tab\n'
-        '3. Allow location if asked\n'
-        '4. Follow on-screen steps — your visit is saved automatically',
+        '1. Sign in to your tourist account\n'
+        '2. Go to the tourist spot or municipality\n'
+        '3. Open the Scan tab and scan the place QR shown there\n'
+        '4. Allow location if asked — your visit is saved automatically',
     answerFil:
         'Para mag-check in:\n'
-        '1. Pumunta sa tourist spot o LGU checkpoint\n'
-        '2. Ipakita ang personal QR (Profile) O i-scan ang spot QR sa Scan tab\n'
-        '3. Payagan ang location kung hihingin\n'
-        '4. Sundin ang steps — awtomatikong mase-save ang visit',
+        '1. Mag-sign in sa tourist account mo\n'
+        '2. Pumunta sa tourist spot o municipality\n'
+        '3. Buksan ang Scan tab at i-scan ang place QR na nandoon\n'
+        '4. Payagan ang location kung hihingin — awtomatikong mase-save ang visit',
     answerCeb:
         'Para mag-check in:\n'
-        '1. Adto sa tourist spot o LGU checkpoint\n'
-        '2. Ipakita ang personal QR (Profile) O i-scan ang spot QR sa Scan tab\n'
-        '3. Tugoti ang location kung gikinahanglan\n'
-        '4. Sunda ang steps — automatic nga ma-save ang visit',
+        '1. Pag-sign in sa imong tourist account\n'
+        '2. Adto sa tourist spot o municipality\n'
+        '3. Ablihi ang Scan tab ug i-scan ang place QR nga naa didto\n'
+        '4. Tugoti ang location kung gikinahanglan — automatic nga ma-save ang visit',
   ),
   AppFaqItem(
     icon: Icons.logout_rounded,

@@ -14,9 +14,11 @@ class LaagWithFriendsScreen extends StatefulWidget {
 }
 
 class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
-  static const Color _textDark = Color(0xFF111827);
+  Color get _textDark => AppTheme.textPrimary;
   final _codeCtrl = TextEditingController();
+  final _touristIdCtrl = TextEditingController();
   late final Stream<TouristGroup?> _groupStream;
+  late final Stream<List<TouristGroup>> _inviteStream;
   bool _busy = false;
 
   String get _uid => FirebaseAuth.instance.currentUser?.uid ?? '';
@@ -25,6 +27,8 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
   void initState() {
     super.initState();
     _groupStream = TouristGroupService.watchMyActiveGroup();
+    _inviteStream = TouristGroupService.watchMyInvites();
+    TouristGroupService.deliverMyCheckInNotices();
     // Ends / leaves expired groups so the live query stays clean.
     TouristGroupService.myActiveGroup();
   }
@@ -32,6 +36,7 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
   @override
   void dispose() {
     _codeCtrl.dispose();
+    _touristIdCtrl.dispose();
     super.dispose();
   }
 
@@ -63,34 +68,10 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
   }
 
   Future<void> _createGroup() async {
-    final nameCtrl = TextEditingController();
     final name = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Create a group'),
-        content: TextField(
-          controller: nameCtrl,
-          autofocus: true,
-          maxLength: 60,
-          textCapitalization: TextCapitalization.words,
-          decoration: const InputDecoration(
-            labelText: 'Group name',
-            hintText: 'e.g. Barkada Oroquieta Trip',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, nameCtrl.text),
-            child: const Text('Create'),
-          ),
-        ],
-      ),
+      builder: (ctx) => const _CreateGroupDialog(),
     );
-    nameCtrl.dispose();
     if (name == null) return;
     await _run(() async {
       await TouristGroupService.createGroup(name);
@@ -165,7 +146,11 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
         backgroundColor: barBg,
         foregroundColor: barFg,
       ),
-      body: StreamBuilder<TouristGroup?>(
+      body: StreamBuilder<List<TouristGroup>>(
+        stream: _inviteStream,
+        builder: (context, inviteSnap) {
+          final invites = inviteSnap.data ?? const <TouristGroup>[];
+          return StreamBuilder<TouristGroup?>(
         stream: _groupStream,
         builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting &&
@@ -177,9 +162,10 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
             children: [
               ListView(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
-                children: group == null
-                    ? _buildNoGroup()
-                    : _buildGroup(group),
+                children: [
+                  ..._buildInvites(invites),
+                  ...group == null ? _buildNoGroup() : _buildGroup(group),
+                ],
               ),
               if (_busy)
                 const Positioned.fill(
@@ -191,8 +177,78 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
             ],
           );
         },
+      );
+        },
       ),
     );
+  }
+
+  List<Widget> _buildInvites(List<TouristGroup> invites) {
+    if (invites.isEmpty) return const [];
+    final accent = AppTheme.primary;
+    return [
+      for (final group in invites)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: _card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Invitation',
+                  style: TextStyle(
+                    color: accent,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '${group.members[group.leaderUid]?.name ?? 'A friend'} invited you to ${group.name}.',
+                  style: TextStyle(color: _textDark, height: 1.4),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: _busy
+                            ? null
+                            : () => _run(() => TouristGroupService.declineInvite(group)),
+                        child: const Text('Decline'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: _busy
+                            ? null
+                            : () => _run(() async {
+                                  await TouristGroupService.acceptInvite(group);
+                                  _snack('You joined ${group.name}.');
+                                }),
+                        child: const Text('Accept'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+    ];
+  }
+
+  Future<void> _inviteByTouristId(TouristGroup group) async {
+    final raw = _touristIdCtrl.text.trim();
+    if (raw.isEmpty) {
+      _snack('Enter a Tourist ID.', error: true);
+      return;
+    }
+    await _run(() async {
+      await TouristGroupService.inviteByTouristId(group, raw);
+      _touristIdCtrl.clear();
+      _snack('Invitation sent. They need to accept before check-in.');
+    });
   }
 
   Widget _card({required Widget child}) => Container(
@@ -200,7 +256,7 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
         decoration: BoxDecoration(
           color: AppTheme.cardBackground,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
+          border: Border.all(color: AppTheme.border),
         ),
         child: child,
       );
@@ -216,7 +272,7 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
               children: [
                 Icon(Icons.groups_rounded, color: accent, size: 32),
                 const SizedBox(width: 10),
-                const Expanded(
+                Expanded(
                   child: Text(
                     'Travel together, scan once',
                     style: TextStyle(
@@ -257,7 +313,7 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Join a friend\'s group',
               style: TextStyle(
                 fontSize: 16,
@@ -332,7 +388,7 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
                 Expanded(
                   child: Text(
                     group.name,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w800,
                       color: _textDark,
@@ -354,11 +410,12 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
             const SizedBox(height: 12),
             Text(
               leader
-                  ? 'At a tourist spot, scan the spot QR as usual and choose '
-                      '"Check in with ${group.name}" to check in everyone.'
-                  : 'Your group leader checks you in when they scan a spot QR. '
-                      'The visit will appear in your history.',
-              style: const TextStyle(color: _textDark, height: 1.4),
+                  ? 'Scan a destination QR from the home screen. Each person '
+                      'who accepted gets their own check-in, visit, and notification.'
+                  : group.members[_uid]?.isAccepted == false
+                      ? 'Accept the invitation to be included when the leader scans.'
+                      : 'Your group leader checks you in when they scan a destination QR from the home screen.',
+              style: TextStyle(color: _textDark, height: 1.4),
             ),
           ],
         ),
@@ -367,7 +424,7 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
       _card(
         child: Column(
           children: [
-            const Text(
+            Text(
               'Friends scan this in the ATMOS app',
               style: TextStyle(fontWeight: FontWeight.w700, color: _textDark),
             ),
@@ -396,6 +453,36 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
               'Or type this code in Laag with Friends → Join',
               style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 12),
             ),
+            if (leader) ...[
+              const SizedBox(height: 16),
+              Text(
+                'Invite with Tourist ID',
+                style: TextStyle(fontWeight: FontWeight.w700, color: _textDark),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _touristIdCtrl,
+                      textCapitalization: TextCapitalization.characters,
+                      decoration: const InputDecoration(
+                        labelText: 'Tourist ID',
+                        hintText: 'e.g. MO-B1CFA9DD',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onSubmitted: (_) => _inviteByTouristId(group),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  FilledButton(
+                    onPressed: _busy ? null : () => _inviteByTouristId(group),
+                    child: const Text('Invite'),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -404,7 +491,7 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Members',
               style: TextStyle(
                 fontSize: 16,
@@ -413,7 +500,10 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
               ),
             ),
             const SizedBox(height: 6),
-            for (final m in group.orderedMembers)
+            for (final m in [
+              ...group.orderedMembers,
+              ...group.pendingInvites.values,
+            ])
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: CircleAvatar(
@@ -431,15 +521,21 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
                   [
                     if (m.uid == group.leaderUid) 'Leader',
                     if (m.uid == _uid) 'You',
-                    if (m.sex.isNotEmpty) m.sex,
-                    if (m.nationality.isNotEmpty) m.nationality,
+                    m.isAccepted ? 'Accepted' : 'Waiting to accept',
                   ].join(' · '),
                 ),
                 trailing: leader && m.uid != _uid
                     ? IconButton(
-                        tooltip: 'Remove',
+                        tooltip: m.isInvited ? 'Cancel invite' : 'Remove',
                         icon: const Icon(Icons.person_remove_alt_1_rounded),
-                        onPressed: _busy ? null : () => _removeMember(group, m),
+                        onPressed: _busy
+                            ? null
+                            : () => m.isInvited
+                                ? _run(() => TouristGroupService.cancelInvite(
+                                      group,
+                                      m.uid,
+                                    ))
+                                : _removeMember(group, m),
                       )
                     : null,
               ),
@@ -532,5 +628,51 @@ Future<bool> confirmJoinTouristGroup(
       );
     }
     return false;
+  }
+}
+
+/// Owns the name field so it is disposed only after the dialog route unmounts.
+class _CreateGroupDialog extends StatefulWidget {
+  const _CreateGroupDialog();
+
+  @override
+  State<_CreateGroupDialog> createState() => _CreateGroupDialogState();
+}
+
+class _CreateGroupDialogState extends State<_CreateGroupDialog> {
+  final _nameCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Create a group'),
+      content: TextField(
+        controller: _nameCtrl,
+        autofocus: true,
+        maxLength: 60,
+        textCapitalization: TextCapitalization.words,
+        decoration: const InputDecoration(
+          labelText: 'Group name',
+          hintText: 'e.g. Barkada Oroquieta Trip',
+        ),
+        onSubmitted: (value) => Navigator.pop(context, value),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _nameCtrl.text),
+          child: const Text('Create'),
+        ),
+      ],
+    );
   }
 }

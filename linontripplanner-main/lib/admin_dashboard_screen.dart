@@ -88,7 +88,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       case 1:
         return _AnalyticsTab(onChanged: _onGovernorDataChanged);
       case 2:
-        return _FeaturedListTab(onChanged: _onGovernorDataChanged);
+        return AdminFeaturedSpotsTab(onChanged: _onGovernorDataChanged);
       case 3:
         return _SpotsListTab(onChanged: _onGovernorDataChanged);
       case 4:
@@ -1958,30 +1958,33 @@ class _HighRatingSpotsCard extends StatelessWidget {
 
 // ─── Featured list ──────────────────────────────────────────────────────
 
-class _FeaturedListTab extends StatefulWidget {
+/// Featured spots shown on the Trip Planner home banner.
+class AdminFeaturedSpotsTab extends StatefulWidget {
   final VoidCallback onChanged;
 
-  const _FeaturedListTab({required this.onChanged});
+  const AdminFeaturedSpotsTab({super.key, required this.onChanged});
 
   @override
-  State<_FeaturedListTab> createState() => _FeaturedListTabState();
+  State<AdminFeaturedSpotsTab> createState() => _AdminFeaturedSpotsTabState();
 }
 
-class _FeaturedListTabState extends State<_FeaturedListTab> {
+class _AdminFeaturedSpotsTabState extends State<AdminFeaturedSpotsTab> {
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     _loading = featuredSpots.isEmpty;
-    _refresh(silent: featuredSpots.isNotEmpty);
+    _refresh(silent: true);
   }
 
   Future<void> _refresh({bool silent = false}) async {
-    if (!silent && mounted) setState(() => _loading = true);
+    if (!silent && featuredSpots.isEmpty && mounted) {
+      setState(() => _loading = true);
+    }
     try {
       await loadFeaturedSpotsFromFirestore().timeout(
-        const Duration(seconds: 25),
+        const Duration(seconds: 8),
       );
     } catch (e, st) {
       debugPrint('Featured spots load: $e\n$st');
@@ -1992,12 +1995,9 @@ class _FeaturedListTabState extends State<_FeaturedListTab> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const Center(
-        child: CircularProgressIndicator(color: AppColors.primary),
-      );
-    }
-    return RefreshIndicator(
+    return Stack(
+      children: [
+        RefreshIndicator(
       color: AppColors.primary,
       onRefresh: _refresh,
       child: Stack(
@@ -2120,6 +2120,15 @@ class _FeaturedListTabState extends State<_FeaturedListTab> {
         ),
       ],
     ),
+        ),
+        if (_loading)
+          const Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: LinearProgressIndicator(minHeight: 3),
+          ),
+      ],
     );
   }
 }

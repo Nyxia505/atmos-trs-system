@@ -34,6 +34,12 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // This PC's Gradle metaspace is capped so R8 can finish. Release lint
+    // (app_links) hits that cap and is not part of the APK.
+    lint {
+        checkReleaseBuilds = false
+    }
 }
 
 flutter {

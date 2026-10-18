@@ -1,3 +1,4 @@
+import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:flutter/material.dart';
 
 /// A reusable, modern search bar widget with rounded design and optional microphone icon.
@@ -12,7 +13,7 @@ class AppSearchBar extends StatelessWidget {
     this.onMicPressed,
     this.showMicrophone = true,
     this.showShadow = true,
-    this.backgroundColor = Colors.white,
+    this.backgroundColor,
     this.height = 50,
     this.autofocus = false,
     this.enabled = true,
@@ -28,7 +29,7 @@ class AppSearchBar extends StatelessWidget {
   final VoidCallback? onMicPressed;
   final bool showMicrophone;
   final bool showShadow;
-  final Color backgroundColor;
+  final Color? backgroundColor;
   final double height;
   final bool autofocus;
   final bool enabled;
@@ -51,6 +52,9 @@ class AppSearchBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final radius = height / 2;
     final padding = _getHorizontalPadding(context);
+    final fill = backgroundColor ?? AppTheme.cardBackground;
+    final ink = AppTheme.textPrimary;
+    final muted = AppTheme.unselectedMuted;
 
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: padding),
@@ -58,10 +62,10 @@ class AppSearchBar extends StatelessWidget {
         width: double.infinity,
         height: height,
         decoration: BoxDecoration(
-          color: backgroundColor,
+          color: fill,
           borderRadius: BorderRadius.circular(radius),
           border: Border.all(
-            color: borderColor ?? Colors.grey.shade300,
+            color: borderColor ?? AppTheme.border,
             width: 1,
           ),
           boxShadow: customShadow ?? (showShadow
@@ -77,14 +81,14 @@ class AppSearchBar extends StatelessWidget {
         child: Row(
           children: [
             const SizedBox(width: 16),
-            Icon(Icons.search_rounded, color: Colors.grey.shade500, size: 22),
+            Icon(Icons.search_rounded, color: muted, size: 22),
             const SizedBox(width: 12),
             Expanded(
               child: Theme(
-                data: ThemeData(
+                data: Theme.of(context).copyWith(
                   textSelectionTheme: TextSelectionThemeData(
-                    cursorColor: Colors.grey.shade600,
-                    selectionColor: Colors.orange.withOpacity(0.3),
+                    cursorColor: AppTheme.primary,
+                    selectionColor: AppTheme.primary.withValues(alpha: 0.3),
                   ),
                 ),
                 child: TextField(
@@ -93,15 +97,15 @@ class AppSearchBar extends StatelessWidget {
                   onSubmitted: onSubmitted,
                   autofocus: autofocus,
                   enabled: enabled,
-                  cursorColor: Colors.grey.shade600,
-                  style: const TextStyle(
-                    color: Color(0xFF1F2937),
+                  cursorColor: AppTheme.primary,
+                  style: TextStyle(
+                    color: ink,
                     fontSize: 15,
                     fontWeight: FontWeight.w400,
                   ),
                   decoration: InputDecoration(
                     hintText: hintText,
-                    hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 15),
+                    hintStyle: TextStyle(color: muted, fontSize: 15),
                     border: InputBorder.none,
                     enabledBorder: InputBorder.none,
                     focusedBorder: InputBorder.none,
@@ -122,7 +126,7 @@ class AppSearchBar extends StatelessWidget {
                   padding: const EdgeInsets.all(8),
                   child: Icon(
                     Icons.mic_none_rounded,
-                    color: Colors.grey.shade500,
+                    color: muted,
                     size: 22,
                   ),
                 ),
@@ -137,7 +141,7 @@ class AppSearchBar extends StatelessWidget {
                   padding: const EdgeInsets.all(8),
                   child: Icon(
                     Icons.close_rounded,
-                    color: Colors.grey.shade500,
+                    color: muted,
                     size: 20,
                   ),
                 ),

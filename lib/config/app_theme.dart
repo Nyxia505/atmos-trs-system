@@ -23,19 +23,25 @@ class AppTheme {
   static bool get isDark => _c.isDarkMode;
 
   static Color get scaffoldBackground =>
-      isDark ? const Color(0xFF0F172A) : const Color(0xFFFFFFFF);
-
-  static Color get pageBackground =>
       isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
 
+  static Color get pageBackground => scaffoldBackground;
+
   static Color get cardBackground =>
-      isDark ? const Color(0xFF1E293B) : Colors.white;
+      isDark ? const Color(0xFF1E293B) : const Color(0xFFFFFFFF);
+
+  /// Slightly raised surface for chips, inputs, and nested panels.
+  static Color get surfaceMuted =>
+      isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9);
+
+  static Color get border =>
+      isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
 
   static Color get textPrimary =>
-      isDark ? const Color(0xFFF1F5F9) : const Color(0xFF111827);
+      isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
 
   static Color get unselectedMuted =>
-      isDark ? const Color(0xFF94A3B8) : const Color(0xFF6B7280);
+      isDark ? const Color(0xFFCBD5E1) : const Color(0xFF475569);
 
   static Color get gradientOrange => primary;
   static const Color gradientDarkBlue = Color(0xFF0A1628);
@@ -66,13 +72,14 @@ class AppTheme {
         ? const Color(0xFF111827)
         : Colors.white;
 
-    final surface = isDarkTheme ? const Color(0xFF1E293B) : Colors.white;
-    final scaffold = isDarkTheme ? const Color(0xFF0F172A) : const Color(0xFFFFFFFF);
-    final onSurface = isDarkTheme ? const Color(0xFFF1F5F9) : const Color(0xFF111827);
-    final muted = isDarkTheme ? const Color(0xFF94A3B8) : const Color(0xFF6B7280);
+    final surface = isDarkTheme ? const Color(0xFF1E293B) : const Color(0xFFFFFFFF);
+    final scaffold = isDarkTheme ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
+    final onSurface = isDarkTheme ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
+    final muted = isDarkTheme ? const Color(0xFFCBD5E1) : const Color(0xFF475569);
     final surfaceHigh =
-        isDarkTheme ? const Color(0xFF334155) : const Color(0xFFF9FAFB);
-    final inputFill = isDarkTheme ? const Color(0xFF1E293B) : Colors.white;
+        isDarkTheme ? const Color(0xFF334155) : const Color(0xFFF1F5F9);
+    final hairline = isDarkTheme ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+    final inputFill = surface;
 
     final scheme = ColorScheme.fromSeed(
       seedColor: seed,
@@ -83,8 +90,9 @@ class AppTheme {
       onSecondary: Colors.white,
       surface: surface,
       onSurface: onSurface,
+      onSurfaceVariant: muted,
       surfaceContainerHighest: surfaceHigh,
-      outline: muted.withValues(alpha: 0.45),
+      outline: hairline,
     );
 
     final baseText = ThemeData(
@@ -148,7 +156,7 @@ class AppTheme {
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(
-            color: muted.withValues(alpha: isDarkTheme ? 0.35 : 0.25),
+            color: hairline,
           ),
         ),
         focusedBorder: OutlineInputBorder(
@@ -189,9 +197,9 @@ class AppTheme {
         ),
       ),
       bottomNavigationBarTheme: BottomNavigationBarThemeData(
-        backgroundColor: isDarkTheme ? const Color(0xFF1E293B) : Colors.white,
+        backgroundColor: surface,
         selectedItemColor: seed,
-        unselectedItemColor: isDarkTheme ? const Color(0xFF64748B) : const Color(0xFF9CA3AF),
+        unselectedItemColor: muted,
         type: BottomNavigationBarType.fixed,
       ),
       dividerTheme: DividerThemeData(
@@ -224,9 +232,13 @@ class AppTheme {
       ),
       iconTheme: IconThemeData(color: muted, size: 24),
       primaryIconTheme: IconThemeData(color: seed, size: 24),
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: surface,
+        modalBackgroundColor: surface,
+      ),
       snackBarTheme: SnackBarThemeData(
-        backgroundColor: isDarkTheme ? const Color(0xFF334155) : const Color(0xFF111827),
-        contentTextStyle: const TextStyle(color: Colors.white),
+        backgroundColor: isDarkTheme ? const Color(0xFF334155) : const Color(0xFF0F172A),
+        contentTextStyle: const TextStyle(color: Color(0xFFF8FAFC)),
         behavior: SnackBarBehavior.floating,
         actionTextColor: primaryLight,
       ),

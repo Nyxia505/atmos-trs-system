@@ -7,16 +7,17 @@ class GovernorQuickActions extends StatelessWidget {
     required this.onAddMunicipality,
     required this.onExportReport,
     required this.onViewAnalytics,
+    required this.onManageSpots,
   });
 
   final VoidCallback onAddMunicipality;
   final VoidCallback onExportReport;
   final VoidCallback onViewAnalytics;
+  final VoidCallback onManageSpots;
 
   @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    final wrap = width < 980;
+    final wrap = MediaQuery.sizeOf(context).width < 1100;
 
     final actions = [
       _ActionSpec(
@@ -27,7 +28,7 @@ class GovernorQuickActions extends StatelessWidget {
       ),
       _ActionSpec(
         label: 'Export Report',
-        icon: Icons.download_rounded,
+        icon: Icons.file_download_outlined,
         onTap: onExportReport,
       ),
       _ActionSpec(
@@ -35,53 +36,85 @@ class GovernorQuickActions extends StatelessWidget {
         icon: Icons.bar_chart_rounded,
         onTap: onViewAnalytics,
       ),
+      _ActionSpec(
+        label: 'Manage Tourist Spots',
+        icon: Icons.place_outlined,
+        onTap: onManageSpots,
+      ),
     ];
+
+    final buttons = Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      alignment: WrapAlignment.end,
+      children: [for (final action in actions) _ActionButton(spec: action)],
+    );
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: GovernorDashboardTokens.card,
-        borderRadius: BorderRadius.circular(GovernorDashboardTokens.radiusCard),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: GovernorDashboardTokens.border),
         boxShadow: GovernorDashboardTokens.cardShadow,
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Quick Actions',
-            style: GovernorDashboardTokens.sectionTitle(size: 14),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            'Common tasks for faster management.',
-            style: GovernorDashboardTokens.body(size: 12),
-          ),
-          const SizedBox(height: 12),
-          if (wrap)
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
+      child: wrap
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                for (final a in actions)
-                  SizedBox(
-                    width: width < 520 ? double.infinity : (width - 72) / 2,
-                    child: _ActionButton(spec: a),
-                  ),
+                const _QuickTitle(),
+                const SizedBox(height: 12),
+                buttons,
               ],
             )
-          else
-            Row(
+          : Row(
               children: [
-                for (var i = 0; i < actions.length; i++) ...[
-                  if (i > 0) const SizedBox(width: 10),
-                  Expanded(child: _ActionButton(spec: actions[i])),
-                ],
+                const _QuickTitle(),
+                const SizedBox(width: 16),
+                Expanded(child: Align(alignment: Alignment.centerRight, child: buttons)),
               ],
             ),
-        ],
-      ),
+    );
+  }
+}
+
+class _QuickTitle extends StatelessWidget {
+  const _QuickTitle();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: GovernorDashboardTokens.softOrange,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Icon(
+            Icons.bolt_rounded,
+            color: GovernorDashboardTokens.primary,
+            size: 20,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Quick Actions',
+              style: GovernorDashboardTokens.sectionTitle(size: 14),
+            ),
+            Text(
+              'Common tasks for faster management.',
+              style: GovernorDashboardTokens.body(size: 11.5),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
@@ -121,48 +154,42 @@ class _ActionButtonState extends State<_ActionButton> {
         color: Colors.transparent,
         child: InkWell(
           onTap: widget.spec.onTap,
-          borderRadius:
-              BorderRadius.circular(GovernorDashboardTokens.radiusMd),
+          borderRadius: BorderRadius.circular(24),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 160),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(
               gradient: primary ? GovernorDashboardTokens.primaryGradient : null,
               color: primary
                   ? null
                   : (_hovered
                       ? GovernorDashboardTokens.softOrange
-                      : GovernorDashboardTokens.mutedSurface),
-              borderRadius:
-                  BorderRadius.circular(GovernorDashboardTokens.radiusMd),
-              border: primary
-                  ? null
-                  : Border.all(color: GovernorDashboardTokens.border),
-              boxShadow: _hovered
-                  ? GovernorDashboardTokens.cardShadowHover
-                  : const [],
+                      : Colors.white),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: primary
+                    ? Colors.transparent
+                    : GovernorDashboardTokens.border,
+              ),
             ),
             child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
                   widget.spec.icon,
-                  size: 18,
+                  size: 16,
                   color: primary
                       ? Colors.white
-                      : GovernorDashboardTokens.primaryDark,
+                      : GovernorDashboardTokens.text,
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    widget.spec.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: GovernorDashboardTokens.sectionTitle(
-                      size: 12.5,
-                      color: primary
-                          ? Colors.white
-                          : GovernorDashboardTokens.text,
-                    ),
+                const SizedBox(width: 6),
+                Text(
+                  widget.spec.label,
+                  style: GovernorDashboardTokens.sectionTitle(
+                    size: 12.5,
+                    color: primary
+                        ? Colors.white
+                        : GovernorDashboardTokens.text,
                   ),
                 ),
               ],

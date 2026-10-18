@@ -10,6 +10,7 @@ import 'package:atmos_trs_system/utils/ae_register_calculator.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/widgets/ae_register/ae_register_viewer_screen.dart';
 import 'package:atmos_trs_system/widgets/ae_register/ae_sheet_kit.dart';
+import 'package:atmos_trs_system/widgets/atmos_table_kit.dart';
 
 enum _RegStatus { submitted, draft, missing }
 
@@ -436,14 +437,13 @@ class _AeRegisterCompliancePanelState extends State<AeRegisterCompliancePanel> {
           runSpacing: gap,
           children: [
             for (final k in cards)
-              Container(
+              SizedBox(
                 width: w,
+                child: AtmosHoverLift(
+                  restColor: k.$4.withValues(alpha: 0.06),
+                  restBorderColor: k.$4.withValues(alpha: 0.22),
+                  child: Padding(
                 padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: k.$4.withValues(alpha: 0.06),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: k.$4.withValues(alpha: 0.22)),
-                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -470,6 +470,8 @@ class _AeRegisterCompliancePanelState extends State<AeRegisterCompliancePanel> {
                       ),
                     ),
                   ],
+                ),
+                  ),
                 ),
               ),
           ],
@@ -517,98 +519,74 @@ class _AeRegisterCompliancePanelState extends State<AeRegisterCompliancePanel> {
   }
 
   Widget _table(List<_ComplianceLine> lines) {
-    final head = TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: widget.textMuted);
     final cell = TextStyle(fontSize: 12.5, color: widget.textDark);
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: DataTable(
-          headingRowHeight: 40,
-          dataRowMinHeight: 44,
-          dataRowMaxHeight: 56,
-          columnSpacing: 22,
-          headingRowColor: WidgetStateProperty.all(const Color(0xFFF8FAFC)),
-          border: TableBorder(horizontalInside: BorderSide(color: _kBorder.withValues(alpha: 0.8))),
-          columns: [
-            DataColumn(label: Text('Establishment', style: head)),
-            DataColumn(label: Text('Status', style: head)),
-            DataColumn(label: Text('Days filled', style: head), numeric: true),
-            DataColumn(label: Text('Rooms', style: head), numeric: true),
-            DataColumn(label: Text('Occupancy', style: head), numeric: true),
-            DataColumn(label: Text('ALOS', style: head), numeric: true),
-            DataColumn(label: Text('Guest-nights', style: head), numeric: true),
-            DataColumn(label: Text('Sales', style: head), numeric: true),
-            DataColumn(label: Text('MICE (CUS)', style: head)),
-            DataColumn(label: Text('', style: head)),
-          ],
-          rows: [
-            for (final l in lines)
-              DataRow(
-                cells: [
-                  DataCell(
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 260),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            l.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: cell.copyWith(fontWeight: FontWeight.w700),
-                          ),
-                          Text(
-                            [
-                              if (l.category.isNotEmpty) l.category,
-                              if (_province && l.municipality.isNotEmpty) l.municipality,
-                            ].join(' · '),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(fontSize: 11.5, color: widget.textMuted),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  DataCell(_statusChip(l)),
-                  DataCell(
-                    Text(l.report == null ? '—' : '${l.report!.totals.filledDays}/${l.report!.days}', style: cell),
-                  ),
-                  DataCell(Text(l.rooms > 0 ? '${l.rooms}' : '—', style: cell)),
-                  DataCell(
-                    Text(
-                      l.status == _RegStatus.missing
-                          ? '—'
-                          : AeRegisterCalculator.pct(l.report!.totals.occupancyRate, digits: 1),
-                      style: cell,
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      l.status == _RegStatus.missing ? '—' : AeRegisterCalculator.dec(l.report!.totals.alos),
-                      style: cell,
-                    ),
-                  ),
-                  DataCell(Text(l.status == _RegStatus.missing ? '—' : '${l.report!.totals.guestNights}', style: cell)),
-                  DataCell(
-                    Text(l.status == _RegStatus.missing ? '—' : _peso(l.report!.totals.grandTotalSales), style: cell),
-                  ),
-                  DataCell(_miceCell(l, cell)),
-                  DataCell(
-                    TextButton.icon(
-                      onPressed: () => _open(l),
-                      icon: const Icon(Icons.open_in_new_rounded, size: 16),
-                      label: const Text('Open'),
-                      style: TextButton.styleFrom(foregroundColor: widget.primaryColor),
-                    ),
-                  ),
-                ],
+    Widget num(String value) => Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.right,
+          style: cell,
+        );
+    return AtmosResponsiveTable(
+      columns: const [
+        AtmosTableColumn('Establishment', flex: 3, minWidth: 180),
+        AtmosTableColumn('Status', minWidth: 108),
+        AtmosTableColumn('Days filled', minWidth: 96, align: Alignment.centerRight),
+        AtmosTableColumn('Rooms', minWidth: 72, align: Alignment.centerRight),
+        AtmosTableColumn('Occupancy', minWidth: 96, align: Alignment.centerRight),
+        AtmosTableColumn('ALOS', minWidth: 72, align: Alignment.centerRight),
+        AtmosTableColumn('Guest-nights', minWidth: 112, align: Alignment.centerRight),
+        AtmosTableColumn('Sales', minWidth: 96, align: Alignment.centerRight),
+        AtmosTableColumn('MICE (CUS)', minWidth: 128),
+        AtmosTableColumn('Open', minWidth: 108, flex: 1),
+      ],
+      rows: [
+        for (final l in lines)
+          [
+            Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  l.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: cell.copyWith(fontWeight: FontWeight.w700),
+                ),
+                Text(
+                  [
+                    if (l.category.isNotEmpty) l.category,
+                    if (_province && l.municipality.isNotEmpty) l.municipality,
+                  ].join(' · '),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 11.5, color: widget.textMuted),
+                ),
+              ],
+            ),
+            _statusChip(l),
+            num(l.report == null ? '—' : '${l.report!.totals.filledDays}/${l.report!.days}'),
+            num(l.rooms > 0 ? '${l.rooms}' : '—'),
+            num(
+              l.status == _RegStatus.missing
+                  ? '—'
+                  : AeRegisterCalculator.pct(l.report!.totals.occupancyRate, digits: 1),
+            ),
+            num(l.status == _RegStatus.missing ? '—' : AeRegisterCalculator.dec(l.report!.totals.alos)),
+            num(l.status == _RegStatus.missing ? '—' : '${l.report!.totals.guestNights}'),
+            num(l.status == _RegStatus.missing ? '—' : _peso(l.report!.totals.grandTotalSales)),
+            _miceCell(l, cell),
+            TextButton.icon(
+              onPressed: () => _open(l),
+              icon: const Icon(Icons.open_in_new_rounded, size: 16),
+              label: const Text('Open'),
+              style: TextButton.styleFrom(
+                foregroundColor: widget.primaryColor,
+                visualDensity: VisualDensity.compact,
               ),
+            ),
           ],
-        ),
-      ),
+      ],
     );
   }
 

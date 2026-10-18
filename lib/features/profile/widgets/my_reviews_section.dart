@@ -9,7 +9,7 @@ import 'package:flutter/material.dart';
 class MyReviewsSection extends StatelessWidget {
   const MyReviewsSection({super.key});
 
-  static const Color _textMuted = Color(0xFF6B7280);
+  static Color get _textMuted => AppTheme.unselectedMuted;
 
   void _openAll(BuildContext context) {
     Navigator.of(context).push<void>(
@@ -70,15 +70,17 @@ class MyReviewsSection extends StatelessWidget {
             ],
             Align(
               alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: loading ? null : () => _openAll(context),
-                icon: const Icon(Icons.arrow_forward_rounded, size: 18),
-                label: Text(
-                  reviews.isEmpty
-                      ? 'View my reviews'
-                      : 'View all ${reviews.length} review${reviews.length == 1 ? '' : 's'}',
+              child: TextButton(
+                onPressed: () => _openAll(context),
+                style: TextButton.styleFrom(
+                  foregroundColor: accent,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  textStyle: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                  ),
                 ),
-                style: TextButton.styleFrom(foregroundColor: accent),
+                child: const Text('View All Reviews'),
               ),
             ),
           ],
@@ -97,35 +99,40 @@ class _ReviewPreviewRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 10, 4, 4),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.star_rounded, color: accent, size: 18),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  review.displaySpotName,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  review.comment,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: MyReviewsSection._textMuted,
-                    height: 1.35,
-                  ),
-                ),
-              ],
+          Text(
+            review.displaySpotName,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 15,
+              height: 1.25,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: List.generate(5, (index) {
+              final filled = index < review.rating.round().clamp(0, 5);
+              return Icon(
+                filled ? Icons.star_rounded : Icons.star_outline_rounded,
+                color: accent,
+                size: 16,
+              );
+            }),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            review.comment,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 13,
+              color: MyReviewsSection._textMuted,
+              height: 1.35,
             ),
           ),
         ],

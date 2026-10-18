@@ -12,6 +12,7 @@ import 'package:atmos_trs_system/widgets/laag_group_checkin_toggle.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/widgets/party_demographic_fields.dart';
+import 'package:atmos_trs_system/widgets/visit_origin_breakdown_fields.dart';
 
 /// Check-in after scanning an LGU (municipality) QR — records visit for that LGU in [qr_checkins].
 class LguCheckInScreen extends StatefulWidget {
@@ -37,6 +38,7 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
   static const Color _textMuted = Color(0xFF6B7280);
   bool _submitting = false;
   var _demoKey = GlobalKey<PartyDemographicFieldsState>();
+  var _originKey = GlobalKey<VisitOriginBreakdownFieldsState>();
   PartyDemographicValue _demo = kSoloParty;
   TouristGroup? _group;
   bool _useGroup = true;
@@ -60,6 +62,7 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
       if (_groupMode) {
         _demo = kNoCompanions;
         _demoKey = GlobalKey<PartyDemographicFieldsState>();
+        _originKey = GlobalKey<VisitOriginBreakdownFieldsState>();
       }
     });
   }
@@ -69,6 +72,7 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
       _useGroup = v;
       _demo = _groupMode ? kNoCompanions : kSoloParty;
       _demoKey = GlobalKey<PartyDemographicFieldsState>();
+      _originKey = GlobalKey<VisitOriginBreakdownFieldsState>();
     });
   }
 
@@ -108,7 +112,7 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
           SnackBar(
             content: Text(
               demo.validationMessage ??
-                  'Enter party size with Male/Female and Filipino/Foreign counts.',
+                  'Enter party size with Male and Female counts.',
             ),
             behavior: SnackBarBehavior.floating,
             backgroundColor: Colors.red.shade700,
@@ -116,6 +120,33 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
         );
       }
       return;
+    }
+    Map<String, dynamic>? origin;
+    if (demo.partySize > 0) {
+      final originState = _originKey.currentState;
+      if (originState == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Enter where each person in the party lives.'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        return;
+      }
+      final originError = originState.validate();
+      if (originError != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(originError),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: Colors.red.shade700,
+          ),
+        );
+        return;
+      }
+      origin = originState.value.toMap();
     }
     setState(() => _submitting = true);
     try {
@@ -143,8 +174,9 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
         partySize: demo.partySize,
         femaleCount: demo.femaleCount,
         maleCount: demo.maleCount,
-        filipinoCount: demo.filipinoCount,
-        foreignCount: demo.foreignCount,
+        filipinoCount: origin == null ? demo.filipinoCount : 0,
+        foreignCount: origin == null ? demo.foreignCount : 0,
+        originBreakdown: origin,
         group: _groupMode ? _group : null,
         isDemoQr: widget.isDemoQr,
         onBeforeDialog: _clearSubmitting,
@@ -390,8 +422,8 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
           Text(
             _groupMode
                 ? kCompanionsHelpText
-                : 'Enter total guests, then gender and Filipino/Foreign. '
-                    'One side auto-fills the other. Include yourself.',
+                : 'Enter the party size and male/female counts, then '
+                    'where each person lives. Include yourself.',
             style: const TextStyle(color: _textMuted, fontSize: 13, height: 1.4),
           ),
           const SizedBox(height: 12),
@@ -407,8 +439,20 @@ class _LguCheckInScreenState extends State<LguCheckInScreen> {
             partyHelperText: _groupMode
                 ? 'People with you who don\'t have the app (0 if none)'
                 : 'Total guests in this stay / visit',
+            showResidency: false,
             onChanged: (v) => setState(() => _demo = v),
           ),
+          if (_demo.partySize > 0) ...[
+            const SizedBox(height: 16),
+            VisitOriginBreakdownFields(
+              key: _originKey,
+              spotMunicipality: widget.displayName,
+              partySize: _demo.partySize,
+              maleCount: _demo.maleCount,
+              femaleCount: _demo.femaleCount,
+              prefillScanner: !_groupMode,
+            ),
+          ],
         ],
       ),
     );

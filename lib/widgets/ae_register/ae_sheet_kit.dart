@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import 'package:atmos_trs_system/widgets/atmos_table_kit.dart';
 import 'package:atmos_trs_system/widgets/establishment_dash_tokens.dart';
 
 /// Spreadsheet-like building blocks shared by the register sheets.
@@ -76,8 +77,9 @@ class AeCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scale = AeSheetScale.of(context);
     return Container(
-      width: width,
+      width: width * scale,
       height: height,
       padding: const EdgeInsets.symmetric(horizontal: 6),
       alignment: switch (align) {
@@ -113,25 +115,70 @@ class AeSheetFrame extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AeSheetKit.grid),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(minWidth: minWidth),
-          child: Container(
-            decoration: const BoxDecoration(
-              border: Border(left: BorderSide(color: AeSheetKit.grid)),
-            ),
-            child: child,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final viewport = constraints.maxWidth;
+        final base = minWidth > 0 ? minWidth : (viewport.isFinite ? viewport : 0);
+        final scale = viewport.isFinite && base > 0 && viewport > base ? viewport / base : 1.0;
+        final width = base > 0 ? base * scale : null;
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AeSheetKit.grid),
           ),
-        ),
-      ),
+          clipBehavior: Clip.antiAlias,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: width,
+              child: AeSheetScale(
+                scale: scale,
+                child: Container(
+                  decoration: const BoxDecoration(
+                    border: Border(left: BorderSide(color: AeSheetKit.grid)),
+                  ),
+                  child: child,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Scales sheet cells so a register fills the panel when there is spare width.
+class AeSheetScale extends InheritedWidget {
+  const AeSheetScale({super.key, required this.scale, required super.child});
+
+  final double scale;
+
+  static double of(BuildContext context) {
+    final scope = context.dependOnInheritedWidgetOfExactType<AeSheetScale>();
+    return scope?.scale ?? 1;
+  }
+
+  @override
+  bool updateShouldNotify(AeSheetScale oldWidget) => oldWidget.scale != scale;
+}
+
+/// Spreadsheet row that lifts slightly and takes a soft orange wash on hover.
+class AeHoverRow extends StatelessWidget {
+  const AeHoverRow({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return AtmosHoverLift(
+      radius: BorderRadius.zero,
+      restColor: Colors.transparent,
+      restBorderColor: Colors.transparent,
+      borderWidth: 0,
+      lift: 2,
+      child: child,
     );
   }
 }

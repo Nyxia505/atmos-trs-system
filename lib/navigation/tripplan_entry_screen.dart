@@ -1,22 +1,21 @@
 import 'dart:async' show unawaited;
 
+import 'package:atmos_trs_system/navigation/login_route_args.dart';
+import 'package:atmos_trs_system/navigation/post_logout_navigation.dart';
+import 'package:atmos_trs_system/navigation/shared_module_logout.dart';
 import 'package:flutter/material.dart';
-import 'package:video_player/video_player.dart';
-import 'package:atmos_trs_system/widgets/onboarding_hero_video.dart';
-import 'package:trip_plan/admin_dashboard_screen.dart';
-import 'package:trip_plan/data.dart';
-import 'package:trip_plan/main.dart' show TourismAuthGate;
+import 'package:trip_plan/home_screen.dart';
 import 'package:trip_plan/maps_platform_init.dart';
 import 'package:trip_plan/services/tourism_session.dart';
-import 'package:trip_plan/trip_plan_fonts.dart';
-import 'package:trip_plan/trip_plan_routes.dart';
-import 'package:trip_plan/widgets/trip_plan_scenic_background.dart';
+import 'package:trip_plan/theme/tourism_app_theme.dart';
+import 'package:trip_plan/trip_plan_host_bridge.dart';
+import 'package:video_player/video_player.dart';
 
-/// Opens TripPlan auth (login) and, after sign-in, the TripPlan user home dashboard.
+/// Opens the Trip Planner home for a tourist who is already signed in to ATMOS.
 class TripPlanEntryScreen extends StatefulWidget {
   const TripPlanEntryScreen({super.key, this.sharedHeroController});
 
-  /// Landing/onboarding hero player so TripPlan login keeps the same video background.
+  /// Kept so landing can pass the hero player; the planner home does not use it.
   final VideoPlayerController? sharedHeroController;
 
   @override
@@ -29,70 +28,60 @@ class _TripPlanEntryScreenState extends State<TripPlanEntryScreen> {
   @override
   void initState() {
     super.initState();
+    TripPlanHostBridge.embeddedInAtmos = true;
+    TripPlanHostBridge.onSignedOut = signOutSharedModules;
+    TripPlanHostBridge.openSharedLogin = (ctx) {
+      Navigator.of(ctx).pushNamed(
+        '/login',
+        arguments: LoginRouteArgs.forFeature(
+          returnFeature: LoginRouteArgs.featureItinerary,
+        ),
+      );
+    };
+    TripPlanHostBridge.openSharedSignup = (ctx) {
+      final nav = Navigator.of(ctx);
+      nav.pushNamed(
+        '/login',
+        arguments: LoginRouteArgs.forFeature(
+          returnFeature: LoginRouteArgs.featureItinerary,
+        ),
+      );
+      nav.pushNamed(
+        '/signup-tourist',
+        arguments: const {'fromLogin': true, 'loginDepth': 1},
+      );
+    };
+    TripPlanHostBridge.leaveToHost = (ctx) {
+      navigateAfterLogout(ctx);
+    };
     unawaited(_bootstrap());
   }
 
   Future<void> _bootstrap() async {
-    await TripPlanFonts.ensureLoaded();
     unawaited(initMapsForPlatform());
     unawaited(bootstrapAppFirestoreOnce());
     if (mounted) setState(() => _ready = true);
   }
 
-  ThemeData _tripPlanTheme() {
-    return ThemeData(
-      scaffoldBackgroundColor: AppColors.background,
-      colorScheme: ColorScheme.fromSeed(seedColor: AppColors.primary),
-      inputDecorationTheme: InputDecorationTheme(
-        filled: true,
-        fillColor: Colors.white,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: AppColors.primary, width: 1.2),
-        ),
-      ),
-    );
+  @override
+  void dispose() {
+    TripPlanHostBridge.embeddedInAtmos = false;
+    TripPlanHostBridge.onSignedOut = null;
+    TripPlanHostBridge.openSharedLogin = null;
+    TripPlanHostBridge.openSharedSignup = null;
+    TripPlanHostBridge.leaveToHost = null;
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final hero = widget.sharedHeroController ??
-        OnboardingHeroVideo.read(context)?.controller;
-
-    return TripPlanSharedHeroVideo(
-      controller: hero,
-      child: MaterialApp(
-        debugShowCheckedModeBanner: false,
-        theme: _tripPlanTheme(),
-        navigatorObservers: [tourismAdminRouteObserver],
-        routes: tripPlanRoutes(),
-        home: _ready
-            ? const TourismAuthGate()
-            : const Scaffold(
-                backgroundColor: Colors.black,
-                body: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    TripPlanScenicBackground(),
-                    Center(
-                      child: CircularProgressIndicator(
-                        color: AppColors.primary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-      ),
+    return Theme(
+      data: TourismAppTheme.light,
+      child: _ready
+          ? const HomeScreen()
+          : const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            ),
     );
   }
 }

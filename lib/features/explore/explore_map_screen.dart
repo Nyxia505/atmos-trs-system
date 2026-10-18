@@ -17,9 +17,6 @@ import 'package:atmos_trs_system/data/misamis_occidental_display_spots.dart';
 import 'package:atmos_trs_system/data/tourist_spot_image_catalog.dart';
 import 'package:atmos_trs_system/utils/visit_record_image_resolver.dart';
 
-const Color _kDarkText = Color(0xFF111827);
-const Color _kMuted = Color(0xFF6B7280);
-
 /// Explore tab screen: full Explore Map (Misamis Occidental with 17 municipality pins).
 /// Moved from Home screen; same behavior, styling, markers, zoom controls, and Full Map modal.
 class ExploreScreen extends StatefulWidget {
@@ -128,9 +125,9 @@ class _ExploreScreenState extends State<ExploreScreen> {
         MaterialPageRoute<void>(
           fullscreenDialog: true,
           builder: (ctx) => Scaffold(
-            backgroundColor: Colors.white,
+            backgroundColor: AppTheme.pageBackground,
             appBar: AppBar(
-              backgroundColor: Colors.white,
+              backgroundColor: AppTheme.cardBackground,
               elevation: 0,
               scrolledUnderElevation: 0,
               leadingWidth: 80,
@@ -165,12 +162,12 @@ class _ExploreScreenState extends State<ExploreScreen> {
               title: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     'My Recent Visits',
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w800,
-                      color: _kDarkText,
+                      color: AppTheme.textPrimary,
                     ),
                   ),
                   Text(
@@ -192,7 +189,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                       child: Text(
                         'Scan a destination QR code to record your visit.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: _kMuted, fontSize: 14),
+                        style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 14),
                       ),
                     ),
                   )
@@ -244,9 +241,9 @@ class _ExploreScreenState extends State<ExploreScreen> {
         MaterialPageRoute<void>(
           fullscreenDialog: true,
           builder: (ctx) => Scaffold(
-            backgroundColor: Colors.white,
+            backgroundColor: AppTheme.pageBackground,
             appBar: AppBar(
-              backgroundColor: Colors.white,
+              backgroundColor: AppTheme.cardBackground,
               elevation: 0,
               scrolledUnderElevation: 0,
               leadingWidth: 80,
@@ -281,12 +278,12 @@ class _ExploreScreenState extends State<ExploreScreen> {
               title: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     'Misamis Occidental Map',
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w800,
-                      color: _kDarkText,
+                      color: AppTheme.textPrimary,
                     ),
                   ),
                   Text(
@@ -320,9 +317,9 @@ class _ExploreScreenState extends State<ExploreScreen> {
         final height = MediaQuery.of(context).size.height * 0.9;
         return Container(
           height: height,
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          decoration: BoxDecoration(
+            color: AppTheme.cardBackground,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
           ),
           clipBehavior: Clip.antiAlias,
           child: Column(
@@ -332,7 +329,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                 width: 40,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade300,
+                  color: AppTheme.border,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -352,7 +349,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: AppTheme.cardBackground,
                         borderRadius: BorderRadius.circular(14),
                       ),
                       child: Icon(Icons.map_rounded, color: accent, size: 24),
@@ -362,19 +359,19 @@ class _ExploreScreenState extends State<ExploreScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
+                          Text(
                             'Misamis Occidental Map',
                             style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.w800,
-                              color: _kDarkText,
+                              color: AppTheme.textPrimary,
                             ),
                           ),
                           Text(
                             '${spots.length} municipalities & cities',
                             style: TextStyle(
                               fontSize: 13,
-                              color: _kMuted,
+                              color: AppTheme.unselectedMuted,
                             ),
                           ),
                         ],
@@ -494,7 +491,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
     final accent = AppTheme.primary;
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.cardBackground,
         borderRadius: BorderRadius.circular(22),
         border: Border.all(color: accent.withValues(alpha: 0.25)),
         boxShadow: [
@@ -515,13 +512,13 @@ class _ExploreScreenState extends State<ExploreScreen> {
               children: [
                 Icon(Icons.map_outlined, size: 20, color: accent),
                 const SizedBox(width: 8),
-                const Expanded(
+                Expanded(
                   child: Text(
                     'Explore Map',
                     style: TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.w800,
-                      color: _kDarkText,
+                      color: AppTheme.textPrimary,
                     ),
                   ),
                 ),
@@ -578,7 +575,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                               vertical: 8,
                             ),
                             decoration: BoxDecoration(
-                              color: Colors.white,
+                              color: AppTheme.cardBackground,
                               borderRadius: BorderRadius.circular(14),
                               border: Border.all(
                                 color: accent.withValues(alpha: 0.25),
@@ -622,7 +619,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                               vertical: 6,
                             ),
                             decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.95),
+                              color: AppTheme.cardBackground,
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: Text(
@@ -632,7 +629,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                               style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
-                                color: _kMuted,
+                                color: AppTheme.unselectedMuted,
                               ),
                             ),
                           ),
@@ -674,8 +671,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
             children: [
               Text(
                 title,
-                style: const TextStyle(
-                  color: _kDarkText,
+                style: TextStyle(
+                  color: AppTheme.textPrimary,
                   fontSize: 18,
                   fontWeight: FontWeight.w800,
                   letterSpacing: -0.2,
@@ -685,7 +682,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                 const SizedBox(height: 2),
                 Text(
                   subtitle,
-                  style: const TextStyle(color: _kMuted, fontSize: 12.5),
+                  style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 12.5),
                 ),
               ],
             ],
@@ -703,7 +700,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
       builder: (context, _) {
         final accent = AppTheme.primary;
         return Scaffold(
-          backgroundColor: const Color(0xFFF8FAFC),
+          backgroundColor: AppTheme.pageBackground,
           body: Column(
             children: [
               _buildExploreHeader(context),
@@ -812,7 +809,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
           height: cardSize,
           child: Container(
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: AppTheme.cardBackground,
               borderRadius: BorderRadius.circular(20),
               border: Border.all(color: accent.withValues(alpha: 0.12)),
               boxShadow: [
@@ -866,8 +863,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
                             spot.name,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: _kDarkText,
+                            style: TextStyle(
+                              color: AppTheme.textPrimary,
                               fontSize: 14,
                               fontWeight: FontWeight.w700,
                               height: 1.2,
@@ -884,10 +881,10 @@ class _ExploreScreenState extends State<ExploreScreen> {
                             const SizedBox(width: 4),
                             Text(
                               spot.rating.toStringAsFixed(1),
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w700,
-                                color: _kDarkText,
+                                color: AppTheme.textPrimary,
                               ),
                             ),
                             const Spacer(),
@@ -943,7 +940,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
             width: double.infinity,
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: AppTheme.cardBackground,
               borderRadius: BorderRadius.circular(18),
               border: Border.all(color: accent.withValues(alpha: 0.15)),
             ),
@@ -955,10 +952,10 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   color: accent.withValues(alpha: 0.5),
                 ),
                 const SizedBox(height: 10),
-                const Text(
+                Text(
                   'No visits yet',
                   style: TextStyle(
-                    color: _kDarkText,
+                    color: AppTheme.textPrimary,
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
                   ),
@@ -968,7 +965,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   'Scan a destination QR code to record your visit and unlock personalized recommendations.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: _kMuted,
+                    color: AppTheme.unselectedMuted,
                     fontSize: 13,
                     height: 1.4,
                   ),
@@ -1045,7 +1042,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.cardBackground,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: accent.withValues(alpha: 0.12)),
         boxShadow: [
@@ -1070,8 +1067,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
                     visit.spotName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: _kDarkText,
+                    style: TextStyle(
+                      color: AppTheme.textPrimary,
                       fontSize: 15,
                       fontWeight: FontWeight.w700,
                     ),
@@ -1087,7 +1084,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                       ),
                       _buildVisitChip(
                         formatter.format(visit.visitedAt),
-                        _kMuted,
+                        AppTheme.unselectedMuted,
                         filled: false,
                       ),
                     ],
@@ -1105,13 +1102,13 @@ class _ExploreScreenState extends State<ExploreScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: filled ? color.withValues(alpha: 0.12) : const Color(0xFFF3F4F6),
+        color: filled ? color.withValues(alpha: 0.12) : AppTheme.surfaceMuted,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
         label,
         style: TextStyle(
-          color: filled ? color : _kMuted,
+          color: filled ? color : AppTheme.unselectedMuted,
           fontSize: 11,
           fontWeight: FontWeight.w600,
         ),

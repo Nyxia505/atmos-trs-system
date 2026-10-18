@@ -28,6 +28,7 @@ import 'package:atmos_trs_system/firebase_options.dart';
 import 'package:atmos_trs_system/utils/firebase_client_blocked_message.dart';
 import 'package:atmos_trs_system/navigation/auth_navigation.dart';
 import 'package:atmos_trs_system/navigation/root_navigator.dart';
+import 'package:atmos_trs_system/widgets/save_spot_notice.dart';
 import 'package:atmos_trs_system/services/password_reset_service.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
 import 'package:atmos_trs_system/services/qr_launch_bootstrap.dart';
@@ -170,6 +171,7 @@ class _MyAppState extends State<MyApp> {
           notifier: _onboardingHeroVideo,
           child: MaterialApp(
             navigatorKey: rootNavigatorKey,
+            navigatorObservers: [SaveSpotNoticeNavigatorObserver()],
             title: 'ATMOS-TRS',
             theme: AppTheme.asensoTheme,
             darkTheme: AppTheme.asensoDarkTheme,

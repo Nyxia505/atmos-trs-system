@@ -25,6 +25,7 @@ class GovernorEntityAnalyticsScreen extends StatelessWidget {
     this.establishment,
     this.checkIns = const [],
     this.tourists = const [],
+    this.embedded = false,
   });
 
   factory GovernorEntityAnalyticsScreen.spot({
@@ -33,6 +34,7 @@ class GovernorEntityAnalyticsScreen extends StatelessWidget {
     required Map<String, dynamic> spot,
     required List<Map<String, dynamic>> checkIns,
     required List<Map<String, dynamic>> tourists,
+    bool embedded = false,
   }) {
     final name = (spot['name'] ?? 'Spot').toString();
     final cat = (spot['category'] ?? 'Attraction').toString();
@@ -45,6 +47,7 @@ class GovernorEntityAnalyticsScreen extends StatelessWidget {
       spot: spot,
       checkIns: checkIns,
       tourists: tourists,
+      embedded: embedded,
     );
   }
 
@@ -53,6 +56,7 @@ class GovernorEntityAnalyticsScreen extends StatelessWidget {
     required String municipalityName,
     required EstablishmentRegistryEntry establishment,
     required List<Map<String, dynamic>> tourists,
+    bool embedded = false,
   }) {
     return GovernorEntityAnalyticsScreen._(
       kind: GovernorEntityAnalyticsKind.establishment,
@@ -64,6 +68,7 @@ class GovernorEntityAnalyticsScreen extends StatelessWidget {
           ' · $municipalityName',
       establishment: establishment,
       tourists: tourists,
+      embedded: embedded,
     );
   }
 
@@ -76,9 +81,20 @@ class GovernorEntityAnalyticsScreen extends StatelessWidget {
   final EstablishmentRegistryEntry? establishment;
   final List<Map<String, dynamic>> checkIns;
   final List<Map<String, dynamic>> tourists;
+  final bool embedded;
 
   @override
   Widget build(BuildContext context) {
+    final body = kind == GovernorEntityAnalyticsKind.spot
+        ? _SpotAnalyticsView(
+            spot: spot!,
+            checkIns: checkIns,
+            tourists: tourists,
+          )
+        : _EstablishmentAnalyticsBody(
+            establishment: establishment!,
+          );
+    if (embedded) return body;
     return Scaffold(
       backgroundColor: GovernorDashboardTokens.background,
       appBar: AppBar(
@@ -105,9 +121,9 @@ class GovernorEntityAnalyticsScreen extends StatelessWidget {
             Text(
               subtitle,
               style: const TextStyle(
-                fontSize: 12,
-                color: GovernorDashboardTokens.subtitle,
-                fontWeight: FontWeight.w400,
+                fontSize: 13,
+                color: Color(0xFF44403C),
+                fontWeight: FontWeight.w600,
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -115,23 +131,15 @@ class GovernorEntityAnalyticsScreen extends StatelessWidget {
           ],
         ),
       ),
-      body: kind == GovernorEntityAnalyticsKind.spot
-          ? _SpotAnalyticsBody(
-              spot: spot!,
-              checkIns: checkIns,
-              tourists: tourists,
-            )
-          : _EstablishmentAnalyticsBody(
-              establishment: establishment!,
-            ),
+      body: body,
     );
   }
 }
 
 // ── Spot analytics ──────────────────────────────────────────────────
 
-class _SpotAnalyticsBody extends StatelessWidget {
-  const _SpotAnalyticsBody({
+class _SpotAnalyticsView extends StatefulWidget {
+  const _SpotAnalyticsView({
     required this.spot,
     required this.checkIns,
     required this.tourists,
@@ -140,6 +148,41 @@ class _SpotAnalyticsBody extends StatelessWidget {
   final Map<String, dynamic> spot;
   final List<Map<String, dynamic>> checkIns;
   final List<Map<String, dynamic>> tourists;
+
+  @override
+  State<_SpotAnalyticsView> createState() => _SpotAnalyticsViewState();
+}
+
+class _SpotAnalyticsViewState extends State<_SpotAnalyticsView> {
+  /// Null means every check-in. Default matches the existing 14-day view.
+  int? _windowDays = 14;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SpotAnalyticsBody(
+      spot: widget.spot,
+      checkIns: widget.checkIns,
+      tourists: widget.tourists,
+      windowDays: _windowDays,
+      onWindowDays: (days) => setState(() => _windowDays = days),
+    );
+  }
+}
+
+class _SpotAnalyticsBody extends StatelessWidget {
+  const _SpotAnalyticsBody({
+    required this.spot,
+    required this.checkIns,
+    required this.tourists,
+    required this.windowDays,
+    required this.onWindowDays,
+  });
+
+  final Map<String, dynamic> spot;
+  final List<Map<String, dynamic>> checkIns;
+  final List<Map<String, dynamic>> tourists;
+  final int? windowDays;
+  final ValueChanged<int?> onWindowDays;
 
   List<Map<String, dynamic>> get _matched {
     final spotId = (spot['id'] ?? spot['spotId'] ?? '').toString().trim();
@@ -179,19 +222,25 @@ class _SpotAnalyticsBody extends StatelessWidget {
     final byDay = <DateTime, int>{};
     final origins = <String, int>{};
     final now = DateTime.now();
-    final start14 = DateTime(now.year, now.month, now.day)
-        .subtract(const Duration(days: 13));
+    final today = DateTime(now.year, now.month, now.day);
+    final chartDays = windowDays ?? 14;
+    final chartStart = today.subtract(Duration(days: chartDays - 1));
+    final filterStart = windowDays == null ? null : chartStart;
+    final periodLabel = windowDays == null ? 'all time' : 'last $windowDays days';
 
     for (final c in matched) {
+      final day = _ts(c);
+      final d0 = day == null ? null : DateTime(day.year, day.month, day.day);
+      if (filterStart != null && (d0 == null || d0.isBefore(filterStart))) {
+        continue;
+      }
       final uid =
           (c['userId'] ?? c['uid'] ?? c['touristId'] ?? '').toString().trim();
       if (uid.isNotEmpty) uids.add(uid);
       final visitors = checkInVisitorCount(c);
-      final day = _ts(c);
-      if (day != null) {
-        final d0 = DateTime(day.year, day.month, day.day);
+      if (day != null && d0 != null) {
         byWeekday[day.weekday - 1] += visitors;
-        if (!d0.isBefore(start14)) {
+        if (!d0.isBefore(chartStart)) {
           byDay[d0] = (byDay[d0] ?? 0) + visitors;
         }
       }
@@ -238,8 +287,8 @@ class _SpotAnalyticsBody extends StatelessWidget {
     final trendValues = <int>[];
     final trendLabels = <String>[];
     const names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    for (var i = 0; i < 14; i++) {
-      final d = start14.add(Duration(days: i));
+    for (var i = 0; i < chartDays; i++) {
+      final d = chartStart.add(Duration(days: i));
       trendValues.add(byDay[d] ?? 0);
       trendLabels.add(names[(d.weekday - 1) % 7]);
     }
@@ -253,11 +302,41 @@ class _SpotAnalyticsBody extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
       children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final option in const <(int?, String)>[
+              (7, '7 days'),
+              (14, '14 days'),
+              (30, '30 days'),
+              (null, 'All time'),
+            ])
+              ChoiceChip(
+                label: Text(option.$2),
+                selected: windowDays == option.$1,
+                onSelected: (_) => onWindowDays(option.$1),
+                selectedColor: const Color(0xFFFFEDD5),
+                labelStyle: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: windowDays == option.$1
+                      ? const Color(0xFF9A3412)
+                      : const Color(0xFF1C1917),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 12),
         Text('Attraction analytics', style: GovernorDashboardTokens.heading(size: 18)),
         const SizedBox(height: 4),
-        Text(
+        const Text(
           'QR check-ins at this spot (VAR-family data). Confirmed hotel stays are separate.',
-          style: GovernorDashboardTokens.body(size: 12.5),
+          style: TextStyle(
+            color: Color(0xFF44403C),
+            fontSize: 13.5,
+            fontWeight: FontWeight.w600,
+            height: 1.35,
+          ),
         ),
         const SizedBox(height: 14),
         _KpiStrip(
@@ -265,10 +344,10 @@ class _SpotAnalyticsBody extends StatelessWidget {
             _Kpi('Unique visitors', '${uids.length}', Icons.people_outline),
             _Kpi('Check-ins', '$totalVisitors', Icons.qr_code_scanner),
             _Kpi(
-              'Avg / day (14d)',
+              windowDays == null ? 'Avg / day (14d)' : 'Avg / day',
               trendValues.isEmpty
                   ? '0'
-                  : (trendValues.reduce((a, b) => a + b) / 14)
+                  : (trendValues.reduce((a, b) => a + b) / chartDays)
                       .toStringAsFixed(1),
               Icons.trending_up,
             ),
@@ -281,7 +360,9 @@ class _SpotAnalyticsBody extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         EstablishmentDssCharts.panel(
-          title: 'Visitors · last 14 days',
+          title: windowDays == null
+              ? 'Visitors · last 14 days'
+              : 'Visitors · $periodLabel',
           subtitle: 'Headcount from QR check-ins',
           height: 220,
           child: _trendLine(trendValues, trendLabels),
@@ -384,7 +465,7 @@ class _SpotAnalyticsBody extends StatelessWidget {
         const SizedBox(height: 12),
         EstablishmentDssCharts.panel(
           title: 'Visitors by weekday',
-          subtitle: 'All check-ins at this spot',
+          subtitle: 'Check-ins in $periodLabel',
           height: 180,
           child: EstablishmentDssCharts.weekdayBars(byWeekday),
         ),
@@ -406,7 +487,9 @@ class _SpotAnalyticsBody extends StatelessWidget {
 
   Widget _trendLine(List<int> values, List<String> labels) {
     if (values.every((v) => v == 0)) {
-      return EstablishmentDssCharts.emptyChart('No check-ins in the last 14 days.');
+      return EstablishmentDssCharts.emptyChart(
+        'No check-ins in this period.',
+      );
     }
     return EstablishmentDssCharts.staysTrendLine(values: values, labels: labels);
   }
@@ -512,8 +595,9 @@ class _KpiStrip extends StatelessWidget {
                     Text(
                       k.label,
                       style: const TextStyle(
-                        fontSize: 11,
-                        color: GovernorDashboardTokens.subtitle,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF44403C),
                       ),
                     ),
                   ],

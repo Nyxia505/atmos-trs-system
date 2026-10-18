@@ -16,8 +16,8 @@ import 'dart:typed_data';
 import 'package:image_picker/image_picker.dart';
 import 'package:atmos_trs_system/widgets/ui_skeleton.dart';
 import 'package:atmos_trs_system/services/dashboard_stats_cache.dart';
-import 'package:atmos_trs_system/widgets/app_search_bar.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
+import 'package:atmos_trs_system/widgets/atmos_table_kit.dart';
 import 'package:atmos_trs_system/widgets/report_export_preview.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/tourist_id_helper.dart';
@@ -27,30 +27,32 @@ import 'package:atmos_trs_system/services/announcement_push_service.dart';
 import 'package:atmos_trs_system/services/lgu_event_service.dart';
 import 'package:atmos_trs_system/services/governor_firestore_service.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
+import 'package:atmos_trs_system/features/governor/widgets/governor_breadcrumb.dart';
+import 'package:atmos_trs_system/screens/governor_municipality_places_screen.dart';
+import 'package:atmos_trs_system/screens/governor_entity_analytics_screen.dart';
+import 'package:atmos_trs_system/services/establishment_approval_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/services/auth_service.dart';
 import 'package:atmos_trs_system/services/tourist_account_admin_service.dart';
 import 'package:atmos_trs_system/utils/checkin_visitor_count.dart';
 import 'package:atmos_trs_system/utils/production_data_filters.dart';
-import 'package:atmos_trs_system/utils/provincial_report_builder.dart';
-import 'package:atmos_trs_system/utils/checkin_report_summary_csv.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
-import 'package:atmos_trs_system/utils/csv_file_download.dart';
-import 'package:atmos_trs_system/utils/xlsx_file_download.dart';
 import 'package:atmos_trs_system/widgets/dot_report_export_panel.dart';
 import 'package:atmos_trs_system/widgets/lgu_debug_data_dialogs.dart';
-import 'package:atmos_trs_system/screens/governor_municipality_places_screen.dart';
 import 'package:atmos_trs_system/models/tourist_spot.dart';
 import 'package:atmos_trs_system/features/governor/theme/governor_dashboard_tokens.dart';
 import 'package:atmos_trs_system/features/governor/widgets/governor_sidebar.dart';
 import 'package:atmos_trs_system/features/governor/widgets/governor_glass_header.dart';
 import 'package:atmos_trs_system/features/governor/widgets/governor_kpi_card.dart';
 import 'package:atmos_trs_system/features/governor/widgets/governor_quick_actions.dart';
+import 'package:atmos_trs_system/features/governor/widgets/governor_trip_planner_page.dart';
 import 'package:atmos_trs_system/features/governor/widgets/governor_chart_card.dart';
 import 'package:atmos_trs_system/features/governor/widgets/governor_city_ranking_list.dart';
 import 'package:atmos_trs_system/features/governor/widgets/charts/governor_arrivals_area_chart.dart';
 import 'package:atmos_trs_system/features/governor/widgets/charts/governor_donut_chart.dart';
 import 'package:atmos_trs_system/features/governor/widgets/charts/governor_age_bar_chart.dart';
+import 'package:atmos_trs_system/utils/visit_analytics.dart';
+import 'package:atmos_trs_system/widgets/visit_analytics_board.dart';
 
 class GovernorDashboard extends StatefulWidget {
   const GovernorDashboard({super.key});
@@ -62,7 +64,10 @@ class GovernorDashboard extends StatefulWidget {
 class _GovernorDashboardState extends State<GovernorDashboard>
     with SingleTickerProviderStateMixin {
   int _selectedIndex = 0;
+  _MunicipalityDrill? _municipalityDrill;
+  _EntityDrill? _entityDrill;
   bool _isSidebarExpanded = true;
+  bool _tripPlannerMenuOpen = false;
   late AnimationController _animationController;
 
   // Data states — staged loading for smooth post-login paint
@@ -109,16 +114,22 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     _NavItem(icon: Icons.people_alt_rounded, label: 'Registered Tourists'),
     _NavItem(icon: Icons.location_city_rounded, label: 'Municipalities'),
     _NavItem(icon: Icons.analytics_rounded, label: 'Analytics'),
+    _NavItem(icon: Icons.route_rounded, label: 'Trip Planner'),
     _NavItem(icon: Icons.settings_rounded, label: 'Settings'),
   ];
 
   static const int _municipalitiesIndex = 2;
   static const int _analyticsIndex = 3;
-  static const int _settingsIndex = 4;
-  /// Events are not in the sidebar — opened from the header notification bell.
-  static const int _eventsIndex = 5;
-  /// Bottom nav shows Dashboard → Settings (index 0–4).
-  static const int _bottomNavItemCount = 5;
+  static const int _featuredIndex = 4;
+  static const int _plannerEventsIndex = 5;
+  static const int _faresIndex = 6;
+  static const int _settingsIndex = 7;
+  /// LGU events are not in the sidebar — opened from the header notification bell.
+  static const int _eventsIndex = 8;
+  /// Bottom bar: Dashboard, Tourists, Municipalities, Analytics, Trip Planner, Settings.
+  static const int _bottomNavItemCount = 6;
+  static const int _bottomTripPlannerSlot = 4;
+  static const int _bottomSettingsSlot = 5;
 
   // All municipalities data
   final List<Map<String, dynamic>> _allMunicipalities = [
@@ -266,19 +277,6 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   String? _lastSyncDate;
   bool _isExporting = false;
   double _exportProgress = 0.0;
-  String _reportType = 'All Data';
-  DateTime? _reportStartDate;
-  DateTime? _reportEndDate;
-
-  static const List<String> _reportTypes = [
-    'All Data',
-    'Visits only',
-    'Tourists Only',
-    'Tourist Spots Only',
-    'Summary by Municipality',
-    'DOT Visitor to Attraction Report',
-    'DOT Tourism Attraction Visitor Record (VAR 2)',
-  ];
 
   @override
   void initState() {
@@ -896,9 +894,34 @@ class _GovernorDashboardState extends State<GovernorDashboard>
 
   double get _dashboardPanelPadding => _dashboardOnePage ? 12 : 20;
 
+  void _openGovernorSection(int index) {
+    setState(() {
+      _selectedIndex = index;
+      _municipalityDrill = null;
+      _entityDrill = null;
+      if (_isTripPlannerPage) _tripPlannerMenuOpen = true;
+    });
+  }
+
+  void _popMunicipalityDrill() {
+    setState(() {
+      if (_entityDrill != null) {
+        _entityDrill = null;
+      } else {
+        _municipalityDrill = null;
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: _municipalityDrill == null,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _popMunicipalityDrill();
+      },
+      child: Scaffold(
       backgroundColor: _darkBg,
       drawer: _isMobile ? _buildDrawer() : null,
       body: Row(
@@ -908,6 +931,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         ],
       ),
       bottomNavigationBar: _isMobile ? _buildBottomNav() : null,
+    ),
     );
   }
 
@@ -915,30 +939,94 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     return GovernorSidebar(
       asDrawer: true,
       expanded: true,
-      selectedIndex:
-          _selectedIndex < _navItems.length ? _selectedIndex : -1,
+      selectedIndex: _sidebarSelection,
       items: _governorSidebarItems,
+      groupExpanded: _tripPlannerMenuOpen,
+      onToggleGroup: _toggleTripPlannerMenu,
       onSelect: (index) {
-        setState(() => _selectedIndex = index);
+        _openGovernorSection(index);
         Navigator.of(context).maybePop();
       },
       onToggle: () => Navigator.of(context).maybePop(),
       onLogout: _logout,
       showBrandLogo: true,
+      plain: true,
       profileName:
           _profileName.trim().isNotEmpty ? _profileName.trim() : 'Governor',
       avatar: _buildSidebarAvatar(size: 36),
     );
   }
 
+  bool get _isTripPlannerPage =>
+      _selectedIndex == _featuredIndex ||
+      _selectedIndex == _plannerEventsIndex ||
+      _selectedIndex == _faresIndex;
+
+  int get _sidebarSelection =>
+      _selectedIndex == _eventsIndex ? -1 : _selectedIndex;
+
+  void _toggleTripPlannerMenu() {
+    setState(() {
+      if (!_isMobile && !_isSidebarExpanded) {
+        _isSidebarExpanded = true;
+        _tripPlannerMenuOpen = true;
+        return;
+      }
+      if (_isTripPlannerPage) {
+        _tripPlannerMenuOpen = true;
+        return;
+      }
+      _tripPlannerMenuOpen = !_tripPlannerMenuOpen;
+    });
+  }
+
   List<GovernorNavItemData> get _governorSidebarItems => [
-        for (var i = 0; i < _navItems.length; i++)
-          GovernorNavItemData(
-            label: _navItems[i].label,
-            icon: _navItems[i].icon,
-            // Event alerts live on the header notification bell only.
-            badgeCount: 0,
-          ),
+        GovernorNavItemData(
+          label: 'Dashboard',
+          icon: Icons.dashboard_rounded,
+          pageIndex: 0,
+        ),
+        GovernorNavItemData(
+          label: 'Registered Tourists',
+          icon: Icons.people_alt_rounded,
+          pageIndex: 1,
+        ),
+        GovernorNavItemData(
+          label: 'Municipalities',
+          icon: Icons.location_city_rounded,
+          pageIndex: _municipalitiesIndex,
+        ),
+        GovernorNavItemData(
+          label: 'Analytics',
+          icon: Icons.analytics_rounded,
+          pageIndex: _analyticsIndex,
+        ),
+        const GovernorNavItemData(
+          label: 'Trip Planner',
+          icon: Icons.route_rounded,
+          children: [
+            GovernorNavItemData(
+              label: 'Featured',
+              icon: Icons.star_rounded,
+              pageIndex: _featuredIndex,
+            ),
+            GovernorNavItemData(
+              label: 'Events',
+              icon: Icons.event_rounded,
+              pageIndex: _plannerEventsIndex,
+            ),
+            GovernorNavItemData(
+              label: 'Fares',
+              icon: Icons.directions_bus_rounded,
+              pageIndex: _faresIndex,
+            ),
+          ],
+        ),
+        GovernorNavItemData(
+          label: 'Settings',
+          icon: Icons.settings_rounded,
+          pageIndex: _settingsIndex,
+        ),
       ];
 
   Widget _buildBottomNav() {
@@ -968,13 +1056,28 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                       index,
                     ) {
                       final item = _navItems[index];
-                      final isSelected = _selectedIndex == index;
+                      final isSelected = index == _bottomTripPlannerSlot
+                          ? _isTripPlannerPage
+                          : index == _bottomSettingsSlot
+                              ? _selectedIndex == _settingsIndex
+                              : _selectedIndex == index;
                       return Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 2),
                         child: Material(
                           color: Colors.transparent,
                           child: InkWell(
-                            onTap: () => setState(() => _selectedIndex = index),
+                            onTap: () {
+                              if (index == _bottomTripPlannerSlot) {
+                                setState(() => _tripPlannerMenuOpen = true);
+                                Scaffold.of(context).openDrawer();
+                                return;
+                              }
+                              _openGovernorSection(
+                                index == _bottomSettingsSlot
+                                    ? _settingsIndex
+                                    : index,
+                              );
+                            },
                             borderRadius: BorderRadius.circular(18),
                             child: Container(
                               padding: const EdgeInsets.symmetric(
@@ -1049,13 +1152,15 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   Widget _buildSidebar() {
     return GovernorSidebar(
       expanded: _isSidebarExpanded,
-      selectedIndex:
-          _selectedIndex < _navItems.length ? _selectedIndex : -1,
+      selectedIndex: _sidebarSelection,
       items: _governorSidebarItems,
-      onSelect: (index) => setState(() => _selectedIndex = index),
+      groupExpanded: _tripPlannerMenuOpen,
+      onToggleGroup: _toggleTripPlannerMenu,
+      onSelect: _openGovernorSection,
       onToggle: _toggleSidebar,
       onLogout: _logout,
       showBrandLogo: true,
+      plain: true,
       profileName:
           _profileName.trim().isNotEmpty ? _profileName.trim() : 'Governor',
       avatar: _buildSidebarAvatar(size: 36),
@@ -1324,14 +1429,131 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       1 => _buildTouristsContent(),
       _municipalitiesIndex => _buildMunicipalitiesContent(),
       _analyticsIndex => _buildAnalyticsContent(),
+      _featuredIndex => _buildTripPlannerContent(
+          GovernorTripPlannerSection.featured,
+        ),
+      _plannerEventsIndex => _buildTripPlannerContent(
+          GovernorTripPlannerSection.events,
+        ),
+      _faresIndex => _buildTripPlannerContent(
+          GovernorTripPlannerSection.fares,
+        ),
       _settingsIndex => _buildSettingsContent(),
       _ => _buildDashboardContent(),
     };
 
     if (_selectedIndex == 0 && (!_isBootstrapping || _hasCachedStats)) {
-      return DashboardFadeIn(child: content);
+      return _withSearchResults(DashboardFadeIn(child: content));
     }
-    return content;
+    return _withSearchResults(content);
+  }
+
+  Widget _withSearchResults(Widget content) {
+    final query = _searchController.text.trim();
+    if (query.isEmpty || _selectedIndex == 1) return content;
+    final results = _governorSearchHits(query);
+    return Stack(
+      children: [
+        content,
+        Positioned(
+          top: 132,
+          left: 20,
+          right: 20,
+          child: Material(
+            elevation: 8,
+            borderRadius: BorderRadius.circular(14),
+            color: Colors.white,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 280),
+              child: results.isEmpty
+                  ? const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Text(
+                        'No matching municipality, spot, or page',
+                        style: TextStyle(
+                          color: Color(0xFF44403C),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    )
+                  : ListView(
+                      shrinkWrap: true,
+                      children: [
+                        for (final hit in results)
+                          ListTile(
+                            dense: true,
+                            leading: Icon(hit.icon, color: const Color(0xFFC2410C)),
+                            title: Text(
+                              hit.title,
+                              style: const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            subtitle: Text(hit.subtitle),
+                            onTap: () {
+                              hit.open();
+                              _searchController.clear();
+                              setState(() {});
+                            },
+                          ),
+                      ],
+                    ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  List<_SearchHit> _governorSearchHits(String raw) {
+    final q = raw.toLowerCase();
+    final hits = <_SearchHit>[];
+    void addPage(String title, String subtitle, IconData icon, int index) {
+      if (title.toLowerCase().contains(q)) {
+        hits.add(_SearchHit(title, subtitle, icon, () => _openGovernorSection(index)));
+      }
+    }
+
+    addPage('Registered Tourists', 'Tourist registry', Icons.people_alt_rounded, 1);
+    addPage('Municipalities', 'Cities and municipalities', Icons.location_city_rounded, _municipalitiesIndex);
+    addPage('Analytics', 'Visitor analytics', Icons.analytics_rounded, _analyticsIndex);
+    addPage('Featured', 'Trip Planner', Icons.star_rounded, _featuredIndex);
+    addPage('Events', 'Trip Planner', Icons.event_rounded, _plannerEventsIndex);
+    addPage('Fares', 'Trip Planner', Icons.directions_bus_rounded, _faresIndex);
+    addPage('Settings', 'Dashboard settings', Icons.settings_rounded, _settingsIndex);
+
+    for (final m in _allMunicipalities) {
+      final name = m['name']?.toString() ?? '';
+      if (name.toLowerCase().contains(q)) {
+        hits.add(_SearchHit(
+          name,
+          m['type']?.toString() ?? 'Municipality',
+          Icons.location_city_rounded,
+          () => _showMunicipalityDetails(m),
+        ));
+      }
+    }
+    for (final s in _governorAllSpots) {
+      final name = s['name']?.toString() ?? '';
+      if (name.toLowerCase().contains(q)) {
+        hits.add(_SearchHit(
+          name,
+          (s['municipality'] ?? s['category'] ?? 'Tourist spot').toString(),
+          Icons.place_rounded,
+          () {
+            final munName = (s['municipality'] ?? '').toString();
+            Map<String, dynamic>? mun;
+            for (final m in _allMunicipalities) {
+              if ((m['name']?.toString() ?? '').toLowerCase() == munName.toLowerCase()) {
+                mun = m;
+                break;
+              }
+            }
+            if (mun != null) _showMunicipalityDetails(mun);
+          },
+        ));
+      }
+      if (hits.length >= 12) break;
+    }
+    return hits.take(12).toList();
   }
 
   /// Close the notifications dialog (if any), then open the full Events page.
@@ -1368,6 +1590,10 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       compact: compact,
       showConceptMeta: isDashboard,
       searchController: _searchController,
+      searchHint: _selectedIndex == 1
+          ? 'Search tourist ID or origin'
+          : 'Search tourist, municipality, or report...',
+      onSearchChanged: (_) => setState(() {}),
       notificationCount: _unreadNotificationCount,
       onNotifications: _showNotificationsPanel,
       leading: _isMobile
@@ -1884,8 +2110,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
           children: [
             _buildHeader(
               'Welcome back, Governor',
-              subtitle: 'Misamis Occidental · Provincial Tourism Overview',
-              compact: _dashboardOnePage,
+              subtitle: 'Misamis Occidental - Provincial Tourism Overview',
             ),
             Expanded(
               child: LayoutBuilder(
@@ -1901,16 +2126,16 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                                 _buildStatsGrid(),
                                 const SizedBox(height: 12),
                                 GovernorQuickActions(
-                                  onAddMunicipality: () => setState(
-                                    () =>
-                                        _selectedIndex = _municipalitiesIndex,
-                                  ),
+                                  onAddMunicipality: () =>
+                                      _openGovernorSection(_municipalitiesIndex),
                                   onExportReport: () => setState(
                                     () => _selectedIndex = _analyticsIndex,
                                   ),
                                   onViewAnalytics: () => setState(
                                     () => _selectedIndex = _analyticsIndex,
                                   ),
+                                  onManageSpots: () =>
+                                      _openGovernorSection(_municipalitiesIndex),
                                 ),
                                 const SizedBox(height: 12),
                                 Expanded(
@@ -1935,15 +2160,16 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                               _buildStatsGrid(),
                               const SizedBox(height: 16),
                               GovernorQuickActions(
-                                onAddMunicipality: () => setState(
-                                  () => _selectedIndex = _municipalitiesIndex,
-                                ),
+                                onAddMunicipality: () =>
+                                    _openGovernorSection(_municipalitiesIndex),
                                 onExportReport: () => setState(
                                   () => _selectedIndex = _analyticsIndex,
                                 ),
                                 onViewAnalytics: () => setState(
                                   () => _selectedIndex = _analyticsIndex,
                                 ),
+                                onManageSpots: () =>
+                                    _openGovernorSection(_municipalitiesIndex),
                               ),
                               const SizedBox(height: 20),
                               if (_isLoadingDetails) ...[
@@ -2278,38 +2504,14 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     return number.toString();
   }
 
-  List<double> get _dashboardTrendValues {
-    int days;
-    if (_selectedTimeFilter == 'This Week') {
-      days = 7;
-    } else if (_selectedTimeFilter == 'This Month') {
-      days = 14;
-    } else {
-      days = 12;
-    }
-    if (_selectedTimeFilter == 'This Year') {
-      final now = DateTime.now();
-      final counts = List.filled(12, 0.0);
-      for (var c in _checkIns) {
-        final d = _checkInTimestamp(c);
-        if (d != null) {
-          final diff = (now.year - d.year) * 12 + (now.month - d.month);
-          if (diff >= 0 && diff < 12) counts[11 - diff] += 1;
-        }
-      }
-      return counts;
-    }
-    final now = DateTime.now();
-    final counts = List.filled(days, 0.0);
-    for (var c in _checkIns) {
-      final d = _checkInTimestamp(c);
-      if (d != null) {
-        final diff = now.difference(DateTime(d.year, d.month, d.day)).inDays;
-        if (diff >= 0 && diff < days) counts[days - 1 - diff] += 1;
-      }
-    }
-    return counts;
-  }
+  VisitAnalyticsSnapshot get _visitAnalytics => VisitAnalyticsSnapshot.build(
+        checkIns: _checkIns,
+        tourists: _tourists,
+        range: _selectedTimeFilter,
+        parseTime: _checkInTimestamp,
+      );
+
+  List<double> get _dashboardTrendValues => _visitAnalytics.arrivals;
 
   ({String text, bool isPositive}) get _checkInsTrendText {
     int thisWeek = 0, lastWeek = 0;
@@ -2331,16 +2533,8 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   List<Map<String, dynamic>> get _dashboardCategoryStats {
-    final byCategory = <String, int>{};
-    for (var c in _checkIns) {
-      final cat =
-          c['spotCategory']?.toString().trim() ??
-          c['category']?.toString().trim() ??
-          'Other';
-      final key = cat.isEmpty ? 'Other' : cat;
-      byCategory[key] = (byCategory[key] ?? 0) + 1;
-    }
-    final total = byCategory.values.fold<int>(0, (a, b) => a + b);
+    final rows = _visitAnalytics.categories;
+    final total = rows.fold<int>(0, (sum, row) => sum + row.count);
     if (total == 0) {
       return [
         {'name': 'Beach', 'count': 0, 'percentage': 0.0},
@@ -2350,180 +2544,35 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         {'name': 'Resorts', 'count': 0, 'percentage': 0.0},
       ];
     }
-    return byCategory.entries
-        .map(
-          (e) => {
-            'name': e.key,
-            'count': e.value,
-            'percentage': e.value / total,
-          },
-        )
-        .toList()
-      ..sort(
-        (a, b) =>
-            (b['percentage'] as double).compareTo(a['percentage'] as double),
-      );
-  }
-
-  static const Color _genderMaleColor = Color(0xFFEF4444);
-  static const Color _genderFemaleColor = Color(0xFF06B6D4);
-  static const Color _genderOtherColor = Color(0xFF84CC16);
-  static const Color _localVisitorColor = Color(0xFF29B6F6);
-  static const Color _foreignVisitorColor = Color(0xFFFF8C32);
-
-  int? _touristAgeYears(Map<String, dynamic> tourist) {
-    final dob = tourist['dateOfBirth']?.toString().trim();
-    if (dob == null || dob.isEmpty) return null;
-    try {
-      final parts = dob.split('-');
-      if (parts.length < 3) return null;
-      final birth = DateTime(
-        int.parse(parts[0]),
-        int.parse(parts[1]),
-        int.parse(parts[2]),
-      );
-      final now = DateTime.now();
-      var age = now.year - birth.year;
-      if (now.month < birth.month ||
-          (now.month == birth.month && now.day < birth.day)) {
-        age--;
-      }
-      return age < 0 ? null : age;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  String _normalizeGender(Map<String, dynamic> tourist) {
-    final raw = (tourist['sex'] ?? tourist['gender'] ?? '')
-        .toString()
-        .trim()
-        .toLowerCase();
-    if (raw.contains('female') || raw == 'f') return 'Female';
-    if (raw.contains('male') || raw == 'm') return 'Male';
-    if (raw.isNotEmpty) return 'Others';
-    return 'Others';
-  }
-
-  bool? _isLocalTourist(Map<String, dynamic> tourist) {
-    final isLocal = tourist['isLocal'];
-    if (isLocal is bool) return isLocal;
-    final label = tourist['localOrForeign']?.toString().toLowerCase() ?? '';
-    if (label.contains('local')) return true;
-    if (label.contains('foreign')) return false;
-    final nationality = tourist['nationality']?.toString().toLowerCase() ?? '';
-    if (nationality.contains('filipin') || nationality == 'ph') return true;
-    if (nationality.isNotEmpty) return false;
-    return null;
-  }
-
-  String _ageBucketForTourist(int? age) {
-    if (age == null) return 'Unknown';
-    if (age < 18) return '18-35';
-    if (age <= 35) return '18-35';
-    if (age <= 50) return '36-50';
-    if (age <= 64) return '51-64';
-    return '65+';
+    return [
+      for (final row in rows)
+        {
+          'name': row.name,
+          'count': row.count,
+          'percentage': row.count / total,
+        },
+    ];
   }
 
   Map<String, int> get _genderCounts {
-    final counts = <String, int>{'Male': 0, 'Female': 0, 'Others': 0};
-    for (final tourist in _tourists) {
-      final key = _normalizeGender(tourist);
-      counts[key] = (counts[key] ?? 0) + 1;
-    }
-    return counts;
+    final stats = _visitAnalytics;
+    return {
+      'Male': stats.male,
+      'Female': stats.female,
+      'Others': stats.otherGender,
+    };
   }
 
   List<({String label, int male, int female, int others})>
-  get _ageGenderSeries {
-    const labels = ['18-35', '36-50', '51-64', '65+'];
-    final data = <String, ({int male, int female, int others})>{
-      for (final label in labels) label: (male: 0, female: 0, others: 0),
-    };
-    for (final tourist in _tourists) {
-      final bucket = _ageBucketForTourist(_touristAgeYears(tourist));
-      if (!data.containsKey(bucket)) continue;
-      final gender = _normalizeGender(tourist);
-      final current = data[bucket]!;
-      if (gender == 'Male') {
-        data[bucket] = (
-          male: current.male + 1,
-          female: current.female,
-          others: current.others,
-        );
-      } else if (gender == 'Female') {
-        data[bucket] = (
-          male: current.male,
-          female: current.female + 1,
-          others: current.others,
-        );
-      } else {
-        data[bucket] = (
-          male: current.male,
-          female: current.female,
-          others: current.others + 1,
-        );
-      }
-    }
-    return labels.map((label) {
-      final row = data[label]!;
-      return (
-        label: label,
-        male: row.male,
-        female: row.female,
-        others: row.others,
-      );
-    }).toList();
-  }
+  get _ageGenderSeries => _visitAnalytics.ageSeries;
 
   Map<String, int> get _localForeignCounts {
-    var local = 0;
-    var foreign = 0;
-    for (final tourist in _tourists) {
-      if (_isLocalTourist(tourist) == true) {
-        local++;
-      } else {
-        foreign++;
-      }
-    }
-    return {'Local': local, 'Foreign': foreign};
+    final stats = _visitAnalytics;
+    return {'Local': stats.local, 'Foreign': stats.foreign};
   }
 
-  List<({String name, int count})> get _cityRankingData {
-    final counts = <String, int>{};
-    for (final muni in _allMunicipalities) {
-      final name = muni['name']?.toString().trim() ?? '';
-      final value = (muni['tourists'] as num?)?.toInt() ?? 0;
-      if (name.isNotEmpty && value > 0) counts[name] = value;
-    }
-    if (counts.isEmpty) {
-      for (final tourist in _tourists) {
-        final city = tourist['city']?.toString().trim() ?? '';
-        if (city.isEmpty) continue;
-        counts[city] = (counts[city] ?? 0) + 1;
-      }
-    }
-    final sorted = counts.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    return sorted.take(6).map((e) => (name: e.key, count: e.value)).toList();
-  }
-
-  List<({Color color, double fraction})> _segmentsFromCounts(
-    Map<String, int> counts,
-    Map<String, Color> colors,
-  ) {
-    final total = counts.values.fold<int>(0, (a, b) => a + b);
-    if (total == 0) return [];
-    return [
-      for (final entry in counts.entries)
-        if (entry.value > 0)
-          (
-            color: colors[entry.key] ?? Colors.grey,
-            fraction: entry.value / total,
-          ),
-    ];
-  }
+  List<({String name, int count})> get _cityRankingData =>
+      _visitAnalytics.municipalities;
 
   Widget _buildVisitorDemographicsSection() {
     return Column(
@@ -2945,7 +2994,10 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       title: 'Tourist Arrivals',
       icon: Icons.show_chart_rounded,
       trailing: _buildTimeFilterDropdown(dense: dense),
-      child: GovernorArrivalsAreaChart(values: _dashboardTrendValues),
+      child: GovernorArrivalsAreaChart(
+        values: _dashboardTrendValues,
+        showAllBottomLabels: _selectedTimeFilter == 'This Month',
+      ),
     );
   }
 
@@ -3242,17 +3294,19 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         }
       }
     }
-    unawaited(
-      GovernorMunicipalityPlacesScreen.open(
-        context,
-        municipalityId: mid.isEmpty ? name.toLowerCase() : mid,
-        municipalityName: name,
-        municipalityType: type,
-        spots: _governorAllSpots,
-        checkIns: _checkIns,
-        tourists: _tourists,
-      ),
-    );
+    final uniqueVisitors = (municipality['uniqueVisitors'] as num?)?.toInt() ??
+        (municipality['tourists'] as num?)?.toInt() ??
+        0;
+    setState(() {
+      _selectedIndex = _municipalitiesIndex;
+      _entityDrill = null;
+      _municipalityDrill = _MunicipalityDrill(
+        id: mid.isEmpty ? name.toLowerCase() : mid,
+        name: name,
+        type: type,
+        uniqueVisitors: uniqueVisitors,
+      );
+    });
   }
 
   Widget _detailRow(String label, String value) {
@@ -3378,23 +3432,23 @@ class _GovernorDashboardState extends State<GovernorDashboard>
 
   bool _matchesTouristSearch(Map<String, dynamic> t, String query) {
     if (query.isEmpty) return true;
-    final id = TouristIdHelper.displayForTourist(t).toLowerCase();
-    final touristIdField = t['touristId']?.toString().toLowerCase() ?? '';
-    final origin = _getTouristOrigin(t).toLowerCase();
-    final city = t['city']?.toString().toLowerCase() ?? '';
-    final country = t['country']?.toString().toLowerCase() ?? '';
-    final originField = t['origin']?.toString().toLowerCase() ?? '';
+    final folded = query.toLowerCase().replaceAll(RegExp(r'[\s\-_]'), '');
+    bool hit(String value) {
+      final raw = value.toLowerCase();
+      if (raw.contains(query)) return true;
+      return raw.replaceAll(RegExp(r'[\s\-_]'), '').contains(folded);
+    }
+
+    final id = TouristIdHelper.displayForTourist(t);
     final dt = _registeredDateTimeFromTourist(t);
-    final dateStr = _formatRegisteredDateOnly(dt).toLowerCase();
-    final timeStr = _formatRegisteredTimeOnly(dt).toLowerCase();
-    return id.contains(query) ||
-        touristIdField.contains(query) ||
-        origin.contains(query) ||
-        city.contains(query) ||
-        country.contains(query) ||
-        originField.contains(query) ||
-        dateStr.contains(query) ||
-        timeStr.contains(query);
+    return hit(id) ||
+        hit(t['touristId']?.toString() ?? '') ||
+        hit(_getTouristOrigin(t)) ||
+        hit(t['city']?.toString() ?? '') ||
+        hit(t['country']?.toString() ?? '') ||
+        hit(t['origin']?.toString() ?? '') ||
+        hit(_formatRegisteredDateOnly(dt)) ||
+        hit(_formatRegisteredTimeOnly(dt));
   }
 
   List<Map<String, dynamic>> _filteredRegisteredTourists() {
@@ -3509,32 +3563,14 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                     child: Container(
                       decoration: _dashboardPanelDecoration(),
                       clipBehavior: Clip.antiAlias,
-                      child: Column(
-                        children: [
-                          Padding(
-                            padding: EdgeInsets.fromLTRB(
-                              _isMobile ? 12 : 16,
-                              14,
-                              _isMobile ? 12 : 16,
-                              10,
-                            ),
-                            child: _buildSearchBar(
-                              'Search by Tourist ID, origin, or date...',
-                            ),
-                          ),
-                          const Divider(height: 1, color: _cardBorder),
-                          Expanded(
-                            child: filteredTourists.isEmpty
-                                ? _buildEmptyState(
-                                    'No registered tourists match your filters',
-                                    Icons.people_outline_rounded,
-                                  )
-                                : _isMobile
-                                ? _buildTouristsListMobile(filteredTourists)
-                                : _buildTouristsTableDesktop(filteredTourists),
-                          ),
-                        ],
-                      ),
+                      child: filteredTourists.isEmpty
+                          ? _buildEmptyState(
+                              'No registered tourists match your filters',
+                              Icons.people_outline_rounded,
+                            )
+                          : _isMobile
+                              ? _buildTouristsListMobile(filteredTourists)
+                              : _buildTouristsTableDesktop(filteredTourists),
                     ),
                   ),
                 ],
@@ -3757,12 +3793,147 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
-  Widget _buildSearchBar(String hint) {
-    return AppSearchBar(
-      controller: _searchController,
-      hintText: hint,
-      onChanged: (_) => setState(() {}),
-      horizontalPadding: 0,
+  Widget _buildTouristsTableDesktop(List<Map<String, dynamic>> tourists) {
+    final sorted = _sortedTouristsByRegistrationDate(tourists);
+    const headerBg = Color(0xFFFFF7ED);
+    const grid = Color(0xFFE7E5E4);
+    const ink = Color(0xFF1C1917);
+
+    const headStyle = TextStyle(
+      color: Color(0xFF9A3412),
+      fontWeight: FontWeight.w800,
+      fontSize: 12,
+      letterSpacing: 0.4,
+    );
+    const cellStyle = TextStyle(
+      color: ink,
+      fontSize: 13.5,
+      fontWeight: FontWeight.w600,
+      height: 1.2,
+    );
+
+    Widget cell(
+      Widget child, {
+      int flex = 1,
+      bool last = false,
+    }) {
+      return Expanded(
+        flex: flex,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            border: Border(
+              right: last
+                  ? BorderSide.none
+                  : const BorderSide(color: grid),
+            ),
+          ),
+          alignment: Alignment.centerLeft,
+          child: child,
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        Container(
+          decoration: const BoxDecoration(
+            color: headerBg,
+            border: Border(bottom: BorderSide(color: grid, width: 1.4)),
+          ),
+          child: Row(
+            children: [
+              cell(const Text('TOURIST ID', style: headStyle), flex: 24),
+              cell(const Text('ORIGIN', style: headStyle), flex: 24),
+              cell(const Text('DATE', style: headStyle), flex: 14),
+              cell(const Text('TIME', style: headStyle), flex: 14),
+              cell(
+                const Align(
+                  alignment: Alignment.center,
+                  child: Text('VIEW', style: headStyle),
+                ),
+                flex: 10,
+                last: true,
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Scrollbar(
+            thumbVisibility: true,
+            child: ListView.builder(
+              itemCount: sorted.length,
+              itemBuilder: (context, index) {
+                final t = sorted[index];
+                final id = TouristIdHelper.displayForTourist(t);
+                return Material(
+                  color: index.isEven ? Colors.white : const Color(0xFFFAFAF9),
+                  child: InkWell(
+                    onTap: () => _showTouristDetails(t),
+                    hoverColor: const Color(0xFFFFF7ED),
+                    child: Container(
+                      decoration: const BoxDecoration(
+                        border: Border(bottom: BorderSide(color: grid)),
+                      ),
+                      child: Row(
+                        children: [
+                          cell(
+                            Row(
+                              children: [
+                                _touristPrivacyAvatar(radius: 14),
+                                const SizedBox(width: 10),
+                                Flexible(child: _touristIdChip(id)),
+                              ],
+                            ),
+                            flex: 24,
+                          ),
+                          cell(
+                            Text(
+                              _getTouristOrigin(t),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: cellStyle,
+                            ),
+                            flex: 24,
+                          ),
+                          cell(
+                            Text(
+                              _formatRegisteredDateOnly(
+                                _registeredDateTimeFromTourist(t),
+                              ),
+                              style: cellStyle,
+                            ),
+                            flex: 14,
+                          ),
+                          cell(
+                            Text(
+                              _formatRegisteredTimeOnly(
+                                _registeredDateTimeFromTourist(t),
+                              ),
+                              style: cellStyle,
+                            ),
+                            flex: 14,
+                          ),
+                          cell(
+                            Align(
+                              alignment: Alignment.center,
+                              child: _touristViewButton(
+                                onPressed: () => _showTouristDetails(t),
+                              ),
+                            ),
+                            flex: 10,
+                            last: true,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -3851,158 +4022,6 @@ class _GovernorDashboardState extends State<GovernorDashboard>
           ),
         );
       },
-    );
-  }
-
-  Widget _buildTouristsTableDesktop(List<Map<String, dynamic>> tourists) {
-    final sorted = _sortedTouristsByRegistrationDate(tourists);
-
-    const headStyle = TextStyle(
-      color: _textMuted,
-      fontWeight: FontWeight.w600,
-      fontSize: 11,
-      letterSpacing: 0.3,
-    );
-
-    Widget headerCell(
-      String label, {
-      double flex = 1,
-      EdgeInsets padding = EdgeInsets.zero,
-    }) {
-      return Expanded(
-        flex: (flex * 10).round(),
-        child: Padding(
-          padding: padding,
-          child: Text(label.toUpperCase(), style: headStyle),
-        ),
-      );
-    }
-
-    return Column(
-      children: [
-        Container(
-          color: const Color(0xFFF9FAFB),
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          child: Row(
-            children: [
-              headerCell('Tourist ID', flex: 2.4),
-              headerCell(
-                'Origin',
-                flex: 2.4,
-                padding: const EdgeInsets.only(left: 4),
-              ),
-              headerCell('Date', flex: 1.2),
-              headerCell('Time', flex: 1.2),
-              const SizedBox(
-                width: 48,
-                child: Text(
-                  'VIEW',
-                  style: headStyle,
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const Divider(height: 1, color: _cardBorder),
-        Expanded(
-          child: Scrollbar(
-            thumbVisibility: true,
-            child: ListView.separated(
-              itemCount: sorted.length,
-              separatorBuilder: (_, __) => const Divider(
-                height: 1,
-                color: _cardBorder,
-                indent: 16,
-                endIndent: 16,
-              ),
-              itemBuilder: (context, index) {
-                final t = sorted[index];
-                final id = TouristIdHelper.displayForTourist(t);
-                final bg = index.isEven
-                    ? Colors.white
-                    : const Color(0xFFFAFAFA);
-
-                return Material(
-                  color: bg,
-                  child: InkWell(
-                    onTap: () => _showTouristDetails(t),
-                    hoverColor: _primaryOrange.withOpacity(0.04),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 12,
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Expanded(
-                            flex: 24,
-                            child: Row(
-                              children: [
-                                _touristPrivacyAvatar(radius: 16),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: _touristIdChip(id, maxWidth: 220),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Expanded(
-                            flex: 24,
-                            child: Padding(
-                              padding: const EdgeInsets.only(left: 4),
-                              child: Text(
-                                _getTouristOrigin(t),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: _textMuted,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            flex: 12,
-                            child: Text(
-                              _formatRegisteredDateOnly(
-                                _registeredDateTimeFromTourist(t),
-                              ),
-                              style: const TextStyle(
-                                color: _textDark,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            flex: 12,
-                            child: Text(
-                              _formatRegisteredTimeOnly(
-                                _registeredDateTimeFromTourist(t),
-                              ),
-                              style: const TextStyle(
-                                color: _textDark,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ),
-                          _touristViewButton(
-                            onPressed: () => _showTouristDetails(t),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
-      ],
     );
   }
 
@@ -4388,6 +4407,138 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   Widget _buildMunicipalitiesContent() {
+    final place = _municipalityDrill;
+    if (place != null) {
+      final entity = _entityDrill;
+      if (entity != null) {
+        final title = entity.spot != null
+            ? (entity.spot!['name'] ?? 'Tourist spot').toString()
+            : entity.establishment!.businessName;
+        final category = entity.spot != null
+            ? (entity.spot!['category'] ?? 'Attraction').toString()
+            : (entity.establishment!.category.isEmpty
+                ? 'Establishment'
+                : entity.establishment!.category);
+        return _municipalityDrillShell(
+          title: title,
+          subtitle: '$category · ${place.name}',
+          backLabel: 'Back to ${place.name}',
+          onBack: () => setState(() => _entityDrill = null),
+          crumbs: [
+            GovernorBreadcrumbItem(
+              label: 'Municipalities & Cities',
+              onTap: () => setState(() {
+                _municipalityDrill = null;
+                _entityDrill = null;
+              }),
+            ),
+            GovernorBreadcrumbItem(
+              label: place.name,
+              onTap: () => setState(() => _entityDrill = null),
+            ),
+            GovernorBreadcrumbItem(label: '$title Analytics'),
+          ],
+          child: entity.spot != null
+              ? GovernorEntityAnalyticsScreen.spot(
+                  municipalityId: place.id,
+                  municipalityName: place.name,
+                  spot: entity.spot!,
+                  checkIns: _checkIns,
+                  tourists: _tourists,
+                  embedded: true,
+                )
+              : GovernorEntityAnalyticsScreen.establishment(
+                  municipalityId: place.id,
+                  municipalityName: place.name,
+                  establishment: entity.establishment!,
+                  tourists: _tourists,
+                  embedded: true,
+                ),
+        );
+      }
+      return _municipalityDrillShell(
+        title: place.name,
+        subtitle: 'Tourist Spots, Establishments & Tourism Monitoring',
+        backLabel: 'Back to municipalities',
+        onBack: () => setState(() => _municipalityDrill = null),
+        crumbs: [
+          GovernorBreadcrumbItem(
+            label: 'Municipalities & Cities',
+            onTap: () => setState(() => _municipalityDrill = null),
+          ),
+          GovernorBreadcrumbItem(label: place.name),
+        ],
+        child: GovernorMunicipalityPlacesScreen(
+          municipalityId: place.id,
+          municipalityName: place.name,
+          municipalityType: place.type,
+          spots: _governorAllSpots,
+          checkIns: _checkIns,
+          tourists: _tourists,
+          uniqueVisitors: place.uniqueVisitors,
+          embedded: true,
+          onOpenSpot: (spot) => setState(
+            () => _entityDrill = _EntityDrill.spot(spot),
+          ),
+          onOpenEstablishment: (entry) => setState(
+            () => _entityDrill = _EntityDrill.establishment(entry),
+          ),
+        ),
+      );
+    }
+    return _buildMunicipalityList();
+  }
+
+  Widget _municipalityDrillShell({
+    required String title,
+    required String subtitle,
+    required String backLabel,
+    required VoidCallback onBack,
+    required List<GovernorBreadcrumbItem> crumbs,
+    required Widget child,
+  }) {
+    return Container(
+      color: _darkBg,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildHeader(title, subtitle: subtitle),
+          GovernorBreadcrumb(items: crumbs),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              child: TextButton.icon(
+                onPressed: onBack,
+                icon: const Icon(
+                  Icons.arrow_back_rounded,
+                  size: 18,
+                  color: Color(0xFF9A3412),
+                ),
+                label: Text(backLabel),
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFF1C1917),
+                  backgroundColor: Colors.white,
+                  textStyle: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13.5,
+                  ),
+                  side: const BorderSide(color: Color(0xFF9A3412)),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Expanded(child: child),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMunicipalityList() {
     final sorted = List<Map<String, dynamic>>.from(_allMunicipalities)
       ..sort((a, b) {
         final av = (a['uniqueVisitors'] as num?)?.toInt() ??
@@ -4403,23 +4554,18 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       });
 
     return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Color(0xFFFFF7ED),
-            Color(0xFFF8FAFC),
-            Color(0xFFF1F5F9),
-          ],
-        ),
-      ),
+      color: const Color(0xFFF4F6F8),
       child: Column(
         children: [
           _buildHeader(
             'Municipalities & Cities',
                 subtitle:
                     'Tap a city or municipality → spots & establishments → full analytics',
+          ),
+          const GovernorBreadcrumb(
+            items: [
+              GovernorBreadcrumbItem(label: 'Municipalities & Cities'),
+            ],
           ),
           Expanded(
             child: Padding(
@@ -4498,9 +4644,9 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                 Text(
                   'Tourists who visited Misamis Occidental',
                   style: TextStyle(
-                    color: _textMuted,
-                    fontSize: _isMobile ? 12 : 13,
-                    fontWeight: FontWeight.w600,
+                    color: const Color(0xFF334155),
+                    fontSize: _isMobile ? 13 : 14,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -4518,8 +4664,9 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                 Text(
                   'Unique visitors (1 person = 1, even across cities)',
                   style: TextStyle(
-                    color: _textMuted,
-                    fontSize: _isMobile ? 11 : 12,
+                    color: const Color(0xFF334155),
+                    fontSize: _isMobile ? 12 : 13,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
               ],
@@ -4541,9 +4688,9 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                 Text(
                   'Total check-ins',
                   style: TextStyle(
-                    color: _textMuted,
-                    fontSize: _isMobile ? 10 : 11,
-                    fontWeight: FontWeight.w600,
+                    color: const Color(0xFF334155),
+                    fontSize: _isMobile ? 12 : 13,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -4584,19 +4731,15 @@ class _GovernorDashboardState extends State<GovernorDashboard>
             : constraints.maxWidth >= 1000
                 ? 3
                 : 2;
-        final rows = (count / crossAxisCount).ceil().clamp(1, 20);
-        const spacing = 14.0;
-        final usableHeight = constraints.maxHeight;
+        const spacing = 12.0;
+        const itemHeight = 112.0;
         final usableWidth = constraints.maxWidth;
-        // Expand cards to fill height (old max 88 left a huge empty gap).
-        final itemHeight =
-            ((usableHeight - spacing * (rows - 1)) / rows).clamp(96.0, 220.0);
         final itemWidth =
             (usableWidth - spacing * (crossAxisCount - 1)) / crossAxisCount;
-        final aspectRatio = (itemWidth / itemHeight).clamp(1.6, 4.8);
+        final aspectRatio = itemWidth / itemHeight;
 
         return GridView.builder(
-          physics: const NeverScrollableScrollPhysics(),
+          physics: const BouncingScrollPhysics(),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: crossAxisCount,
             crossAxisSpacing: spacing,
@@ -4624,148 +4767,121 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         0;
     final checkIns = (municipality['checkIns'] as num?)?.toInt() ?? 0;
     final isCity = type == 'City';
-    final accent = isCity ? _accentOrange : _primaryOrange;
+    final ink = const Color(0xFF1C1917);
+    final accent = isCity ? const Color(0xFFC2410C) : const Color(0xFF0F766E);
+    final mid = getMunicipalityIdFromName(name);
 
     return _MunicipalityHoverCard(
       onTap: () => _showMunicipalityDetails(municipality),
       child: Container(
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(compact ? 14 : 18),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Colors.white,
-              accent.withValues(alpha: 0.04),
-            ],
-          ),
-          border: Border.all(
-            color: isCity
-                ? accent.withValues(alpha: 0.32)
-                : const Color(0xFFE2E8F0),
-            width: isCity ? 1.4 : 1,
-          ),
-          boxShadow: [
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFE7E5E4)),
+          boxShadow: const [
             BoxShadow(
-              color: accent.withValues(alpha: 0.08),
-              blurRadius: 18,
-              offset: const Offset(0, 8),
-            ),
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 6,
-              offset: const Offset(0, 2),
+              color: Color(0x0A1C1917),
+              blurRadius: 10,
+              offset: Offset(0, 3),
             ),
           ],
         ),
         child: Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: compact ? 12 : 16,
-            vertical: compact ? 12 : 14,
+          padding: EdgeInsets.fromLTRB(
+            compact ? 10 : 12,
+            12,
+            compact ? 10 : 12,
+            12,
           ),
           child: Row(
             children: [
-              Container(
-                width: compact ? 44 : 56,
-                height: compact ? 44 : 56,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      accent.withValues(alpha: 0.22),
-                      accent.withValues(alpha: 0.08),
-                    ],
-                  ),
-                  borderRadius: BorderRadius.circular(compact ? 12 : 14),
-                  border: Border.all(
-                    color: accent.withValues(alpha: 0.2),
-                  ),
-                ),
-                child: Icon(
-                  isCity
-                      ? Icons.apartment_rounded
-                      : Icons.location_city_rounded,
-                  color: accent,
-                  size: compact ? 22 : 28,
-                ),
+              SpotImage(
+                municipalityId: mid,
+                width: 64,
+                height: 64,
+                fit: BoxFit.cover,
+                borderRadius: BorderRadius.circular(10),
+                placeholderIcon: Icons.location_on_rounded,
               ),
-              SizedBox(width: compact ? 10 : 14),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
                       name,
                       style: TextStyle(
-                        color: _textDark,
-                        fontSize: compact ? 16 : 18,
-                        fontWeight: FontWeight.bold,
-                        height: 1.2,
+                        color: ink,
+                        fontSize: compact ? 15 : 16,
+                        fontWeight: FontWeight.w800,
+                        height: 1.15,
                         letterSpacing: -0.2,
                       ),
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    SizedBox(height: compact ? 6 : 8),
-                    Row(
-                      children: [
-                        Container(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: compact ? 8 : 10,
-                            vertical: compact ? 3 : 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: accent,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            type,
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: compact ? 10.5 : 11.5,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        SizedBox(width: compact ? 8 : 10),
-                        Icon(
-                          Icons.people_alt_rounded,
-                          size: compact ? 14 : 16,
-                          color: _textMuted,
-                        ),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            '$uniqueVisitors unique visitor${uniqueVisitors == 1 ? '' : 's'}'
-                            '${checkIns > 0 ? ' · $checkIns visitors' : ''}',
-                            style: TextStyle(
-                              color: _textMuted,
-                              fontSize: compact ? 12 : 13,
-                              fontWeight: FontWeight.w600,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
+                    const SizedBox(height: 4),
+                    Text(
+                      type,
+                      style: TextStyle(
+                        color: accent,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
+                    if (checkIns > 0) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        '$checkIns check-in${checkIns == 1 ? '' : 's'}',
+                        style: const TextStyle(
+                          color: Color(0xFF44403C),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
+              const SizedBox(width: 8),
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '$uniqueVisitors',
+                    style: TextStyle(
+                      color: ink,
+                      fontSize: compact ? 20 : 24,
+                      fontWeight: FontWeight.w800,
+                      height: 1,
+                      letterSpacing: -0.6,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    uniqueVisitors == 1 ? 'visitor' : 'visitors',
+                    style: const TextStyle(
+                      color: Color(0xFF44403C),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(width: 8),
               Container(
-                width: compact ? 32 : 36,
-                height: compact ? 32 : 36,
+                width: 28,
+                height: 28,
                 decoration: BoxDecoration(
-                  color: accent.withValues(alpha: 0.1),
+                  color: accent.withValues(alpha: 0.12),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
                   Icons.arrow_forward_rounded,
+                  size: 16,
                   color: accent,
-                  size: compact ? 16 : 18,
                 ),
               ),
             ],
@@ -4778,74 +4894,43 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   DateTime? _checkInTimestamp(Map<String, dynamic> c) =>
       GovernorFirestoreService.parseCheckInTime(c);
 
-  int get _analyticsDailyAvg {
-    if (_checkIns.isEmpty) return 0;
-    final dates = <DateTime>{};
-    for (var c in _checkIns) {
-      final d = _checkInTimestamp(c);
-      if (d != null) dates.add(DateTime(d.year, d.month, d.day));
-    }
-    if (dates.isEmpty) return 0;
-    final min = dates.reduce((a, b) => a.isBefore(b) ? a : b);
-    final max = dates.reduce((a, b) => a.isAfter(b) ? a : b);
-    final days = max.difference(min).inDays + 1;
-    return days > 0
-        ? (sumCheckInVisitors(_checkIns) / days).round()
-        : sumCheckInVisitors(_checkIns);
-  }
+  int get _analyticsDailyAvg => _visitAnalytics.dailyAverage;
 
-  String get _analyticsPeakHour {
-    final byHour = <int, int>{};
-    for (var c in _checkIns) {
-      final d = _checkInTimestamp(c);
-      if (d != null) {
-        final h = d.hour;
-        byHour[h] = (byHour[h] ?? 0) + 1;
-      }
-    }
-    if (byHour.isEmpty) return '—';
-    final top = byHour.entries.reduce((a, b) => a.value >= b.value ? a : b);
-    final h = top.key;
-    final end = h + 1;
-    final am2 = end < 12 ? 'AM' : 'PM';
-    final s = h == 0 ? 12 : (h > 12 ? h - 12 : h);
-    final e = end == 0 ? 12 : (end > 12 ? end - 12 : end);
-    return '$s-$e $am2';
-  }
+  String get _analyticsPeakHour => _visitAnalytics.peakHour;
 
-  String get _analyticsTopOrigin {
-    final counts = <String, int>{};
-    for (var t in _tourists) {
-      final one =
-          t['city']?.toString().trim() ??
-          t['country']?.toString().trim() ??
-          t['origin']?.toString().trim() ??
-          t['nationality']?.toString().trim();
-      if (one != null && one.isNotEmpty) {
-        counts[one] = (counts[one] ?? 0) + 1;
-      }
-    }
-    if (counts.isEmpty) return '—';
-    return counts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
-  }
+  String get _analyticsTopOrigin => _visitAnalytics.topOrigin;
 
-  List<Map<String, dynamic>> get _analyticsTopSpots {
-    final byLocation = <String, int>{};
-    for (var c in _checkIns) {
-      final loc =
-          c['location']?.toString().trim() ??
-          c['spotName']?.toString().trim() ??
-          '';
-      if (loc.isNotEmpty) byLocation[loc] = (byLocation[loc] ?? 0) + 1;
-    }
-    return byLocation.entries
-        .map((e) => {'name': e.key, 'visits': e.value})
-        .toList()
-      ..sort((a, b) => (b['visits'] as int).compareTo(a['visits'] as int));
+  List<Map<String, dynamic>> get _analyticsTopSpots => [
+        for (final spot in _visitAnalytics.spots)
+          {'name': spot.name, 'visits': spot.count},
+      ];
+
+  Widget _buildTripPlannerContent(GovernorTripPlannerSection section) {
+    final title = switch (section) {
+      GovernorTripPlannerSection.featured => 'Featured',
+      GovernorTripPlannerSection.events => 'Events',
+      GovernorTripPlannerSection.fares => 'Fares',
+    };
+    final subtitle = switch (section) {
+      GovernorTripPlannerSection.featured =>
+        'Spots shown on the Trip Planner home banner',
+      GovernorTripPlannerSection.events =>
+        'Calendar events and notices in the Trip Planner',
+      GovernorTripPlannerSection.fares =>
+        'Bus and tricycle fares used when a tourist builds an itinerary',
+    };
+    return Container(
+      color: _darkBg,
+      child: Column(
+        children: [
+          _buildHeader(title, subtitle: subtitle),
+          Expanded(child: GovernorTripPlannerPage(section: section)),
+        ],
+      ),
+    );
   }
 
   // ==================== ANALYTICS SECTION ====================
-  /// Insights + provincial exports (moved from Reports).
   Widget _buildAnalyticsContent() {
     final pad = _isMobile ? 14.0 : 22.0;
     return RefreshIndicator(
@@ -4857,8 +4942,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
           children: [
             _buildHeader(
               'Analytics',
-              subtitle:
-                  'Insights and provincial exports for Misamis Occidental',
+              subtitle: 'Insights for Misamis Occidental',
             ),
             Expanded(
               child: SingleChildScrollView(
@@ -4876,42 +4960,24 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                     _buildAnalyticsCards(),
                     const SizedBox(height: 22),
                     _buildAnalyticsSectionLabel(
+                      'Visitor analytics',
+                      'Gender, age, residence, arrivals, and municipality ranking from check-ins',
+                      Icons.pie_chart_outline_rounded,
+                    ),
+                    const SizedBox(height: 12),
+                    VisitAnalyticsBoard(
+                      checkIns: _checkIns,
+                      tourists: _tourists,
+                      parseTime: _checkInTimestamp,
+                    ),
+                    const SizedBox(height: 22),
+                    _buildAnalyticsSectionLabel(
                       'Spot rankings',
                       'Most visited tourist spots by check-in volume',
                       Icons.emoji_events_outlined,
                     ),
                     const SizedBox(height: 12),
                     _buildTopSpotsChart(),
-                    const SizedBox(height: 22),
-                    _buildAnalyticsSectionLabel(
-                      'Provincial exports',
-                      'Download province-wide reports for all LGUs',
-                      Icons.file_download_outlined,
-                    ),
-                    const SizedBox(height: 12),
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        final sideBySide = !_isMobile && constraints.maxWidth >= 980;
-                        if (!sideBySide) {
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              _buildGovernorQuickReports(),
-                              const SizedBox(height: 14),
-                              _buildGovernorCustomReportGenerator(),
-                            ],
-                          );
-                        }
-                        return Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(child: _buildGovernorQuickReports()),
-                            const SizedBox(width: 14),
-                            Expanded(child: _buildGovernorCustomReportGenerator()),
-                          ],
-                        );
-                      },
-                    ),
                     const SizedBox(height: 22),
                     _buildAnalyticsSectionLabel(
                       'DOT templates (provincial)',
@@ -5310,7 +5376,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
             'Events',
             subtitle: unreadCount > 0
                 ? '$unreadCount new LGU event${unreadCount == 1 ? '' : 's'}'
-                : 'Province-wide LGU events (auto-published)',
+                : 'LGU offices publish these events. View only.',
           ),
           Expanded(
             child: Padding(
@@ -5824,10 +5890,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                const Divider(height: 1, color: Color(0xFFE5E7EB)),
-                const SizedBox(height: 10),
-                _buildAnnouncementActionsRow(announcement, status, isPublished),
+                const SizedBox(height: 4),
               ],
             ),
           ),
@@ -5873,195 +5936,6 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
-  Widget _buildAnnouncementActionsRow(
-    Map<String, dynamic> announcement,
-    String status,
-    bool isPublished,
-  ) {
-    final buttons = <Widget>[];
-
-    // Legacy pending items only — new posts auto-publish.
-    if (status == 'pending') {
-      buttons.add(
-        _announcementActionButton(
-          label: 'Publish',
-          icon: Icons.check_circle_outline,
-          color: const Color(0xFF2E7D32),
-          onPressed: () => _approveLguEvent(announcement),
-        ),
-      );
-    }
-    if (status == 'approved' && isPublished) {
-      buttons.add(
-        _announcementActionButton(
-          label: 'Unpublish',
-          icon: Icons.visibility_off_outlined,
-          color: _textMuted,
-          onPressed: () => _unpublishLguEvent(announcement),
-        ),
-      );
-    }
-
-    if (buttons.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: buttons,
-    );
-  }
-
-  Future<void> _approveLguEvent(Map<String, dynamic> announcement) async {
-    final id = announcement['id']?.toString() ?? '';
-    if (id.isEmpty) return;
-    try {
-      await LguEventService().approveEvent(
-        eventId: id,
-        approvedBy: FirebaseAuth.instance.currentUser?.email ?? 'Governor',
-      );
-      final pushSent = await _broadcastPublishedAnnouncement(
-        title: announcement['title']?.toString() ?? '',
-        content: announcement['content']?.toString() ?? '',
-        type: LguEventService.typeEvent,
-        announcementId: id,
-      );
-      setState(() {
-        final index = _announcements.indexWhere((a) => a['id'] == id);
-        if (index != -1) {
-          _announcements[index]['status'] = 'approved';
-          _announcements[index]['published'] = true;
-        }
-      });
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_publishedAnnouncementSnackMessage(pushSent)),
-          backgroundColor: _primaryOrange,
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not approve event: $e')),
-      );
-    }
-  }
-
-  Future<void> _rejectLguEvent(Map<String, dynamic> announcement) async {
-    final id = announcement['id']?.toString() ?? '';
-    if (id.isEmpty) return;
-    final reasonController = TextEditingController();
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Reject event?'),
-        content: TextField(
-          controller: reasonController,
-          maxLines: 3,
-          decoration: const InputDecoration(
-            labelText: 'Reason (optional)',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Reject'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) {
-      reasonController.dispose();
-      return;
-    }
-    try {
-      await LguEventService().rejectEvent(
-        eventId: id,
-        reason: reasonController.text,
-        rejectedBy: FirebaseAuth.instance.currentUser?.email ?? 'Governor',
-      );
-      setState(() {
-        final index = _announcements.indexWhere((a) => a['id'] == id);
-        if (index != -1) {
-          _announcements[index]['status'] = 'rejected';
-          _announcements[index]['published'] = false;
-          if (reasonController.text.trim().isNotEmpty) {
-            _announcements[index]['rejectedReason'] = reasonController.text.trim();
-          }
-        }
-      });
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Event rejected')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not reject event: $e')),
-      );
-    } finally {
-      reasonController.dispose();
-    }
-  }
-
-  Future<void> _unpublishLguEvent(Map<String, dynamic> announcement) async {
-    final id = announcement['id']?.toString() ?? '';
-    if (id.isEmpty) return;
-    try {
-      await LguEventService().unpublishEvent(id);
-      setState(() {
-        final index = _announcements.indexWhere((a) => a['id'] == id);
-        if (index != -1) {
-          _announcements[index]['published'] = false;
-        }
-      });
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Event unpublished')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not unpublish event: $e')),
-      );
-    }
-  }
-
-  Widget _announcementActionButton({
-    required String label,
-    required IconData icon,
-    required Color color,
-    required VoidCallback onPressed,
-  }) {
-    return SizedBox(
-      width: _isMobile ? null : 96,
-      child: OutlinedButton.icon(
-        onPressed: onPressed,
-        icon: Icon(icon, size: 16, color: color),
-        label: Text(
-          label,
-          style: TextStyle(
-            color: color,
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: color,
-          side: BorderSide(color: color.withOpacity(0.35)),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-          minimumSize: const Size(0, 36),
-        ),
-      ),
-    );
-  }
 
   void _showCreateAnnouncementDialog() {
     final titleController = TextEditingController();
@@ -6474,658 +6348,6 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
-  Widget _buildGovernorQuickReports() {
-    final items = <({
-      String title,
-      String subtitle,
-      IconData icon,
-      Color accent,
-      String type,
-    })>[
-      (
-        title: 'Daily',
-        subtitle: "Today's unique scanners",
-        icon: Icons.today_rounded,
-        accent: const Color(0xFF2563EB),
-        type: 'daily',
-      ),
-      (
-        title: 'Weekly',
-        subtitle: 'Last 7 days',
-        icon: Icons.date_range_rounded,
-        accent: const Color(0xFFEA580C),
-        type: 'weekly',
-      ),
-      (
-        title: 'Monthly',
-        subtitle: 'This month to date',
-        icon: Icons.calendar_month_rounded,
-        accent: _primaryOrange,
-        type: 'monthly',
-      ),
-      (
-        title: 'Annual',
-        subtitle: 'Year to date',
-        icon: Icons.calendar_today_rounded,
-        accent: const Color(0xFF0F766E),
-        type: 'annual',
-      ),
-    ];
-
-    return _buildGovernorReportPanel(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            'Quick exports',
-            style: TextStyle(
-              color: _textDark,
-              fontSize: 14.5,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            'One-tap province-wide downloads by time window.',
-            style: TextStyle(color: _textMuted, fontSize: 12, height: 1.35),
-          ),
-          const SizedBox(height: 14),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final twoCol = constraints.maxWidth >= 360;
-              if (!twoCol) {
-                return Column(
-                  children: [
-                    for (var i = 0; i < items.length; i++) ...[
-                      if (i > 0) const SizedBox(height: 10),
-                      _buildGovernorQuickReportRow(
-                        title: items[i].title,
-                        subtitle: items[i].subtitle,
-                        icon: items[i].icon,
-                        accent: items[i].accent,
-                        type: items[i].type,
-                      ),
-                    ],
-                  ],
-                );
-              }
-              return Column(
-                children: [
-                  for (var row = 0; row < 2; row++) ...[
-                    if (row > 0) const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        for (var col = 0; col < 2; col++) ...[
-                          if (col > 0) const SizedBox(width: 10),
-                          Expanded(
-                            child: _buildGovernorQuickReportRow(
-                              title: items[row * 2 + col].title,
-                              subtitle: items[row * 2 + col].subtitle,
-                              icon: items[row * 2 + col].icon,
-                              accent: items[row * 2 + col].accent,
-                              type: items[row * 2 + col].type,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ],
-                ],
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildGovernorQuickReportRow({
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    required Color accent,
-    required String type,
-  }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () => _generateGovernorQuickReport(type),
-        borderRadius: BorderRadius.circular(14),
-        child: Ink(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF8FAFC),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: _cardBorder),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 34,
-                    height: 34,
-                    decoration: BoxDecoration(
-                      color: accent.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(icon, color: accent, size: 17),
-                  ),
-                  const Spacer(),
-                  Icon(Icons.download_rounded, size: 16, color: accent),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Text(
-                title,
-                style: const TextStyle(
-                  color: _textDark,
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                subtitle,
-                style: const TextStyle(
-                  color: _textMuted,
-                  fontSize: 11.5,
-                  height: 1.3,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildGovernorCustomReportGenerator() {
-    return _buildGovernorReportPanel(
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final stacked = _isMobile || constraints.maxWidth < 720;
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Text(
-                'Custom report',
-                style: TextStyle(
-                  color: _textDark,
-                  fontSize: 14.5,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                'Pick a date range and report type, then export province-wide.',
-                style: TextStyle(color: _textMuted, fontSize: 12, height: 1.35),
-              ),
-              const SizedBox(height: 16),
-              if (stacked) ...[
-                _buildGovernorDatePicker(
-                  'Start Date',
-                  _reportStartDate,
-                  (d) => setState(() => _reportStartDate = d),
-                ),
-                const SizedBox(height: 12),
-                _buildGovernorDatePicker(
-                  'End Date',
-                  _reportEndDate,
-                  (d) => setState(() => _reportEndDate = d),
-                ),
-                const SizedBox(height: 12),
-                _buildGovernorReportTypeDropdown(),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: _generateGovernorCustomReport,
-                    icon: _isExporting
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.download),
-                    label: Text(_isExporting ? 'Generating...' : 'Generate'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _primaryOrange,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
-              ] else
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  crossAxisAlignment: WrapCrossAlignment.end,
-                  children: [
-                    SizedBox(
-                      width: 190,
-                      child: _buildGovernorDatePicker(
-                        'Start Date',
-                        _reportStartDate,
-                        (d) => setState(() => _reportStartDate = d),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 190,
-                      child: _buildGovernorDatePicker(
-                        'End Date',
-                        _reportEndDate,
-                        (d) => setState(() => _reportEndDate = d),
-                      ),
-                    ),
-                    SizedBox(
-                      width: math.min(280.0, constraints.maxWidth - 24),
-                      child: _buildGovernorReportTypeDropdown(),
-                    ),
-                    ElevatedButton.icon(
-                      onPressed: _generateGovernorCustomReport,
-                      icon: _isExporting
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Icon(Icons.download_rounded, size: 17),
-                      label: Text(_isExporting ? 'Generating...' : 'Generate'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _primaryOrange,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 18,
-                          vertical: 11,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildGovernorDatePicker(
-    String label,
-    DateTime? selected,
-    ValueChanged<DateTime> onSelect,
-  ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label, style: const TextStyle(color: _textMuted, fontSize: 11)),
-        const SizedBox(height: 4),
-        InkWell(
-          onTap: () async {
-            final date = await showDatePicker(
-              context: context,
-              initialDate: selected ?? DateTime.now(),
-              firstDate: DateTime(2020),
-              lastDate: DateTime.now().add(const Duration(days: 365)),
-            );
-            if (date != null) onSelect(date);
-          },
-          borderRadius: BorderRadius.circular(10),
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              border: Border.all(color: _cardBorder),
-              borderRadius: BorderRadius.circular(10),
-              color: Colors.white,
-            ),
-            child: Text(
-              selected != null
-                  ? formatReportDate(selected)
-                  : 'Select date',
-              style: TextStyle(
-                color: selected != null ? _textDark : _textMuted,
-                fontSize: 13,
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildGovernorReportTypeDropdown() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const Text(
-          'Report Type',
-          style: TextStyle(color: _textMuted, fontSize: 11),
-        ),
-        const SizedBox(height: 4),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: _cardBorder),
-          ),
-          child: DropdownButton<String>(
-            value: _reportType,
-            isExpanded: true,
-            isDense: true,
-            dropdownColor: Colors.white,
-            underline: const SizedBox.shrink(),
-            icon: Icon(Icons.keyboard_arrow_down, color: _textMuted, size: 20),
-            style: const TextStyle(color: _textDark, fontSize: 13),
-            items: _reportTypes
-                .map(
-                  (t) => DropdownMenuItem(
-                    value: t,
-                    child: Text(
-                      t,
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
-                      style: const TextStyle(fontSize: 13),
-                    ),
-                  ),
-                )
-                .toList(),
-            onChanged: (v) {
-              if (v != null) setState(() => _reportType = v);
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Future<void> _generateGovernorQuickReport(String type) async {
-    final now = DateTime.now();
-    late DateTime startDate;
-    late DateTime endDate;
-
-    switch (type) {
-      case 'daily':
-        startDate = DateTime(now.year, now.month, now.day);
-        endDate = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
-        break;
-      case 'weekly':
-        final todayStart = DateTime(now.year, now.month, now.day);
-        startDate = todayStart.subtract(const Duration(days: 6));
-        endDate = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
-        break;
-      case 'monthly':
-        startDate = DateTime(now.year, now.month, 1);
-        endDate = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
-        break;
-      case 'annual':
-        startDate = DateTime(now.year, 1, 1);
-        endDate = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
-        break;
-      default:
-        startDate = DateTime(now.year, now.month, now.day);
-        endDate = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
-    }
-
-    await _generateGovernorReport(
-      startDate,
-      endDate,
-      'All Data',
-      type,
-    );
-  }
-
-  Future<void> _generateGovernorCustomReport() async {
-    if (_reportStartDate == null || _reportEndDate == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please select both start and end dates'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
-    final start = DateTime(
-      _reportStartDate!.year,
-      _reportStartDate!.month,
-      _reportStartDate!.day,
-    );
-    final end = DateTime(
-      _reportEndDate!.year,
-      _reportEndDate!.month,
-      _reportEndDate!.day,
-      23,
-      59,
-      59,
-      999,
-    );
-    if (end.isBefore(start)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('End date must be on or after start date'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
-    if (_reportType == 'DOT Tourism Attraction Visitor Record (VAR 2)') {
-      await _generateGovernorVar2Report(start, end, 'custom');
-      return;
-    }
-
-    await _generateGovernorReport(start, end, _reportType, 'custom');
-  }
-
-  Future<void> _generateGovernorVar2Report(
-    DateTime startDate,
-    DateTime endDate,
-    String period,
-  ) async {
-    setState(() {
-      _isExporting = true;
-      _exportProgress = 0.0;
-    });
-
-    for (var i = 1; i <= 8; i++) {
-      await Future.delayed(const Duration(milliseconds: 80));
-      if (mounted) setState(() => _exportProgress = i / 8);
-    }
-
-    final filtered = filterCheckInsInDateRange(_checkIns, startDate, endDate);
-    final catalog = _governorAllSpots
-        .map(
-          (s) => DotVar2SpotCatalogEntry(
-            spotId: s['id']?.toString() ?? '',
-            name: s['name']?.toString() ?? 'Unknown',
-            dotAttractionCode: s['dotAttractionCode']?.toString() ?? '',
-          ),
-        )
-        .toList();
-
-    const provinceLabel = 'Misamis Occidental (Provincial)';
-    final var2 = buildDotVar2VisitorRecordReport(
-      checkIns: filtered,
-      catalogSpots: catalog,
-      municipalityName: provinceLabel,
-      startDate: startDate,
-      endDate: endDate,
-    );
-
-    final csvName = var2CsvFilename(
-      municipalitySlug: 'misamis_occidental_provincial',
-      startDate: startDate,
-      endDate: endDate,
-    );
-    final xlsxName = var2XlsxFilename(
-      municipalitySlug: 'misamis_occidental_provincial',
-      startDate: startDate,
-      endDate: endDate,
-    );
-
-    final report = StringBuffer()
-      ..writeln('=== DOT VAR 2 — PROVINCIAL (MISAMIS OCCIDENTAL) ===')
-      ..writeln('Generated: ${DateTime.now()}')
-      ..writeln('Month/Year: ${var2.monthYearLabel}')
-      ..writeln('Scope: $provinceLabel')
-      ..writeln('Check-ins in period: ${var2.checkInsProcessed}')
-      ..writeln()
-      ..writeln(var2.note)
-      ..writeln()
-      ..writeln('--- ATTRACTION SUMMARY (province-wide) ---');
-
-    for (final row in var2.rows) {
-      report.writeln(
-        '${row.name} [${row.attractionCode.isEmpty ? 'no code' : row.attractionCode}] '
-        '→ Grand Total: ${row.grandTotal.total}',
-      );
-    }
-    report
-      ..writeln()
-      ..writeln(
-        'Total of this Month ****: ${var2.footerTotals.grandTotal.total}',
-      );
-
-    if (mounted) setState(() => _isExporting = false);
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'Provincial VAR 2 generated (${var2.checkInsProcessed} check-ins)',
-        ),
-        backgroundColor: _primaryOrange,
-        action: SnackBarAction(
-          label: 'Preview',
-          textColor: Colors.white,
-          onPressed: () => _showGovernorExportPreview(
-            'Provincial VAR 2 Report',
-            report.toString(),
-            csvData: var2.csv,
-            csvFilename: csvName,
-            xlsxBytes: var2.xlsxBytes,
-            xlsxFilename: xlsxName,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _generateGovernorReport(
-    DateTime startDate,
-    DateTime endDate,
-    String type,
-    String period,
-  ) async {
-    setState(() {
-      _isExporting = true;
-      _exportProgress = 0.0;
-    });
-
-    for (var i = 1; i <= 8; i++) {
-      await Future.delayed(const Duration(milliseconds: 80));
-      if (mounted) setState(() => _exportProgress = i / 8);
-    }
-
-    final built = buildProvincialAtmosReport(
-      allCheckIns: _checkIns,
-      tourists: _tourists,
-      spots: _governorAllSpots,
-      activeSpots: _activeSpots,
-      startDate: startDate,
-      endDate: endDate,
-      reportType: type,
-      period: period,
-    );
-
-    if (mounted) setState(() => _isExporting = false);
-    if (!mounted) return;
-
-    final summaryCsvName = built.summaryCsv != null
-        ? checkInSummaryCsvFilename(
-            period: period,
-            startDate: startDate,
-            endDate: endDate,
-          ).replaceFirst('checkin_summary', 'provincial_checkin_summary')
-        : null;
-    final muniCsvName = built.municipalityCsv != null
-        ? provincialReportCsvFilename(
-            period: period,
-            startDate: startDate,
-            endDate: endDate,
-            suffix: 'by_municipality',
-          )
-        : null;
-    final detailCsvName = built.detailCsv != null
-        ? provincialReportCsvFilename(
-            period: period,
-            startDate: startDate,
-            endDate: endDate,
-            suffix: 'checkins_detail',
-          )
-        : null;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'Provincial $period report generated (${built.checkInsInPeriod} check-ins)',
-        ),
-        backgroundColor: _primaryOrange,
-        action: SnackBarAction(
-          label: 'Preview',
-          textColor: Colors.white,
-          onPressed: () => _showGovernorExportPreview(
-            'Provincial ${_capitalizeLabel(period)} Report',
-            built.reportText,
-            csvData: built.summaryCsv,
-            csvFilename: summaryCsvName,
-            detailCsvData: built.municipalityCsv ?? built.detailCsv,
-            detailCsvFilename: muniCsvName ?? detailCsvName,
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showGovernorExportPreview(
-    String title,
-    String content, {
-    String? csvData,
-    String? csvFilename,
-    String? detailCsvData,
-    String? detailCsvFilename,
-    List<int>? xlsxBytes,
-    String? xlsxFilename,
-  }) {
-    showReportExportPreviewDialog(
-      context,
-      title: title,
-      subtitle: 'ATMOS-TRS · Governor Portal · Provincial export',
-      content: content,
-      csvData: csvData,
-      csvFilename: csvFilename,
-      detailCsvData: detailCsvData,
-      detailCsvFilename: detailCsvFilename,
-      detailCsvLabel: detailCsvFilename != null &&
-              detailCsvFilename.contains('municipality')
-          ? 'Download by municipality CSV'
-          : 'Download detail CSV',
-      xlsxBytes: xlsxBytes,
-      xlsxFilename: xlsxFilename,
-      accentColor: _primaryOrange,
-    );
-  }
-
   // ==================== SETTINGS SECTION ====================
   Widget _buildSettingsContent() {
     return Container(
@@ -7190,7 +6412,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                       Icons.download_outlined,
                       _isExporting
                           ? 'Exporting... ${(_exportProgress * 100).toInt()}%'
-                          : 'Provincial exports on Analytics (all LGUs)',
+                          : 'DOT templates on Analytics',
                       () => setState(() => _selectedIndex = _analyticsIndex),
                     ),
                     _buildSettingsTileWithSubtitle(
@@ -8155,43 +7377,26 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     if (lines.isEmpty) return const SizedBox.shrink();
     final headers = lines.first.split(',').map((s) => s.trim()).toList();
     final dataRows = lines.length > 1 ? lines.sublist(1) : <String>[];
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: DataTable(
-        headingRowColor: WidgetStateProperty.all(Colors.grey.shade100),
-        columnSpacing: 16,
-        horizontalMargin: 12,
-        columns: headers
-            .map(
-              (h) => DataColumn(
-                label: Text(
-                  h,
-                  style: const TextStyle(
-                    color: _textDark,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            )
-            .toList(),
-        rows: dataRows.map((line) {
-          final cells = line.split(',').map((s) => s.trim()).toList();
-          return DataRow(
-            cells: List.generate(
-              headers.length,
-              (i) => DataCell(
+    return AtmosResponsiveTable(
+      columns: [
+        for (final h in headers)
+          AtmosTableColumn(h, minWidth: 120, flex: h.length > 16 ? 2 : 1),
+      ],
+      rows: [
+        for (final line in dataRows)
+          () {
+            final cells = line.split(',').map((s) => s.trim()).toList();
+            return [
+              for (var i = 0; i < headers.length; i++)
                 Text(
                   i < cells.length ? cells[i] : '',
                   style: const TextStyle(color: _textDark, fontSize: 12),
                   overflow: TextOverflow.ellipsis,
                   maxLines: 1,
                 ),
-              ),
-            ),
-          );
-        }).toList(),
-      ),
+            ];
+          }(),
+      ],
     );
   }
 
@@ -9466,16 +8671,42 @@ class _MunicipalityHoverCardState extends State<_MunicipalityHoverCard> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedScale(
-          scale: _hovered ? 1.02 : 1.0,
+          scale: _hovered ? 1.015 : 1.0,
           duration: const Duration(milliseconds: 160),
           curve: Curves.easeOut,
-          child: AnimatedOpacity(
-            opacity: _hovered ? 1 : 0.98,
-            duration: const Duration(milliseconds: 160),
-            child: widget.child,
-          ),
+          child: widget.child,
         ),
       ),
     );
   }
+}
+
+class _SearchHit {
+  const _SearchHit(this.title, this.subtitle, this.icon, this.open);
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final VoidCallback open;
+}
+
+class _MunicipalityDrill {
+  const _MunicipalityDrill({
+    required this.id,
+    required this.name,
+    required this.type,
+    required this.uniqueVisitors,
+  });
+
+  final String id;
+  final String name;
+  final String type;
+  final int uniqueVisitors;
+}
+
+class _EntityDrill {
+  const _EntityDrill.spot(this.spot) : establishment = null;
+  const _EntityDrill.establishment(this.establishment) : spot = null;
+
+  final Map<String, dynamic>? spot;
+  final EstablishmentRegistryEntry? establishment;
 }

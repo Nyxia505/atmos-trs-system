@@ -255,9 +255,11 @@ class MiceEventTable extends StatelessWidget {
       }
     }
     final editable = !readOnly && !showMonth;
-    return InkWell(
-      onTap: editable ? () => onEdit?.call(e) : (showMonth ? () => onOpenMonth?.call(e) : null),
-      child: Row(children: cells),
+    return AeHoverRow(
+      child: InkWell(
+        onTap: editable ? () => onEdit?.call(e) : (showMonth ? () => onOpenMonth?.call(e) : null),
+        child: Row(children: cells),
+      ),
     );
   }
 

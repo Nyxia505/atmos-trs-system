@@ -1,7 +1,10 @@
 import 'dart:async' show StreamSubscription, Timer, unawaited;
+import 'dart:math' as math;
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 import 'package:atmos_trs_system/data/app_faq_content.dart';
@@ -9,19 +12,27 @@ import 'package:atmos_trs_system/features/navigation/placeholder_pages.dart'
     show ScanTabPage;
 import 'package:atmos_trs_system/navigation/landing_intent_navigation.dart';
 import 'package:atmos_trs_system/navigation/login_route_args.dart';
-import 'package:atmos_trs_system/navigation/tripplan_entry_screen.dart';
+import 'package:atmos_trs_system/navigation/role_router.dart';
+import 'package:atmos_trs_system/navigation/trip_planner_access.dart';
 import 'package:atmos_trs_system/data/landing_lgu_destinations.dart';
 import 'package:atmos_trs_system/screens/municipality_map_and_spots_screen.dart';
 import 'package:atmos_trs_system/widgets/atmos_brand_title.dart';
 import 'package:atmos_trs_system/widgets/atmos_square_logo.dart';
 import 'package:atmos_trs_system/widgets/hero_video_branding_overlay.dart';
+import 'package:atmos_trs_system/widgets/landing_about_section.dart';
+import 'package:atmos_trs_system/widgets/landing_features_section.dart';
+import 'package:atmos_trs_system/widgets/landing_how_it_works_section.dart';
 import 'package:atmos_trs_system/widgets/hero_video_mute_control.dart';
 import 'package:atmos_trs_system/widgets/onboarding_hero_video.dart';
+import 'package:atmos_trs_system/config/app_store_links.dart';
 import 'package:atmos_trs_system/config/atmos_brand_typography.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/config/supabase_storage_config.dart';
 import 'package:atmos_trs_system/services/landing_intent_service.dart';
+import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
 import 'package:atmos_trs_system/services/landing_public_stats_service.dart';
+import 'package:atmos_trs_system/widgets/landing_hero_stats.dart';
+import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/services/login_flow_service.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
 import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
@@ -40,8 +51,6 @@ class LandingPage extends StatefulWidget {
 
 class _LandingPageState extends State<LandingPage> {
   bool _isScrolled = false;
-  int? _hoveredExperienceIndex;
-  int? _hoveredFeatureIndex;
   int? _hoveredHeroGlassIndex;
   String? _hoveredDestinationName;
 
@@ -100,6 +109,7 @@ class _LandingPageState extends State<LandingPage> {
   final GlobalKey _keyDestinations = GlobalKey();
   final GlobalKey _keyHowItWorks = GlobalKey();
   final GlobalKey _keyAbout = GlobalKey();
+  final GlobalKey _keyFaq = GlobalKey();
 
   /// Landing page always uses Asenso orange (not Settings theme color).
   static const Color _primaryOrange = Color(0xFFF97316);
@@ -108,9 +118,8 @@ class _LandingPageState extends State<LandingPage> {
   static const Color _darkBg = Color(0xFF192334);
   static const Color _accentOrange = Color(0xFFFB923C);
 
-  /// Page shell: crisp white with optional muted strips (avoids cream/peach page fills).
+  /// Page shell: crisp white (avoids cream/peach page fills on sections that stay white).
   static const Color _pageBackground = Color(0xFFFFFFFF);
-  static const Color _pageSurfaceMuted = Color(0xFFF8FAFC);
   static const Color _pageDivider = Color(0xFFE5E7EB);
   static const Color _bodyText = Color(0xFF334155);
   static const double _cardRadius = 18.0;
@@ -166,44 +175,6 @@ class _LandingPageState extends State<LandingPage> {
   }
 
   /// Soft tinted card backgrounds + accents (Asenso orange family).
-  final List<Map<String, dynamic>> _features = [
-    {
-      'icon': Icons.qr_code_rounded,
-      'title': 'QR Code Registration',
-      'description':
-          'Quick and easy tourist registration with unique QR code identification',
-      'accent': _primaryOrange,
-    },
-    {
-      'icon': Icons.vrpano_rounded,
-      'title': 'Virtual Reality Tours',
-      'description':
-          'Explore destinations in immersive 360° VR before you visit',
-      'accent': _primaryOrange,
-    },
-    {
-      'icon': Icons.qr_code_scanner_rounded,
-      'title': 'Smart Check-ins',
-      'description':
-          'Scan your QR at tourist spots for seamless check-in experience',
-      'accent': _primaryOrange,
-    },
-    {
-      'icon': Icons.badge_rounded,
-      'title': 'Digital Tourist ID',
-      'description':
-          'Your unique digital identification for all tourist activities',
-      'accent': _primaryOrange,
-    },
-    {
-      'icon': Icons.map_rounded,
-      'title': 'Itinerary Planner',
-      'description': 'Plan and organize your travel itinerary',
-      'accent': _primaryOrange,
-      'route': 'itinerary',
-    },
-  ];
-
   /// Images resolved from [TouristSpotImageCatalog] — same as the mobile app.
   late final List<Map<String, String>> _destinations =
       buildLandingLguDestinations();
@@ -245,10 +216,108 @@ class _LandingPageState extends State<LandingPage> {
   User? _authUser = FirebaseAuth.instance.currentUser;
   StreamSubscription<User?>? _authSub;
   LandingPublicStats? _publicStats;
+  int? _registeredTourists;
+  bool _registeredTouristsLoading = true;
+  bool _registeredTouristsFailed = false;
+  bool _registeredTouristSeedStarted = false;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+      _registeredTouristSub;
+  bool _heroStatsOpen = false;
+  int? _touristSpots;
+  int? _vrTours;
+  bool _spotStatsLoading = true;
+  bool _spotStatsFailed = false;
+  StreamSubscription<LandingSpotCounts>? _spotStatsSub;
 
   Future<void> _loadPublicStats() async {
     final stats = await LandingPublicStatsService.load();
-    if (mounted) setState(() => _publicStats = stats);
+    if (mounted) {
+      setState(() {
+        _publicStats = stats;
+        _touristSpots ??= stats.touristSpots;
+        _vrTours ??= stats.vrTours;
+        if (_spotStatsLoading &&
+            stats.touristSpots != null &&
+            stats.vrTours != null) {
+          _spotStatsLoading = false;
+          _spotStatsFailed = false;
+        }
+      });
+    }
+  }
+
+  void _listenSpotCounts() {
+    _spotStatsSub = LandingPublicStatsService.watchSpotCounts().listen(
+      (counts) {
+        if (!mounted) return;
+        setState(() {
+          _touristSpots = counts.touristSpots;
+          _vrTours = counts.vrTours;
+          _spotStatsLoading = false;
+          _spotStatsFailed = false;
+        });
+      },
+      onError: (Object error) {
+        debugPrint('[LandingPublicStats] spot listener failed: $error');
+        if (!mounted) return;
+        setState(() {
+          _spotStatsLoading = false;
+          _spotStatsFailed = _touristSpots == null && _vrTours == null;
+        });
+      },
+    );
+  }
+
+  void _listenRegisteredTourists() {
+    _registeredTouristSub =
+        LandingPublicStatsService.watchRegisteredTourists().listen(
+      (snapshot) {
+        final raw = snapshot.data()?['registeredTourists'];
+        if (raw is num) {
+          if (!mounted) return;
+          setState(() {
+            _registeredTourists = raw.toInt();
+            _registeredTouristsLoading = false;
+            _registeredTouristsFailed = false;
+          });
+          return;
+        }
+        unawaited(_seedRegisteredTourists());
+      },
+      onError: (Object error) {
+        debugPrint('[LandingPublicStats] listener failed: $error');
+        unawaited(_seedRegisteredTourists(fromError: true));
+      },
+    );
+  }
+
+  Future<void> _seedRegisteredTourists({bool fromError = false}) async {
+    if (_registeredTouristSeedStarted) {
+      if (fromError && _registeredTourists == null && mounted) {
+        setState(() {
+          _registeredTouristsLoading = false;
+          _registeredTouristsFailed = true;
+        });
+      }
+      return;
+    }
+    _registeredTouristSeedStarted = true;
+    final count = await LandingPublicStatsService.ensureRegisteredTouristCount();
+    if (!mounted) return;
+    if (count != null) {
+      setState(() {
+        _registeredTourists = count;
+        _registeredTouristsLoading = false;
+        _registeredTouristsFailed = false;
+      });
+      return;
+    }
+    if (_registeredTourists == null) {
+      setState(() {
+        _registeredTouristsLoading = false;
+        _registeredTouristsFailed = true;
+      });
+    }
   }
 
   String _formatStatCount(int? value) {
@@ -273,6 +342,8 @@ class _LandingPageState extends State<LandingPage> {
     _heroSearchController.addListener(_onHeroSearchTextChanged);
     _heroSearchFocusNode.addListener(_onHeroSearchFocusChanged);
     unawaited(_loadPublicStats());
+    _listenRegisteredTourists();
+    _listenSpotCounts();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -367,6 +438,137 @@ class _LandingPageState extends State<LandingPage> {
     _pushAuthRoute('/login');
   }
 
+  /// ATMOS-TRS login opens the role dashboard. A leftover VR intent must not
+  /// turn this into an APK download.
+  Future<void> _openAtmosLogin() async {
+    await LandingIntentService.clear();
+    if (!mounted) return;
+    _navigateToLogin();
+  }
+
+  /// Header Log In: ATMOS TRS or Itinerary, then that product's login and dashboard.
+  void _openHeaderLoginChoice() {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 22, 22, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Log in',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.montserrat(
+                      color: const Color(0xFF1B2433),
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Choose where to continue',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.montserrat(
+                      color: const Color(0xFF64748B),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  _headerLoginChoiceTile(
+                    icon: Icons.travel_explore_rounded,
+                    title: 'ATMOS TRS',
+                    subtitle: 'Tourist and establishment dashboard',
+                    onTap: () {
+                      Navigator.pop(dialogContext);
+                      unawaited(_openAtmosLogin());
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  _headerLoginChoiceTile(
+                    icon: Icons.map_outlined,
+                    title: 'Itinerary',
+                    subtitle: 'Trip Planner dashboard',
+                    onTap: () {
+                      Navigator.pop(dialogContext);
+                      _navigateToLoginForFeature(
+                        returnFeature: LoginRouteArgs.featureItinerary,
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _headerLoginChoiceTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: const Color(0xFFFFF8F4),
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFF4D5C2)),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, color: _primaryOrange),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: GoogleFonts.montserrat(
+                        color: const Color(0xFF1B2433),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: GoogleFonts.montserrat(
+                        color: const Color(0xFF64748B),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.arrow_forward_rounded, color: _primaryOrange),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   void _navigateToSignup() {
     _pushAuthRoute('/signup');
   }
@@ -407,29 +609,34 @@ class _LandingPageState extends State<LandingPage> {
   }) async {
     await LandingIntentService.clear();
     if (!mounted) return;
-    await LandingIntentNavigation.executeIntent(
-      context,
-      LandingIntent(feature: returnFeature, municipalityName: municipalityName),
-    );
-  }
-
-  void _pushTripPlanEntry() {
-    final heroController = OnboardingHeroVideo.read(context)?.controller;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (context) =>
-            TripPlanEntryScreen(sharedHeroController: heroController),
-      ),
-    );
+    if (returnFeature == LoginRouteArgs.featureItinerary) {
+      await LandingIntentNavigation.openPlanner(context);
+      return;
+    }
+    // ATMOS-TRS login (including a VR return) opens the signed-in role
+    // dashboard. APK downloads stay on the Home download buttons.
+    await _openAuthorizedDashboard();
   }
 
   Future<void> _openPlanItinerary({String? municipalityName}) async {
     _pauseHeroVideoForAuthNavigation();
+    final access = _isLoggedIn
+        ? await TripPlannerAccess.evaluate()
+        : TripPlannerAccessResult.signedOut;
+    if (!mounted) return;
+    if (access == TripPlannerAccessResult.denied) {
+      await LandingIntentService.clear();
+      if (!mounted) return;
+      final route = await _authorizedDashboardRoute();
+      if (!mounted) return;
+      Navigator.of(context).pushNamed(route);
+      return;
+    }
     await LandingIntentService.setPending(
       feature: LoginRouteArgs.featureItinerary,
       municipalityName: municipalityName,
     );
-    if (!_isLoggedIn) {
+    if (access == TripPlannerAccessResult.signedOut) {
       _navigateToLoginForFeature(
         returnFeature: LoginRouteArgs.featureItinerary,
         municipalityName: municipalityName,
@@ -437,15 +644,38 @@ class _LandingPageState extends State<LandingPage> {
       return;
     }
     await LandingIntentService.clear();
-    _pushTripPlanEntry();
+    if (!mounted) return;
+    await LandingIntentNavigation.openPlanner(context);
   }
 
   void _openVrOrLogin() {
-    if (_isLoggedIn) {
-      unawaited(_openVrTourFromLanding());
-    } else {
+    // ATMOS login. Sign Up opens the account chooser, with Tourist and Establishment.
       _navigateToLoginForFeature(returnFeature: LoginRouteArgs.featureVr);
     }
+
+  Future<void> _openAuthorizedDashboard() async {
+    _pauseHeroVideoForAuthNavigation();
+    final route = await _authorizedDashboardRoute();
+    if (!mounted) return;
+    Navigator.of(context).pushNamed(route);
+  }
+
+  /// Role dashboard for the signed-in Firebase account. Does not create a new user.
+  Future<String> _authorizedDashboardRoute() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return '/login';
+    final profile = await UserDirectoryService.getProfileByUid(user.uid);
+    if (profile != null) return RoleRouter.routeForProfile(profile);
+    final storedUid = await SessionStorage.getStoredUser();
+    if (storedUid != user.uid) return '/dashboard';
+    final role = await SessionStorage.getStoredRole();
+    return switch (role) {
+      UserRole.governor => '/governor-dashboard',
+      UserRole.provincialTourism => '/provincial-tourism-dashboard',
+      UserRole.tourism => '/lgu-dashboard',
+      UserRole.tourismEstablishment => '/establishment-dashboard',
+      UserRole.tourist => '/dashboard',
+    };
   }
 
   void _openTripPlannerOrLogin() {
@@ -456,14 +686,6 @@ class _LandingPageState extends State<LandingPage> {
         returnFeature: LoginRouteArgs.featureItinerary,
       );
     }
-  }
-
-  void _openLandingFaq() {
-    showDialog<void>(
-      context: context,
-      barrierColor: Colors.black.withValues(alpha: 0.45),
-      builder: (_) => const _LandingFaqDialog(),
-    );
   }
 
   Future<void> _openVrTourFromLanding({String? municipalityName}) async {
@@ -495,9 +717,6 @@ class _LandingPageState extends State<LandingPage> {
     mobileLabel: _isMobile ? 'VR Tour' : 'Start VR Tour',
   );
 
-  String get _landingVrQuickActionLabel =>
-      VrDownloadAppPrompt.ctaLabel(mobileLabel: 'VR Tour');
-
   static const List<String> _sectionOrder = [
     'home',
     'chooseExperience',
@@ -505,6 +724,7 @@ class _LandingPageState extends State<LandingPage> {
     'destinations',
     'howItWorks',
     'about',
+    'faq',
   ];
 
   /// Scroll offset where a section starts (relative to page [ScrollController]).
@@ -638,6 +858,8 @@ class _LandingPageState extends State<LandingPage> {
   @override
   void dispose() {
     _authSub?.cancel();
+    _registeredTouristSub?.cancel();
+    _spotStatsSub?.cancel();
     _scrollUiThrottle?.cancel();
     _heavyImageWarmTimer?.cancel();
     _heroSearchController.removeListener(_onHeroSearchTextChanged);
@@ -662,14 +884,80 @@ class _LandingPageState extends State<LandingPage> {
   bool get _isWideDesktop => MediaQuery.of(context).size.width >= 1366;
   bool get _isUltraWide => MediaQuery.of(context).size.width >= 1920;
 
-  /// Drawer + menu button for phones and tablets.
-  bool get _useDrawerNav => MediaQuery.of(context).size.width < 1024;
+  TextStyle _navLabelStyle({required bool compact, Color? color}) {
+    return GoogleFonts.montserrat(
+      color: color,
+      fontSize: compact ? 12 : 13,
+      fontWeight: FontWeight.w700,
+      letterSpacing: 0.05,
+      height: 1.15,
+    );
+  }
 
-  /// Smaller nav chips when horizontal space is limited.
-  bool get _navCompact => MediaQuery.of(context).size.width < 1280;
+  /// Width of the six full labels plus their chip padding.
+  double _landingNavWidth({required bool compact}) {
+    final style = _navLabelStyle(compact: compact);
+    final innerPad = compact ? 16.0 : 22.0;
+    final outerPad = compact ? 4.0 : 6.0;
+    var total = 0.0;
+    for (final item in _landingNavItems) {
+      final painter = TextPainter(
+        text: TextSpan(text: item.label, style: style),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+      total += painter.width + innerPad + outerPad;
+    }
+    return total;
+  }
 
-  /// Shorter nav labels so all items fit on the right without clipping.
-  bool get _navTight => MediaQuery.of(context).size.width < 1200;
+  /// Space kept for the logo, brand, and optional mute control.
+  double get _headerBrandReserve {
+    final width = MediaQuery.sizeOf(context).width;
+    final brandMin = width < 520 ? 132.0 : 176.0;
+    // Keep room for the hero mute control so it cannot push the labels.
+    return 52 + brandMin + 24 + 44;
+  }
+
+  /// Log In and Sign Up, or Dashboard when a session already exists.
+  double get _headerAuthReserve {
+    final style = GoogleFonts.montserrat(
+      fontSize: 13,
+      fontWeight: FontWeight.w700,
+      height: 1.15,
+    );
+    double labelWidth(String text) {
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: style),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+      return painter.width + 36;
+    }
+
+    if (_isLoggedIn) return labelWidth('Dashboard');
+    return labelWidth('Log In') + 8 + labelWidth('Sign Up');
+  }
+
+  /// Menu button only when the six full labels and auth actions cannot fit.
+  bool get _useDrawerNav {
+    final width = MediaQuery.sizeOf(context).width;
+    return width <
+        _landingNavWidth(compact: true) +
+            _headerBrandReserve +
+            _headerAuthReserve;
+  }
+
+  /// Tighter chip padding on smaller laptops. Labels stay unchanged.
+  bool get _navCompact {
+    if (_useDrawerNav) return false;
+    final width = MediaQuery.sizeOf(context).width;
+    return width <
+        _landingNavWidth(compact: false) +
+            _headerBrandReserve +
+            _headerAuthReserve +
+            24;
+  }
 
   double get _landingAppBarHeight =>
       _useDrawerNav ? (_isMobile ? 96.0 : 88.0) : 72.0;
@@ -677,7 +965,10 @@ class _LandingPageState extends State<LandingPage> {
   /// One full-screen panel per nav item (area below the app bar).
   double get _sectionViewportHeight {
     final screenH = MediaQuery.sizeOf(context).height;
-    return (screenH - _landingAppBarHeight).clamp(420.0, screenH);
+    final height = screenH - _landingAppBarHeight;
+    // clamp() throws when the window is shorter than the 420px floor.
+    if (height < 420) return height < 0 ? 0.0 : height;
+    return height.clamp(420.0, screenH);
   }
 
   double get _sectionContentMaxWidth {
@@ -685,19 +976,6 @@ class _LandingPageState extends State<LandingPage> {
     if (_isWideDesktop) return 1360;
     if (_isDesktop) return 1180;
     return double.infinity;
-  }
-
-  double get _sectionTitleFontSize {
-    if (_isMobile) return 30;
-    if (_isTablet) return 34;
-    if (_isWideDesktop) return 42;
-    return 38;
-  }
-
-  double get _sectionSubtitleFontSize {
-    if (_isMobile) return 15;
-    if (_isTablet) return 16;
-    return 17;
   }
 
   double get _sectionSubtitleMaxWidth {
@@ -725,31 +1003,6 @@ class _LandingPageState extends State<LandingPage> {
         constraints: BoxConstraints(maxWidth: _sectionContentMaxWidth),
         child: child,
       ),
-    );
-  }
-
-  BoxDecoration _surfaceCardDecoration({
-    bool hovered = false,
-    Color accent = _primaryOrange,
-  }) {
-    return BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(_cardRadius),
-      border: Border.all(
-        color: hovered
-            ? accent.withValues(alpha: 0.40)
-            : const Color(0xFFE8ECF1),
-        width: hovered ? 1.5 : 1,
-      ),
-      boxShadow: [
-        BoxShadow(
-          color: hovered
-              ? accent.withValues(alpha: 0.12)
-              : Colors.black.withValues(alpha: 0.05),
-          blurRadius: hovered ? 20 : 12,
-          offset: Offset(0, hovered ? 8 : 4),
-        ),
-      ],
     );
   }
 
@@ -796,6 +1049,15 @@ class _LandingPageState extends State<LandingPage> {
     letterSpacing: -0.2,
   );
 
+  /// City and municipality names on destination cards and search results.
+  TextStyle get _destinationNameStyle => GoogleFonts.montserrat(
+    color: _darkBg,
+    fontSize: _isMobile ? 16 : 17,
+    fontWeight: FontWeight.w800,
+    height: 1.25,
+    letterSpacing: -0.2,
+  );
+
   TextStyle get _cardSubtitleStyle => TextStyle(
     color: _bodyText,
     fontSize: _isMobile ? 14 : 15,
@@ -823,6 +1085,7 @@ class _LandingPageState extends State<LandingPage> {
     ),
     (label: 'How It Works', sectionId: 'howItWorks', icon: Icons.route_rounded),
     (label: 'About', sectionId: 'about', icon: Icons.info_outline_rounded),
+    (label: 'FAQ', sectionId: 'faq', icon: Icons.help_outline_rounded),
   ];
 
   GlobalKey? _sectionKey(String section) {
@@ -833,6 +1096,7 @@ class _LandingPageState extends State<LandingPage> {
       'destinations' => _keyDestinations,
       'howItWorks' => _keyHowItWorks,
       'about' => _keyAbout,
+      'faq' => _keyFaq,
       _ => null,
     };
   }
@@ -931,35 +1195,33 @@ class _LandingPageState extends State<LandingPage> {
                 if (!_isLoggedIn) _buildRegisterCalloutSection(),
                 _buildViewportNavSection(
                   key: _keyChooseExperience,
-                  color: _pageBackground,
-                  fullScreenOnWeb: true,
+                  color: const Color(0xFFFFF8F4),
                   child: _buildChooseYourExperienceSection(viewport: true),
                 ),
                 _buildViewportNavSection(
                   key: _keyFeatures,
-                  color: _pageSurfaceMuted,
+                  color: LandingFeaturesSection.page,
                   child: _buildFeaturesSection(viewport: true),
                 ),
                 _buildViewportNavSection(
                   key: _keyDestinations,
-                  color: _pageBackground,
+                  color: const Color(0xFFFFF8F4),
                   child: _buildDestinationsSection(viewport: true),
                 ),
                 _buildViewportNavSection(
                   key: _keyHowItWorks,
-                  color: _pageSurfaceMuted,
+                  color: LandingHowItWorksSection.page,
                   child: _buildHowItWorksSection(viewport: true),
                 ),
                 _buildViewportNavSection(
                   key: _keyAbout,
                   color: _pageBackground,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildAboutSection(viewport: true),
-                      _buildStatisticsSection(viewport: true),
-                    ],
-                  ),
+                  child: _buildAboutAndStatistics(viewport: true),
+                ),
+                _buildViewportNavSection(
+                  key: _keyFaq,
+                  color: const Color(0xFFFFF8F4),
+                  child: _buildLandingFaqSection(),
                 ),
                 _buildFooter(),
               ],
@@ -1103,7 +1365,16 @@ class _LandingPageState extends State<LandingPage> {
                 if (!_useDrawerNav)
                   Padding(
                     padding: const EdgeInsets.only(right: 12),
-                    child: Center(child: _buildInlineNavBar()),
+                    child: Center(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _buildInlineNavBar(),
+                          const SizedBox(width: 8),
+                          _buildHeaderAuthActions(),
+                        ],
+                      ),
+                    ),
                   ),
               ],
             ),
@@ -1119,16 +1390,18 @@ class _LandingPageState extends State<LandingPage> {
     required Color color,
     required Widget child,
     bool fullScreenOnWeb = false,
+    BoxDecoration? decoration,
   }) {
     final useViewportPanel =
         _isMobile || (kIsWeb && fullScreenOnWeb && !_isMobile);
     return Container(
       key: key,
+      alignment: useViewportPanel ? Alignment.center : Alignment.topCenter,
       constraints: BoxConstraints(
         minHeight: useViewportPanel ? _sectionViewportHeight : 0,
       ),
       width: double.infinity,
-      color: color,
+      decoration: decoration ?? BoxDecoration(color: color),
       child: Padding(
         padding: EdgeInsets.only(
           top: _landingAppBarHeight + (_isMobile ? 8 : 16),
@@ -1147,45 +1420,89 @@ class _LandingPageState extends State<LandingPage> {
   Widget _buildInlineNavBar() {
     final compact = _navCompact;
 
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      physics: const BouncingScrollPhysics(),
-      reverse: false,
-      child: Row(
+    return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           for (final item in _landingNavItems)
             _buildNavChip(
-              label: _navChipLabel(item),
+            label: item.label,
               onTap: () => _onNavTap(item.sectionId),
               isActive: _activeSection == item.sectionId,
               compact: compact,
             ),
-          if (!_isLoggedIn) ...[
-            _buildHeaderAuthChip(
-              label: 'Log In',
-              onTap: _navigateToLogin,
-              compact: compact,
-            ),
-            _buildHeaderAuthChip(
-              label: 'Sign Up',
-              onTap: _navigateToSignup,
-              compact: compact,
-              emphasized: true,
-            ),
-          ],
-        ],
-      ),
+      ],
     );
   }
 
-  String _navChipLabel(({String label, String sectionId, IconData icon}) item) {
-    if (!_navTight) return item.label;
-    return switch (item.sectionId) {
-      'howItWorks' => 'Steps',
-      'destinations' => 'Places',
-      _ => item.label,
-    };
+  Widget _buildHeaderAuthActions() {
+    if (_isLoggedIn) {
+      return _headerAuthButton(
+        label: 'Dashboard',
+        filled: true,
+        onPressed: () => unawaited(_openAuthorizedDashboard()),
+      );
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _headerAuthButton(
+              label: 'Log In',
+          filled: false,
+          onPressed: _openHeaderLoginChoice,
+            ),
+        const SizedBox(width: 8),
+        _headerAuthButton(
+              label: 'Sign Up',
+          filled: true,
+          onPressed: _navigateToSignup,
+        ),
+      ],
+    );
+  }
+
+  Widget _headerAuthButton({
+    required String label,
+    required bool filled,
+    required VoidCallback onPressed,
+  }) {
+    final shape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(999),
+    );
+    final textStyle = GoogleFonts.montserrat(
+      fontSize: 13,
+      fontWeight: FontWeight.w700,
+      height: 1.15,
+    );
+    if (filled) {
+      return FilledButton(
+        onPressed: onPressed,
+        style: FilledButton.styleFrom(
+          backgroundColor: _primaryOrange,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          minimumSize: const Size(0, 36),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          shape: shape,
+          textStyle: textStyle,
+        ),
+        child: Text(label),
+      );
+    }
+    return OutlinedButton(
+      onPressed: onPressed,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: _primaryOrange,
+        backgroundColor: Colors.white,
+        side: const BorderSide(color: _primaryOrange, width: 1.4),
+        minimumSize: const Size(0, 36),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        shape: shape,
+        textStyle: textStyle,
+      ),
+      child: Text(label),
+    );
   }
 
   Widget _buildNavChip({
@@ -1215,56 +1532,11 @@ class _LandingPageState extends State<LandingPage> {
             ),
             child: Text(
               label,
-              style: TextStyle(
+              maxLines: 1,
+              softWrap: false,
+              style: _navLabelStyle(
+                compact: compact,
                 color: isActive ? Colors.white : const Color(0xFF192334),
-                fontSize: compact ? 12 : 13,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.05,
-                height: 1.15,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildHeaderAuthChip({
-    required String label,
-    required VoidCallback onTap,
-    bool compact = false,
-    bool emphasized = false,
-  }) {
-    return Padding(
-      padding: EdgeInsets.only(left: compact ? 3 : 5, right: compact ? 3 : 4),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(24),
-          child: AnimatedContainer(
-            duration: _motionDuration,
-            curve: Curves.easeOut,
-            padding: EdgeInsets.symmetric(
-              horizontal: compact ? 10 : 14,
-              vertical: compact ? 6 : 7,
-            ),
-            decoration: BoxDecoration(
-              color: emphasized ? _primaryOrange : Colors.transparent,
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(
-                color: _primaryOrange,
-                width: emphasized ? 0 : 1.5,
-              ),
-            ),
-            child: Text(
-              label,
-              style: TextStyle(
-                color: emphasized ? Colors.white : _primaryOrange,
-                fontSize: compact ? 12 : 13,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.1,
-                height: 1.15,
               ),
             ),
           ),
@@ -1318,6 +1590,9 @@ class _LandingPageState extends State<LandingPage> {
                 ),
                 title: Text(
                   item.label,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: isActive ? FontWeight.w700 : FontWeight.w600,
@@ -1362,39 +1637,31 @@ class _LandingPageState extends State<LandingPage> {
                 );
               },
             ),
+            if (!_isLoggedIn) ...[
             const Divider(height: 24),
-            if (!_isLoggedIn)
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                child: Column(
-                  children: [
-                    SizedBox(
-                      width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                       child: OutlinedButton(
                         onPressed: () {
                           Navigator.pop(context);
-                          _navigateToLogin();
+                    _openHeaderLoginChoice();
                         },
                         style: OutlinedButton.styleFrom(
                           foregroundColor: _primaryOrange,
-                          side: const BorderSide(
-                            color: _primaryOrange,
-                            width: 1.5,
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
+                    side: const BorderSide(color: _primaryOrange, width: 1.4),
+                    minimumSize: const Size.fromHeight(44),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(24),
+                      borderRadius: BorderRadius.circular(999),
                           ),
                         ),
                         child: const Text(
                           'Log In',
-                          style: TextStyle(fontWeight: FontWeight.w700),
+                    style: TextStyle(fontWeight: FontWeight.w800),
                         ),
                       ),
                     ),
-                    const SizedBox(height: 10),
-                    SizedBox(
-                      width: double.infinity,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                       child: FilledButton(
                         onPressed: () {
                           Navigator.pop(context);
@@ -1403,21 +1670,20 @@ class _LandingPageState extends State<LandingPage> {
                         style: FilledButton.styleFrom(
                           backgroundColor: _primaryOrange,
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
+                    minimumSize: const Size.fromHeight(44),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(24),
+                      borderRadius: BorderRadius.circular(999),
                           ),
                         ),
                         child: const Text(
                           'Sign Up',
-                          style: TextStyle(fontWeight: FontWeight.w700),
+                    style: TextStyle(fontWeight: FontWeight.w800),
                         ),
                       ),
                     ),
                   ],
-                ),
-              )
-            else
+            if (_isLoggedIn) ...[
+              const Divider(height: 24),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                 child: SizedBox(
@@ -1439,6 +1705,7 @@ class _LandingPageState extends State<LandingPage> {
                   ),
                 ),
               ),
+            ],
           ],
         ),
       ),
@@ -1539,6 +1806,8 @@ class _LandingPageState extends State<LandingPage> {
                             if (!_heroSearchSuggestionsOpen) ...[
                               SizedBox(height: _isMobile ? 20 : 28),
                               _buildHeroGlassFeatureCards(),
+                              SizedBox(height: _isMobile ? 14 : 16),
+                              _buildHeroApkDownloads(),
                               if (_isLoggedIn) ...[
                                 const SizedBox(height: 18),
                                 _buildLoggedInHeroActions(),
@@ -1631,8 +1900,130 @@ class _LandingPageState extends State<LandingPage> {
               ],
             ),
           ),
+          if (_heroStatsOpen)
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => setState(() => _heroStatsOpen = false),
+              ),
+            ),
+          Positioned(
+            right: _isMobile ? 16 : 32,
+            bottom: MediaQuery.paddingOf(context).bottom + (_isMobile ? 86 : 36),
+            child: _buildHeroStatsAnchor(),
+          ),
         ],
       ),
+    );
+  }
+
+  List<LandingStatEntry> get _heroStatEntries {
+    LandingStatStatus status({
+      required bool loading,
+      required bool failed,
+      required int? value,
+    }) {
+      if (value != null) return LandingStatStatus.ready;
+      if (loading && !failed) return LandingStatStatus.loading;
+      return LandingStatStatus.unavailable;
+    }
+
+    final municipalities = getMisamisOccidentalMunicipalities().length;
+    return [
+      LandingStatEntry(
+        label: 'Registered Tourists',
+        icon: Icons.people_rounded,
+        status: status(
+          loading: _registeredTouristsLoading,
+          failed: _registeredTouristsFailed,
+          value: _registeredTourists,
+        ),
+        value: _registeredTourists,
+      ),
+      LandingStatEntry(
+        label: 'Tourist Spots',
+        icon: Icons.place_rounded,
+        status: status(
+          loading: _spotStatsLoading,
+          failed: _spotStatsFailed,
+          value: _touristSpots,
+        ),
+        value: _touristSpots,
+      ),
+      LandingStatEntry(
+        label: 'Cities & Municipalities',
+        icon: Icons.location_city_rounded,
+        status: municipalities > 0
+            ? LandingStatStatus.ready
+            : LandingStatStatus.unavailable,
+        value: municipalities > 0 ? municipalities : null,
+      ),
+      LandingStatEntry(
+        label: 'VR Tours',
+        icon: Icons.vrpano_rounded,
+        status: status(
+          loading: _spotStatsLoading,
+          failed: _spotStatsFailed,
+          value: _vrTours,
+        ),
+        value: _vrTours,
+      ),
+    ];
+  }
+
+  Widget _buildHeroStatsAnchor() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 220),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: (child, animation) {
+            return FadeTransition(
+              opacity: animation,
+              child: ScaleTransition(
+                scale: Tween<double>(begin: 0.94, end: 1).animate(animation),
+                alignment: Alignment.bottomRight,
+                child: child,
+              ),
+            );
+          },
+          child: _heroStatsOpen
+              ? Padding(
+                  key: const ValueKey('landing-stats-open'),
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: LandingHeroStatsPanel(
+                    entries: _heroStatEntries,
+                    onClose: () => setState(() => _heroStatsOpen = false),
+                  ),
+                )
+              : const SizedBox.shrink(key: ValueKey('landing-stats-closed')),
+        ),
+        Tooltip(
+          message: 'By the numbers',
+          child: Material(
+            color: Colors.white,
+            elevation: 6,
+            shadowColor: Colors.black26,
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: () => setState(() => _heroStatsOpen = !_heroStatsOpen),
+              child: const SizedBox(
+                width: 46,
+                height: 46,
+                child: Icon(
+                  Icons.insights_rounded,
+                  color: _primaryOrange,
+                  size: 22,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1653,7 +2044,7 @@ class _LandingPageState extends State<LandingPage> {
       (
         icon: Icons.groups_rounded,
         title: '17 LGUs',
-        subtitle: 'Explore all municipalities',
+        subtitle: '3 Cities & 14 Municipalities',
         onTap: () => _onNavTap('destinations'),
       ),
     ];
@@ -1981,26 +2372,153 @@ class _LandingPageState extends State<LandingPage> {
   }
 
   void _onExperienceCardTap(int index) {
-    if (_qrWelcomeMessage != null) {
-      // Post-signup from QR: VR Tour | Trip Planner | Continue on website
-      switch (index) {
-        case 0:
-          _openVrTourFromLanding();
-        case 1:
-          _openPlanItinerary();
-        case 2:
-          _openUserApp();
-      }
+    final preview = index == 0 ? _vrTourPreview : _tripPlannerPreview;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      transitionDuration: reduceMotion
+          ? Duration.zero
+          : const Duration(milliseconds: 340),
+      pageBuilder: (context, _, _) =>
+          Center(child: _ExperiencePreviewDialog(preview: preview)),
+      transitionBuilder: (context, animation, _, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        );
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.96, end: 1).animate(curved),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+
+  void _openExperienceVirtualTour() {
+    if (!_isLoggedIn) {
+      _navigateToLoginForFeature(returnFeature: LoginRouteArgs.featureVr);
       return;
     }
-    switch (index) {
-      case 0:
-        _openVrOrLogin();
-      case 1:
-        _openTripPlannerOrLogin();
-      case 2:
-        _openLandingFaq();
+    unawaited(_openExperienceVirtualTourForRole());
+  }
+
+  Future<void> _openExperienceVirtualTourForRole() async {
+    final user = FirebaseAuth.instance.currentUser;
+    final profile = user == null
+        ? null
+        : await UserDirectoryService.getProfileByUid(user.uid);
+    if (!mounted) return;
+    if (profile == null || profile.isTourist) {
+      await _openVrTourFromLanding();
+      return;
     }
+    _pauseHeroVideoForAuthNavigation();
+    if (!mounted) return;
+    Navigator.of(context).pushNamed(RoleRouter.routeForProfile(profile));
+  }
+
+  void _openExperienceTripPlanner() {
+    if (_isLoggedIn) {
+      unawaited(_openPlanItinerary());
+      return;
+    }
+    _navigateToLoginForFeature(returnFeature: LoginRouteArgs.featureItinerary);
+  }
+
+  void _showApkDownloadMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  /// Downloads the hosted ATMOS TRS APK. Does not open login or a dashboard.
+  Future<void> _downloadVrTourApk() async {
+    if (!kHasAndroidApkDownload) {
+      _showApkDownloadMessage(
+        'The VR Tour APK needs to be built or uploaded before it can be downloaded.',
+      );
+      return;
+    }
+    final opened = await openAtmosAppDownload(
+      target: AtmosAppDownloadTarget.apk,
+      copyCheckInLinkToClipboard: false,
+    );
+    if (!opened && mounted) {
+      _showApkDownloadMessage(
+        'The VR Tour APK could not be opened. Confirm the download file is hosted.',
+      );
+    }
+  }
+
+  /// Downloads the hosted Trip Planner APK. Does not open login or a dashboard.
+  Future<void> _downloadTripPlannerApk() async {
+    if (!kHasTripPlannerApkDownload) {
+      _showApkDownloadMessage(
+        'The Trip Planner APK needs to be built or uploaded before it can be downloaded.',
+      );
+      return;
+    }
+    final opened = await openTripPlannerApkDownload();
+    if (!opened && mounted) {
+      _showApkDownloadMessage(
+        'The Trip Planner APK could not be opened. Confirm the download file is hosted.',
+      );
+    }
+  }
+
+  Widget _buildHeroApkDownloads() {
+    final align = _isMobile ? WrapAlignment.center : WrapAlignment.start;
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      alignment: align,
+      children: [
+        _heroApkDownloadButton(
+          label: 'Download VR Tour App',
+          onPressed: () => unawaited(_downloadVrTourApk()),
+        ),
+        _heroApkDownloadButton(
+          label: 'Download Trip Planner App',
+          onPressed: () => unawaited(_downloadTripPlannerApk()),
+        ),
+      ],
+    );
+  }
+
+  Widget _heroApkDownloadButton({
+    required String label,
+    required VoidCallback onPressed,
+  }) {
+    return FilledButton(
+      onPressed: onPressed,
+      style: FilledButton.styleFrom(
+        backgroundColor: _primaryOrange,
+        foregroundColor: Colors.white,
+        elevation: 6,
+        shadowColor: _primaryOrange.withValues(alpha: 0.45),
+        padding: EdgeInsets.symmetric(
+          horizontal: _isMobile ? 16 : 18,
+          vertical: 12,
+        ),
+        minimumSize: const Size(44, 44),
+        tapTargetSize: MaterialTapTargetSize.padded,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
+      ),
+    );
   }
 
   Widget _buildLoggedInHeroActions() {
@@ -2283,11 +2801,7 @@ class _LandingPageState extends State<LandingPage> {
                           children: [
                             Text(
                               item['name'] ?? '',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                                fontSize: 14,
-                                color: Color(0xFF0F172A),
-                              ),
+                              style: _destinationNameStyle.copyWith(fontSize: 14),
                             ),
                             if ((item['category'] ?? '').isNotEmpty)
                               Text(
@@ -2420,134 +2934,203 @@ class _LandingPageState extends State<LandingPage> {
     );
   }
 
-  Widget _buildChooseYourExperienceSection({bool viewport = false}) {
-    final fromQrSignup = _qrWelcomeMessage != null;
-    final List<Map<String, dynamic>> experienceCards = fromQrSignup
-        ? [
-            {
-              'title': 'VR Tour',
-              'subtitle': VrDownloadAppPrompt.blocksVrOnWeb
-                  ? 'Unlocks on phone — get the ATMOS app'
-                  : 'Explore destinations in immersive 360° preview',
-              'icon': Icons.vrpano_rounded,
-              'cta': VrDownloadAppPrompt.blocksVrOnWeb
-                  ? 'Get the App for VR'
-                  : 'Start tour',
-            },
-            {
-              'title': 'Trip Planner',
-              'subtitle': 'Build and organize your travel itinerary',
-              'icon': Icons.map_rounded,
-              'cta': 'Start planning',
-            },
-            {
-              'title': kIsWeb ? 'Continue on website' : 'Continue in the app',
-              'subtitle': kIsWeb
-                  ? 'Browse destinations in your browser'
-                  : 'Open your tourist dashboard and Digital Tourist ID',
-              'icon': kIsWeb ? Icons.language_rounded : Icons.dashboard_rounded,
-              'cta': 'Continue',
-            },
-          ]
-        : [
-            {
-              'title': 'VR Tour',
-              'subtitle': VrDownloadAppPrompt.blocksVrOnWeb
-                  ? 'Get the ATMOS app to explore in immersive 360°'
-                  : 'Explore destinations in immersive 360° preview',
-              'icon': Icons.vrpano_rounded,
-              'cta': VrDownloadAppPrompt.blocksVrOnWeb
-                  ? 'Get the App for VR'
-                  : 'Start tour',
-            },
-            {
-              'title': 'Trip Planner',
-              'subtitle': 'Plan and organize your travel itinerary',
-              'icon': Icons.map_rounded,
-              'cta': 'Start planning',
-            },
-            {
-              'title': 'FAQ & Help',
-              'subtitle':
-                  'Quick answers about registration, VR tours, trip planning, and check-ins',
-              'icon': Icons.help_outline_rounded,
-              'cta': 'View FAQs',
-            },
-          ];
+  static const _ExperiencePreview _vrTourPreview = _ExperiencePreview(
+    title: 'VR Tour',
+    explanation:
+        'This is the ATMOS TRS tourist screen for Oroquieta City Plaza: the 360° plaza panorama, Start VR Tour, nearby restaurants, nearby hotels, and the app navigation bar.',
+    assets: ['assets/mockup/vr tour.png'],
+    aspect: 878 / 1791,
+  );
 
-    return Container(
-      padding: EdgeInsets.symmetric(
-        vertical: _sectionInnerVertical(viewport: viewport),
-      ),
-      decoration: BoxDecoration(
-        gradient: RadialGradient(
-          center: const Alignment(0, -0.35),
-          radius: 1.1,
-          colors: [
-            Color.alphaBlend(
-              _primaryOrange.withValues(alpha: 0.04),
-              viewport ? Colors.transparent : _pageBackground,
-            ),
-            viewport ? Colors.transparent : _pageBackground,
-          ],
+  static const _ExperiencePreview _tripPlannerPreview = _ExperiencePreview(
+    title: 'Trip Planner',
+    explanation:
+        'This is the Assign days screen: Day 1 starts in Sinacaban, with destinations, travel distance, duration, transportation, estimated expenses, and Review my trip.',
+    assets: ['assets/mockup/Trip planner.png'],
+    aspect: 851 / 1848,
+  );
+
+  Widget _buildChooseYourExperienceSection({bool viewport = false}) {
+    return Stack(
+      children: [
+        const Positioned.fill(
+          child: CustomPaint(painter: _ExperienceSectionPainter()),
         ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _buildSectionHeader(
-            fromQrSignup
-                ? 'What would you like to do?'
-                : 'Choose Your Experience',
-            fromQrSignup
-                ? 'VR Tour and Trip Planner — continue on the website or get the ATMOS app'
-                : 'One platform — explore, plan, and get answers across Misamis Occidental',
-            icon: Icons.explore_rounded,
-            badge: fromQrSignup
-                ? 'VR · Trip Planner · Website / App'
-                : 'VR · Itinerary · FAQ',
-            highlight: fromQrSignup ? 'do?' : 'Experience',
+        Padding(
+      padding: EdgeInsets.symmetric(
+            vertical: viewport ? (_isMobile ? 8 : 12) : (_isMobile ? 28 : 40),
           ),
-          if (_qrWelcomeMessage != null) ...[
-            SizedBox(height: viewport ? 16 : (_isMobile ? 20 : 24)),
-            _buildQrRegistrationWelcomeBanner(),
-          ],
-          SizedBox(height: viewport ? 16 : (_isMobile ? 24 : 32)),
-          _isMobile
-              ? Column(
-                  children: [
-                    for (var i = 0; i < experienceCards.length; i++)
-                      Padding(
-                        padding: EdgeInsets.only(top: i == 0 ? 0 : 12),
-                        child: _buildExperienceCard(
-                          index: i,
-                          title: experienceCards[i]['title'] as String,
-                          subtitle: experienceCards[i]['subtitle'] as String,
-                          icon: experienceCards[i]['icon'] as IconData,
-                          cta: experienceCards[i]['cta'] as String,
-                        ),
-                      ),
-                  ],
-                )
-              : Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    for (var i = 0; i < experienceCards.length; i++) ...[
-                      if (i > 0) const SizedBox(width: 16),
-                      Expanded(
-                        child: _buildExperienceCard(
-                          index: i,
-                          title: experienceCards[i]['title'] as String,
-                          subtitle: experienceCards[i]['subtitle'] as String,
-                          icon: experienceCards[i]['icon'] as IconData,
-                          cta: experienceCards[i]['cta'] as String,
-                          expanded: true,
-                        ),
-                      ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _ExperienceEntrance(
+                child: _buildExperienceHeading(),
+              ),
+              if (_qrWelcomeMessage != null) ...[
+                SizedBox(height: viewport ? 16 : (_isMobile ? 20 : 24)),
+                _buildQrRegistrationWelcomeBanner(),
+              ],
+              SizedBox(height: _isMobile ? 22 : 28),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final width = constraints.maxWidth;
+                  final phoneHeight = _experiencePhoneHeight;
+                  final virtualTour = _experienceModule(
+                    index: 0,
+                    phoneHeight: phoneHeight,
+                    info: _experienceVirtualTourCard(),
+                  );
+                  final tripPlanner = _experienceModule(
+                    index: 1,
+                    phoneHeight: phoneHeight,
+                    info: _experienceTripPlannerCard(),
+                  );
+                  if (width >= 980) {
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: virtualTour),
+                        const SizedBox(width: 18),
+                        Expanded(child: tripPlanner),
+                      ],
+                    );
+                  }
+                  return Column(
+                    children: [
+                      virtualTour,
+                      const SizedBox(height: 18),
+                      tripPlanner,
                     ],
-                  ],
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _experienceModule({
+    required int index,
+    required double phoneHeight,
+    required Widget info,
+  }) {
+    return _ExperienceMergedPanel(
+      phone: _experiencePhone(index: index, height: phoneHeight),
+      info: info,
+    );
+  }
+
+  Widget _buildExperienceHeading() {
+    final titleSize = _isMobile ? 34.0 : (_isTablet ? 44.0 : 52.0);
+    return Column(
+              children: [
+                Text(
+          'EXPLORE  ·  DISCOVER  ·  EXPERIENCE',
+                  textAlign: TextAlign.center,
+          style: GoogleFonts.montserrat(
+                    color: _primaryOrange,
+            fontSize: _isMobile ? 11 : 12,
+                    fontWeight: FontWeight.w800,
+            letterSpacing: _isMobile ? 1.4 : 2.2,
+          ),
+        ),
+        SizedBox(height: _isMobile ? 12 : 16),
+        Text.rich(
+          TextSpan(
+            children: [
+              const TextSpan(text: 'Discover\n'),
+              TextSpan(
+                text: 'Misamis Occidental',
+                style: TextStyle(color: _primaryOrange),
+              ),
+            ],
+          ),
+          textAlign: TextAlign.center,
+          style: GoogleFonts.montserrat(
+            color: const Color(0xFF1B2433),
+            fontSize: titleSize,
+            fontWeight: FontWeight.w800,
+            height: 1.05,
+            letterSpacing: -0.8,
+          ),
+        ),
+        const SizedBox(height: 14),
+                ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+                  child: Text(
+            'Experience stunning destinations, local culture, and unique attractions through our smart tourism platform.',
+                    textAlign: TextAlign.center,
+            style: GoogleFonts.montserrat(
+              color: const Color(0xFF475569),
+              fontSize: _isMobile ? 14.5 : 16,
+              height: 1.5,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
                 ),
-        ],
+              ],
+    );
+  }
+
+  Widget _experiencePhone({required int index, required double height}) {
+    final asset = index == 0
+        ? 'assets/mockup/vr tour.png'
+        : 'assets/mockup/Trip planner.png';
+    return _ExperienceEntrance(
+      delay: Duration(milliseconds: 80 + index * 90),
+      child: _ExperiencePhoneMotion(
+        asset: asset,
+        height: height,
+        framed: false,
+        aspect: index == 0 ? 878 / 1791 : 851 / 1848,
+        motionIndex: index,
+        onTap: () => _onExperienceCardTap(index),
+      ),
+    );
+  }
+
+  Widget _experienceVirtualTourCard() {
+    return _ExperienceEntrance(
+      delay: const Duration(milliseconds: 140),
+        child: _ExperienceGlassCard(
+          embedded: true,
+          icon: Icons.vrpano_rounded,
+          title: 'Virtual Tour',
+          body:
+              'Experience the beauty of Misamis Occidental through immersive 360° virtual tours.',
+          points: const [
+            '360° Interactive Tour',
+            'Explore Tourist Spots',
+            'View Nearby Establishments',
+            'Realistic and Immersive Experience',
+          ],
+          buttonLabel: 'Explore Virtual Tour',
+          highlighted: _highlightExperienceSection,
+          onPressed: _openExperienceVirtualTour,
+        ),
+    );
+  }
+
+  Widget _experienceTripPlannerCard() {
+    return _ExperienceEntrance(
+      delay: const Duration(milliseconds: 220),
+        child: _ExperienceGlassCard(
+          embedded: true,
+          icon: Icons.calendar_month_rounded,
+          title: 'Trip Planner',
+          body:
+              'Plan your journey with day-by-day itineraries, travel estimates, and organized destinations.',
+          points: const [
+            'Create Day-by-Day Itineraries',
+            'Estimated Travel Time & Distance',
+            'Discover Recommended Destinations',
+            'Save and Manage Your Trip',
+          ],
+          buttonLabel: 'Plan Your Trip',
+          highlighted: _highlightExperienceSection,
+          onPressed: _openExperienceTripPlanner,
       ),
     );
   }
@@ -2595,211 +3178,18 @@ class _LandingPageState extends State<LandingPage> {
     );
   }
 
-  Widget _buildExperienceCard({
-    required int index,
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    required String cta,
-    bool expanded = false,
-  }) {
-    final isHovered = _hoveredExperienceIndex == index;
-    final isHighlighted = _highlightExperienceSection;
-    const mutedText = Color(0xFF64748B);
-    final ctaColor = isHovered ? Colors.white : _primaryOrange;
-    final ctaRow = AnimatedContainer(
-      duration: _motionDuration,
-      curve: Curves.easeOutCubic,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(
-        color: isHovered
-            ? _primaryOrange
-            : _primaryOrange.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            cta,
-            style: TextStyle(
-              color: ctaColor,
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.1,
-            ),
-          ),
-          AnimatedPadding(
-            duration: _motionDuration,
-            curve: Curves.easeOutCubic,
-            padding: EdgeInsets.only(left: isHovered ? 8 : 6),
-            child: Icon(Icons.arrow_forward_rounded, color: ctaColor, size: 16),
-          ),
-        ],
-      ),
-    );
-    Widget iconTile(double size) => AnimatedContainer(
-      duration: _motionDuration,
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: _primaryOrange.withValues(alpha: isHovered ? 0.16 : 0.10),
-        borderRadius: BorderRadius.circular(size * 0.3),
-      ),
-      alignment: Alignment.center,
-      child: Icon(icon, color: _primaryOrange, size: size * 0.48),
-    );
-
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hoveredExperienceIndex = index),
-      onExit: (_) => setState(() => _hoveredExperienceIndex = null),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: () => _onExperienceCardTap(index),
-        child: AnimatedContainer(
-          duration: _motionDuration,
-          curve: Curves.easeOutCubic,
-          transform: Matrix4.identity()
-            ..translateByDouble(0, isHovered ? -3.0 : 0.0, 0, 1),
-          constraints: expanded
-              ? const BoxConstraints(minHeight: 210)
-              : const BoxConstraints(),
-          width: expanded ? double.infinity : null,
-          padding: EdgeInsets.all(expanded ? 26 : 18),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(_cardRadius + 2),
-            border: Border.all(
-              color: isHighlighted || isHovered
-                  ? _primaryOrange.withValues(alpha: 0.30)
-                  : const Color(0xFFEEF1F5),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: isHovered
-                    ? _primaryOrange.withValues(alpha: 0.10)
-                    : const Color(0xFF0F172A).withValues(alpha: 0.04),
-                blurRadius: isHovered ? 24 : 16,
-                offset: Offset(0, isHovered ? 10 : 6),
-              ),
-            ],
-          ),
-          child: expanded
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    iconTile(52),
-                    const SizedBox(height: 20),
-                    Text(
-                      title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: _cardTitleStyle.copyWith(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      subtitle,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: _cardSubtitleStyle.copyWith(
-                        fontSize: 14,
-                        height: 1.6,
-                        color: mutedText,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    ctaRow,
-                  ],
-                )
-              : Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    iconTile(46),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: _cardTitleStyle,
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            subtitle,
-                            maxLines: 3,
-                            overflow: TextOverflow.ellipsis,
-                            style: _cardSubtitleStyle.copyWith(
-                              fontSize: 14,
-                              height: 1.55,
-                              color: mutedText,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          ctaRow,
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-        ),
-      ),
-    );
+  double get _experiencePhoneHeight {
+    final width = MediaQuery.sizeOf(context).width;
+    if (width < 720) return 400;
+    if (width < 1180) return 440;
+    if (width < 1400) return 430;
+    return 500;
   }
 
   Widget _buildFeaturesSection({bool viewport = false}) {
-    return Container(
-      padding: EdgeInsets.symmetric(
-        vertical: _sectionInnerVertical(viewport: viewport),
-      ),
-      color: viewport ? Colors.transparent : _pageSurfaceMuted,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _buildSectionHeader(
-            'Why Choose ATMOS-TRS?',
-            'Smart registration, VR tours, itinerary planning & QR check-ins — all in one platform',
-            icon: Icons.auto_awesome_rounded,
-            badge: 'Official provincial platform',
-            highlight: 'ATMOS-TRS?',
-          ),
-          SizedBox(height: viewport ? 16 : (_isMobile ? 24 : 32)),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final columns = _isMobile
-                  ? 1
-                  : constraints.maxWidth >= 1100
-                  ? 3
-                  : 2;
-              const spacing = 16.0;
-              final cardWidth = columns == 1
-                  ? constraints.maxWidth
-                  : (constraints.maxWidth - spacing * (columns - 1)) / columns;
-              return Wrap(
-                spacing: spacing,
-                runSpacing: spacing,
-                children: [
-                  for (var i = 0; i < _features.length; i++)
-                    SizedBox(
-                      width: cardWidth,
-                      child: _buildFeatureCard(
-                        i,
-                        _features[i],
-                        compact: _isMobile,
-                      ),
-                    ),
-                ],
-              );
-            },
-          ),
-        ],
-      ),
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: viewport ? 8 : 36),
+      child: const LandingFeaturesSection(),
     );
   }
 
@@ -2831,217 +3221,29 @@ class _LandingPageState extends State<LandingPage> {
     );
   }
 
-  Widget _buildSectionHeader(
-    String title,
-    String subtitle, {
-    IconData? icon,
-    String? badge,
-    String? highlight,
-  }) {
-    return Column(
-      children: [
-        Container(
-          width: 44,
-          height: 4,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [_primaryOrange, _brandDark],
-            ),
-            borderRadius: BorderRadius.circular(4),
-          ),
-        ),
-        const SizedBox(height: 16),
-        if (badge != null) ...[
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: _primaryOrange.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: _primaryOrange.withValues(alpha: 0.22)),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (icon != null) ...[
-                  Icon(icon, size: 14, color: _primaryOrange),
-                  const SizedBox(width: 6),
-                ],
-                Text(
-                  badge.toUpperCase(),
-                  style: const TextStyle(
-                    color: _primaryOrange,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1.1,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-        ],
-        _twoToneTitle(
-          title,
-          highlight,
-          TextStyle(
-            color: _darkBg,
-            fontSize: _sectionTitleFontSize,
-            fontWeight: FontWeight.w800,
-            letterSpacing: -0.4,
-            height: 1.15,
-          ),
-        ),
-        const SizedBox(height: 12),
-        ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: _sectionSubtitleMaxWidth),
-          child: Text(
-            subtitle,
-            textAlign: TextAlign.center,
-            style: _sectionBodyStyle.copyWith(
-              fontSize: _sectionSubtitleFontSize,
-              fontWeight: FontWeight.w500,
-              color: const Color(0xFF64748B),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildFeatureCard(
-    int index,
-    Map<String, dynamic> feature, {
-    bool compact = false,
-  }) {
-    final accent = feature['accent'] as Color? ?? _primaryOrange;
-    final isHovered = _hoveredFeatureIndex == index;
-    final String? route = feature['route'] as String?;
-
-    if (compact) {
-      Widget card = MouseRegion(
-        onEnter: (_) => setState(() => _hoveredFeatureIndex = index),
-        onExit: (_) => setState(() => _hoveredFeatureIndex = null),
-        cursor: route != null
-            ? SystemMouseCursors.click
-            : SystemMouseCursors.basic,
-        child: AnimatedContainer(
-          duration: _motionDuration,
-          curve: Curves.easeOutCubic,
-          transform: Matrix4.identity()
-            ..translateByDouble(0, isHovered ? -3.0 : 0.0, 0, 1),
-          padding: const EdgeInsets.all(20),
-          decoration: _surfaceCardDecoration(
-            hovered: isHovered,
-            accent: accent,
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _landingIconTile(
-                feature['icon'] as IconData,
-                accent: accent,
-                size: 44,
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      feature['title'] as String,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: _cardTitleStyle.copyWith(fontSize: 16),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      feature['description'] as String,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: _cardSubtitleStyle.copyWith(fontSize: 14),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-      if (route == 'itinerary') {
-        return GestureDetector(onTap: _openPlanItinerary, child: card);
-      }
-      return card;
-    }
-
-    Widget card = MouseRegion(
-      onEnter: (_) => setState(() => _hoveredFeatureIndex = index),
-      onExit: (_) => setState(() => _hoveredFeatureIndex = null),
-      cursor: SystemMouseCursors.click,
-      child: AnimatedContainer(
-        duration: _motionDuration,
-        curve: Curves.easeOutCubic,
-        transform: Matrix4.identity()
-          ..translateByDouble(0, isHovered ? -4.0 : 0.0, 0, 1),
-        padding: const EdgeInsets.fromLTRB(20, 22, 20, 20),
-        decoration: _surfaceCardDecoration(hovered: isHovered, accent: accent),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _landingIconTile(
-              feature['icon'] as IconData,
-              accent: accent,
-              size: 48,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              feature['title'] as String,
-              textAlign: TextAlign.left,
-              style: _cardTitleStyle,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              feature['description'] as String,
-              textAlign: TextAlign.left,
-              style: _cardSubtitleStyle.copyWith(fontSize: 14),
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
-      ),
-    );
-
-    if (route == 'itinerary') {
-      return GestureDetector(onTap: _openPlanItinerary, child: card);
-    }
-    return card;
-  }
-
   Widget _buildDestinationsSection({bool viewport = false}) {
     final query = _heroSearchController.text.trim();
     final filtered = _filteredDestinations;
     final isFiltering = query.isNotEmpty;
     final matchLabel = filtered.length == 1 ? 'match' : 'matches';
 
-    return Container(
+    return Stack(
+      children: [
+        const Positioned.fill(
+          child: CustomPaint(painter: _DestinationsBackdropPainter()),
+        ),
+        Padding(
       padding: EdgeInsets.symmetric(
         vertical: _sectionInnerVertical(viewport: viewport),
       ),
-      color: viewport ? Colors.transparent : _pageBackground,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _buildSectionHeader(
-            isFiltering ? 'Search results' : 'Municipalities & Cities',
-            isFiltering
+          _buildDestinationsHeading(
+            title: isFiltering ? 'Search results' : 'Municipalities & Cities',
+            subtitle: isFiltering
                 ? '${filtered.length} $matchLabel for "$query" — tap a card for VR tours, itinerary planning & tourist spots'
                 : 'All 17 tourist destinations in Misamis Occidental — tap any card to explore in 360° or plan your trip',
-            icon: Icons.location_city_rounded,
             badge: isFiltering ? '${filtered.length} found' : '17 LGUs',
             highlight: isFiltering ? 'results' : 'Cities',
           ),
@@ -3104,6 +3306,95 @@ class _LandingPageState extends State<LandingPage> {
             ),
         ],
       ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDestinationsHeading({
+    required String title,
+    required String subtitle,
+    required String badge,
+    required String highlight,
+  }) {
+    final titleSize = _isMobile ? 32.0 : 46.0;
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF1E6),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: const Color(0xFFF8D7C0)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.location_city_rounded,
+                size: 14,
+                color: _primaryOrange,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                badge.toUpperCase(),
+                style: GoogleFonts.montserrat(
+                  color: _primaryOrange,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.1,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _twoToneTitle(
+          title,
+          highlight,
+          GoogleFonts.montserrat(
+            color: const Color(0xFF1B2433),
+            fontSize: titleSize,
+            fontWeight: FontWeight.w800,
+            height: 1.1,
+            letterSpacing: -0.6,
+          ),
+        ),
+        const SizedBox(height: 10),
+        ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: _sectionSubtitleMaxWidth),
+          child: Text(
+            subtitle,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.montserrat(
+              color: const Color(0xFF64748B),
+              fontSize: _isMobile ? 14 : 16,
+              fontWeight: FontWeight.w500,
+              height: 1.5,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  BoxDecoration _destinationCardDecoration({required bool hovered}) {
+    return BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(22),
+      border: Border.all(
+        color: hovered ? _primaryOrange : const Color(0xFFF4D5C2),
+        width: hovered ? 1.5 : 1,
+      ),
+      boxShadow: [
+        BoxShadow(
+          color: hovered
+              ? _primaryOrange.withValues(alpha: 0.16)
+              : const Color(0x140F172A),
+          blurRadius: hovered ? 24 : 16,
+          offset: Offset(0, hovered ? 12 : 6),
+        ),
+      ],
     );
   }
 
@@ -3111,7 +3402,7 @@ class _LandingPageState extends State<LandingPage> {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
-      decoration: _surfaceCardDecoration(),
+      decoration: _destinationCardDecoration(hovered: false),
       child: Column(
         children: [
           _landingIconTile(Icons.search_off_rounded, size: 56),
@@ -3179,7 +3470,7 @@ class _LandingPageState extends State<LandingPage> {
                 maxHeight: screen.height * 0.88,
               ),
               child: Material(
-                color: _pageBackground,
+                color: const Color(0xFFFFF8F4),
                 elevation: 16,
                 shadowColor: Colors.black.withValues(alpha: 0.25),
                 borderRadius: BorderRadius.circular(22),
@@ -3326,7 +3617,7 @@ class _LandingPageState extends State<LandingPage> {
                           Text(
                             name,
                             textAlign: TextAlign.center,
-                            style: TextStyle(
+                            style: GoogleFonts.montserrat(
                               color: _darkBg,
                               fontSize: _isMobile ? 22 : 26,
                               fontWeight: FontWeight.w800,
@@ -3343,62 +3634,7 @@ class _LandingPageState extends State<LandingPage> {
                               height: 1.45,
                             ),
                           ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Choose how to explore $name:',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: Colors.grey.shade800,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(height: 14),
-                          SizedBox(
-                            width: double.infinity,
-                            child: FilledButton.icon(
-                              onPressed: () {
-                                Navigator.pop(dialogContext);
-                                _openVrTourFromLanding(municipalityName: name);
-                              },
-                              icon: const Icon(Icons.vrpano_rounded, size: 20),
-                              label: Text(_landingVrButtonLabel),
-                              style: FilledButton.styleFrom(
-                                backgroundColor: _primaryOrange,
-                                foregroundColor: Colors.white,
-                                minimumSize: const Size(double.infinity, 46),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          SizedBox(
-                            width: double.infinity,
-                            child: OutlinedButton.icon(
-                              onPressed: () {
-                                Navigator.pop(dialogContext);
-                                _openPlanItinerary(municipalityName: name);
-                              },
-                              icon: const Icon(Icons.map_rounded, size: 20),
-                              label: const Text('Plan itinerary'),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: const Color(0xFF0369A1),
-                                backgroundColor: const Color(
-                                  0xFF0EA5E9,
-                                ).withValues(alpha: 0.08),
-                                side: const BorderSide(
-                                  color: Color(0xFF0EA5E9),
-                                ),
-                                minimumSize: const Size(double.infinity, 46),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 10),
+                          const SizedBox(height: 8),
                           SizedBox(
                             width: double.infinity,
                             child: TextButton.icon(
@@ -3470,27 +3706,53 @@ class _LandingPageState extends State<LandingPage> {
     return SpotImage(imageUrl: imageUrl, fit: fit);
   }
 
-  Widget _destinationCategoryBadge(String category, {bool onImage = false}) {
+  Widget _destinationCategoryBadge(String category) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: onImage
-            ? Colors.black.withValues(alpha: 0.55)
-            : _primaryOrange.withValues(alpha: 0.10),
+        color: const Color(0xFFFFF1E6),
         borderRadius: BorderRadius.circular(999),
-        border: onImage
-            ? null
-            : Border.all(color: _primaryOrange.withValues(alpha: 0.22)),
+        border: Border.all(color: const Color(0xFFF8D7C0)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Text(
-        category,
-        style: TextStyle(
-          color: onImage ? Colors.white : _primaryOrange,
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.2,
+        category.toUpperCase(),
+        style: GoogleFonts.montserrat(
+          color: _primaryOrange,
+          fontSize: 10,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.6,
         ),
       ),
+    );
+  }
+
+  Widget _destinationExploreCue() {
+    return Row(
+      children: [
+        const Icon(Icons.place_rounded, size: 16, color: _primaryOrange),
+        const SizedBox(width: 6),
+        Text(
+          'Explore destination',
+          style: GoogleFonts.montserrat(
+            color: _primaryOrange,
+            fontSize: 13,
+          fontWeight: FontWeight.w700,
+          ),
+        ),
+        const Spacer(),
+        const Icon(
+          Icons.arrow_forward_rounded,
+          size: 16,
+          color: _primaryOrange,
+        ),
+      ],
     );
   }
 
@@ -3546,13 +3808,13 @@ class _LandingPageState extends State<LandingPage> {
               _enableHeavyImages(budget: _destinations.length);
               _showDestinationExploreSheet(destination);
             },
-            borderRadius: BorderRadius.circular(_cardRadius),
+            borderRadius: BorderRadius.circular(22),
             child: AnimatedContainer(
               duration: _motionDuration,
               curve: Curves.easeOutCubic,
               transform: Matrix4.identity()
-                ..translateByDouble(0, isHovered ? -3.0 : 0.0, 0, 1),
-              decoration: _surfaceCardDecoration(hovered: isHovered),
+                ..translateByDouble(0, isHovered ? -6.0 : 0.0, 0, 1),
+              decoration: _destinationCardDecoration(hovered: isHovered),
               clipBehavior: Clip.antiAlias,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3585,10 +3847,7 @@ class _LandingPageState extends State<LandingPage> {
                         Positioned(
                           top: 10,
                           left: 10,
-                          child: _destinationCategoryBadge(
-                            category,
-                            onImage: true,
-                          ),
+                          child: _destinationCategoryBadge(category),
                         ),
                       ],
                     ),
@@ -3602,40 +3861,22 @@ class _LandingPageState extends State<LandingPage> {
                           name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: _cardTitleStyle,
+                          style: _destinationNameStyle,
                         ),
                         const SizedBox(height: 6),
                         Text(
                           description,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: _cardSubtitleStyle.copyWith(fontSize: 14),
+                          style: GoogleFonts.montserrat(
+                            color: const Color(0xFF64748B),
+                            fontSize: 13,
+                            height: 1.45,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
-                        const SizedBox(height: 14),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _buildDestinationQuickAction(
-                                label: _landingVrQuickActionLabel,
-                                icon: Icons.vrpano_rounded,
-                                color: _primaryOrange,
-                                onTap: () => _openVrTourFromLanding(
-                                  municipalityName: name,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: _buildDestinationQuickAction(
-                                label: 'Itinerary',
-                                icon: Icons.map_rounded,
-                                color: _primaryOrange,
-                                onTap: () =>
-                                    _openPlanItinerary(municipalityName: name),
-                              ),
-                            ),
-                          ],
-                        ),
+                        const SizedBox(height: 12),
+                        _destinationExploreCue(),
                       ],
                     ),
                   ),
@@ -3655,13 +3896,13 @@ class _LandingPageState extends State<LandingPage> {
         color: Colors.transparent,
         child: InkWell(
           onTap: () => _showDestinationExploreSheet(destination),
-          borderRadius: BorderRadius.circular(_cardRadius),
+          borderRadius: BorderRadius.circular(22),
           child: AnimatedContainer(
             duration: _motionDuration,
             curve: Curves.easeOutCubic,
             transform: Matrix4.identity()
-              ..translateByDouble(0, isHovered ? -4.0 : 0.0, 0, 1),
-            decoration: _surfaceCardDecoration(hovered: isHovered),
+              ..translateByDouble(0, isHovered ? -6.0 : 0.0, 0, 1),
+            decoration: _destinationCardDecoration(hovered: isHovered),
             clipBehavior: Clip.antiAlias,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3694,10 +3935,7 @@ class _LandingPageState extends State<LandingPage> {
                       Positioned(
                         top: 10,
                         left: 10,
-                        child: _destinationCategoryBadge(
-                          category,
-                          onImage: true,
-                        ),
+                        child: _destinationCategoryBadge(category),
                       ),
                     ],
                   ),
@@ -3711,88 +3949,23 @@ class _LandingPageState extends State<LandingPage> {
                         name,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: _cardTitleStyle,
+                        style: _destinationNameStyle,
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        description.isEmpty
-                            ? 'Tap for VR & itinerary'
-                            : description,
+                        description,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: _cardSubtitleStyle.copyWith(fontSize: 14),
+                        style: GoogleFonts.montserrat(
+                          color: const Color(0xFF64748B),
+                          fontSize: 13,
+                          height: 1.45,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
-                      const SizedBox(height: 14),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _buildDestinationQuickAction(
-                              label: _landingVrQuickActionLabel,
-                              icon: Icons.vrpano_rounded,
-                              color: _primaryOrange,
-                              onTap: () => _openVrTourFromLanding(
-                                municipalityName: name,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: _buildDestinationQuickAction(
-                              label: 'Itinerary',
-                              icon: Icons.map_rounded,
-                              color: _primaryOrange,
-                              onTap: () =>
-                                  _openPlanItinerary(municipalityName: name),
-                            ),
-                          ),
-                        ],
-                      ),
+                      const SizedBox(height: 12),
+                      _destinationExploreCue(),
                     ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDestinationQuickAction({
-    required String label,
-    required IconData icon,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
-        child: Ink(
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: color.withValues(alpha: 0.35)),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 6),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(icon, size: 15, color: color),
-                const SizedBox(width: 4),
-                Flexible(
-                  child: Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: color,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
                   ),
                 ),
               ],
@@ -3815,409 +3988,42 @@ class _LandingPageState extends State<LandingPage> {
   }
 
   Widget _buildHowItWorksSection({bool viewport = false}) {
-    final stepEntries = _steps.asMap().entries.toList();
-    return Container(
-      padding: EdgeInsets.symmetric(
-        vertical: _sectionInnerVertical(viewport: viewport),
-      ),
-      color: viewport ? Colors.transparent : _pageSurfaceMuted,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _buildSectionHeader(
-            'How It Works',
-            'Get started with ATMOS-TRS in 5 simple steps',
-            icon: Icons.route_rounded,
-            badge: '5 easy steps',
-            highlight: 'Works',
-          ),
-          SizedBox(height: viewport ? 16 : (_isMobile ? 24 : 32)),
-          _isMobile
-              ? Column(
-                  children: [
-                    for (var i = 0; i < stepEntries.length; i++) ...[
-                      if (i > 0) _buildMobileStepConnector(),
-                      _buildStepCard(stepEntries[i].value, compact: true),
-                    ],
-                  ],
-                )
-              : LayoutBuilder(
-                  builder: (context, constraints) {
-                    final cardsInRow = constraints.maxWidth >= 1320
-                        ? 5
-                        : constraints.maxWidth >= 1080
-                        ? 4
-                        : 3;
-                    const gap = 16.0;
-                    final cardWidth =
-                        (constraints.maxWidth - (gap * (cardsInRow - 1))) /
-                        cardsInRow;
-
-                    return Wrap(
-                      spacing: gap,
-                      runSpacing: gap,
-                      alignment: WrapAlignment.center,
-                      children: [
-                        for (final step in stepEntries)
-                          SizedBox(
-                            width: cardWidth.clamp(200.0, 260.0),
-                            child: _buildStepCard(step.value, compact: false),
-                          ),
-                      ],
-                    );
-                  },
-                ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMobileStepConnector() {
     return Padding(
-      padding: const EdgeInsets.only(left: 28, top: 4, bottom: 4),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Container(
-          width: 2,
-          height: 20,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(1),
-            color: _primaryOrange.withValues(alpha: 0.25),
+      padding: EdgeInsets.symmetric(vertical: viewport ? 8 : 36),
+      child: LandingHowItWorksSection(
+        steps: [
+          for (final step in _steps)
+            LandingHowItWorksStep(
+              number: step['number'] as String,
+              title: step['title'] as String,
+              description: step['description'] as String,
+              icon: step['icon'] as IconData,
           ),
-        ),
+        ],
       ),
     );
   }
 
-  Widget _buildStepConnector() {
+  Widget _buildAboutAndStatistics({bool viewport = false}) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6),
-      child: Row(
-        children: [
-          Container(
-            width: 54,
-            height: 1.5,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  _primaryOrange.withValues(alpha: 0.26),
-                  _primaryOrange.withValues(alpha: 0.08),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(width: 2),
-          Icon(
-            Icons.chevron_right_rounded,
-            color: _primaryOrange.withValues(alpha: 0.5),
-            size: 14,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStepCard(Map<String, dynamic> step, {bool compact = false}) {
-    final number = step['number'] as String;
-    final title = step['title'] as String;
-    final description = step['description'] as String;
-    final icon = step['icon'] as IconData;
-
-    if (compact) {
-      return Container(
-        padding: const EdgeInsets.all(20),
-        decoration: _surfaceCardDecoration(),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Column(
-              children: [
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    _landingIconTile(icon, size: 48),
-                    Positioned(
-                      right: -4,
-                      top: -4,
-                      child: Container(
-                        width: 22,
-                        height: 22,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: _primaryOrange, width: 1.5),
-                        ),
-                        alignment: Alignment.center,
-                        child: Text(
-                          number,
-                          style: const TextStyle(
-                            color: _primaryOrange,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: _cardTitleStyle.copyWith(fontSize: 16),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    description,
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                    style: _cardSubtitleStyle.copyWith(fontSize: 14),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 22),
-      decoration: _surfaceCardDecoration(),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Stack(
-            clipBehavior: Clip.none,
-            children: [
-              _landingIconTile(icon, size: 52),
-              Positioned(
-                right: -6,
-                top: -6,
-                child: Container(
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [_primaryOrange, _brandDark],
-                    ),
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 2),
-                    boxShadow: [
-                      BoxShadow(
-                        color: _primaryOrange.withValues(alpha: 0.35),
-                        blurRadius: 6,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    number,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Text(
-            title,
-            textAlign: TextAlign.center,
-            style: _cardTitleStyle.copyWith(fontSize: 15),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            description,
-            textAlign: TextAlign.center,
-            style: _cardSubtitleStyle.copyWith(fontSize: 13),
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatCard(Map<String, dynamic> stat) {
-    final accent = stat['accent'] as Color? ?? _primaryOrange;
-
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: _surfaceCardDecoration(accent: accent),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              _landingIconTile(
-                stat['icon'] as IconData,
-                accent: accent,
-                size: 44,
-              ),
-              const Spacer(),
-            ],
-          ),
-          const SizedBox(height: 16),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text(
-              stat['value'] as String,
-              maxLines: 1,
-              style: TextStyle(
-                color: _darkBg,
-                fontSize: _isMobile ? 28 : 32,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.5,
-                height: 1.0,
-              ),
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            stat['label'] as String,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: _cardSubtitleStyle.copyWith(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatisticsSection({bool viewport = false}) {
-    final stats = [
-      {
-        'value': _formatStatCount(_publicStats?.registeredTourists),
-        'label': 'Registered Tourists',
-        'icon': Icons.people_rounded,
-        'accent': _primaryOrange,
-      },
-      {
-        'value': _formatStatCount(_publicStats?.touristSpots),
-        'label': 'Tourist Spots',
-        'icon': Icons.place_rounded,
-        'accent': _primaryOrange,
-      },
-      {
-        'value': '17',
-        'label': 'Cities & Municipalities',
-        'icon': Icons.location_city_rounded,
-        'accent': _primaryOrange,
-      },
-      {
-        'value': '7',
-        'label': 'VR Tours',
-        'icon': Icons.vrpano_rounded,
-        'accent': _primaryOrange,
-      },
-    ];
-
-    return Container(
-      padding: EdgeInsets.symmetric(
-        vertical: _sectionInnerVertical(viewport: viewport),
-      ),
-      color: viewport ? Colors.transparent : _pageSurfaceMuted,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _buildSectionHeader(
-            'By the numbers',
-            'Growing smart tourism across Misamis Occidental',
-            icon: Icons.insights_rounded,
-            badge: 'Impact',
-            highlight: 'numbers',
-          ),
-          SizedBox(height: _isMobile ? 24 : 32),
-          _isMobile
-              ? Column(
-                  children: [
-                    for (var i = 0; i < stats.length; i++)
-                      Padding(
-                        padding: EdgeInsets.only(top: i == 0 ? 0 : 12),
-                        child: _buildStatCard(stats[i]),
-                      ),
-                  ],
-                )
-              : _isTablet
-              ? Column(
-                  children: [
-                    for (var row = 0; row < stats.length; row += 2)
-                      Padding(
-                        padding: EdgeInsets.only(top: row == 0 ? 0 : 16),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(child: _buildStatCard(stats[row])),
-                            const SizedBox(width: 16),
-                            Expanded(child: _buildStatCard(stats[row + 1])),
-                          ],
-                        ),
-                      ),
-                  ],
-                )
-              : Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    for (var i = 0; i < stats.length; i++) ...[
-                      if (i > 0) const SizedBox(width: 16),
-                      Expanded(child: _buildStatCard(stats[i])),
-                    ],
-                  ],
-                ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildProvincialTourismOfficeCard({required double height}) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(_cardRadius),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.08),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(_cardRadius),
-        child: Container(
-          height: height,
-          decoration: BoxDecoration(
-            border: Border.all(color: const Color(0xFFE8ECF1)),
-          ),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              if (_heavyImagesEnabled)
-                SpotImage(
+      padding: EdgeInsets.symmetric(vertical: viewport ? 8 : 36),
+      child: LandingAboutShowcase(
+        bleed: _sectionOuterPadding,
+        compact: _isMobile,
+        tablet: _isTablet,
+        showNumbers: false,
+        titleSize: _isMobile ? 28 : 38,
+        bodyStyle: _sectionBodyStyle,
+        body:
+            'ATMOS-TRS — $_kAppFullName — is the official digital platform for tourism in Misamis Occidental. '
+            'We provide seamless tourist registration, VR previews of destinations, itinerary planning, and QR check-ins at spots.\n\n'
+            'Our mission is to connect visitors with local communities and create a sustainable, smart tourism ecosystem across the province.',
+        capitol: _heavyImagesEnabled
+            ? const SpotImage(
                   imageUrl: _kCapitolAsset,
                   fit: BoxFit.cover,
-                  height: height,
                 )
-              else
-                ColoredBox(
+            : ColoredBox(
                   color: const Color(0xFFE2E8F0),
                   child: Center(
                     child: Icon(
@@ -4227,126 +4033,73 @@ class _LandingPageState extends State<LandingPage> {
                     ),
                   ),
                 ),
-              Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black.withValues(alpha: 0.08),
-                      Colors.black.withValues(alpha: 0.78),
-                    ],
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Provincial Governor',
-                      style: _cardTitleStyle.copyWith(
-                        fontSize: 18,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Misamis Occidental',
-                      style: _cardSubtitleStyle.copyWith(
-                        fontSize: 15,
-                        color: Colors.white.withValues(alpha: 0.88),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+        stats: [
+          LandingAboutStat(
+            value: '',
+            label: 'Registered Tourists',
+            icon: Icons.people_rounded,
+            liveCount: _registeredTourists,
+            liveLoading: _registeredTouristsLoading,
+            liveUnavailable: _registeredTouristsFailed,
           ),
-        ),
+          LandingAboutStat(
+            value: _formatStatCount(_publicStats?.touristSpots),
+            label: 'Tourist Spots',
+            icon: Icons.place_rounded,
+          ),
+          const LandingAboutStat(
+            value: '17',
+            label: 'Cities & Municipalities',
+            icon: Icons.location_city_rounded,
+          ),
+          const LandingAboutStat(
+            value: '7',
+            label: 'VR Tours',
+            icon: Icons.vrpano_rounded,
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildAboutSection({bool viewport = false}) {
-    return Container(
-      padding: EdgeInsets.symmetric(
-        vertical: _sectionInnerVertical(viewport: viewport),
-      ),
-      color: viewport ? Colors.transparent : _pageBackground,
-      child: _isMobile
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildAboutSectionCopy(),
-                const SizedBox(height: 32),
-                _buildProvincialTourismOfficeCard(height: 280),
-              ],
-            )
-          : Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(child: _buildAboutSectionCopy()),
-                const SizedBox(width: 48),
-                Expanded(child: _buildProvincialTourismOfficeCard(height: 400)),
-              ],
-            ),
-    );
-  }
-
-  Widget _buildAboutSectionCopy() {
+  Widget _buildLandingFaqSection() {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(
-          width: 44,
-          height: 4,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [_primaryOrange, _brandDark],
-            ),
-            borderRadius: BorderRadius.circular(4),
-          ),
-        ),
-        const SizedBox(height: 14),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: _primaryOrange.withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: _primaryOrange.withValues(alpha: 0.22)),
-          ),
-          child: const Text(
-            'ABOUT ATMOS-TRS',
-            style: TextStyle(
-              color: _primaryOrange,
-              fontSize: 11,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 1.1,
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        _twoToneTitle(
-          'Advancing Tourism in\nMisamis Occidental',
-          'Misamis Occidental',
-          AtmosBrandTypography.displayTitle(
-            color: _darkBg,
-            fontSize: _isMobile ? 28 : 38,
-            letterSpacing: 0.3,
-            height: 1.15,
-          ),
-          textAlign: TextAlign.start,
-        ),
-        const SizedBox(height: 20),
         Text(
-          'ATMOS-TRS — $_kAppFullName — is the official digital platform for tourism in Misamis Occidental. '
-          'We provide seamless tourist registration, VR previews of destinations, itinerary planning, and QR check-ins at spots.\n\n'
-          'Our mission is to connect visitors with local communities and create a sustainable, smart tourism ecosystem across the province.',
-          style: _sectionBodyStyle,
+          'FAQ',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: _primaryOrange,
+            fontSize: _isMobile ? 13 : 14,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 1.1,
+          ),
         ),
+        const SizedBox(height: 8),
+        Text(
+          'Frequently Asked Questions',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: _darkBg,
+            fontSize: _isMobile ? 26 : 34,
+            fontWeight: FontWeight.w800,
+            height: 1.15,
+            letterSpacing: -0.4,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Answers about registration, QR check-in, and using ATMOS-TRS.',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: _bodyText,
+            fontSize: _isMobile ? 14 : 16,
+            height: 1.45,
+          ),
+        ),
+        const SizedBox(height: 22),
+        const _LandingFaqAccordion(),
       ],
     );
   }
@@ -4528,6 +4281,37 @@ class _LandingPageState extends State<LandingPage> {
     );
   }
 
+  void _openLandingFaq() {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Close frequently asked questions',
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      transitionDuration: reduceMotion
+          ? Duration.zero
+          : const Duration(milliseconds: 320),
+      pageBuilder: (context, _, _) => const _LandingFaqDialog(),
+      transitionBuilder: (context, animation, _, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        );
+        return FadeTransition(
+          opacity: curved,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 0.08),
+              end: Offset.zero,
+            ).animate(curved),
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildFooterLinks() {
     final links = ['Home', 'Features', 'Destinations', 'About', 'Contact'];
     return Column(
@@ -4563,6 +4347,32 @@ class _LandingPageState extends State<LandingPage> {
                 fontSize: 14,
                 fontWeight: FontWeight.w500,
               ),
+            ),
+          ),
+        ),
+        InkWell(
+          onTap: () => _onNavTap('faq'),
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.help_outline_rounded,
+                  size: 16,
+                  color: Colors.white.withValues(alpha: 0.72),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  'FAQ',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.72),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -4726,20 +4536,766 @@ class _DestinationImageFullscreenPage extends StatelessWidget {
   }
 }
 
-class _LandingFaqDialog extends StatefulWidget {
-  const _LandingFaqDialog();
+class _ExperienceEntrance extends StatefulWidget {
+  const _ExperienceEntrance({
+    required this.child,
+    this.delay = Duration.zero,
+  });
+
+  final Widget child;
+  final Duration delay;
 
   @override
-  State<_LandingFaqDialog> createState() => _LandingFaqDialogState();
+  State<_ExperienceEntrance> createState() => _ExperienceEntranceState();
 }
 
-class _LandingFaqDialogState extends State<_LandingFaqDialog> {
+class _ExperienceEntranceState extends State<_ExperienceEntrance>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 620),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (MediaQuery.disableAnimationsOf(context)) {
+        _controller.value = 1;
+        return;
+      }
+      Future<void>.delayed(widget.delay, () {
+        if (mounted) _controller.forward();
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        final t = Curves.easeOutCubic.transform(_controller.value);
+        return Opacity(
+          opacity: t,
+          child: Transform.translate(
+            offset: Offset(0, (1 - t) * 28),
+            child: child,
+          ),
+        );
+      },
+      child: widget.child,
+    );
+  }
+}
+
+class _ExperienceGlassCard extends StatefulWidget {
+  const _ExperienceGlassCard({
+    required this.icon,
+    required this.title,
+    required this.body,
+    required this.points,
+    required this.buttonLabel,
+    required this.onPressed,
+    this.highlighted = false,
+    this.embedded = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final String body;
+  final List<String> points;
+  final String buttonLabel;
+  final VoidCallback onPressed;
+  final bool highlighted;
+  final bool embedded;
+
+  @override
+  State<_ExperienceGlassCard> createState() => _ExperienceGlassCardState();
+}
+
+class _ExperienceGlassCardState extends State<_ExperienceGlassCard> {
+  static const Color _orange = Color(0xFFF97316);
+  static const Color _navy = Color(0xFF192334);
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final compact = MediaQuery.sizeOf(context).width < 720;
+    return MouseRegion(
+      onEnter: (event) {
+        if (event.kind != PointerDeviceKind.mouse) return;
+        setState(() => _hover = true);
+      },
+      onExit: (_) {
+        if (_hover) setState(() => _hover = false);
+      },
+      child: AnimatedContainer(
+        duration: reduceMotion ? Duration.zero : const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        width: double.infinity,
+        transform: Matrix4.translationValues(
+          0,
+          !widget.embedded && _hover && !reduceMotion ? -6 : 0,
+          0,
+        ),
+        padding: EdgeInsets.fromLTRB(
+          widget.embedded ? 4 : (compact ? 16 : 22),
+          widget.embedded ? 4 : (compact ? 16 : 22),
+          widget.embedded ? 4 : (compact ? 16 : 22),
+          widget.embedded ? 0 : (compact ? 16 : 20),
+        ),
+        decoration: widget.embedded
+            ? const BoxDecoration(color: Colors.transparent)
+            : BoxDecoration(
+          color: Colors.white.withValues(alpha: _hover ? 0.96 : 0.92),
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(
+            color: widget.highlighted
+                ? _orange.withValues(alpha: 0.7)
+                : Colors.white.withValues(alpha: 0.8),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF0F172A).withValues(
+                alpha: _hover ? 0.20 : 0.12,
+              ),
+              blurRadius: _hover ? 28 : 18,
+              offset: Offset(0, _hover ? 14 : 8),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: compact ? 48 : 54,
+              height: compact ? 48 : 54,
+              decoration: BoxDecoration(
+                color: _orange,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: _orange.withValues(alpha: 0.35),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Icon(widget.icon, color: Colors.white, size: compact ? 26 : 28),
+            ),
+            SizedBox(height: compact ? 12 : 14),
+            Text(
+              widget.title,
+              style: GoogleFonts.montserrat(
+                color: _orange,
+                fontSize: compact ? 22 : 26,
+                fontWeight: FontWeight.w800,
+                height: 1.1,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              widget.body,
+              style: TextStyle(
+                color: const Color(0xFF334155),
+                fontSize: compact ? 14 : 15,
+                height: 1.5,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            SizedBox(height: compact ? 12 : 14),
+            for (final point in widget.points)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.only(top: 1),
+                      child: Icon(
+                        Icons.check_circle_rounded,
+                        color: _orange,
+                        size: 18,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        point,
+                        style: TextStyle(
+                          color: _navy,
+                          fontSize: compact ? 13 : 14,
+                          fontWeight: FontWeight.w600,
+                          height: 1.3,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            SizedBox(height: compact ? 8 : 12),
+            _ExperienceGradientButton(
+              label: widget.buttonLabel,
+              onPressed: widget.onPressed,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ExperienceGradientButton extends StatefulWidget {
+  const _ExperienceGradientButton({
+    required this.label,
+    required this.onPressed,
+  });
+
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  State<_ExperienceGradientButton> createState() =>
+      _ExperienceGradientButtonState();
+}
+
+class _ExperienceGradientButtonState extends State<_ExperienceGradientButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return MouseRegion(
+      onEnter: (event) {
+        if (event.kind != PointerDeviceKind.mouse) return;
+        setState(() => _hover = true);
+      },
+      onExit: (_) {
+        if (_hover) setState(() => _hover = false);
+      },
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onPressed,
+        child: AnimatedScale(
+          scale: _hover && !reduceMotion ? 1.03 : 1,
+          duration: reduceMotion
+              ? Duration.zero
+              : const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          child: AnimatedContainer(
+            duration: reduceMotion
+                ? Duration.zero
+                : const Duration(milliseconds: 180),
+            width: double.infinity,
+            constraints: const BoxConstraints(minHeight: 46),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: _hover
+                    ? const [Color(0xFFFFB057), Color(0xFFFF6A00)]
+                    : const [Color(0xFFFF9A3C), Color(0xFFF97316)],
+              ),
+              borderRadius: BorderRadius.circular(999),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFFF97316).withValues(
+                    alpha: _hover ? 0.45 : 0.28,
+                  ),
+                  blurRadius: _hover ? 16 : 10,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Flexible(
+                  child: Text(
+                    widget.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.montserrat(
+                      color: Colors.white,
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Icon(
+                  Icons.arrow_forward_rounded,
+                  color: Colors.white,
+                  size: 18,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ExperiencePreview {
+  const _ExperiencePreview({
+    required this.title,
+    required this.explanation,
+    required this.assets,
+    this.aspect = 878 / 1791,
+  });
+
+  final String title;
+  final String explanation;
+  final List<String> assets;
+  final double aspect;
+}
+
+class _ExperiencePhoneMotion extends StatefulWidget {
+  const _ExperiencePhoneMotion({
+    required this.asset,
+    required this.height,
+    required this.framed,
+    required this.motionIndex,
+    required this.onTap,
+    this.aspect = 878 / 1791,
+  });
+
+  final String asset;
+  final double height;
+  final bool framed;
+  final double aspect;
+  final int motionIndex;
+  final VoidCallback onTap;
+
+  @override
+  State<_ExperiencePhoneMotion> createState() => _ExperiencePhoneMotionState();
+}
+
+class _ExperiencePhoneMotionState extends State<_ExperiencePhoneMotion>
+    with TickerProviderStateMixin {
+  late final AnimationController _float;
+  late final AnimationController _hover;
+  late final AnimationController _reveal;
+
+  ScrollPosition? _position;
+  final ValueNotifier<Offset> _tilt = ValueNotifier<Offset>(Offset.zero);
+  double _screenHeight = 800;
+  bool _reduceMotion = false;
+  bool _revealed = false;
+  bool _hovering = false;
+
+  double get _phase => widget.motionIndex == 0 ? 0 : 0.42;
+  double get _amplitude => widget.motionIndex == 0 ? 6 : 8;
+
+  @override
+  void initState() {
+    super.initState();
+    _float = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: widget.motionIndex == 0 ? 3600 : 4500),
+    );
+    _hover = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 280),
+    );
+    _reveal = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: 680 + widget.motionIndex * 140),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onScroll());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _screenHeight = MediaQuery.sizeOf(context).height;
+    final reduce = MediaQuery.disableAnimationsOf(context);
+    if (reduce != _reduceMotion) {
+      _reduceMotion = reduce;
+      if (reduce) {
+        _float.stop();
+        _hover.value = 0;
+        _tilt.value = Offset.zero;
+        _reveal.value = 1;
+        _revealed = true;
+      }
+    }
+    final next = Scrollable.maybeOf(context)?.position;
+    if (!identical(next, _position)) {
+      _position?.removeListener(_onScroll);
+      _position = next;
+      _position?.addListener(_onScroll);
+    }
+  }
+
+  @override
+  void dispose() {
+    _position?.removeListener(_onScroll);
+    _tilt.dispose();
+    _float.dispose();
+    _hover.dispose();
+    _reveal.dispose();
+    super.dispose();
+  }
+
+  bool _isInView() {
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.hasSize || !box.attached) return false;
+    final top = box.localToGlobal(Offset.zero).dy;
+    final bottom = top + box.size.height;
+    return bottom > 48 && top < _screenHeight - 48;
+  }
+
+  void _onScroll() {
+    if (!mounted) return;
+    final visible = _isInView();
+    if (visible) _playReveal();
+    if (_reduceMotion) {
+      _float.stop();
+      return;
+    }
+    if (visible && _revealed) {
+      if (!_float.isAnimating) _float.repeat();
+    } else {
+      _float.stop();
+    }
+  }
+
+  void _playReveal() {
+    if (_revealed) return;
+    _revealed = true;
+    if (_reduceMotion) {
+      _reveal.value = 1;
+      return;
+    }
+    _reveal.forward(from: 0);
+  }
+
+  void _onHover(PointerHoverEvent event) {
+    if (_reduceMotion || event.kind != PointerDeviceKind.mouse) return;
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
+    final local = box.globalToLocal(event.position);
+    final dx = ((local.dx / box.size.width) - 0.5).clamp(-0.5, 0.5);
+    final dy = ((local.dy / box.size.height) - 0.5).clamp(-0.5, 0.5);
+    _tilt.value = Offset(-dy * 0.10, dx * 0.16);
+    if (!_hovering) {
+      _hovering = true;
+      _hover.forward();
+    }
+  }
+
+  void _onExit(PointerExitEvent event) {
+    if (!_hovering && _tilt.value == Offset.zero) return;
+    _hovering = false;
+    _tilt.value = Offset.zero;
+    _hover.reverse();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onHover: _onHover,
+      onExit: _onExit,
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: AnimatedBuilder(
+            animation: Listenable.merge([_float, _hover, _reveal, _tilt]),
+            builder: (context, child) {
+              final revealT = Curves.easeOutCubic.transform(_reveal.value);
+              final hoverT = _hover.value;
+              final floatY = _reduceMotion
+                  ? 0.0
+                  : math.sin((_float.value + _phase) * math.pi * 2) *
+                      _amplitude;
+              final scale = 1 + (0.035 * hoverT);
+              final tilt = _tilt.value;
+              final transform = Matrix4.identity()
+                ..setEntry(3, 2, 0.0012)
+                ..rotateX(tilt.dx * hoverT)
+                ..rotateY(tilt.dy * hoverT)
+                ..scaleByDouble(scale, scale, 1, 1);
+              Widget phone = Transform(
+                alignment: Alignment.center,
+                filterQuality: FilterQuality.medium,
+                transform: transform,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(widget.height * 0.08),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF0F172A).withValues(
+                          alpha: 0.08 + (0.10 * hoverT),
+                        ),
+                        blurRadius: 18 + (16 * hoverT),
+                        offset: Offset(0, 10 + (6 * hoverT)),
+                      ),
+                    ],
+                  ),
+                  child: child,
+                ),
+              );
+              phone = Transform.translate(
+                offset: Offset(0, ((1 - revealT) * 32) + floatY),
+                child: phone,
+              );
+              if (revealT < 1) {
+                phone = Opacity(opacity: revealT, child: phone);
+              }
+              return phone;
+            },
+            child: RepaintBoundary(
+              child: _LandingPhonePreview(
+                asset: widget.asset,
+                height: widget.height,
+                framed: widget.framed,
+                aspect: widget.aspect,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LandingPhonePreview extends StatelessWidget {
+  const _LandingPhonePreview({
+    required this.asset,
+    required this.height,
+    required this.framed,
+    this.aspect = 878 / 1791,
+  });
+
+  final String asset;
+  final double height;
+  final bool framed;
+  final double aspect;
+
+  static const double _shotAspect = 1080 / 2400;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!framed) {
+      final width = height * aspect;
+      return Container(
+        width: width,
+        height: height,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(height * 0.055),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.16),
+              blurRadius: 22,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Image.asset(
+          asset,
+          width: width,
+          height: height,
+          fit: BoxFit.contain,
+          filterQuality: FilterQuality.high,
+          gaplessPlayback: true,
+        ),
+      );
+    }
+
+    const bezel = 8.0;
+    final screenHeight = height - bezel * 2;
+    final screenWidth = screenHeight * _shotAspect;
+    return Container(
+      width: screenWidth + bezel * 2,
+      height: height,
+      padding: const EdgeInsets.all(bezel),
+      decoration: BoxDecoration(
+        color: const Color(0xFF161616),
+        borderRadius: BorderRadius.circular(height * 0.055),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.16),
+            blurRadius: 22,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(height * 0.042),
+        child: Image.asset(
+          asset,
+          width: screenWidth,
+          height: screenHeight,
+          fit: BoxFit.fill,
+          filterQuality: FilterQuality.high,
+          gaplessPlayback: true,
+        ),
+      ),
+    );
+  }
+}
+
+class _ExperiencePreviewDialog extends StatefulWidget {
+  const _ExperiencePreviewDialog({required this.preview});
+
+  final _ExperiencePreview preview;
+
+  @override
+  State<_ExperiencePreviewDialog> createState() =>
+      _ExperiencePreviewDialogState();
+}
+
+class _ExperiencePreviewDialogState extends State<_ExperiencePreviewDialog> {
   static const Color _orange = Color(0xFFF97316);
   static const Color _title = Color(0xFF192334);
   static const Color _muted = Color(0xFF64748B);
-  static const Color _border = Color(0xFFEEF1F5);
 
-  int? _expandedIndex = 0;
+  int _index = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final compact = size.width < 600;
+    final assets = widget.preview.assets;
+    final canPage = assets.length > 1;
+    final phoneHeight = (size.height * (compact ? 0.52 : 0.62)).clamp(
+      320.0,
+      640.0,
+    );
+
+    return Dialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: compact ? 12 : 24,
+        vertical: compact ? 16 : 24,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      clipBehavior: Clip.antiAlias,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 560,
+          maxHeight: size.height * 0.92,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: EdgeInsets.fromLTRB(compact ? 16 : 22, 14, 8, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      widget.preview.title,
+                      style: const TextStyle(
+                        color: _title,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Close',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded, color: _muted),
+                  ),
+                ],
+              ),
+            ),
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: size.height * 0.76),
+              child: SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(
+                  compact ? 16 : 22,
+                  0,
+                  compact ? 16 : 22,
+                  20,
+                ),
+                child: Column(
+                  children: [
+                    Center(
+                      child: _LandingPhonePreview(
+                        asset: assets[_index],
+                        height: phoneHeight,
+                        framed: false,
+                        aspect: widget.preview.aspect,
+                      ),
+                    ),
+                    if (canPage) ...[
+                      const SizedBox(height: 12),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          IconButton(
+                            tooltip: 'Previous screenshot',
+                            onPressed: _index == 0
+                                ? null
+                                : () => setState(() => _index -= 1),
+                            icon: const Icon(Icons.chevron_left_rounded),
+                          ),
+                          Text(
+                            '${_index + 1} / ${assets.length}',
+                            style: const TextStyle(
+                              color: _muted,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Next screenshot',
+                            onPressed: _index == assets.length - 1
+                                ? null
+                                : () => setState(() => _index += 1),
+                            icon: const Icon(Icons.chevron_right_rounded),
+                          ),
+                        ],
+                      ),
+                    ],
+                    const SizedBox(height: 14),
+                    Text(
+                      widget.preview.explanation,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Color(0xFF475569),
+                        fontSize: 14,
+                        height: 1.55,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: TextButton.styleFrom(foregroundColor: _orange),
+                      child: const Text(
+                        'Close',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LandingFaqDialog extends StatelessWidget {
+  const _LandingFaqDialog();
 
   @override
   Widget build(BuildContext context) {
@@ -4749,33 +5305,63 @@ class _LandingFaqDialogState extends State<_LandingFaqDialog> {
       backgroundColor: Colors.white,
       surfaceTintColor: Colors.transparent,
       insetPadding: EdgeInsets.symmetric(
-        horizontal: compact ? 16 : 24,
-        vertical: 24,
+        horizontal: compact ? 12 : 28,
+        vertical: compact ? 16 : 28,
       ),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-      clipBehavior: Clip.antiAlias,
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxWidth: 640,
-          maxHeight: size.height * 0.85,
+          maxWidth: 680,
+          maxHeight: size.height * 0.86,
         ),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
           children: [
-            _buildHeader(compact),
-            const Divider(height: 1, color: _border),
-            Flexible(
-              child: ListView.separated(
-                shrinkWrap: true,
-                padding: EdgeInsets.fromLTRB(
-                  compact ? 14 : 22,
-                  16,
-                  compact ? 14 : 22,
-                  22,
-                ),
-                itemCount: kAppFaqItems.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 10),
-                itemBuilder: (context, i) => _buildItem(i, kAppFaqItems[i]),
+            Padding(
+              padding: EdgeInsets.fromLTRB(compact ? 16 : 20, 10, 6, 8),
+      child: Row(
+        children: [
+          Container(
+                    width: 36,
+                    height: 36,
+            decoration: BoxDecoration(
+                      color: const Color(0xFFF97316).withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(10),
+            ),
+            alignment: Alignment.center,
+            child: const Icon(
+              Icons.help_outline_rounded,
+                      color: Color(0xFFF97316),
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                  'Frequently Asked Questions',
+                  style: TextStyle(
+                        color: const Color(0xFF192334),
+                        fontSize: compact ? 16 : 18,
+                        fontWeight: FontWeight.w800,
+                        height: 1.2,
+                      ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Close',
+            onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      color: Color(0xFF64748B),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1, color: Color(0xFFEEF1F5)),
+            const Expanded(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(12, 14, 12, 18),
+                child: _LandingFaqAccordion(),
               ),
             ),
           ],
@@ -4783,55 +5369,33 @@ class _LandingFaqDialogState extends State<_LandingFaqDialog> {
       ),
     );
   }
+}
 
-  Widget _buildHeader(bool compact) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(compact ? 18 : 24, 20, 12, 18),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: _orange.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(13),
-            ),
-            alignment: Alignment.center,
-            child: const Icon(
-              Icons.help_outline_rounded,
-              color: _orange,
-              size: 22,
-            ),
-          ),
-          const SizedBox(width: 14),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Frequently Asked Questions',
-                  style: TextStyle(
-                    color: _title,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -0.2,
-                  ),
-                ),
-                SizedBox(height: 2),
-                Text(
-                  'Everything you need to know about ATMOS-TRS',
-                  style: TextStyle(color: _muted, fontSize: 13, height: 1.4),
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            tooltip: 'Close',
-            onPressed: () => Navigator.of(context).pop(),
-            icon: const Icon(Icons.close_rounded, color: _muted),
-          ),
-        ],
-      ),
+class _LandingFaqAccordion extends StatefulWidget {
+  const _LandingFaqAccordion();
+
+  @override
+  State<_LandingFaqAccordion> createState() => _LandingFaqAccordionState();
+}
+
+class _LandingFaqAccordionState extends State<_LandingFaqAccordion> {
+  static const Color _orange = Color(0xFFF97316);
+  static const Color _title = Color(0xFF192334);
+  static const Color _muted = Color(0xFF64748B);
+  static const Color _border = Color(0xFFEEF1F5);
+
+  int? _expandedIndex = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    return ListView.separated(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      padding: EdgeInsets.symmetric(horizontal: compact ? 0 : 8),
+      itemCount: kAppFaqItems.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
+      itemBuilder: (context, i) => _buildItem(i, kAppFaqItems[i]),
     );
   }
 
@@ -4916,4 +5480,129 @@ class _LandingFaqDialogState extends State<_LandingFaqDialog> {
       ),
     );
   }
+}
+
+class _ExperienceMergedPanel extends StatelessWidget {
+  const _ExperienceMergedPanel({required this.phone, required this.info});
+
+  final Widget phone;
+  final Widget info;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 16, 16, 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: const Color(0xFFF4D5C2)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x140F172A),
+            blurRadius: 18,
+            offset: Offset(0, 8),
+          ),
+        ],
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final sideBySide = constraints.maxWidth >= 560;
+          if (!sideBySide) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                phone,
+                const SizedBox(height: 8),
+                info,
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              phone,
+              const SizedBox(width: 8),
+              Expanded(child: info),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ExperienceSectionPainter extends CustomPainter {
+  const _ExperienceSectionPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = const Color(0xFFFFF8F4),
+    );
+    final wave = Path()
+      ..moveTo(0, size.height * 0.86)
+      ..quadraticBezierTo(
+        size.width * 0.25,
+        size.height * 0.78,
+        size.width * 0.5,
+        size.height * 0.88,
+      )
+      ..quadraticBezierTo(
+        size.width * 0.78,
+        size.height,
+        size.width,
+        size.height * 0.84,
+      )
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(wave, Paint()..color = const Color(0xFFFFE4CC));
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _DestinationsBackdropPainter extends CustomPainter {
+  const _DestinationsBackdropPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final wash = Paint()..color = const Color(0xFFFFF8F4);
+    canvas.drawRect(Offset.zero & size, wash);
+
+    final hill = Paint()..color = const Color(0xFFFFE8D6);
+    final path = Path()
+      ..moveTo(0, size.height * 0.92)
+      ..quadraticBezierTo(
+        size.width * 0.22,
+        size.height * 0.78,
+        size.width * 0.48,
+        size.height * 0.9,
+      )
+      ..quadraticBezierTo(
+        size.width * 0.74,
+        size.height * 1.02,
+        size.width,
+        size.height * 0.82,
+      )
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(path, hill);
+
+    final dot = Paint()..color = const Color(0x33F97316);
+    for (var i = 0; i < 8; i++) {
+      canvas.drawCircle(
+        Offset(size.width * (0.08 + i * 0.12), 36 + (i.isEven ? 10 : 28)),
+        i.isEven ? 3 : 2,
+        dot,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

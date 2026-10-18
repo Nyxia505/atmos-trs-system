@@ -1,0 +1,59 @@
+name: Build Android APKs
+
+# Manual only. A website deploy does not update apps already installed on phones.
+# Artifacts are downloaded from the Actions run, then hosted and linked from the landing page.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Which APK to build
+        required: true
+        type: choice
+        options:
+          - atmos-trs
+          - trip-planner
+          - both
+
+jobs:
+  atmos-trs:
+    if: inputs.target == 'atmos-trs' || inputs.target == 'both'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Build ATMOS TRS APK
+        run: flutter build apk --release
+      - name: Upload ATMOS TRS APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: atmos-trs-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+  trip-planner:
+    if: inputs.target == 'trip-planner' || inputs.target == 'both'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: linontripplanner-main
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Install Trip Planner dependencies
+        run: flutter pub get
+      - name: Build Trip Planner APK
+        run: flutter build apk --release
+      - name: Upload Trip Planner APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: trip-planner-apk
+          path: linontripplanner-main/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error

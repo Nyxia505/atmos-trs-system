@@ -13,6 +13,7 @@ import 'package:atmos_trs_system/services/mobile_onboarding_storage.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/tourist_profile_hydration.dart';
+import 'package:atmos_trs_system/services/lgu_office_registry_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 
@@ -79,6 +80,11 @@ class StartupRouteResolver {
       }
     }
 
+    if (route == '/governor-dashboard' ||
+        route == '/provincial-tourism-dashboard' ||
+        route == '/lgu-dashboard') {
+      unawaited(LguOfficeRegistryService.syncForCurrentUser());
+    }
     return _applyQrWelcomeIfNeeded(route, firebaseUser: firebaseUser);
   }
 
@@ -90,9 +96,8 @@ class StartupRouteResolver {
     final pendingLgu = await PendingLguCheckInStorage.peek();
     if (firebaseUser == null) {
       if (pendingSpot != null || pendingLgu != null) {
-        // Web camera QR: show landing Get-app banner first; Continue → /qr-welcome.
-        // Native App Link: go straight to party welcome fill-up.
-        return kIsWeb ? '/landing' : '/qr-welcome';
+        // Scanned spot is already stored. Go straight to tourist login.
+        return '/login';
       }
       if (!kIsWeb && !await MobileOnboardingStorage.isComplete()) {
         return '/mobile-onboarding';

@@ -1,5 +1,12 @@
+import 'dart:async';
+
+import 'package:atmos_trs_system/config/auth_config.dart';
+import 'package:atmos_trs_system/config/user_profile_storage.dart';
 import 'package:atmos_trs_system/data/app_faq_content.dart';
 import 'package:atmos_trs_system/data/chatbot_destination_knowledge.dart';
+import 'package:atmos_trs_system/services/notification_badge_notifier.dart';
+import 'package:atmos_trs_system/services/user_activity_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 enum AtmosLanguage { en, fil, ceb }
 
@@ -25,17 +32,24 @@ class FaqChatbotService {
 
   static const botName = 'Tala AI';
 
+  /// Account lookups must finish or fail. The local FAQ path does not use this.
+  static const accountLookupTimeout = Duration(seconds: 8);
+
   /// Remembers the user's language for the current chat session.
   AtmosLanguage _sessionLanguage = AtmosLanguage.en;
 
   /// After a helpful tourism/app answer, a short "ok/thanks" should get a warm reply.
   bool _awaitingAcknowledgement = false;
 
+  /// Spot from the previous answer, so "and the entrance fee?" stays on topic.
+  String? _followUpSpotId;
+
   AtmosLanguage get sessionLanguage => _sessionLanguage;
 
   void resetSession() {
     _sessionLanguage = AtmosLanguage.en;
     _awaitingAcknowledgement = false;
+    _followUpSpotId = null;
   }
 
   void restoreSessionLanguage(AtmosLanguage lang) {
@@ -81,6 +95,25 @@ class FaqChatbotService {
         'Nearby hotels sa Bless Amare',
       ];
 
+  /// True when the reply needs the signed-in profile, visits, or notifications.
+  /// Greetings and FAQ answers stay on-device and skip that lookup.
+  bool needsAccountLookup(String rawInput) {
+    final input = rawInput.trim();
+    if (input.isEmpty) return false;
+    return _personalKind(_normalize(input)) != null;
+  }
+
+  /// One reply for [rawInput]. Local answers return immediately.
+  /// Account answers wait at most [accountLookupTimeout].
+  ///
+  /// The provider returns a finished reply. It does not stream tokens.
+  Future<String> answer(String rawInput) async {
+    final input = rawInput.trim();
+    if (!needsAccountLookup(input)) return replyTo(input);
+    final personal = await tryPersonalReply(input).timeout(accountLookupTimeout);
+    return personal ?? replyTo(input);
+  }
+
   String replyTo(String rawInput) {
     final input = rawInput.trim();
     final lang = input.isEmpty
@@ -125,8 +158,12 @@ class FaqChatbotService {
       return _outOfScope(lang);
     }
 
-    final spotReply =
-        ChatbotDestinationKnowledge.reply(normalized, _langCode(lang));
+    final spotReply = ChatbotDestinationKnowledge.reply(
+      normalized,
+      _langCode(lang),
+      followUpSpotId: _followUpSpotId,
+      rememberSpot: (spotId) => _followUpSpotId = spotId,
+    );
     if (spotReply != null) {
       _awaitingAcknowledgement = true;
       return _limitWords(spotReply);
@@ -146,6 +183,83 @@ class FaqChatbotService {
 
     _awaitingAcknowledgement = false;
     return _limitWords(_fallback(lang));
+  }
+
+  /// Account, check-in, notification, and itinerary questions for the signed-in tourist.
+  /// Returns null when [rawInput] is not one of those questions.
+  Future<String?> tryPersonalReply(String rawInput) async {
+    final input = rawInput.trim();
+    if (input.isEmpty) return null;
+    final lang = languageFor(input);
+    final normalized = _normalize(input);
+    final kind = _personalKind(normalized);
+    if (kind == null) return null;
+
+    final uid = AuthConfig.currentUserUid?.trim().isNotEmpty == true
+        ? AuthConfig.currentUserUid!.trim()
+        : FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) {
+      return _needSignIn(lang);
+    }
+
+    try {
+      return switch (kind) {
+        _PersonalKind.account => await _accountReply(lang),
+        _PersonalKind.checkIns => await _checkInReply(lang),
+        _PersonalKind.notifications => await _notificationReply(lang),
+        _PersonalKind.itinerary => _itineraryReply(lang),
+      };
+    } catch (_) {
+      return _connectionProblem(lang);
+    }
+  }
+
+  _PersonalKind? _personalKind(String input) {
+    if (_containsAny(input, [
+      'my account',
+      'my profile',
+      'tourist id',
+      'account ko',
+      'akong account',
+      'profile ko',
+      'akong profile',
+      'aking account',
+      'aking profile',
+    ])) {
+      return _PersonalKind.account;
+    }
+    if (_containsAny(input, [
+      'my check',
+      'my visit',
+      'check-in history',
+      'check in history',
+      'akong check',
+      'aking check',
+      'mga bisita ko',
+      'nahisulod nako',
+    ])) {
+      return _PersonalKind.checkIns;
+    }
+    if (_containsAny(input, [
+      'my notification',
+      'unread',
+      'akong notification',
+      'aking notification',
+      'mga abiso',
+    ])) {
+      return _PersonalKind.notifications;
+    }
+    if (_containsAny(input, [
+      'my itinerary',
+      'my trip plan',
+      'saved trip',
+      'akong itinerary',
+      'aking itinerary',
+      'plano ko',
+    ])) {
+      return _PersonalKind.itinerary;
+    }
+    return null;
   }
 
   String welcomeFor(String? seed) {
@@ -745,7 +859,10 @@ class FaqChatbotService {
       'good afternoon',
       'good evening',
       'kumusta',
+      'kamusta',
       'musta',
+      'maayong gabii',
+      'good night',
       'magandang umaga',
       'magandang hapon',
       'maayong buntag',
@@ -870,14 +987,14 @@ class FaqChatbotService {
       cebScore += 5;
     }
 
-    // Shared greetings lean slightly by surrounding words.
-    if (_containsPhrase(n, 'kumusta') || _containsPhrase(n, 'musta')) {
-      if (filScore == cebScore) {
-        if (_containsPhrase(n, 'po')) {
-          filScore += 2;
-        } else if (_containsPhrase(n, 'ra')) {
-          cebScore += 2;
-        }
+    // Misamis Occidental default: kumusta/kamusta/musta is Bisaya unless "po".
+    if (_containsPhrase(n, 'kumusta') ||
+        _containsPhrase(n, 'kamusta') ||
+        _containsPhrase(n, 'musta')) {
+      if (_containsPhrase(n, 'po')) {
+        filScore += 5;
+      } else {
+        cebScore += 5;
       }
     }
 
@@ -967,7 +1084,121 @@ class FaqChatbotService {
   List<String> _tokens(String value) {
     return value.split(' ').where((t) => t.isNotEmpty).toList();
   }
+
+  String _needSignIn(AtmosLanguage lang) {
+    return _localized(
+      lang: lang,
+      en:
+          'Sign in to your tourist account first. Then I can look up your profile, check-ins, and Trip Planner status.',
+      fil:
+          'Mag-sign in muna sa tourist account mo. Pagkatapos, titingnan ko ang profile, check-ins, at Trip Planner status mo.',
+      ceb:
+          'Pag-sign in una sa imong tourist account. Unya tan-awon nako ang imong profile, check-ins, ug Trip Planner status.',
+    );
+  }
+
+  String _connectionProblem(AtmosLanguage lang) {
+    return _localized(
+      lang: lang,
+      en:
+          'I could not load that from your account just now. Check your connection and try again. I will not guess.',
+      fil:
+          'Hindi ko ma-load ang impormasyon mula sa account mo ngayon. Tingnan ang connection at subukan ulit. Hindi ako mag-iimbento.',
+      ceb:
+          'Wala nako ma-load ang impormasyon gikan sa imong account karon. Tan-awa ang connection ug sulayi pag-usab. Dili ko moimbento.',
+    );
+  }
+
+  Future<String> _accountReply(AtmosLanguage lang) async {
+    final profile = await UserProfileStorage.getUserProfile();
+    final name = [
+      profile?.firstName.trim() ?? '',
+      profile?.lastName.trim() ?? '',
+    ].where((part) => part.isNotEmpty).join(' ');
+    final email = profile?.email.trim() ?? '';
+    final touristId = profile?.touristId.trim() ?? '';
+    if (name.isEmpty && email.isEmpty && touristId.isEmpty) {
+      return _localized(
+        lang: lang,
+        en:
+            'You are signed in, but I do not have a saved tourist profile on this device yet. Open Account to finish your profile.',
+        fil:
+            'Naka-sign in ka, pero wala pang naka-save na tourist profile sa device na ito. Buksan ang Account para kumpletuhin ang profile.',
+        ceb:
+            'Naka-sign in ka, pero wala pay naka-save nga tourist profile niini nga device. Ablihi ang Account aron makumpleto ang profile.',
+      );
+    }
+    final lines = <String>[
+      if (name.isNotEmpty) name,
+      if (touristId.isNotEmpty) 'Tourist ID: $touristId',
+      if (email.isNotEmpty) email,
+    ];
+    return _localized(
+      lang: lang,
+      en: 'Here is the profile saved for this account:\n${lines.map((l) => '• $l').join('\n')}',
+      fil: 'Ito ang profile na naka-save para sa account na ito:\n${lines.map((l) => '• $l').join('\n')}',
+      ceb: 'Mao ni ang profile nga naka-save para niini nga account:\n${lines.map((l) => '• $l').join('\n')}',
+    );
+  }
+
+  Future<String> _checkInReply(AtmosLanguage lang) async {
+    final visits = await UserActivityService.getVisitedSpots();
+    if (visits.isEmpty) {
+      return _localized(
+        lang: lang,
+        en:
+            'You have no QR check-ins saved on this account yet. Scan a spot or municipality QR while you are there to record a visit.',
+        fil:
+            'Wala ka pang QR check-in na naka-save sa account na ito. I-scan ang QR ng spot o municipality habang nandoon ka para ma-record ang visit.',
+        ceb:
+            'Wala pay QR check-in nga naka-save niini nga account. I-scan ang QR sa spot o municipality samtang naa ka didto aron ma-record ang visit.',
+      );
+    }
+    final lines = visits.take(8).map((visit) {
+      final day = visit.visitedAt.toLocal();
+      final date = '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+      return '• ${visit.spotName} ($date)';
+    }).join('\n');
+    final extra = visits.length > 8 ? '\n• +${visits.length - 8} more' : '';
+    return _localized(
+      lang: lang,
+      en: 'Your saved check-ins:\n$lines$extra',
+      fil: 'Ang naka-save mong check-ins:\n$lines$extra',
+      ceb: 'Ang imong naka-save nga check-ins:\n$lines$extra',
+    );
+  }
+
+  Future<String> _notificationReply(AtmosLanguage lang) async {
+    await NotificationBadgeNotifier.instance.refresh();
+    final unread = NotificationBadgeNotifier.instance.count;
+    return _localized(
+      lang: lang,
+      en: unread == 0
+          ? 'You have no unread notifications. Open the Notifications tab for announcements from the tourism office.'
+          : 'You have $unread unread notification${unread == 1 ? '' : 's'}. Open the Notifications tab to read them.',
+      fil: unread == 0
+          ? 'Wala kang unread notifications. Buksan ang Notifications tab para sa announcements ng tourism office.'
+          : 'May $unread unread notification${unread == 1 ? '' : 's'} ka. Buksan ang Notifications tab para basahin.',
+      ceb: unread == 0
+          ? 'Wala kay unread notifications. Ablihi ang Notifications tab para sa announcements sa tourism office.'
+          : 'Naa kay $unread unread notification${unread == 1 ? '' : 's'}. Ablihi ang Notifications tab aron basahon.',
+    );
+  }
+
+  String _itineraryReply(AtmosLanguage lang) {
+    return _localized(
+      lang: lang,
+      en:
+          'Trip Planner builds your day-by-day itinerary inside the app. No saved itinerary is stored for this account yet. Open Trip Planner from Home when you are ready to plan a trip.',
+      fil:
+          'Ang Trip Planner ang gumagawa ng day-by-day itinerary sa app. Wala pang naka-save na itinerary para sa account na ito. Buksan ang Trip Planner mula sa Home kapag handa ka nang magplano.',
+      ceb:
+          'Ang Trip Planner maoy maghimo sa day-by-day itinerary sulod sa app. Wala pay naka-save nga itinerary para niini nga account. Ablihi ang Trip Planner gikan sa Home kung andam ka na magplano.',
+    );
+  }
 }
+
+enum _PersonalKind { account, checkIns, notifications, itinerary }
 
 class LanguageScores {
   const LanguageScores({

@@ -61,7 +61,15 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Path-package build output (Trip Planner lives in this repo, not a submodule)
+linontripplanner-main/build/
+linontripplanner-main/.dart_tool/
+
 # Local release builds / scratch DOT workbooks (do not push)
 *.apk
+*.jks
+*.keystore
+**/google-services-account*.json
+**/service-account*.json
 tmp_*.xlsx
 tmp_templates/

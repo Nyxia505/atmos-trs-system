@@ -14,6 +14,16 @@ class SignupAccountTypeScreen extends StatelessWidget {
   static const Color _textDark = Color(0xFF1F2937);
   static const Color _textMuted = Color(0xFF6B7280);
 
+  List<_SignupAccountOption> _visibleOptions(BuildContext context) {
+    final args = ModalRoute.of(context)?.settings.arguments;
+    final touristAndEstablishment =
+        args is Map && args[kSignupTouristAndEstablishmentArg] == true;
+    if (!touristAndEstablishment) return _options;
+    return _options
+        .where((option) => option.route != '/signup-lgu')
+        .toList(growable: false);
+  }
+
   static const _options = <_SignupAccountOption>[
     _SignupAccountOption(
       title: 'Tourist',
@@ -88,7 +98,7 @@ class SignupAccountTypeScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 28),
-                for (final option in _options) ...[
+                for (final option in _visibleOptions(context)) ...[
                   _AccountTypeCard(
                     option: option,
                     glass: true,
@@ -320,7 +330,7 @@ class SignupAccountTypeScreen extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 26),
-                      for (final option in _options) ...[
+                      for (final option in _visibleOptions(context)) ...[
                         _AccountTypeCard(
                           option: option,
                           glass: false,

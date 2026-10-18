@@ -108,7 +108,9 @@ Future<PublicFirestoreDocs> fetchPublicFirestoreQuery(
 
     for (final source in sources) {
       try {
-        final snap = await query.get(GetOptions(source: source));
+        final snap = await query
+            .get(GetOptions(source: source))
+            .timeout(const Duration(seconds: 6));
         // After a server permission-denied, an empty cache must not look like a
         // successful "0 documents" load (that wipes in-memory catalogs).
         if (lastDenied != null &&
@@ -157,7 +159,9 @@ Future<PublicFirestoreDocs> _fetchPublicCollectionViaRest(
     'pageSize': '300',
   });
 
-  final response = await http.get(uri);
+  final response = await http
+      .get(uri)
+      .timeout(const Duration(seconds: 8));
   if (response.statusCode != 200) {
     throw FirebaseException(
       plugin: 'cloud_firestore',

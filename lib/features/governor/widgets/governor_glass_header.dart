@@ -13,7 +13,7 @@ class GovernorGlassHeader extends StatelessWidget {
     this.profile,
     this.searchController,
     this.onSearchChanged,
-    this.searchHint = 'Search tourist, municipality, or report...',
+    this.searchHint = 'Search tourist spots, municipalities, or reports...',
     this.compact = false,
     this.leading,
     this.showConceptMeta = true,

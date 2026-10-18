@@ -8,6 +8,9 @@ import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
+import 'package:atmos_trs_system/navigation/auth_navigation.dart';
+import 'package:atmos_trs_system/screens/verify_otp_screen.dart';
+import 'package:atmos_trs_system/services/auth_service.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_barangays.dart';
 import 'package:atmos_trs_system/services/establishment_registration_service.dart';
@@ -55,6 +58,7 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
   final _usernameFocus = FocusNode();
   final _passwordFocus = FocusNode();
   final _confirmPasswordFocus = FocusNode();
+  final _confirmPasswordFieldKey = GlobalKey<FormFieldState<String>>();
 
   String _contactDialCode = '+63';
   String? _category;
@@ -72,6 +76,8 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
   bool _privacyOpened = false;
   bool _termsOpened = false;
   bool _submitting = false;
+  bool _submitGuard = false;
+  String? _submitPhase;
 
   /// Optional business permit photo (bytes held until Auth uid exists).
   Uint8List? _permitImageBytes;
@@ -416,9 +422,23 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
     Navigator.pop(context);
   }
 
+  void _onPasswordEdited() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_confirmPasswordController.text.isEmpty) return;
+      _confirmPasswordFieldKey.currentState?.validate();
+    });
+  }
+
   Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (_submitGuard) return;
+    _submitGuard = true;
+    if (!_formKey.currentState!.validate()) {
+      _submitGuard = false;
+      return;
+    }
     if (!_legalReviewComplete || !_agreeToTerms) {
+      _submitGuard = false;
       setState(() => _signupStep = 0);
       _snack('Please complete Terms & Data Privacy first.');
       return;
@@ -427,6 +447,7 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
         _municipality == null ||
         _barangay == null ||
         _yearEstablished == null) {
+      _submitGuard = false;
       _snack('Please complete all required fields.');
       return;
     }
@@ -435,12 +456,14 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
     if (lat == null ||
         lng == null ||
         (lat.abs() < 1e-6 && lng.abs() < 1e-6)) {
+      _submitGuard = false;
       _snack('Tap Get location so tourists can find you on the map.');
       return;
     }
     if (_isLodgingCategory &&
         EstablishmentLodgingHours.minutesSinceMidnight(_checkInTime) ==
             EstablishmentLodgingHours.minutesSinceMidnight(_checkOutTime)) {
+      _submitGuard = false;
       _snack('Check-in and check-out times must be different.');
       return;
     }
@@ -455,7 +478,10 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
       _contactController.text,
     );
 
-    setState(() => _submitting = true);
+    setState(() {
+      _submitting = true;
+      _submitPhase = 'Creating your account...';
+    });
     String? createdUid;
     var usernameClaimed = false;
 
@@ -484,7 +510,19 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
         return;
       }
       createdUid = uid;
-      await FirestoreAuthGate.ensureFreshIdToken();
+      unawaited(() async {
+        try {
+          await AuthService.sendEmailVerification();
+        } catch (e, st) {
+          debugPrint('[EST-SIGNUP] Firebase verification email: $e\n$st');
+        }
+      }());
+      final tokenFuture = FirestoreAuthGate.ensureFreshIdToken();
+      final permitFuture = _uploadPermitIfAny(uid).onError((Object e, StackTrace st) {
+        debugPrint('[EST-SIGNUP] permit upload: $e\n$st');
+        return null;
+      });
+      await tokenFuture;
 
       final usernameError =
           await UsernameRegistryService.checkAvailable(username);
@@ -518,6 +556,9 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
         return;
       }
 
+      if (mounted) {
+        setState(() => _submitPhase = 'Sending verification email...');
+      }
       final otp = OtpService.generateSixDigitOtp();
       await OtpService.saveOtp(uid: uid, otp: otp, email: email);
 
@@ -526,32 +567,23 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
         unawaited(syncFcmTokenToUserDoc(uid));
       }
 
-      final delivery = await OtpDeliveryService.deliverVerificationCode(
-        uid: uid,
-        email: email,
-        displayName: businessName,
-        otp: otp,
-        mobile: contact,
-        notifyOnThisDevice: false,
-        trySms: false,
-        otpAlreadyInFirestore: true,
+      unawaited(
+        OtpDeliveryService.deliverVerificationCode(
+          uid: uid,
+          email: email,
+          displayName: businessName,
+          otp: otp,
+          mobile: contact,
+          notifyOnThisDevice: false,
+          trySms: false,
+          otpAlreadyInFirestore: true,
+          emailInBackground: true,
+        ),
       );
-      if (!delivery.canCompleteRegistration) {
-        if (usernameClaimed) {
-          await UsernameRegistryService.release(username);
-        }
-        await RegistrationRollbackService.rollback(uid);
-        createdUid = null;
-        _snack(
-          'Verification code could not be saved. Your account was not created. '
-          'Please try again.',
-        );
-        return;
-      }
 
       final municipalityId = getMunicipalityIdFromName(_municipality);
       final permitNo = _businessPermitNoController.text.trim();
-      final permitUrl = await _uploadPermitIfAny(uid);
+      final permitUrl = await permitFuture;
       final lodging = EstablishmentCapability.isLodging(_category);
       final checkInStr = EstablishmentLodgingHours.format(_checkInTime);
       final checkOutStr = EstablishmentLodgingHours.format(_checkOutTime);
@@ -627,14 +659,16 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
       );
 
       if (!mounted) return;
-      Navigator.pushReplacementNamed(
-        context,
-        '/verify-otp',
-        arguments: {
-          'contactEmail': email,
-          'fromSignup': true,
-          'accountType': 'tourism_establishment',
-        },
+      Navigator.of(context).pushReplacement(
+        verificationHandoffRoute(
+          builder: (_) => const VerifyOtpScreen(),
+          arguments: {
+            'contactEmail': email,
+            'fromSignup': true,
+            'otpAlreadySent': true,
+            'accountType': 'tourism_establishment',
+          },
+        ),
       );
     } on FirebaseAuthException catch (e) {
       debugPrint('[EST-SIGNUP] Auth error: ${e.code} ${e.message}');
@@ -655,7 +689,13 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
       }
       _snack('Registration failed: $e');
     } finally {
-      if (mounted) setState(() => _submitting = false);
+      _submitGuard = false;
+      if (mounted) {
+        setState(() {
+          _submitting = false;
+          _submitPhase = null;
+        });
+      }
     }
   }
 
@@ -1078,7 +1118,10 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
             style: _fieldTextStyle,
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             obscureText: _obscurePassword,
+            enableInteractiveSelection: true,
+            autovalidateMode: AutovalidateMode.onUserInteraction,
             textInputAction: TextInputAction.next,
+            onChanged: (_) => _onPasswordEdited(),
             onFieldSubmitted: (_) => _confirmPasswordFocus.requestFocus(),
             decoration: _dec(
               hint: 'At least 6 characters',
@@ -1099,11 +1142,14 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
           const SizedBox(height: 12),
           _sectionLabel('Confirm Password'),
           TextFormField(
+            key: _confirmPasswordFieldKey,
             controller: _confirmPasswordController,
             focusNode: _confirmPasswordFocus,
             style: _fieldTextStyle,
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
             obscureText: _obscureConfirm,
+            enableInteractiveSelection: true,
+            autovalidateMode: AutovalidateMode.onUserInteraction,
             textInputAction: TextInputAction.done,
             onFieldSubmitted: (_) {
               if (!_submitting) unawaited(_submit());
@@ -1138,13 +1184,27 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
               padding: const EdgeInsets.symmetric(vertical: 16),
             ),
             child: _submitting
-                ? const SizedBox(
-                    height: 22,
-                    width: 22,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.5,
-                      color: Colors.white,
-                    ),
+                ? Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const SizedBox(
+                        height: 22,
+                        width: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: Colors.white,
+                        ),
+                      ),
+                      if (_submitPhase != null) ...[
+                        const SizedBox(width: 12),
+                        Flexible(
+                          child: Text(
+                            _submitPhase!,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
+                    ],
                   )
                 : const Text(
                     'Create account',

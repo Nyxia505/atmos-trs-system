@@ -102,7 +102,7 @@ class _AeCountryMatrixTableState extends State<AeCountryMatrixTable> {
     final t = l.totals;
     final style = AeSheetKit.cell(color: color, weight: weight, italic: l.kind == AeMatrixLineKind.country);
     String n(int v) => v == 0 ? '-' : '$v';
-    return Row(children: [
+    return AeHoverRow(child: Row(children: [
       AeCell('', width: cols[0].$2, fill: fill, child: Padding(
         padding: EdgeInsets.only(left: indent),
         child: Text(l.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: style),
@@ -119,6 +119,6 @@ class _AeCountryMatrixTableState extends State<AeCountryMatrixTable> {
         fill: const Color(0xFFF1F5F9),
         style: AeSheetKit.cell(weight: FontWeight.w800, color: l.ok ? AeDashTokens.success : AeDashTokens.danger),
       ),
-    ]);
+    ]));
   }
 }

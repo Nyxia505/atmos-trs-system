@@ -3,7 +3,7 @@ description: "ATMOS TRS"
 
 publish_to: 'none'
 
-version: 1.0.7+8
+version: 1.0.8+9
 
 environment:
   sdk: ^3.11.0
@@ -115,6 +115,7 @@ flutter:
     - assets/images/ae_photos_collage.png
     # Municipality / destination heroes for Visited place thumbnails
     - assets/images/oroquieta City plaza.jpeg
+    - assets/images/iloveoro.jpg
     - assets/images/ozamis city.webp
     - assets/images/Cotta Fort & Shrine.jpg
     - assets/images/Immaculate Conception Cathedral.webp
@@ -128,6 +129,7 @@ flutter:
     - assets/images/lake_duminagat.webp
     - assets/images/conception_v2.png
     - assets/images/DonVic_v2.png
+    - assets/images/DonVic.png
     - assets/images/Jimenez.png
     - assets/images/Lopez Jaena.png
     - assets/images/Panaon.png
@@ -139,11 +141,14 @@ flutter:
     - assets/images/el triunfo.png
     - assets/images/lumantas river side garden.webp
     - assets/images/tripplan.png
+    - assets/mockup/
     - assets/Onboarding_screen/
     # Unicode-capable font embedded in DOT report PDFs (default Helvetica lacks — – ’ • →).
     - assets/fonts/noto_sans/
     # Bundled official template used when the Supabase copy is missing.
     - forms_format/CUS-FORM-MICE-UTILIZATION-SURVEY-FORM.xlsx
+    - forms_format/3.-DAE1B.2.xlsx
+    - forms_format/DAE1B.2.Domestic.xlsx
 
   fonts:
     - family: Sacrifice

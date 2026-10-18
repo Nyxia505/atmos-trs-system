@@ -143,7 +143,7 @@ class GovernorArrivalsAreaChart extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: GovernorDashboardTokens.body(
-                    size: rotateBottomLabels ? 9 : 10,
+                    size: values.length > 20 ? 8 : (rotateBottomLabels ? 9 : 10),
                   ),
                 );
                 if (!rotateBottomLabels) {

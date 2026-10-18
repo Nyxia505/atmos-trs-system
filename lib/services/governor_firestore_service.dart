@@ -344,6 +344,7 @@ class GovernorFirestoreService {
     } else {
       row = {'id': docId, ...raw};
     }
+    _keepVisitFields(raw, row);
 
     final spotId =
         row['spotId']?.toString().trim() ??
@@ -380,6 +381,50 @@ class GovernorFirestoreService {
     row['userId'] = uid.isNotEmpty ? uid : row['userId'];
     row['tourist_id'] = uid.isNotEmpty ? uid : row['tourist_id'];
     return row;
+  }
+
+  static const _visitFieldKeys = [
+    'originBreakdown',
+    'companionOrigin',
+    'visitorCount',
+    'partySize',
+    'visitor_count',
+    'party_size',
+    'maleCount',
+    'femaleCount',
+    'filipinoCount',
+    'foreignCount',
+    'companionCount',
+    'companionMale',
+    'companionFemale',
+    'companionFilipino',
+    'companionForeign',
+    'groupMembers',
+    'touristProfile',
+    'touristSex',
+    'touristNationality',
+    'touristCountry',
+    'touristProvince',
+    'touristCity',
+    'touristIsLocal',
+    'touristLocalOrForeign',
+    'location',
+    'spotName',
+  ];
+
+  /// Party size, origin, and sex fields must survive normalization.
+  static void _keepVisitFields(
+    Map<String, dynamic> raw,
+    Map<String, dynamic> row,
+  ) {
+    for (final key in _visitFieldKeys) {
+      final value = raw[key];
+      if (value == null) continue;
+      final current = row[key];
+      if (current == null || (current is String && current.trim().isEmpty)) {
+        row[key] = value;
+      }
+    }
   }
 
   static DateTime? parseCheckInTime(Map<String, dynamic> c) {

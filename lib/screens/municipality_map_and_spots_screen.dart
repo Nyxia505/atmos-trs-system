@@ -10,6 +10,8 @@ import 'package:atmos_trs_system/models/establishment_map_pin.dart';
 import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
 import 'package:atmos_trs_system/features/explore/explore_data.dart' show TouristSpot;
 import 'package:atmos_trs_system/features/tourism/tourist_spot_detail_screen.dart';
+import 'package:atmos_trs_system/models/tourist_destination_detail.dart';
+import 'package:atmos_trs_system/screens/tourist_destination_detail_screen.dart';
 import 'package:atmos_trs_system/services/establishment_map_pins_service.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart';
 import 'package:atmos_trs_system/screens/establishment_public_detail_screen.dart';
@@ -22,10 +24,15 @@ class MunicipalityMapAndSpotsScreen extends StatefulWidget {
   const MunicipalityMapAndSpotsScreen({
     super.key,
     required this.municipalityIdOrName,
+    this.spotsOnly = false,
   });
 
   /// Municipality id (e.g. 'oroquieta') or display name (e.g. 'Oroquieta City').
   final String municipalityIdOrName;
+
+  /// Visited-places check-in for a municipality: list spots to open and review.
+  /// The map stays available from Explore.
+  final bool spotsOnly;
 
   @override
   State<MunicipalityMapAndSpotsScreen> createState() =>
@@ -74,6 +81,26 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
       if (s.id == fs.id) return s;
     }
     return null;
+  }
+
+  void _openSpot(TouristSpot spot) {
+    if (widget.spotsOnly) {
+      Navigator.push(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => TouristDestinationDetailScreen(
+            destination: TouristDestinationDetail.fromExploreSpot(spot),
+          ),
+        ),
+      );
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => TouristSpotDetailScreen(spot: spot),
+      ),
+    );
   }
 
   @override
@@ -158,6 +185,7 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
       ),
       body: Column(
         children: [
+          if (!widget.spotsOnly)
           SizedBox(
             height: municipalityDetailMapHeight(context),
             width: double.infinity,
@@ -187,13 +215,7 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
                     onSpotTap: (fs) {
                       final spot = _spotForFirestore(fs);
                       if (spot == null) return;
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) =>
-                              TouristSpotDetailScreen(spot: spot),
-                        ),
-                      );
+                      _openSpot(spot);
                     },
                     onEstablishmentTap: (pin) {
                       Navigator.push(
@@ -213,14 +235,25 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                const Text(
-                  'Tourist spots',
-                  style: TextStyle(
+                Text(
+                  widget.spotsOnly ? 'Places you can review' : 'Tourist spots',
+                  style: const TextStyle(
                     color: Color(0xFF111827),
                     fontWeight: FontWeight.w700,
                     fontSize: 18,
                   ),
                 ),
+                if (widget.spotsOnly) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Open the place you checked in to, then write a review. Other tourists can read it on that page.',
+                    style: TextStyle(
+                      color: AppTheme.unselectedMuted,
+                      fontSize: 13,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 if (_spots.isEmpty)
                   Padding(
@@ -237,15 +270,7 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
                   ..._spots.map(
                     (spot) => _SpotCard(
                       spot: spot,
-                      onOpenDetails: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) =>
-                                TouristSpotDetailScreen(spot: spot),
-                          ),
-                        );
-                      },
+                      onOpenDetails: () => _openSpot(spot),
                     ),
                   ),
               ],

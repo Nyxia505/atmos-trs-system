@@ -26,6 +26,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:atmos_trs_system/navigation/post_logout_navigation.dart';
+import 'package:atmos_trs_system/navigation/shared_module_logout.dart';
 import 'package:atmos_trs_system/widgets/app_logout_button.dart';
 
 /// Main User Dashboard - Container for all user navigation
@@ -1659,8 +1660,9 @@ class _UserDashboardScreenState extends State<UserDashboardScreen>
                           ],
                         ),
                       );
-                      if (confirmed != true) return;
-                      AuthConfig.currentUserUid = null;
+                      if (confirmed != true || !context.mounted) return;
+                      await signOutSharedModules();
+                      if (!context.mounted) return;
                       navigateAfterLogout(context);
                     },
                   ),

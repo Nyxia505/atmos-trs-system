@@ -20,6 +20,7 @@ import 'package:atmos_trs_system/utils/mice_report_query.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/pdf_file_download.dart';
 import 'package:atmos_trs_system/utils/xlsx_file_download.dart';
+import 'package:atmos_trs_system/widgets/atmos_table_kit.dart';
 
 /// Shared DOT / DAE export panel for LGU (municipal) and Governor (provincial).
 class DotReportExportPanel extends StatefulWidget {
@@ -114,6 +115,33 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
     return [for (final f in kDotFormCatalog) if (allowed.contains(f.id)) f];
   }
 
+  /// Spot scope lists VAR only. Establishment scope lists DAE and CUS.
+  /// All spots and establishments lists every family.
+  List<DotFormCatalogEntry> get _scopedCatalog {
+    final base = _catalog;
+    return switch (_entityKind) {
+      DotReportEntityKind.spot => [
+          for (final f in base)
+            if (f.category == DotFormCategory.attraction) f,
+        ],
+      DotReportEntityKind.establishment => [
+          for (final f in base)
+            if (f.category == DotFormCategory.accommodation ||
+                f.category == DotFormCategory.mice)
+              f,
+        ],
+      DotReportEntityKind.all => base,
+    };
+  }
+
+  void _syncFormToScope() {
+    final forms = _scopedCatalog;
+    if (forms.isEmpty) return;
+    if (forms.any((f) => f.id == _selected.id)) return;
+    _selected = forms.first;
+    _formSearchController.text = _selected.title;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -129,6 +157,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
     } else {
       _subscribeEstablishments();
     }
+    _syncFormToScope();
     unawaited(_refreshPreview());
     unawaited(_loadPaperSize());
   }
@@ -730,6 +759,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
                   setState(() {
                     _entityKind = v;
                     _selectedEntity = null;
+                    _syncFormToScope();
                   });
                   unawaited(_refreshPreview());
                 },
@@ -864,6 +894,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
             ? constraints.maxWidth
             : 420.0;
         return DropdownMenu<DotFormCatalogEntry>(
+          key: ValueKey('${_entityKind.name}:${_selected.id}'),
           controller: _formSearchController,
           initialSelection: _selected,
           enableFilter: true,
@@ -920,7 +951,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
             _onFormSelected(form);
           },
           dropdownMenuEntries: [
-            for (final form in _catalog)
+            for (final form in _scopedCatalog)
               DropdownMenuEntry<DotFormCatalogEntry>(
                 value: form,
                 label: form.title,
@@ -1143,89 +1174,35 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       );
     }
 
-    final borderSide = BorderSide(color: widget.borderColor);
-    final headerStyle = TextStyle(
-      color: widget.textDark,
-      fontWeight: FontWeight.w800,
-      fontSize: 11.5,
-      letterSpacing: 0.2,
-    );
-    final cellStyle = TextStyle(
-      color: widget.textDark,
-      fontSize: 12.5,
-    );
+    final cellStyle = TextStyle(color: widget.textDark, fontSize: 12.5);
     final footerStyle = TextStyle(
       color: widget.textDark,
       fontWeight: FontWeight.w800,
       fontSize: 12.5,
     );
+    Widget text(String value, TextStyle style) => Text(
+          value,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: style,
+        );
 
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: widget.borderColor),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final minW = constraints.maxWidth.isFinite && constraints.maxWidth > 0
-              ? constraints.maxWidth
-              : 640.0;
-          return SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minWidth: minW),
-              child: DataTable(
-                headingRowColor: const WidgetStatePropertyAll(Color(0xFFF1F5F9)),
-                headingRowHeight: 44,
-                dataRowMinHeight: 40,
-                dataRowMaxHeight: 56,
-                horizontalMargin: 14,
-                columnSpacing: 18,
-                dividerThickness: 1,
-                border: TableBorder(
-                  top: borderSide,
-                  bottom: borderSide,
-                  left: borderSide,
-                  right: borderSide,
-                  horizontalInside: borderSide,
-                  verticalInside: borderSide,
-                ),
-                headingTextStyle: headerStyle,
-                dataTextStyle: cellStyle,
-                columns: [
-                  for (final h in preview.headers)
-                    DataColumn(label: Text(h)),
-                ],
-                rows: [
-                  for (var i = 0; i < preview.rows.length; i++)
-                    DataRow(
-                      color: WidgetStatePropertyAll(
-                        i.isOdd ? const Color(0xFFF8FAFC) : Colors.white,
-                      ),
-                      cells: [
-                        for (final cell in preview.rows[i])
-                          DataCell(Text(cell)),
-                      ],
-                    ),
-                  if (preview.footer != null)
-                    DataRow(
-                      color: const WidgetStatePropertyAll(Color(0xFFFFF7ED)),
-                      cells: [
-                        for (final cell in preview.footer!)
-                          DataCell(
-                            Text(cell, style: footerStyle),
-                          ),
-                      ],
-                    ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
+    return AtmosResponsiveTable(
+      columns: [
+        for (final h in preview.headers)
+          AtmosTableColumn(
+            h,
+            flex: h.length > 18 ? 2 : 1,
+            minWidth: (h.length * 7.2).clamp(88, 168).toDouble(),
+          ),
+      ],
+      rows: [
+        for (final row in preview.rows)
+          [for (final cell in row) text(cell, cellStyle)],
+      ],
+      footer: preview.footer == null
+          ? null
+          : [for (final cell in preview.footer!) text(cell, footerStyle)],
     );
   }
 
@@ -1523,7 +1500,9 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
                     ? null
                     : _entityMunicipalityFilter)
                 : widget.municipalityId,
-        includeRows: form.id == 'dae1a_manual',
+        includeRows: form.id == 'dae1a_manual' ||
+            form.id == 'dae1b2' ||
+            form.id == 'dae1b2_domestic',
       );
     } catch (e) {
       debugPrint('[DotReportExportPanel] AE registers: $e');

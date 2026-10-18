@@ -67,13 +67,24 @@ class ChatbotDestinationKnowledge {
   };
 
   /// Returns a spot-specific answer from in-app destination data, or null.
-  static String? reply(String normalizedInput, String lang) {
+  static String? reply(
+    String normalizedInput,
+    String lang, {
+    String? followUpSpotId,
+    void Function(String spotId)? rememberSpot,
+  }) {
     if (_isListAllQuery(normalizedInput)) {
       return _listAllSpots(lang);
     }
 
     final intent = _detectIntent(normalizedInput);
-    final spot = _findBestSpot(normalizedInput);
+    var spot = _findBestSpot(normalizedInput);
+    if (spot == null &&
+        followUpSpotId != null &&
+        followUpSpotId.isNotEmpty &&
+        intent != _SpotIntent.unknown) {
+      spot = _spotById(followUpSpotId);
+    }
     if (spot == null) {
       if (intent != _SpotIntent.unknown) {
         return _whichSpotPrompt(lang, intent);
@@ -81,7 +92,16 @@ class ChatbotDestinationKnowledge {
       return null;
     }
 
+    final spotId = spot['spotId']?.toString() ?? '';
+    if (spotId.isNotEmpty) rememberSpot?.call(spotId);
     return _formatAnswer(spot, intent, lang);
+  }
+
+  static Map<String, dynamic>? _spotById(String spotId) {
+    for (final spot in kFeaturedDestinations) {
+      if (spot['spotId']?.toString() == spotId) return spot;
+    }
+    return null;
   }
 
   static bool _isListAllQuery(String input) {

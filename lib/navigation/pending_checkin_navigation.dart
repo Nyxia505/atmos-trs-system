@@ -29,6 +29,16 @@ String? landingWelcomeMessageForPending({
   return null;
 }
 
+/// Opens the destination chooser when a scan is waiting. Does not check the tourist in.
+Future<bool> openQrDestinationIfPending(BuildContext context) async {
+  final spot = await PendingSpotCheckInStorage.peek();
+  final lgu = await PendingLguCheckInStorage.peek();
+  if (spot == null && lgu == null) return false;
+  if (!context.mounted) return true;
+  Navigator.pushNamedAndRemoveUntil(context, '/qr-resume', (route) => false);
+  return true;
+}
+
 /// Shown when the account was created but the pending scan was not saved.
 const String _kAccountReadyTitle = 'Your account is ready';
 

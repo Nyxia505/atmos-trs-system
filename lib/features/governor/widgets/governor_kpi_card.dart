@@ -70,12 +70,12 @@ class _GovernorKpiCardState extends State<GovernorKpiCard> {
               height: compact ? 40 : 48,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(14),
-                color: widget.accent,
+                color: widget.accent.withValues(alpha: 0.14),
               ),
               child: Icon(
                 widget.icon,
-                size: compact ? 20 : 22,
-                color: Colors.white,
+                size: compact ? 22 : 24,
+                color: widget.accent,
               ),
             ),
             SizedBox(width: compact ? 10 : 14),

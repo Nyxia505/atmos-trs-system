@@ -15,6 +15,8 @@ class TouristGroupMember {
     this.city = '',
     this.isLocal,
     this.localOrForeign = '',
+    this.status = 'accepted',
+    this.touristId = '',
     this.joinedAt,
   });
 
@@ -27,7 +29,14 @@ class TouristGroupMember {
   final String city;
   final bool? isLocal;
   final String localOrForeign;
+
+  /// `accepted` can be checked in. `invited` must accept first.
+  final String status;
+  final String touristId;
   final DateTime? joinedAt;
+
+  bool get isAccepted => status != 'invited' && status != 'declined';
+  bool get isInvited => status == 'invited';
 
   factory TouristGroupMember.fromMap(String uid, Map<String, dynamic> m) {
     final joined = m['joinedAt'];
@@ -43,6 +52,10 @@ class TouristGroupMember {
       city: m['city']?.toString().trim() ?? '',
       isLocal: m['isLocal'] is bool ? m['isLocal'] as bool : null,
       localOrForeign: m['localOrForeign']?.toString().trim() ?? '',
+      status: (m['status']?.toString().trim().isNotEmpty ?? false)
+          ? m['status'].toString().trim()
+          : 'accepted',
+      touristId: m['touristId']?.toString().trim() ?? '',
       joinedAt: joined is Timestamp
           ? joined.toDate()
           : (joined is DateTime ? joined : null),
@@ -72,6 +85,7 @@ class TouristGroupMember {
       city: t['city']?.toString().trim() ?? '',
       isLocal: t['isLocal'] is bool ? t['isLocal'] as bool : null,
       localOrForeign: t['localOrForeign']?.toString().trim() ?? '',
+      touristId: t['touristId']?.toString().trim() ?? '',
     );
   }
 
@@ -86,11 +100,18 @@ class TouristGroupMember {
         'city': city,
         if (isLocal != null) 'isLocal': isLocal,
         'localOrForeign': localOrForeign,
+        if (touristId.isNotEmpty) 'touristId': touristId,
       };
 
   /// Firestore map stored in the group document (adds `joinedAt`).
-  Map<String, dynamic> toGroupMap({bool serverJoinedAt = true}) => {
+  Map<String, dynamic> toGroupMap({
+    bool serverJoinedAt = true,
+    String status = 'accepted',
+  }) =>
+      {
         ...toProfileMap(),
+        'status': status,
+        if (touristId.isNotEmpty) 'touristId': touristId,
         'joinedAt': serverJoinedAt
             ? FieldValue.serverTimestamp()
             : (joinedAt == null ? null : Timestamp.fromDate(joinedAt!)),
@@ -107,6 +128,7 @@ class TouristGroup {
     required this.status,
     required this.memberUids,
     required this.members,
+    this.pendingInvites = const {},
     this.createdAt,
     this.expiresAt,
   });
@@ -123,6 +145,7 @@ class TouristGroup {
   final String status;
   final List<String> memberUids;
   final Map<String, TouristGroupMember> members;
+  final Map<String, TouristGroupMember> pendingInvites;
   final DateTime? createdAt;
   final DateTime? expiresAt;
 
@@ -135,7 +158,13 @@ class TouristGroup {
 
   bool hasMember(String uid) => memberUids.contains(uid);
 
+  bool hasPendingInvite(String uid) => pendingInvites.containsKey(uid);
+
   int get memberCount => memberUids.length;
+
+  /// People the leader may check in with one scan.
+  List<TouristGroupMember> get participatingMembers =>
+      orderedMembers.where((m) => m.isAccepted).toList();
 
   /// Members in join order with the leader first.
   List<TouristGroupMember> get orderedMembers {
@@ -189,6 +218,21 @@ class TouristGroup {
         );
       }
     });
+    final rawInvites = d['pendingInvites'] is Map
+        ? Map<String, dynamic>.from(d['pendingInvites'] as Map)
+        : const <String, dynamic>{};
+    final pendingInvites = <String, TouristGroupMember>{};
+    rawInvites.forEach((uid, value) {
+      if (value is Map) {
+        pendingInvites[uid] = TouristGroupMember.fromMap(
+          uid,
+          {
+            ...Map<String, dynamic>.from(value),
+            'status': 'invited',
+          },
+        );
+      }
+    });
     DateTime? ts(Object? v) => v is Timestamp ? v.toDate() : null;
     return TouristGroup(
       id: doc.id,
@@ -198,6 +242,7 @@ class TouristGroup {
       status: d['status']?.toString() ?? 'active',
       memberUids: uids,
       members: members,
+      pendingInvites: pendingInvites,
       createdAt: ts(d['createdAt']),
       expiresAt: ts(d['expiresAt']),
     );

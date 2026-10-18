@@ -75,9 +75,9 @@ class ProfileTouristQrCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          const Text(
+          Text(
             'Show at check-in or partner sites',
-            style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+            style: TextStyle(fontSize: 12, color: AppTheme.unselectedMuted),
           ),
         ],
         SizedBox(height: compact ? 8 : 16),
@@ -100,9 +100,9 @@ class ProfileTouristQrCard extends StatelessWidget {
         else
           Padding(
             padding: EdgeInsets.symmetric(vertical: compact ? 12 : 24),
-            child: const Text(
+            child: Text(
               'Tourist ID not available yet',
-              style: TextStyle(color: Color(0xFF6B7280), fontSize: 12),
+              style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 12),
             ),
           ),
       ],
@@ -114,7 +114,7 @@ class ProfileTouristQrCard extends StatelessWidget {
       width: double.infinity,
       padding: EdgeInsets.all(compact ? 12 : 18),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.cardBackground,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: accent.withValues(alpha: 0.35)),
       ),

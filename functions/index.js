@@ -7,6 +7,8 @@
  * Requires Blaze plan for Cloud Functions (or use Firebase free tier limits).
  */
 const {onDocumentWritten} = require('firebase-functions/v2/firestore');
+const {onSchedule} = require('firebase-functions/v2/scheduler');
+const functionsV1 = require('firebase-functions/v1');
 const {onCall, HttpsError} = require('firebase-functions/v2/https');
 const {defineString} = require('firebase-functions/params');
 const {initializeApp} = require('firebase-admin/app');
@@ -1183,6 +1185,8 @@ const STAFF_ROLES = new Set([
   'Tourism',
   'tourism_office',
   'Tourism_Office',
+  'provincial_tourism',
+  'tourism_province',
 ]);
 
 /** Misamis Occidental LGU display names (for dummy seed). */
@@ -1561,6 +1565,70 @@ exports.sendGovernorAnnouncementPush = onDocumentWritten(
       announcementId,
       eventType,
     });
+    return null;
+  },
+);
+
+/**
+ * Publishes scheduled announcements when their Asia/Manila window opens and
+ * expires them when it closes. Client feeds also hide posts outside the window,
+ * so a late tick does not leave an expired post visible.
+ */
+exports.syncAnnouncementSchedule = onSchedule(
+  {
+    schedule: 'every 5 minutes',
+    timeZone: 'Asia/Manila',
+    region: 'asia-southeast1',
+    timeoutSeconds: 120,
+  },
+  async () => {
+    const now = new Date();
+    const snap = await db
+      .collection('announcements')
+      .where('scheduleState', 'in', ['scheduled', 'live'])
+      .limit(300)
+      .get();
+    if (snap.empty) return null;
+
+    let batch = db.batch();
+    let ops = 0;
+    const commit = async () => {
+      if (ops === 0) return;
+      await batch.commit();
+      batch = db.batch();
+      ops = 0;
+    };
+
+    for (const doc of snap.docs) {
+      const data = doc.data() || {};
+      const start = data.startsAt && data.startsAt.toDate
+        ? data.startsAt.toDate()
+        : null;
+      const end = data.endsAt && data.endsAt.toDate
+        ? data.endsAt.toDate()
+        : null;
+      if (!start) continue;
+      const open = now >= start && (!end || now < end);
+      const expired = end ? now >= end : false;
+      const state = normalizeField(data.scheduleState);
+
+      if (state === 'scheduled' && open) {
+        batch.update(doc.ref, {
+          published: true,
+          scheduleState: 'live',
+          publishedAt: FieldValue.serverTimestamp(),
+        });
+        ops += 1;
+      } else if ((state === 'live' || state === 'scheduled') && expired) {
+        batch.update(doc.ref, {
+          published: false,
+          scheduleState: 'expired',
+        });
+        ops += 1;
+      }
+      if (ops >= 400) await commit();
+    }
+    await commit();
     return null;
   },
 );
@@ -1964,6 +2032,106 @@ exports.createLguTouristSpot = onCall(
 );
 
 /**
+ * Updates an existing tourist spot and its QR payload for LGU / provincial staff.
+ * Used when client Firestore rules block the direct update.
+ */
+exports.updateLguTouristSpot = onCall(
+  {region: 'asia-southeast1'},
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Must be signed in.');
+    }
+
+    const callerUid = request.auth.uid;
+    const callerEmail = normalizeField(
+      request.auth.token && request.auth.token.email,
+    ).toLowerCase();
+
+    try {
+      await assertProvincialStaff(callerUid);
+    } catch (err) {
+      const looksStaff =
+        callerEmail === 'governor.atmos@misocc-demo.ph' ||
+        callerEmail === 'tourismoffice.atmos@misocc-demo.ph' ||
+        callerEmail === 'provincial.tourism@misocc-demo.ph' ||
+        callerEmail.startsWith('tourism.') ||
+        callerEmail.includes('tourism');
+      if (!looksStaff) {
+        throw err;
+      }
+    }
+
+    const data = request.data || {};
+    const spotId = normalizeField(data.spotId);
+    if (!spotId) {
+      throw new HttpsError('invalid-argument', 'spotId is required.');
+    }
+
+    const ref = db.collection('tourist_spots').doc(spotId);
+    const existing = await ref.get();
+    if (!existing.exists) {
+      throw new HttpsError('not-found', 'Tourist spot was not found.');
+    }
+
+    const patch = {
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedByUid: callerUid,
+    };
+    const textFields = [
+      'name',
+      'category',
+      'municipality',
+      'municipalityId',
+      'description',
+      'status',
+      'dotAttractionCode',
+      'qr_payload',
+      'qrValue',
+    ];
+    for (const key of textFields) {
+      const value = normalizeField(data[key]);
+      if (value) patch[key] = value;
+    }
+    if (Array.isArray(data.gallery)) {
+      patch.gallery = data.gallery
+        .filter((item) => typeof item === 'string' && item.trim())
+        .map((item) => item.trim())
+        .slice(0, 8);
+      if (patch.gallery.length > 0) {
+        patch.image_url = patch.gallery[0];
+        patch.image = patch.gallery[0];
+      }
+    }
+    const imageUrl = normalizeField(data.image_url);
+    if (data.image_url === null) {
+      patch.image_url = FieldValue.delete();
+      patch.image = FieldValue.delete();
+    } else if (imageUrl) {
+      patch.image_url = imageUrl;
+      patch.image = imageUrl;
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'vr_link')) {
+      if (data.vr_link === null || normalizeField(data.vr_link) === '') {
+        patch.vr_link = FieldValue.delete();
+        patch.hasVR = false;
+      } else {
+        patch.vr_link = normalizeField(data.vr_link);
+        patch.hasVR = true;
+      }
+    }
+    const lat = Number(data.latitude);
+    const lng = Number(data.longitude);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      patch.latitude = lat;
+      patch.longitude = lng;
+    }
+
+    await ref.set(patch, {merge: true});
+    return {ok: true, id: spotId};
+  },
+);
+
+/**
  * Deletes a tourist account (Firebase Auth + related Firestore docs).
  * Governor / tourism staff only. Does not delete staff accounts.
  */
@@ -2229,16 +2397,18 @@ exports.seedLguAnalyticsData = onCall(
           `seed.${municipalityId}.${i + 1}@misocc-seed.ph`;
         const partyHeadcount = 1 + (i % 4);
         const sex = profile.sex || ((i % 2 === 0) ? 'Female' : 'Male');
+        const dateOfBirth = seedDateOfBirth(i);
 
         const touristPayload = {
           firebaseUid: uid,
-          touristId: uid,
+          touristId: seedTouristDisplayId(uid),
           firstName: fn,
           lastName: ln,
           fullName: `${fn} ${ln}`,
           email,
           authEmail: email,
           sex,
+          dateOfBirth,
           nationality: profile.nationality,
           country: profile.country,
           province: isLocal
@@ -2261,7 +2431,8 @@ exports.seedLguAnalyticsData = onCall(
           source: 'lgu_debug_seed',
           seedTag: 'lgu_analytics_debug_v2_address',
           updatedAt: FieldValue.serverTimestamp(),
-          createdAt: FieldValue.serverTimestamp(),
+          createdAt: new Date(now.getTime() - (30 - (i % 28)) * 86400000),
+          registeredAt: new Date(now.getTime() - (30 - (i % 28)) * 86400000),
         };
 
         writer.set(db.collection('tourists').doc(uid), touristPayload, {merge: true});
@@ -2271,6 +2442,7 @@ exports.seedLguAnalyticsData = onCall(
           email,
           role: 'tourist',
           fullName: `${fn} ${ln}`,
+          dateOfBirth,
           ...(isLocal
             ? {municipalityId, municipality: municipalityName}
             : {}),
@@ -2307,10 +2479,12 @@ exports.seedLguAnalyticsData = onCall(
             userId: uid,
             user_id: uid,
             tourist_id: uid,
+            touristId: seedTouristDisplayId(uid),
             touristName: `${fn} ${ln}`,
             tourist_name: `${fn} ${ln}`,
             touristEmail: email,
             touristNationality: profile.nationality,
+            touristDateOfBirth: dateOfBirth,
             touristMobile: '',
             municipalityId,
             lguId: municipalityId,
@@ -2455,6 +2629,10 @@ exports.clearAllTouristData = onCall(
           'touristId',
           touristIds,
         );
+      for (let g = 1; g <= 12; g++) {
+        await db.collection('tourist_groups').doc(`seed_group_${municipalityId}_${g}`).delete().catch(() => {});
+        await db.collection('qr_checkins').doc(`seed_group_${municipalityId}_${g}`).delete().catch(() => {});
+      }
     } else {
       // Full wipe of tourist-related collections (keeps staff users / spots)
       deleted.tourists += await deleteCollectionInBatches('tourists');
@@ -2599,6 +2777,25 @@ function isDeletableTouristUser(docId, data) {
   return false;
 }
 
+function seedDateOfBirth(index) {
+  const ages = [16, 21, 28, 33, 41, 52, 61];
+  const age = ages[index % ages.length];
+  const now = new Date();
+  const month = String((index % 12) + 1).padStart(2, '0');
+  const day = String((index % 27) + 1).padStart(2, '0');
+  return `${now.getFullYear() - age}-${month}-${day}`;
+}
+
+function seedTouristDisplayId(uid) {
+  let hash = 0;
+  const text = String(uid || '');
+  for (let i = 0; i < text.length; i++) {
+    hash = (Math.imul(hash, 33) + text.charCodeAt(i)) >>> 0;
+  }
+  const hex = hash.toString(16).padStart(8, '0').slice(-8).toUpperCase();
+  return `MO-${hex}`;
+}
+
 async function collectTouristIdsForMunicipality(municipalityId) {
   const ids = new Set();
   const byReg = await db.collection('tourists')
@@ -2670,6 +2867,8 @@ async function deleteAllTouristRoleUsers() {
 }
 
 const LANDING_STATS_TTL_MS = 10 * 60 * 1000;
+const LANDING_STATS_DOC = 'public_stats/landing';
+const LANDING_STAT_MEMBERS = 'landing_stat_members';
 let landingStatsCache = null;
 
 /** Mirrors ProductionDataFilters.isDummyTourist in the Flutter app. */
@@ -2694,39 +2893,402 @@ function isLandingCountableSpot(s) {
   return status !== 'deleted' && status !== 'removed' && status !== 'archived';
 }
 
+function spotHasPublicVrTour(s) {
+  if (s.hasVR === true) return true;
+  const link = String(s.vr_link || s.vrLink || '').trim();
+  return link.length > 0;
+}
+
+/**
+ * One ledger doc per countable tourist account (doc id = tourist id).
+ * Create and delete retries no-op once the ledger matches the account.
+ */
+async function syncLandingTouristMembership(touristId) {
+  const touristRef = db.collection('tourists').doc(touristId);
+  const ledgerRef = db.collection(LANDING_STAT_MEMBERS).doc(touristId);
+  const statsRef = db.doc(LANDING_STATS_DOC);
+  await db.runTransaction(async (tx) => {
+    const tourist = await tx.get(touristRef);
+    const data = tourist.exists ? tourist.data() || {} : null;
+    const shouldCount = !!(data && !isLandingDummyTourist(touristId, data));
+    const ledger = await tx.get(ledgerRef);
+    const counted = ledger.exists;
+    if (shouldCount === counted) return;
+    const stats = await tx.get(statsRef);
+    const current = stats.exists ? Number(stats.get('registeredTourists')) || 0 : 0;
+    if (shouldCount) {
+      tx.set(ledgerRef, {kind: 'tourist'});
+      tx.set(statsRef, {
+        registeredTourists: current + 1,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, {merge: true});
+      return;
+    }
+    tx.delete(ledgerRef);
+    tx.set(statsRef, {
+      registeredTourists: Math.max(0, current - 1),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, {merge: true});
+  });
+}
+
+/** Sets the public count from existing tourist accounts. Does not store profiles. */
+async function reconcileLandingRegisteredTourists() {
+  let cursor = null;
+  let count = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    let q = db.collection('tourists').orderBy(FieldPath.documentId()).limit(200);
+    if (cursor) q = q.startAfter(cursor);
+    const snap = await q.get();
+    if (snap.empty) break;
+    const batch = db.batch();
+    for (const doc of snap.docs) {
+      const ledgerRef = db.collection(LANDING_STAT_MEMBERS).doc(doc.id);
+      if (isLandingDummyTourist(doc.id, doc.data() || {})) {
+        batch.delete(ledgerRef);
+      } else {
+        batch.set(ledgerRef, {kind: 'tourist'}, {merge: true});
+        count += 1;
+      }
+    }
+    await batch.commit();
+    cursor = snap.docs[snap.docs.length - 1];
+    if (snap.size < 200) break;
+  }
+  await db.doc(LANDING_STATS_DOC).set({
+    registeredTourists: count,
+    reconciledAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  }, {merge: true});
+  return count;
+}
+
+/** Keeps public_stats/landing aligned when a tourist account is created or removed. */
+exports.syncLandingRegisteredTouristCount = functionsV1
+  .region('asia-southeast1')
+  .firestore.document('tourists/{touristId}')
+  .onWrite(async (change, context) => {
+    const touristId = context.params.touristId;
+    const beforeSnap = change.before;
+    const afterSnap = change.after;
+    const before = beforeSnap.exists ? beforeSnap.data() || {} : null;
+    const after = afterSnap.exists ? afterSnap.data() || {} : null;
+    const wasCounted = !!(before && !isLandingDummyTourist(touristId, before));
+    const isCounted = !!(after && !isLandingDummyTourist(touristId, after));
+    if (wasCounted === isCounted) return null;
+    await syncLandingTouristMembership(touristId);
+    return null;
+  });
+
 /**
  * Public aggregate counts for the landing page "By the numbers" section.
  * No auth required; returns counts only (no personal data).
  */
 exports.getLandingPublicStats = onCall(
-  {region: 'asia-southeast1'},
+  {region: 'asia-southeast1', timeoutSeconds: 120},
   async () => {
     const now = Date.now();
-    if (landingStatsCache && now - landingStatsCache.at < LANDING_STATS_TTL_MS) {
-      return landingStatsCache.data;
+    let touristSpots;
+    let vrTours;
+    const cacheFresh = landingStatsCache &&
+      now - landingStatsCache.at < LANDING_STATS_TTL_MS &&
+      typeof landingStatsCache.data.touristSpots === 'number' &&
+      typeof landingStatsCache.data.vrTours === 'number';
+    if (cacheFresh) {
+      touristSpots = landingStatsCache.data.touristSpots;
+      vrTours = landingStatsCache.data.vrTours;
+    } else {
+      const spotsSnap = await db.collection('tourist_spots')
+        .select('status', 'hasVR', 'vr_link', 'vrLink')
+        .get();
+      touristSpots = 0;
+      vrTours = 0;
+      for (const doc of spotsSnap.docs) {
+        const data = doc.data() || {};
+        if (!isLandingCountableSpot(data)) continue;
+        touristSpots += 1;
+        if (spotHasPublicVrTour(data)) vrTours += 1;
+      }
+      landingStatsCache = {at: now, data: {touristSpots, vrTours}};
     }
 
-    const [touristsSnap, spotsSnap] = await Promise.all([
-      db
-        .collection('tourists')
-        .select('firebaseUid', 'email', 'source', 'status', 'accountDeleted', 'province')
-        .get(),
-      db.collection('tourist_spots').select('status').get(),
-    ]);
-
-    let registeredTourists = 0;
-    for (const doc of touristsSnap.docs) {
-      if (!isLandingDummyTourist(doc.id, doc.data() || {})) registeredTourists += 1;
+    const statsSnap = await db.doc(LANDING_STATS_DOC).get();
+    const stored = statsSnap.get('registeredTourists');
+    let registeredTourists;
+    if (statsSnap.exists && statsSnap.get('reconciledAt') && typeof stored === 'number') {
+      registeredTourists = stored;
+    } else {
+      registeredTourists = await reconcileLandingRegisteredTourists();
     }
 
-    let touristSpots = 0;
-    for (const doc of spotsSnap.docs) {
-      if (isLandingCountableSpot(doc.data() || {})) touristSpots += 1;
-    }
-
-    const data = {registeredTourists, touristSpots, updatedAt: now};
-    landingStatsCache = {at: now, data};
-    return data;
+    return {registeredTourists, touristSpots, vrTours, updatedAt: now};
   },
 );
 
+exports.optacaManageAccount = onCall(
+  {region: 'asia-southeast1'},
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Must be signed in.');
+    }
+    await assertOptacaCaller(
+      request.auth.uid,
+      request.auth.token && request.auth.token.email,
+    );
+
+    const data = request.data || {};
+    const action = normalizeField(data.action).toLowerCase();
+    const auth = getAuth();
+
+    if (action === 'create') {
+      return createOptacaStakeholderAccount(auth, request.auth.uid, data);
+    }
+
+    const uid = normalizeField(data.uid);
+    if (!uid) {
+      throw new HttpsError('invalid-argument', 'uid is required.');
+    }
+    if (uid === request.auth.uid) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Use Settings to change your own OPTACA password.',
+      );
+    }
+
+    const userSnap = await db.collection('users').doc(uid).get();
+    if (!userSnap.exists) {
+      throw new HttpsError('not-found', 'Account was not found.');
+    }
+    const existing = userSnap.data() || {};
+    if (!isOptacaManageableRole(existing.role)) {
+      throw new HttpsError(
+        'permission-denied',
+        'OPTACA can manage LGU and establishment accounts only.',
+      );
+    }
+
+    if (action === 'update') {
+      return updateOptacaStakeholderAccount(auth, uid, existing, data);
+    }
+    if (action === 'setpassword') {
+      const password = String(data.password || '');
+      if (password.length < 8) {
+        throw new HttpsError(
+          'invalid-argument',
+          'Password must be at least 8 characters.',
+        );
+      }
+      await auth.updateUser(uid, {password});
+      return {ok: true};
+    }
+    if (action === 'setstatus') {
+      const active = data.active === true;
+      const status = active ? 'active' : 'inactive';
+      await auth.updateUser(uid, {disabled: !active});
+      await db.collection('users').doc(uid).set({
+        status,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, {merge: true});
+      if (isEstablishmentRole(existing.role)) {
+        await db.collection('accommodation_establishments').doc(uid).set({
+          status,
+          updatedAt: FieldValue.serverTimestamp(),
+        }, {merge: true});
+      }
+      return {ok: true, status};
+    }
+
+    throw new HttpsError('invalid-argument', 'Unknown account action.');
+  },
+);
+
+function isEstablishmentRole(role) {
+  const value = normalizeField(role).toLowerCase();
+  return value === 'tourism_establishment' ||
+    value === 'tourismestablishment' ||
+    value === 'establishment';
+}
+
+function isOptacaManageableRole(role) {
+  const value = normalizeField(role).toLowerCase();
+  return value === 'tourism' ||
+    value === 'tourism_office' ||
+    isEstablishmentRole(value);
+}
+
+async function assertOptacaCaller(uid, email) {
+  const snap = await db.collection('users').doc(uid).get();
+  const role = normalizeField(snap.data() && snap.data().role).toLowerCase();
+  const mail = normalizeField(email).toLowerCase();
+  const roleOk = role === 'provincial_tourism' || role === 'tourism_province';
+  const emailOk = mail === 'provincial.tourism@misocc-demo.ph';
+  if (!roleOk && !emailOk) {
+    throw new HttpsError(
+      'permission-denied',
+      'Only the Provincial Tourism Office (OPTACA) can manage these accounts.',
+    );
+  }
+}
+
+async function createOptacaStakeholderAccount(auth, callerUid, data) {
+  const email = normalizeField(data.email).toLowerCase();
+  const password = String(data.password || '');
+  const fullName = normalizeField(data.fullName);
+  const requestedRole = normalizeField(data.role).toLowerCase();
+  const municipalityId = normalizeField(data.municipalityId).toLowerCase();
+  const category = normalizeField(data.category);
+  if (!email.includes('@')) {
+    throw new HttpsError('invalid-argument', 'A valid email is required.');
+  }
+  if (password.length < 8) {
+    throw new HttpsError(
+      'invalid-argument',
+      'Password must be at least 8 characters.',
+    );
+  }
+  if (!fullName) {
+    throw new HttpsError('invalid-argument', 'Name is required.');
+  }
+  const role = requestedRole === 'tourism_office' ? 'tourism' : requestedRole;
+  if (role !== 'tourism' && role !== 'tourism_establishment') {
+    throw new HttpsError(
+      'invalid-argument',
+      'Role must be an LGU office or a tourism establishment.',
+    );
+  }
+  if (!municipalityId || !MUNICIPALITY_DISPLAY_NAMES[municipalityId]) {
+    throw new HttpsError('invalid-argument', 'Choose a municipality in Misamis Occidental.');
+  }
+  if (role === 'tourism_establishment' && !category) {
+    throw new HttpsError('invalid-argument', 'Establishment category is required.');
+  }
+
+  let userRecord;
+  try {
+    userRecord = await auth.createUser({
+      email,
+      password,
+      displayName: fullName,
+      emailVerified: true,
+      disabled: false,
+    });
+  } catch (err) {
+    const code = err && err.code ? String(err.code) : '';
+    if (code === 'auth/email-already-exists') {
+      throw new HttpsError('already-exists', 'That email is already registered.');
+    }
+    throw new HttpsError(
+      'internal',
+      (err && err.message) || 'Could not create the account.',
+    );
+  }
+
+  const municipality = municipalityDisplayName(municipalityId);
+  await db.collection('users').doc(userRecord.uid).set({
+    firebaseUid: userRecord.uid,
+    email,
+    fullName,
+    role,
+    municipality,
+    municipalityId,
+    category: role === 'tourism_establishment' ? category : '',
+    status: 'active',
+    isVerified: true,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+    createdByUid: callerUid,
+    createdVia: 'optacaManageAccount',
+  });
+
+  if (role === 'tourism_establishment') {
+    await db.collection('accommodation_establishments').doc(userRecord.uid).set({
+      id: userRecord.uid,
+      businessName: fullName,
+      name: fullName,
+      category,
+      type: category,
+      ownerName: fullName,
+      email,
+      municipality,
+      municipalityId,
+      ownerUid: userRecord.uid,
+      authUid: userRecord.uid,
+      status: 'active',
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      createdBy: 'optaca',
+    });
+  }
+
+  return {ok: true, uid: userRecord.uid};
+}
+
+async function updateOptacaStakeholderAccount(auth, uid, existing, data) {
+  const fullName = normalizeField(data.fullName);
+  const email = normalizeField(data.email).toLowerCase();
+  const municipalityId = normalizeField(data.municipalityId).toLowerCase();
+  const category = normalizeField(data.category);
+  const authPatch = {};
+  const patch = {updatedAt: FieldValue.serverTimestamp()};
+
+  if (fullName) {
+    patch.fullName = fullName;
+    authPatch.displayName = fullName;
+  }
+  if (email) {
+    if (!email.includes('@')) {
+      throw new HttpsError('invalid-argument', 'A valid email is required.');
+    }
+    patch.email = email;
+    authPatch.email = email;
+    authPatch.emailVerified = true;
+  }
+  if (municipalityId) {
+    if (!MUNICIPALITY_DISPLAY_NAMES[municipalityId]) {
+      throw new HttpsError('invalid-argument', 'Choose a municipality in Misamis Occidental.');
+    }
+    patch.municipalityId = municipalityId;
+    patch.municipality = municipalityDisplayName(municipalityId);
+  }
+  if (category && isEstablishmentRole(existing.role)) {
+    patch.category = category;
+  }
+  if (Object.keys(authPatch).length > 0) {
+    try {
+      await auth.updateUser(uid, authPatch);
+    } catch (err) {
+      const code = err && err.code ? String(err.code) : '';
+      if (code === 'auth/email-already-exists') {
+        throw new HttpsError('already-exists', 'That email is already registered.');
+      }
+      throw new HttpsError(
+        'internal',
+        (err && err.message) || 'Could not update the account.',
+      );
+    }
+  }
+  await db.collection('users').doc(uid).set(patch, {merge: true});
+  if (isEstablishmentRole(existing.role)) {
+    const estPatch = {updatedAt: FieldValue.serverTimestamp()};
+    if (fullName) {
+      estPatch.businessName = fullName;
+      estPatch.name = fullName;
+      estPatch.ownerName = fullName;
+    }
+    if (email) estPatch.email = email;
+    if (patch.municipalityId) {
+      estPatch.municipalityId = patch.municipalityId;
+      estPatch.municipality = patch.municipality;
+    }
+    if (category) {
+      estPatch.category = category;
+      estPatch.type = category;
+    }
+    await db.collection('accommodation_establishments').doc(uid).set(
+      estPatch,
+      {merge: true},
+    );
+  }
+  return {ok: true};
+}

@@ -142,11 +142,13 @@ class AeMonthlyRecordTable extends StatelessWidget {
     );
   }
 
-  Widget _split(String label, int a, int n) => Row(children: [
-        AeCell(label, width: 200),
-        AeCell('$a', width: 110, align: TextAlign.center),
-        AeCell('$n', width: 110, align: TextAlign.center),
-      ]);
+  Widget _split(String label, int a, int n) => AeHoverRow(
+        child: Row(children: [
+          AeCell(label, width: 200),
+          AeCell('$a', width: 110, align: TextAlign.center),
+          AeCell('$n', width: 110, align: TextAlign.center),
+        ]),
+      );
 
   Widget _dayRow(AeDailyRecordLine d, List<(String, double)> cols) {
     final weekend = d.date.weekday >= 6;
@@ -156,7 +158,8 @@ class AeMonthlyRecordTable extends StatelessWidget {
         ? AeDashTokens.success
         : (d.markedZero ? AeDashTokens.info : AeDashTokens.muted);
     final canToggle = !readOnly && !d.hasRows && onToggleZeroDay != null;
-    return InkWell(
+    return AeHoverRow(
+      child: InkWell(
       onTap: canToggle ? () => onToggleZeroDay!(d.day, !d.markedZero) : null,
       child: Row(children: [
         for (final c in cols)
@@ -192,6 +195,7 @@ class AeMonthlyRecordTable extends StatelessWidget {
               ),
           },
       ]),
+      ),
     );
   }
 }

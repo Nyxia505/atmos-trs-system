@@ -10,7 +10,7 @@ class RecentReviewsSection extends StatelessWidget {
 
   final int maxItems;
 
-  static const Color _textMuted = Color(0xFF6B7280);
+  static Color get _textMuted => AppTheme.unselectedMuted;
 
   @override
   Widget build(BuildContext context) {
@@ -87,7 +87,7 @@ class RecentReviewsSection extends StatelessWidget {
                     vertical: 20,
                   ),
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: AppTheme.cardBackground,
                     borderRadius: BorderRadius.circular(18),
                     border: Border.all(color: accent.withValues(alpha: 0.12)),
                   ),
@@ -155,7 +155,7 @@ class _RecentReviewCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
         child: Ink(
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: AppTheme.cardBackground,
             borderRadius: BorderRadius.circular(18),
             border: Border.all(color: accent.withValues(alpha: 0.12)),
             boxShadow: [
@@ -243,16 +243,16 @@ class _RecentReviewCard extends StatelessWidget {
                   review.comment,
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     height: 1.4,
-                    color: Color(0xFF374151),
+                    color: AppTheme.textPrimary,
                   ),
                 ),
                 const SizedBox(height: 8),
                 Text(
                   review.dateLabel,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11,
                     color: RecentReviewsSection._textMuted,
                   ),

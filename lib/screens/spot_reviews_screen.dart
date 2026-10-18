@@ -18,8 +18,8 @@ class SpotReviewsScreen extends StatelessWidget {
   final String spotName;
   final double? fallbackRating;
 
-  static const Color _textDark = Color(0xFF111827);
-  static const Color _textMuted = Color(0xFF6B7280);
+  static Color get _textDark => AppTheme.textPrimary;
+  static Color get _textMuted => AppTheme.unselectedMuted;
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +28,7 @@ class SpotReviewsScreen extends StatelessWidget {
         AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: AppTheme.pageBackground,
       appBar: AppBar(
         backgroundColor: accent,
         foregroundColor: Colors.white,
@@ -58,7 +58,7 @@ class SpotReviewsScreen extends StatelessWidget {
                   children: [
                     Icon(Icons.rate_review_outlined, size: 48, color: accent),
                     const SizedBox(height: 12),
-                    const Text(
+                    Text(
                       'No reviews yet',
                       style: TextStyle(
                         fontSize: 18,
@@ -70,7 +70,7 @@ class SpotReviewsScreen extends StatelessWidget {
                     Text(
                       'Be the first to review $spotName after a QR check-in.',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: _textMuted),
+                      style: TextStyle(color: _textMuted),
                     ),
                   ],
                 ),
@@ -84,7 +84,7 @@ class SpotReviewsScreen extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: AppTheme.cardBackground,
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(color: accent.withValues(alpha: 0.12)),
                 ),
@@ -103,7 +103,7 @@ class SpotReviewsScreen extends StatelessWidget {
                     const SizedBox(width: 8),
                     Text(
                       '$displayCount review${displayCount == 1 ? '' : 's'}',
-                      style: const TextStyle(color: _textMuted),
+                      style: TextStyle(color: _textMuted),
                     ),
                   ],
                 ),
@@ -143,12 +143,12 @@ class _ReviewCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.cardBackground,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: isOwnReview
               ? accent.withValues(alpha: 0.45)
-              : Colors.grey.shade200,
+              : AppTheme.border,
           width: isOwnReview ? 1.5 : 1,
         ),
       ),
@@ -211,7 +211,7 @@ class _ReviewCard extends StatelessWidget {
                 ),
                 Text(
                   review.dateLabel,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11,
                     color: SpotReviewsScreen._textMuted,
                   ),

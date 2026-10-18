@@ -1,10 +1,12 @@
 import 'package:atmos_trs_system/config/app_theme.dart';
+import 'package:atmos_trs_system/navigation/login_route_args.dart';
 import 'package:atmos_trs_system/config/atmos_brand_typography.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/qr_welcome_destination_context.dart';
 import 'package:atmos_trs_system/widgets/atmos_brand_logo.dart';
 import 'package:atmos_trs_system/widgets/party_demographic_fields.dart';
+import 'package:atmos_trs_system/widgets/visit_origin_breakdown_fields.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -35,6 +37,7 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
   late final AnimationController _fadeController;
   late final Animation<double> _fadeAnimation;
   final _demoKey = GlobalKey<PartyDemographicFieldsState>();
+  final _originKey = GlobalKey<VisitOriginBreakdownFieldsState>();
   PartyDemographicValue _demo = const PartyDemographicValue(
     partySize: 1,
     maleCount: 0,
@@ -71,7 +74,7 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
           SnackBar(
             content: Text(
               demo.validationMessage ??
-                  'Enter party size with Male/Female and Filipino/Foreign counts.',
+                  'Enter party size with Male and Female counts.',
             ),
             behavior: SnackBarBehavior.floating,
             backgroundColor: Colors.red.shade700,
@@ -80,19 +83,49 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
       }
       return false;
     }
+    final originState = _originKey.currentState;
+    if (originState == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Enter where each person in the party lives.'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: Colors.red.shade700,
+          ),
+        );
+      }
+      return false;
+    }
+    final originError = originState.validate();
+    if (originError != null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(originError),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: Colors.red.shade700,
+          ),
+        );
+      }
+      return false;
+    }
+    final origin = originState.value;
+    final originJson = origin.toJson();
     await PendingSpotCheckInStorage.setPartyDemographics(
       partySize: demo.partySize,
       femaleCount: demo.femaleCount,
       maleCount: demo.maleCount,
-      filipinoCount: demo.filipinoCount,
-      foreignCount: demo.foreignCount,
+      filipinoCount: origin.domestic,
+      foreignCount: origin.foreignTotal,
+      originJson: originJson,
     );
     await PendingLguCheckInStorage.setPartyDemographics(
       partySize: demo.partySize,
       femaleCount: demo.femaleCount,
       maleCount: demo.maleCount,
-      filipinoCount: demo.filipinoCount,
-      foreignCount: demo.foreignCount,
+      filipinoCount: origin.domestic,
+      foreignCount: origin.foreignTotal,
+      originJson: originJson,
     );
     return true;
   }
@@ -128,13 +161,25 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
   Future<void> _goToSignup() async {
     if (!await _persistPartyDemographics()) return;
     if (!mounted) return;
-    Navigator.pushReplacementNamed(context, '/signup');
+    Navigator.pushReplacementNamed(
+      context,
+      '/signup-tourist',
+      arguments: LoginRouteArgs.forFeature(
+        returnFeature: LoginRouteArgs.featureQr,
+      ),
+    );
   }
 
   Future<void> _goToLogin() async {
     if (!await _persistPartyDemographics()) return;
     if (!mounted) return;
-    Navigator.pushReplacementNamed(context, '/login');
+    Navigator.pushReplacementNamed(
+      context,
+      '/login',
+      arguments: LoginRouteArgs.forFeature(
+        returnFeature: LoginRouteArgs.featureQr,
+      ),
+    );
   }
 
   Future<void> _continueAsGuest() async {
@@ -491,8 +536,8 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
           ),
           const SizedBox(height: 6),
           const Text(
-            'Enter your total party, then gender and Filipino/Foreign counts. '
-            'Editing one side auto-fills the other. Include yourself.',
+            'Enter your total party and male/female counts, then where each '
+            'person lives. Include yourself. Each person goes in only one origin.',
             style: TextStyle(
               color: _bodyText,
               fontSize: 14,
@@ -508,11 +553,23 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
             initialFemale: 1,
             initialFilipino: 1,
             initialForeign: 0,
+            showResidency: false,
             partyLabel: 'Total party (kabook)',
             maleLabel: 'Laki (male)',
             femaleLabel: 'Baye (female)',
             partyHelperText: 'Total visitors including yourself',
             onChanged: (v) => setState(() => _demo = v),
+          ),
+          const SizedBox(height: 16),
+          VisitOriginBreakdownFields(
+            key: _originKey,
+            spotMunicipality: (_destination?.municipality.trim().isNotEmpty ?? false)
+                ? _destination!.municipality.trim()
+                : 'this municipality',
+            partySize: _demo.partySize,
+            maleCount: _demo.maleCount,
+            femaleCount: _demo.femaleCount,
+            prefillScanner: false,
           ),
         ],
       ),

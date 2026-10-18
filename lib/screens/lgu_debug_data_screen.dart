@@ -1073,6 +1073,7 @@ class _SeedTab extends StatefulWidget {
 
 class _SeedTabState extends State<_SeedTab> {
   late String _selectedMunId;
+  List<({String id, String name})> _spots = const [];
   bool _seedAll = false;
   bool _useSplit = true;
   final _totalCtrl = TextEditingController(text: '20');
@@ -1091,6 +1092,8 @@ class _SeedTabState extends State<_SeedTab> {
   bool _regBusy = false;
   String? _regError;
   String _regProgress = '';
+  bool _estBusy = false;
+  String? _estError;
 
   Future<void> _runRegisters() async {
     setState(() {
@@ -1208,9 +1211,13 @@ class _SeedTabState extends State<_SeedTab> {
   @override
   void initState() {
     super.initState();
-    _selectedMunId = widget.municipalityId;
-    for (final s in widget.spots) {
-      if (s.id.trim().isNotEmpty) _selectedSpotIds.add(s.id);
+    _selectedMunId = normalizeMunicipalityId(widget.municipalityId);
+    _spots = [
+      for (final s in widget.spots)
+        if (s.id.trim().isNotEmpty) (id: s.id, name: s.name),
+    ];
+    for (final s in _spots) {
+      _selectedSpotIds.add(s.id);
     }
     for (final c in [_totalCtrl, _localCtrl, _foreignCtrl, _checkInsCtrl]) {
       c.addListener(_onCountsChanged);
@@ -1261,15 +1268,30 @@ class _SeedTabState extends State<_SeedTab> {
 
   @override
   void dispose() {
-    _totalCtrl.dispose();
-    _localCtrl.dispose();
-    _foreignCtrl.dispose();
-    _checkInsCtrl.dispose();
+    for (final c in [_totalCtrl, _localCtrl, _foreignCtrl, _checkInsCtrl]) {
+      c.removeListener(_onCountsChanged);
+      c.dispose();
+    }
     super.dispose();
   }
 
   int _parse(TextEditingController c, {int fallback = 0}) {
     return int.tryParse(c.text.trim()) ?? fallback;
+  }
+
+  Future<void> _selectMunicipality(String municipalityId) async {
+    final id = normalizeMunicipalityId(municipalityId);
+    setState(() => _selectedMunId = id);
+    try {
+      final spots = await LguDebugDataService.listSpots(id);
+      if (!mounted || _selectedMunId != id) return;
+      setState(() {
+        _spots = spots;
+        _selectedSpotIds
+          ..clear()
+          ..addAll(spots.map((s) => s.id));
+      });
+    } catch (_) {}
   }
 
   Future<void> _run() async {
@@ -1312,6 +1334,7 @@ class _SeedTabState extends State<_SeedTab> {
       }
       if (!mounted) return;
       widget.onDone();
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(result.summaryMessage),
@@ -1379,8 +1402,8 @@ class _SeedTabState extends State<_SeedTab> {
               ),
               const SizedBox(height: 4),
               Text(
-                'Locals get home address in the selected LGU (Registered Tourists). '
-                'Foreign visitors get check-ins only — they do not inflate the registry.',
+                'Locals are registered to this LGU. Check-ins are written here '
+                'so this dashboard’s analytics update without a site visit.',
                 style: TextStyle(fontSize: 13, color: widget.muted),
               ),
               const SizedBox(height: 16),
@@ -1398,7 +1421,7 @@ class _SeedTabState extends State<_SeedTab> {
                 onChanged: _busy
                     ? null
                     : (v) {
-                        if (v != null) setState(() => _selectedMunId = v);
+                        if (v != null) unawaited(_selectMunicipality(v));
                       },
               ),
               SwitchListTile(
@@ -1478,7 +1501,7 @@ class _SeedTabState extends State<_SeedTab> {
                   isDense: true,
                 ),
               ),
-              if (widget.spots.isNotEmpty) ...[
+              if (_spots.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 Text(
                   'Spots for check-ins',
@@ -1492,21 +1515,20 @@ class _SeedTabState extends State<_SeedTab> {
                   spacing: 6,
                   runSpacing: 6,
                   children: [
-                    for (final s in widget.spots)
-                      FilterChip(
-                        label: Text(s.name),
+                    for (final s in _spots)
+                      _SeedSpotChip(
+                        label: s.name,
                         selected: _selectedSpotIds.contains(s.id),
-                        onSelected: _busy
-                            ? null
-                            : (sel) {
-                                setState(() {
-                                  if (sel) {
-                                    _selectedSpotIds.add(s.id);
-                                  } else {
-                                    _selectedSpotIds.remove(s.id);
-                                  }
-                                });
-                              },
+                        enabled: !_busy,
+                        onTap: () {
+                          setState(() {
+                            if (_selectedSpotIds.contains(s.id)) {
+                              _selectedSpotIds.remove(s.id);
+                            } else {
+                              _selectedSpotIds.add(s.id);
+                            }
+                          });
+                        },
                       ),
                   ],
                 ),
@@ -1545,7 +1567,120 @@ class _SeedTabState extends State<_SeedTab> {
         ),
         const SizedBox(height: 16),
         _registerSeedCard(muns),
+        const SizedBox(height: 16),
+        _establishmentSeedCard(muns),
       ],
+    );
+  }
+
+  Future<void> _seedEstablishments() async {
+    setState(() {
+      _estBusy = true;
+      _estError = null;
+    });
+    try {
+      final name = getMisamisOccidentalMunicipalities()
+          .where((m) => m.id == _selectedMunId)
+          .map((m) => m.name)
+          .firstOrNull ?? _selectedMunId;
+      final count = await LguDebugDataService.seedEstablishments(
+        municipalityId: _selectedMunId,
+        municipalityName: name,
+      );
+      if (!mounted) return;
+      widget.onDone();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Seeded $count establishments for $name.'),
+          backgroundColor: const Color(0xFF10B981),
+        ),
+      );
+      setState(() => _estBusy = false);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _estBusy = false;
+        _estError = e.toString().replaceFirst('Bad state: ', '');
+      });
+    }
+  }
+
+  Future<void> _clearEstablishments() async {
+    setState(() {
+      _estBusy = true;
+      _estError = null;
+    });
+    try {
+      final count = await LguDebugDataService.clearSeedEstablishments(
+        municipalityId: _selectedMunId,
+      );
+      if (!mounted) return;
+      widget.onDone();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Removed $count seeded establishments.')),
+      );
+      setState(() => _estBusy = false);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _estBusy = false;
+        _estError = e.toString().replaceFirst('Bad state: ', '');
+      });
+    }
+  }
+
+  Widget _establishmentSeedCard(List<Municipality> muns) {
+    final munName = muns
+            .where((m) => m.id == _selectedMunId)
+            .map((m) => m.name)
+            .firstOrNull ??
+        _selectedMunId;
+    return _Card(
+      color: widget.card,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Seed establishments',
+            style: TextStyle(fontWeight: FontWeight.w700, color: Colors.grey.shade900),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Adds 3 active lodging businesses for $munName (Harbor View Hotel, '
+            'Bay Resort, Plaza Inn). Clear removes only these seeded records.',
+            style: TextStyle(fontSize: 13, color: widget.muted),
+          ),
+          if (_estError != null) ...[
+            const SizedBox(height: 8),
+            Text(_estError!, style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13)),
+          ],
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton(
+                  onPressed: _estBusy ? null : _seedEstablishments,
+                  style: FilledButton.styleFrom(backgroundColor: widget.orange),
+                  child: _estBusy
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Text('Seed establishments'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: _estBusy ? null : _clearEstablishments,
+                  child: const Text('Clear seeded'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1715,6 +1850,48 @@ class _PurgeTabState extends State<_PurgeTab> {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _SeedSpotChip extends StatelessWidget {
+  const _SeedSpotChip({
+    required this.label,
+    required this.selected,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    const orange = Color(0xFFF97316);
+    return Material(
+      color: selected ? orange : const Color(0xFFFFF7ED),
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        onTap: enabled ? onTap : null,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: orange),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? Colors.white : const Color(0xFF9A3412),
+              fontWeight: FontWeight.w600,
+              fontSize: 13,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

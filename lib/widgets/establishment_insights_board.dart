@@ -8,6 +8,7 @@ import 'package:atmos_trs_system/widgets/ae_register/ae_sheet_kit.dart';
 import 'package:atmos_trs_system/widgets/chart_transition.dart';
 import 'package:atmos_trs_system/widgets/establishment_dash_tokens.dart';
 import 'package:atmos_trs_system/widgets/establishment_dashboard_components.dart';
+import 'package:atmos_trs_system/widgets/atmos_table_kit.dart';
 import 'package:atmos_trs_system/widgets/establishment_dss_charts.dart';
 
 /// Insights (decision support) from the hotel's DOT DAE-1B register.
@@ -802,28 +803,16 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
             color: AeDashTokens.purple,
           ),
           const SizedBox(height: 10),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 520),
-              child: Table(
-                columnWidths: const {0: FlexColumnWidth(1.4)},
-                border: TableBorder(horizontalInside: BorderSide(color: AeDashTokens.softBorder)),
-                children: [
-                  TableRow(
-                    decoration: const BoxDecoration(color: AeDashTokens.mutedSurface),
-                    children: [
-                      cell('Metric', head: true, first: true),
-                      cell(thisLabel, head: true),
-                      cell(p == null ? 'Prev. month' : p.longLabel, head: true),
-                      cell(ly == null ? 'Last year' : ly.longLabel, head: true),
-                    ],
-                  ),
-                  for (final r in rows)
-                    TableRow(children: [cell(r.$1, first: true), cell(r.$2), cell(r.$3), cell(r.$4)]),
-                ],
-              ),
-            ),
+          AtmosResponsiveTable(
+            columns: [
+              const AtmosTableColumn('Metric', flex: 2, minWidth: 150),
+              AtmosTableColumn(thisLabel, minWidth: 110, align: Alignment.centerRight),
+              AtmosTableColumn(p == null ? 'Prev. month' : p.longLabel, minWidth: 120, align: Alignment.centerRight),
+              AtmosTableColumn(ly == null ? 'Last year' : ly.longLabel, minWidth: 120, align: Alignment.centerRight),
+            ],
+            rows: [
+              for (final r in rows) [cell(r.$1, first: true), cell(r.$2), cell(r.$3), cell(r.$4)],
+            ],
           ),
         ],
       ),

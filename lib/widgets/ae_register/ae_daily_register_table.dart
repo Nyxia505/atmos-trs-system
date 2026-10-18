@@ -249,9 +249,11 @@ class _AeDailyRegisterTableState extends State<AeDailyRegisterTable> {
           }
       }
     }
-    return InkWell(
-      onTap: widget.readOnly ? null : () => widget.onEdit?.call(r),
-      child: Row(children: cells),
+    return AeHoverRow(
+      child: InkWell(
+        onTap: widget.readOnly ? null : () => widget.onEdit?.call(r),
+        child: Row(children: cells),
+      ),
     );
   }
 

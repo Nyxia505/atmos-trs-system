@@ -28,7 +28,11 @@ class SpotReviewService {
   static Future<String?> _uid() async {
     final cached = AuthConfig.currentUserUid?.trim();
     if (cached != null && cached.isNotEmpty) return cached;
-    return FirebaseAuth.instance.currentUser?.uid;
+    try {
+      return FirebaseAuth.instance.currentUser?.uid;
+    } catch (_) {
+      return null;
+    }
   }
 
   static String _docId(String spotId, String userId) {
@@ -142,13 +146,33 @@ class SpotReviewService {
     });
   }
 
+  static final Set<String> _confirmedCheckIns = {};
+
   /// Whether the signed-in user checked in at [spotId] via QR.
   static Future<bool> hasCheckedInAtSpot(String spotId) async {
     if (spotId.trim().isEmpty) return false;
+    final target = spotId.trim().toLowerCase();
+    final canonical = _canonicalSpotId(spotId);
+    if (_confirmedCheckIns.contains(target) ||
+        _confirmedCheckIns.contains(canonical)) {
+      return true;
+    }
     final local = await UserActivityService.getVisitedSpots();
-    if (_visitsInclude(local, spotId)) return true;
+    if (_visitsInclude(local, spotId)) {
+      _rememberCheckIn(spotId);
+      return true;
+    }
     final synced = await UserActivityService.syncVisitedSpotsFromQrCheckins();
-    return _visitsInclude(synced, spotId);
+    final checkedIn = _visitsInclude(synced, spotId);
+    if (checkedIn) _rememberCheckIn(spotId);
+    return checkedIn;
+  }
+
+  static void _rememberCheckIn(String spotId) {
+    final target = spotId.trim().toLowerCase();
+    if (target.isNotEmpty) _confirmedCheckIns.add(target);
+    final canonical = _canonicalSpotId(spotId);
+    if (canonical.isNotEmpty) _confirmedCheckIns.add(canonical);
   }
 
   static Future<SpotReview?> getUserReview(String spotId) async {
@@ -183,24 +207,20 @@ class SpotReviewService {
   }
 
   /// Submit or update the current user's review (requires QR check-in).
+  ///
+  /// [existing] skips a read of the same document before the write.
   static Future<SpotReviewResult> submitReview({
     required String spotId,
     required String spotName,
     required double rating,
     required String comment,
+    SpotReview? existing,
   }) async {
-    final uid = await _uid();
-    if (uid == null || uid.isEmpty) {
-      return const SpotReviewFailure('Sign in to leave a review.');
-    }
-    if (!_firebaseReady) {
-      return const SpotReviewFailure('Reviews are unavailable offline. Try again later.');
-    }
-    if (spotId.trim().isEmpty) {
+    final trimmedSpotId = spotId.trim();
+    final trimmedComment = comment.trim();
+    if (trimmedSpotId.isEmpty) {
       return const SpotReviewFailure('This destination cannot be reviewed yet.');
     }
-
-    final trimmedComment = comment.trim();
     if (trimmedComment.length < 10) {
       return const SpotReviewFailure('Please write at least 10 characters.');
     }
@@ -208,7 +228,15 @@ class SpotReviewService {
       return const SpotReviewFailure('Please select a star rating.');
     }
 
-    final checkedIn = await hasCheckedInAtSpot(spotId);
+    final uid = await _uid();
+    if (uid == null || uid.isEmpty) {
+      return const SpotReviewFailure('Sign in to leave a review.');
+    }
+    if (!_firebaseReady) {
+      return const SpotReviewFailure('Reviews are unavailable offline. Try again later.');
+    }
+
+    final checkedIn = await hasCheckedInAtSpot(trimmedSpotId);
     if (!checkedIn) {
       return const SpotReviewFailure(
         'Scan the QR code at this spot to check in before leaving a review.',
@@ -216,25 +244,24 @@ class SpotReviewService {
     }
 
     try {
-      final docRef = _firestore.collection(_collectionId).doc(_docId(spotId, uid));
-      final existing = await docRef.get();
+      final docRef = _firestore.collection(_collectionId).doc(_docId(trimmedSpotId, uid));
+      final isUpdate = existing != null && existing.userId == uid;
       final authorName = await _authorName();
       final review = SpotReview(
         id: docRef.id,
-        spotId: spotId.trim(),
+        spotId: trimmedSpotId,
         userId: uid,
         authorName: authorName,
         rating: rating.clamp(1.0, 5.0),
         comment: trimmedComment,
-        createdAt: existing.exists
-            ? SpotReview.fromFirestore(existing).createdAt
-            : DateTime.now(),
+        createdAt: isUpdate ? existing.createdAt : DateTime.now(),
         updatedAt: DateTime.now(),
+        spotName: spotName.trim(),
       );
 
       await docRef.set(
         {
-          ...review.toFirestore(isUpdate: existing.exists),
+          ...review.toFirestore(isUpdate: isUpdate),
           'spotName': spotName.trim(),
         },
         SetOptions(merge: true),
@@ -243,7 +270,7 @@ class SpotReviewService {
       return SpotReviewSuccess(review);
     } catch (e) {
       debugPrint('SpotReviewService.submitReview: $e');
-      return SpotReviewFailure('Could not save review. Please try again.');
+      return const SpotReviewFailure('Could not save review. Please try again.');
     }
   }
 }

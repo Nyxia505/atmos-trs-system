@@ -8,9 +8,11 @@ import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/beta_testing_config.dart';
 import 'package:atmos_trs_system/config/user_profile_storage.dart';
 import 'package:atmos_trs_system/config/qr_scan_geofence_config.dart';
+import 'package:atmos_trs_system/config/vr_tour_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/models/tourist_group.dart';
 import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
+import 'package:atmos_trs_system/models/visit_origin_breakdown.dart';
 import 'package:atmos_trs_system/services/qr_scan_demo_guard.dart';
 import 'package:atmos_trs_system/services/qr_scan_location_guard.dart';
 import 'package:atmos_trs_system/services/spot_location_cache.dart';
@@ -464,9 +466,11 @@ class QRCheckInService {
     int filipinoCount = 0,
     int foreignCount = 0,
     TouristGroup? group,
+    Map<String, dynamic>? originBreakdown,
   }) async {
     final clampedFilipinos = filipinoCount < 0 ? 0 : filipinoCount;
     final clampedForeign = foreignCount < 0 ? 0 : foreignCount;
+    final parsedOrigin = VisitOriginBreakdown.tryParse(originBreakdown);
     var resolvedPartySize = partySize < 1 ? 1 : partySize;
     var resolvedFemales = femaleCount < 0 ? 0 : femaleCount;
     var resolvedMales = maleCount < 0 ? 0 : maleCount;
@@ -527,8 +531,10 @@ class QRCheckInService {
       if (resolvedPartySize < 1) resolvedPartySize = 1;
       resolvedFemales = memberFemales + companionFemales;
       resolvedMales = memberMales + companionMales;
-      resolvedFilipinos = memberFilipinos + clampedFilipinos;
-      resolvedForeign = memberForeign + clampedForeign;
+      resolvedFilipinos = memberFilipinos +
+          (parsedOrigin?.domestic ?? clampedFilipinos);
+      resolvedForeign = memberForeign +
+          (parsedOrigin?.foreignTotal ?? clampedForeign);
       groupFields = {
         'groupId': group.id,
         'groupName': group.name,
@@ -538,9 +544,15 @@ class QRCheckInService {
         'companionCount': companions,
         'companionFemale': companionFemales,
         'companionMale': companionMales,
-        'companionFilipino': clampedFilipinos,
-        'companionForeign': clampedForeign,
+        'companionFilipino': parsedOrigin?.domestic ?? clampedFilipinos,
+        'companionForeign': parsedOrigin?.foreignTotal ?? clampedForeign,
+        if (parsedOrigin != null) 'companionOrigin': parsedOrigin.toMap(),
       };
+    }
+
+    if (group == null && parsedOrigin != null) {
+      resolvedFilipinos = parsedOrigin.domestic;
+      resolvedForeign = parsedOrigin.foreignTotal;
     }
 
     final locationId = spotId.trim();
@@ -596,6 +608,8 @@ class QRCheckInService {
         latitude: spotDoc.latitude!,
         longitude: spotDoc.longitude!,
         spotLabel: resolvedSpotName.isNotEmpty ? resolvedSpotName : locationId,
+        spotId: locationId,
+        spotName: resolvedSpotName,
       );
       if (proximityError != null) {
         return QRCheckInFailure(proximityError);
@@ -697,6 +711,8 @@ class QRCheckInService {
         'checkins_ref': checkinRef.id,
         ...touristSnap,
         ...groupFields,
+        if (group == null && parsedOrigin != null)
+          'originBreakdown': parsedOrigin.toMap(),
       });
 
       final saved = await qrRef.get(const GetOptions(source: Source.server));
@@ -720,6 +736,10 @@ class QRCheckInService {
           'filipinoCount': resolvedFilipinos,
           'foreignCount': resolvedForeign,
           if (group != null) 'groupId': group.id,
+          if (group == null && parsedOrigin != null)
+            'originBreakdown': parsedOrigin.toMap(),
+          if (group != null && parsedOrigin != null)
+            'companionOrigin': parsedOrigin.toMap(),
           'checkin_time': FieldValue.serverTimestamp(),
         });
       } catch (e) {
@@ -783,29 +803,45 @@ class QRCheckInService {
     return normalizeMunicipalityId(spotDocId);
   }
 
-  /// Requires the device to be within [kQrScanSpotMaxDistanceMeters] of the spot anchor.
+  /// Plaza grounds use a wider radius; every other spot stays at 50 m.
+  static double maxDistanceForSpot({String? spotId, String? spotName}) {
+    if (isOroquietaPlazaSpot(spotId: spotId, spotName: spotName)) {
+      return kQrScanPlazaGroundsMaxDistanceMeters;
+    }
+    return kQrScanSpotMaxDistanceMeters;
+  }
+
+  /// Requires the device to be within the spot's check-in radius.
   /// Returns a user-facing error, or `null` if the location check passed.
   static Future<String?> verifyProximityToTouristSpot({
     required double latitude,
     required double longitude,
     required String spotLabel,
+    String? spotId,
+    String? spotName,
   }) async {
     if (BetaTestingGuard.bypassValidation) return null;
 
     return QrScanLocationGuard.verifyNearAnchor(
       anchorLat: latitude,
       anchorLng: longitude,
-      maxDistanceMeters: kQrScanSpotMaxDistanceMeters,
+      maxDistanceMeters: maxDistanceForSpot(
+        spotId: spotId,
+        spotName: spotName ?? spotLabel,
+      ),
       spotLabel: spotLabel,
     );
   }
 
   /// If the QR URL embeds lat/lng, they must match the Firestore spot (anti forged print).
+  /// Oroquieta City Plaza allows a pin anywhere on the grounds.
   static String? verifyQrCoordinatesMatchFirestore({
     required double? qrLat,
     required double? qrLng,
     required double firestoreLat,
     required double firestoreLng,
+    String? spotId,
+    String? spotName,
   }) {
     if (BetaTestingGuard.bypassValidation) return null;
 
@@ -817,7 +853,10 @@ class QRCheckInService {
       firestoreLat,
       firestoreLng,
     );
-    if (mismatch > kQrScanQrVsFirestoreMaxMismatchMeters) {
+    final limit = isOroquietaPlazaSpot(spotId: spotId, spotName: spotName)
+        ? kQrScanPlazaGroundsMaxDistanceMeters
+        : kQrScanQrVsFirestoreMaxMismatchMeters;
+    if (mismatch > limit) {
       return QrScanMessages.qrMismatch;
     }
     return null;

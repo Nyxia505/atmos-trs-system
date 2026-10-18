@@ -1,3 +1,4 @@
+import 'package:atmos_trs_system/models/visit_origin_breakdown.dart';
 import 'package:atmos_trs_system/utils/checkin_report_summary_csv.dart';
 import 'package:atmos_trs_system/utils/checkin_visitor_count.dart';
 
@@ -96,6 +97,8 @@ Map<String, dynamic>? checkInScannerProfile(Map<String, dynamic> c) {
   }
   final snap = <String, dynamic>{
     if ((c['touristSex']?.toString() ?? '').isNotEmpty) 'sex': c['touristSex'],
+    if ((c['touristDateOfBirth']?.toString() ?? '').isNotEmpty)
+      'dateOfBirth': c['touristDateOfBirth'],
     if ((c['touristNationality']?.toString() ?? '').isNotEmpty)
       'nationality': c['touristNationality'],
     if ((c['touristCountry']?.toString() ?? '').isNotEmpty)
@@ -153,6 +156,13 @@ List<CheckInVisitorUnit> expandCheckInVisitors(
   int? filipinoLeft;
   int? foreignLeft;
 
+  final savedOrigin = VisitOriginBreakdown.tryParse(
+    c['originBreakdown'] ?? c['companionOrigin'],
+  );
+  if (members.isEmpty && savedOrigin != null) {
+    return _unitsFromOrigin(savedOrigin);
+  }
+
   if (members.isNotEmpty) {
     for (final m in members) {
       final uid = m['uid']?.toString().trim() ?? '';
@@ -176,6 +186,11 @@ List<CheckInVisitorUnit> expandCheckInVisitors(
         c.containsKey('companionForeign')) {
       filipinoLeft = _int(c['companionFilipino']);
       foreignLeft = _int(c['companionForeign']);
+    }
+    final companionOrigin = VisitOriginBreakdown.tryParse(c['companionOrigin']);
+    if (companionOrigin != null) {
+      units.addAll(_unitsFromOrigin(companionOrigin));
+      return units;
     }
   } else {
     units.add(CheckInVisitorUnit(profile: scanner ?? const {}, uid: scannerUid));
@@ -267,6 +282,56 @@ List<CheckInVisitorUnit> expandCheckInVisitors(
       isProxy: true,
       residenceUnknown: true,
     ));
+  }
+  return units;
+}
+
+List<CheckInVisitorUnit> _unitsFromOrigin(VisitOriginBreakdown origin) {
+  final units = <CheckInVisitorUnit>[];
+  void addSex(Map<String, dynamic> residence, int male, int female) {
+    for (var i = 0; i < male; i++) {
+      units.add(CheckInVisitorUnit(profile: {...residence, 'sex': 'Male'}));
+    }
+    for (var i = 0; i < female; i++) {
+      units.add(CheckInVisitorUnit(profile: {...residence, 'sex': 'Female'}));
+    }
+  }
+
+  final province = origin.spotProvince.trim().isEmpty
+      ? 'Misamis Occidental'
+      : origin.spotProvince.trim();
+  Map<String, dynamic> domestic({required String city, required String prov}) =>
+      {
+        if (city.trim().isNotEmpty) 'city': city.trim(),
+        'province': prov.trim(),
+        'country': 'Philippines',
+        'nationality': 'Filipino',
+        'localOrForeign': 'Local',
+        'isLocal': true,
+      };
+
+  addSex(
+    domestic(city: origin.spotMunicipality, prov: province),
+    origin.thisMunicipalityMale,
+    origin.thisMunicipalityFemale,
+  );
+  for (final row in origin.thisProvince) {
+    addSex(domestic(city: row.place, prov: province), row.male, row.female);
+  }
+  for (final row in origin.otherProvinces) {
+    addSex(domestic(city: '', prov: row.place), row.male, row.female);
+  }
+  for (final row in origin.foreign) {
+    addSex(
+      {
+        'country': row.place.trim(),
+        'nationality': row.place.trim(),
+        'localOrForeign': 'Foreign',
+        'isLocal': false,
+      },
+      row.male,
+      row.female,
+    );
   }
   return units;
 }

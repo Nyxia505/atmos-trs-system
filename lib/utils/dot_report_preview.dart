@@ -213,17 +213,7 @@ DotReportPreviewTable buildDotReportPreview({
             scopeLabel: scopeLabel,
           );
         }
-        return _previewCountryMatrix(
-          filtered: filtered,
-          touristById: touristById,
-          scopeLabel: scopeLabel,
-          titleCode: form.code,
-          gaps: const [
-            'No hotel DOT register months in range — attraction/LGU QR used as labeled proxy.',
-            'DOT Form A country-row taxonomy not mapped for QR profiles — raw country labels.',
-            'Official sheet cell layout may differ; Excel is ATMOS best-effort.',
-          ],
-        );
+        return _daeAwaitingRegister(form, scopeLabel);
       case DotReportType.dae3FormA:
         return _previewDae3(
           filtered: filtered,
@@ -239,11 +229,7 @@ DotReportPreviewTable buildDotReportPreview({
             scopeLabel: scopeLabel,
           );
         }
-        return _previewDae3b2(
-          filtered: filtered,
-          touristById: touristById,
-          scopeLabel: scopeLabel,
-        );
+        return _daeAwaitingRegister(form, scopeLabel);
       case DotReportType.cusMice:
         return buildCusMicePreview(form: form, mice: mice, scopeLabel: scopeLabel);
     }
@@ -401,6 +387,24 @@ DotReportPreviewTable _previewVar2({
   );
 }
 
+DotReportPreviewTable _daeAwaitingRegister(
+  DotFormCatalogEntry form,
+  String scopeLabel,
+) {
+  return DotReportPreviewTable(
+    headers: const ['Status', 'Detail'],
+    rows: const [
+      ['Gap', 'No hotel DOT register months in this date range.'],
+      ['Gap', 'Attraction and LGU QR visits stay on VAR forms.'],
+    ],
+    summaryLine: '${form.code} · awaiting hotel DOT registers · $scopeLabel',
+    gaps: [
+      '${form.code} needs hotel DOT register months in range.',
+      'QR attraction visits are not copied onto DAE forms.',
+    ],
+  );
+}
+
 DotReportPreviewTable _previewDae3({
   required List<Map<String, dynamic>> filtered,
   required AeRegisterReportData register,
@@ -408,9 +412,15 @@ DotReportPreviewTable _previewDae3({
   DateTime? Function(Map<String, dynamic>)? parseTimestamp,
 }) {
   final fromRegister = register.isNotEmpty;
+  if (!fromRegister) {
+    return _daeAwaitingRegister(
+      kDotFormCatalogById['dae3']!,
+      scopeLabel,
+    );
+  }
   final agg = aggregateDae3PreferringRegister(
     reports: register.reports,
-    checkIns: filtered,
+    checkIns: const [],
     scopeLabel: scopeLabel,
     parseCheckInTimestamp: parseTimestamp,
   );
@@ -468,59 +478,6 @@ DotReportPreviewTable _previewDae3({
             'Rooms occupied / guest-nights blank until hotels fill their monthly register.',
             'AE-ID uses spot name as proxy — not accommodation_establishments.',
           ],
-  );
-}
-
-DotReportPreviewTable _previewDae3b2({
-  required List<Map<String, dynamic>> filtered,
-  required Map<String, Map<String, dynamic>> touristById,
-  required String scopeLabel,
-}) {
-  final byOrigin = <String, int>{};
-  var male = 0;
-  var female = 0;
-  var skipped = 0;
-  final visitors = _visitorProfiles(filtered, touristById);
-
-  for (final tourist in visitors.people) {
-    if (tourist == null || !_isDomesticTourist(tourist)) {
-      skipped++;
-      continue;
-    }
-    final origin = _domesticOriginLabel(tourist);
-    if (origin.isEmpty) {
-      skipped++;
-      continue;
-    }
-    byOrigin[origin] = (byOrigin[origin] ?? 0) + 1;
-    final sex = (tourist['sex']?.toString() ?? '').trim().toLowerCase();
-    if (sex.startsWith('m')) {
-      male++;
-    } else if (sex.startsWith('f')) {
-      female++;
-    }
-  }
-
-  final origins = byOrigin.keys.toList()..sort();
-  const headers = ['Province / City of origin', 'Guests'];
-  final rows = [
-    for (final o in origins) [o, '${byOrigin[o]}'],
-  ];
-  final total = byOrigin.values.fold<int>(0, (a, b) => a + b);
-  return DotReportPreviewTable(
-    headers: headers,
-    rows: rows,
-    summaryLine:
-        '$total domestic guests · Male $male · Female $female'
-        '${skipped > 0 ? ' · $skipped skipped (foreign / incomplete)' : ''}'
-        ' · $scopeLabel',
-    footer: rows.isEmpty ? null : ['TOTAL', '$total'],
-    gaps: [
-      'No hotel DOT register months in range — QR visits used as domestic proxy rows.',
-      'PSA region not derived for QR profiles — city/province text only.',
-      'Official DAE 3B.2 layout may use ATMOS-built sheet.',
-      if (visitors.hasProxy) kCompanionProxyGapNote,
-    ],
   );
 }
 
@@ -710,6 +667,10 @@ DotReportPreviewTable _previewRegisterDomestic({
       ...register.sourceGaps(form.code),
       'Domestic = Philippine residents (Filipino + foreign nationality living in PH).',
       'PH region is optional on the register — unfilled guests go to "$unspecified".',
+      if (form.id == 'dae1b2')
+        'Excel download is the official 3.-DAE1B.2 workbook (daily + monthly). City and province rows stay blank.',
+      if (form.id == 'dae1b2_domestic')
+        'Excel download is the official DAE1B.2.Domestic workbook (daily + AE columns + monthly).',
     ],
   );
 }
@@ -864,7 +825,6 @@ DotReportPreviewTable _previewEstablishmentForm({
   if (register.isNotEmpty) {
     switch (form.id) {
       case 'dae1b2':
-        return _previewRegisterCountryMatrix(form: form, register: register, scopeLabel: scopeLabel);
       case 'dae1b2_domestic':
         return _previewRegisterDomestic(form: form, register: register, scopeLabel: scopeLabel);
       case 'dae1b_macro':

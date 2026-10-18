@@ -10,6 +10,7 @@ import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
 import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
 import 'package:atmos_trs_system/services/spot_review_service.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart';
+import 'package:atmos_trs_system/widgets/save_spot_notice.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:atmos_trs_system/widgets/write_spot_review_sheet.dart';
 import 'package:flutter/material.dart';
@@ -38,15 +39,15 @@ class TouristDestinationDetailScreen extends StatefulWidget {
 
 class _TouristDestinationDetailScreenState
     extends State<TouristDestinationDetailScreen> {
-  static const Color _textDark = Color(0xFF111827);
-  static const Color _textMuted = Color(0xFF6B7280);
-  static const Color _pageBg = Color(0xFFE8ECF0);
+  Color get _textDark => AppTheme.textPrimary;
+  Color get _textMuted => AppTheme.unselectedMuted;
+  Color get _pageBg => AppTheme.pageBackground;
 
   final PageController _galleryController = PageController();
   int _galleryIndex = 0;
   bool _isSaved = false;
-  bool _isSaving = false;
   SpotReview? _userReview;
+  SpotReview? _justSubmitted;
   bool _canReview = false;
   bool _checkingReviewEligibility = false;
   Future<void>? _eligibilityLoad;
@@ -56,7 +57,9 @@ class _TouristDestinationDetailScreenState
   @override
   void initState() {
     super.initState();
-    _loadSaved();
+    _isSaved = UserActivityService.isSpotSavedSync(d.spotId);
+    UserActivityService.savedSpotsRevision.addListener(_onSavedRevision);
+    unawaited(_loadSaved());
     _eligibilityLoad = _loadReviewEligibility();
     unawaited(
       UserActivityService.recordRecentlyViewed(
@@ -70,14 +73,22 @@ class _TouristDestinationDetailScreenState
 
   @override
   void dispose() {
+    UserActivityService.savedSpotsRevision.removeListener(_onSavedRevision);
     _galleryController.dispose();
     super.dispose();
   }
 
+  void _onSavedRevision() {
+    final saved = UserActivityService.isSpotSavedSync(d.spotId);
+    if (!mounted || saved == _isSaved) return;
+    setState(() => _isSaved = saved);
+  }
+
   Future<void> _loadSaved() async {
     if (d.spotId.isEmpty) return;
-    final saved = await UserActivityService.isSpotSaved(d.spotId);
-    if (mounted) setState(() => _isSaved = saved);
+    await UserActivityService.ensureSavedSpotsLoaded();
+    if (!mounted) return;
+    setState(() => _isSaved = UserActivityService.isSpotSavedSync(d.spotId));
   }
 
   Future<void> _loadReviewEligibility() async {
@@ -124,15 +135,31 @@ class _TouristDestinationDetailScreenState
 
   Future<void> _openWriteReview() async {
     if (d.spotId.isEmpty) return;
-    final posted = await showWriteSpotReviewSheet(
+    final review = await showWriteSpotReviewSheet(
       context: context,
       spotId: d.spotId,
       spotName: d.name,
       existing: _userReview,
     );
-    if (posted == true) {
-      await _loadReviewEligibility();
-    }
+    if (!mounted || review == null) return;
+    setState(() {
+      _userReview = review;
+      _canReview = true;
+      _justSubmitted = review;
+    });
+  }
+
+  SpotReviewSummary _displaySummary(SpotReviewSummary live) {
+    final pending = _justSubmitted;
+    if (pending == null) return live;
+    final alreadyListed = live.reviews.any(
+      (review) =>
+          review.userId == pending.userId &&
+          review.comment == pending.comment &&
+          review.rating == pending.rating,
+    );
+    if (alreadyListed) return live;
+    return live.withReview(pending);
   }
 
   void _openAllReviews() {
@@ -149,20 +176,22 @@ class _TouristDestinationDetailScreenState
   }
 
   Future<void> _toggleSave() async {
-    if (d.spotId.isEmpty || _isSaving) return;
-    setState(() => _isSaving = true);
-    final saved = await UserActivityService.toggleSaveSpot(d.spotId);
+    if (d.spotId.isEmpty) return;
+    final name = d.name.trim().isEmpty ? 'This destination' : d.name.trim();
+    final future = UserActivityService.toggleSaveSpot(d.spotId);
+    final saved = UserActivityService.isSpotSavedSync(d.spotId);
     if (!mounted) return;
-    setState(() {
-      _isSaved = saved;
-      _isSaving = false;
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(saved ? 'Saved to your list' : 'Removed from saved'),
-        backgroundColor: AppTheme.primary,
-        behavior: SnackBarBehavior.floating,
-      ),
+    SaveSpotNotice.show(
+      context,
+      saved ? '$name saved!' : '$name removed from saved',
+    );
+    final result = await future;
+    if (!mounted || result == saved) return;
+    if (UserActivityService.isSpotSavedSync(d.spotId) == saved) return;
+    SaveSpotNotice.show(
+      context,
+      'Could not update $name. Try again.',
+      error: true,
     );
   }
 
@@ -222,7 +251,7 @@ class _TouristDestinationDetailScreenState
                 : SpotReviewService.watchSpotReviews(d.spotId),
             builder: (context, reviewSnapshot) {
               final reviewSummary =
-                  reviewSnapshot.data ?? SpotReviewSummary.empty;
+                  _displaySummary(reviewSnapshot.data ?? SpotReviewSummary.empty);
 
               return CustomScrollView(
             slivers: [
@@ -324,11 +353,11 @@ class _TouristDestinationDetailScreenState
         d.name,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 17),
+        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 17),
       ),
       actions: [
         IconButton(
-          onPressed: _isSaving ? null : _toggleSave,
+          onPressed: _toggleSave,
           icon: Icon(
             _isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
           ),
@@ -425,7 +454,7 @@ class _TouristDestinationDetailScreenState
           Expanded(
             child: Text(
               d.openingHours,
-              style: const TextStyle(
+              style: TextStyle(
                 color: Colors.white,
                 fontSize: 13,
                 fontWeight: FontWeight.w500,
@@ -539,7 +568,7 @@ class _TouristDestinationDetailScreenState
               const SizedBox(width: 4),
               Text(
                 reviewSummary.averageRating.toStringAsFixed(1),
-                style: const TextStyle(
+                style: TextStyle(
                   fontWeight: FontWeight.w800,
                   fontSize: 16,
                   color: _textDark,
@@ -547,13 +576,13 @@ class _TouristDestinationDetailScreenState
               ),
               Text(
                 '  ($countLabel)',
-                style: const TextStyle(color: _textMuted, fontSize: 13),
+                style: TextStyle(color: _textMuted, fontSize: 13),
               ),
             ] else ...[
               const Spacer(),
               Text(
                 countLabel,
-                style: const TextStyle(color: _textMuted, fontSize: 13),
+                style: TextStyle(color: _textMuted, fontSize: 13),
               ),
             ],
           ],
@@ -561,7 +590,7 @@ class _TouristDestinationDetailScreenState
         const SizedBox(height: 10),
         Text(
           d.name,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 26,
             fontWeight: FontWeight.w800,
             color: _textDark,
@@ -576,7 +605,7 @@ class _TouristDestinationDetailScreenState
             Expanded(
               child: Text(
                 d.municipality,
-                style: const TextStyle(
+                style: TextStyle(
                   color: _textMuted,
                   fontSize: 15,
                   fontWeight: FontWeight.w500,
@@ -588,7 +617,7 @@ class _TouristDestinationDetailScreenState
         const SizedBox(height: 14),
         Text(
           d.shortDescription,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 15,
             height: 1.55,
             color: _textDark,
@@ -641,7 +670,7 @@ class _TouristDestinationDetailScreenState
       runSpacing: 10,
       children: actions.map((a) {
         return Material(
-          color: Colors.white,
+          color: AppTheme.cardBackground,
           borderRadius: BorderRadius.circular(16),
           child: InkWell(
             onTap: a.onTap,
@@ -697,7 +726,7 @@ class _TouristDestinationDetailScreenState
                 child: Icon(Icons.vrpano_rounded, color: accent),
               ),
               const SizedBox(width: 12),
-              const Expanded(
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -795,7 +824,7 @@ class _TouristDestinationDetailScreenState
             const SizedBox(width: 8),
             Text(
               'Nearby $title',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w800,
                 color: _textDark,
@@ -840,7 +869,7 @@ class _TouristDestinationDetailScreenState
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     'Reviews',
                     style: TextStyle(
                       fontSize: 18,
@@ -852,7 +881,7 @@ class _TouristDestinationDetailScreenState
                     totalCount == 0
                         ? 'Be the first to review'
                         : '$totalCount visitor review${totalCount == 1 ? '' : 's'}',
-                    style: const TextStyle(color: _textMuted, fontSize: 13),
+                    style: TextStyle(color: _textMuted, fontSize: 13),
                   ),
                 ],
               ),
@@ -972,9 +1001,9 @@ class _TouristDestinationDetailScreenState
       width: double.infinity,
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: const Color(0xFFEDF0F4),
+        color: AppTheme.cardBackground,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFB0BAC5), width: 1.5),
+        border: Border.all(color: AppTheme.border, width: 1.5),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.08),
@@ -1001,7 +1030,7 @@ class _TouristDestinationDetailScreenState
               children: [
                 Text(
                   label,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     color: _textDark,
                     fontWeight: FontWeight.w800,
@@ -1010,7 +1039,7 @@ class _TouristDestinationDetailScreenState
                 const SizedBox(height: 3),
                 Text(
                   value,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 14,
                     color: _textMuted,
                     height: 1.4,
@@ -1068,7 +1097,7 @@ class _NearbyPlaceTileState extends State<_NearbyPlaceTile> {
         child: Container(
           width: 176,
           decoration: BoxDecoration(
-            color: const Color(0xFFDDE2E8),
+            color: AppTheme.cardBackground,
             borderRadius: BorderRadius.circular(18),
             border: Border.all(color: accent.withValues(alpha: 0.45), width: 1.5),
             boxShadow: [
@@ -1091,7 +1120,7 @@ class _NearbyPlaceTileState extends State<_NearbyPlaceTile> {
                       height: 118,
                       width: double.infinity,
                       decoration: BoxDecoration(
-                        color: const Color(0xFFCDD3DA),
+                        color: AppTheme.surfaceMuted,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
                           color: Colors.black.withValues(alpha: 0.22),
@@ -1135,7 +1164,7 @@ class _NearbyPlaceTileState extends State<_NearbyPlaceTile> {
                               const SizedBox(width: 3),
                               Text(
                                 '${place.gallery.length}',
-                                style: const TextStyle(
+                                style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 10,
                                   fontWeight: FontWeight.w700,
@@ -1158,10 +1187,10 @@ class _NearbyPlaceTileState extends State<_NearbyPlaceTile> {
                         place.name,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
-                          color: Color(0xFF111827),
+                          color: AppTheme.textPrimary,
                         ),
                       ),
                       const Spacer(),
@@ -1180,9 +1209,9 @@ class _NearbyPlaceTileState extends State<_NearbyPlaceTile> {
                               place.driveMinutes != null
                                   ? '~${place.driveMinutes!.round()} min drive'
                                   : '${place.distanceKm.toStringAsFixed(1)} km',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 10,
-                                color: Color(0xFF6B7280),
+                                color: AppTheme.unselectedMuted,
                               ),
                             ),
                           ),
@@ -1236,7 +1265,7 @@ class _NearbyGallerySheetState extends State<_NearbyGallerySheet> {
 
     return Container(
       decoration: const BoxDecoration(
-        color: Color(0xFF111827),
+        color: Color(0xFF0F172A),
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       padding: EdgeInsets.only(bottom: bottomPad + 16),
@@ -1263,7 +1292,7 @@ class _NearbyGallerySheetState extends State<_NearbyGallerySheet> {
                 Expanded(
                   child: Text(
                     widget.place.name,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: Colors.white,
                       fontSize: 16,
                       fontWeight: FontWeight.w800,
@@ -1412,7 +1441,7 @@ class _ReviewTile extends StatelessWidget {
                 children: [
                   Text(
                     review.author,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontWeight: FontWeight.w700,
                       fontSize: 14,
                     ),
@@ -1442,18 +1471,18 @@ class _ReviewTile extends StatelessWidget {
                   Icon(Icons.star_rounded, size: 14, color: accent),
                   Text(
                     review.rating.toStringAsFixed(1),
-                    style: const TextStyle(fontSize: 12),
+                    style: TextStyle(fontSize: 12),
                   ),
                 ],
               ),
               Text(
                 review.dateLabel,
-                style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+                style: TextStyle(fontSize: 11, color: AppTheme.unselectedMuted),
               ),
               const SizedBox(height: 4),
               Text(
                 review.comment,
-                style: const TextStyle(fontSize: 13, height: 1.4),
+                style: TextStyle(fontSize: 13, height: 1.4),
               ),
             ],
           ),

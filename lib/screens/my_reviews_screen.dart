@@ -9,8 +9,8 @@ import 'package:flutter/material.dart';
 class MyReviewsScreen extends StatelessWidget {
   const MyReviewsScreen({super.key});
 
-  static const Color _textDark = Color(0xFF111827);
-  static const Color _textMuted = Color(0xFF6B7280);
+  static Color get _textDark => AppTheme.textPrimary;
+  static Color get _textMuted => AppTheme.unselectedMuted;
 
   Future<void> _openSpot(BuildContext context, SpotReview review) async {
     await openSpotFromReview(context, review);
@@ -30,7 +30,7 @@ class MyReviewsScreen extends StatelessWidget {
     final accent = AppTheme.primary;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: AppTheme.pageBackground,
       appBar: AppBar(
         backgroundColor: accent,
         foregroundColor: Colors.white,
@@ -55,7 +55,7 @@ class MyReviewsScreen extends StatelessWidget {
                   children: [
                     Icon(Icons.rate_review_outlined, size: 48, color: accent),
                     const SizedBox(height: 12),
-                    const Text(
+                    Text(
                       'No reviews yet',
                       style: TextStyle(
                         fontSize: 18,
@@ -114,9 +114,9 @@ class _MyReviewCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.cardBackground,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: AppTheme.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -130,7 +130,7 @@ class _MyReviewCard extends StatelessWidget {
                   children: [
                     Text(
                       review.displaySpotName,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 16,
                         color: MyReviewsScreen._textDark,
@@ -139,7 +139,7 @@ class _MyReviewCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       review.dateLabel,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
                         color: MyReviewsScreen._textMuted,
                       ),

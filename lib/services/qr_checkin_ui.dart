@@ -320,6 +320,7 @@ Future<bool> performQRCheckIn(
   int filipinoCount = 0,
   int foreignCount = 0,
   TouristGroup? group,
+  Map<String, dynamic>? originBreakdown,
   bool isDemoQr = false,
   VoidCallback? onBeforeDialog,
 }) async {
@@ -336,6 +337,7 @@ Future<bool> performQRCheckIn(
     filipinoCount: filipinoCount,
     foreignCount: foreignCount,
     group: group,
+    originBreakdown: originBreakdown,
   );
 
   if (!context.mounted) return false;

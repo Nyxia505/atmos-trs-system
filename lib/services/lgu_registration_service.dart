@@ -4,6 +4,7 @@ import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/services/otp_service.dart';
 import 'package:atmos_trs_system/services/pending_lgu_registration_cache.dart';
+import 'package:atmos_trs_system/services/lgu_office_registry_service.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 
 /// Persists LGU tourism-office profiles after OTP (deferred signup).
@@ -58,5 +59,6 @@ class LguRegistrationService {
     }
 
     await PendingLguRegistrationCache.clear();
+    await LguOfficeRegistryService.syncForCurrentUser();
   }
 }

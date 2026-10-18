@@ -68,10 +68,10 @@ class PlaceholderNavPage extends StatelessWidget {
             const SizedBox(height: 16),
             Text(
               title,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
-                color: Colors.white,
+                color: AppTheme.textPrimary,
               ),
             ),
             const SizedBox(height: 8),
@@ -103,13 +103,13 @@ class SeeAllPage extends StatelessWidget {
         backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          icon: Icon(Icons.arrow_back, color: AppTheme.textPrimary),
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: Text(
           showList ? 'Misamis Occidental' : 'All Destinations',
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: AppTheme.textPrimary,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -135,7 +135,7 @@ class SeeAllPage extends StatelessWidget {
           child: Text(
             'Municipalities & Cities',
             style: TextStyle(
-              color: Colors.white.withOpacity(0.7),
+              color: AppTheme.unselectedMuted,
               fontSize: 14,
             ),
           ),
@@ -144,7 +144,7 @@ class SeeAllPage extends StatelessWidget {
           final isCity = name.endsWith(' City');
           return Card(
             margin: const EdgeInsets.only(bottom: 8),
-            color: Colors.white.withOpacity(0.08),
+            color: AppTheme.border,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
             ),
@@ -156,15 +156,15 @@ class SeeAllPage extends StatelessWidget {
               ),
               title: Text(
                 name,
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: AppTheme.textPrimary,
                   fontWeight: FontWeight.w500,
                   fontSize: 15,
                 ),
               ),
               trailing: Icon(
                 Icons.chevron_right,
-                color: Colors.white.withOpacity(0.5),
+                color: AppTheme.unselectedMuted,
               ),
             ),
           );
@@ -211,12 +211,12 @@ class ExploreTabPage extends StatelessWidget {
           children: [
             Icon(Icons.explore_rounded, size: 64, color: AppTheme.primary),
             const SizedBox(height: 16),
-            const Text(
+            Text(
               'Explore',
               style: TextStyle(
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
-                color: Colors.white,
+                color: AppTheme.textPrimary,
               ),
             ),
             const SizedBox(height: 8),
@@ -588,6 +588,8 @@ class _ScanTabPageState extends State<ScanTabPage> with WidgetsBindingObserver {
             qrLng: qrEmbedLng,
             firestoreLat: slat,
             firestoreLng: slng,
+            spotId: spotId,
+            spotName: spotName,
           );
       if (qrMismatchError != null) {
         final fresh = await _freshSpotIfMoved(spot);
@@ -617,6 +619,8 @@ class _ScanTabPageState extends State<ScanTabPage> with WidgetsBindingObserver {
             latitude: slat,
             longitude: slng,
             spotLabel: spotName.isNotEmpty ? spotName : spotId,
+            spotId: spotId,
+            spotName: spotName,
           );
       if (spotLocationError != null) {
         final fresh = await _freshSpotIfMoved(spot);
@@ -919,9 +923,9 @@ class _ScanTabPageState extends State<ScanTabPage> with WidgetsBindingObserver {
                     children: [
                       if (widget.guestMode)
                         IconButton(
-                          icon: const Icon(
+                          icon: Icon(
                             Icons.arrow_back_rounded,
-                            color: Color(0xFF111827),
+                            color: AppTheme.textPrimary,
                           ),
                           onPressed: () => Navigator.of(context).pop(),
                           tooltip: 'Back',
@@ -945,10 +949,10 @@ class _ScanTabPageState extends State<ScanTabPage> with WidgetsBindingObserver {
                           widget.guestMode
                               ? 'Scan LGU or spot QR'
                               : 'QR Check-in',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,
-                            color: Color(0xFF111827),
+                            color: AppTheme.textPrimary,
                           ),
                         ),
                       ),
@@ -1073,10 +1077,10 @@ class _ScanTabPageState extends State<ScanTabPage> with WidgetsBindingObserver {
               const SizedBox(height: 16),
               Text(
                 title,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w600,
-                  color: Color(0xFF111827),
+                  color: AppTheme.textPrimary,
                 ),
                 textAlign: TextAlign.center,
               ),
@@ -1445,8 +1449,8 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
     setState(() => _filter = f);
   }
 
-  static const Color _kNotifText = Color(0xFF111827);
-  static const Color _kNotifMuted = Color(0xFF6B7280);
+  static Color get _kNotifText => AppTheme.textPrimary;
+  static Color get _kNotifMuted => AppTheme.unselectedMuted;
 
   Widget _buildNotificationsHeader(BuildContext context) {
     final showActions = !_loading && _errorMessage == null && _items.isNotEmpty;
@@ -1653,10 +1657,10 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
             decoration: BoxDecoration(
               color: selected
                   ? AppTheme.primary.withValues(alpha: 0.12)
-                  : Colors.white,
+                  : AppTheme.cardBackground,
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
-                color: selected ? AppTheme.primary : const Color(0xFFE5E7EB),
+                color: selected ? AppTheme.primary : AppTheme.border,
                 width: selected ? 1.5 : 1,
               ),
             ),
@@ -1900,10 +1904,10 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
                     Expanded(
                       child: Text(
                         item.title,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w800,
-                          color: Color(0xFF111827),
+                          color: AppTheme.textPrimary,
                           height: 1.25,
                         ),
                       ),
@@ -1946,7 +1950,7 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
-                            backgroundColor: Colors.grey.shade100,
+                            backgroundColor: AppTheme.surfaceMuted,
                             side: BorderSide.none,
                             padding: const EdgeInsets.symmetric(horizontal: 8),
                           ),
@@ -1957,10 +1961,10 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
                         item.message.trim().isEmpty
                             ? '(No message)'
                             : item.message.trim(),
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 15,
                           height: 1.45,
-                          color: Color(0xFF374151),
+                          color: AppTheme.textPrimary,
                         ),
                       ),
                       const SizedBox(height: 16),
@@ -2022,7 +2026,7 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
       builder: (context, _) {
         final accent = AppTheme.primary;
         return Scaffold(
-          backgroundColor: const Color(0xFFF8FAFC),
+          backgroundColor: AppTheme.pageBackground,
           body: Column(
             children: [
               _buildNotificationsHeader(context),
@@ -2056,10 +2060,10 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
                                       color: AppTheme.primary,
                                     ),
                                     const SizedBox(height: 16),
-                                    const Text(
+                                    Text(
                                       'Something went wrong',
                                       style: TextStyle(
-                                        color: Color(0xFF111827),
+                                        color: AppTheme.textPrimary,
                                         fontSize: 18,
                                         fontWeight: FontWeight.w600,
                                       ),
@@ -2177,7 +2181,7 @@ class _AlertsTabPageState extends State<AlertsTabPage> {
             const SizedBox(height: 20),
             Text(
               title,
-              style: const TextStyle(
+              style: TextStyle(
                 color: _kNotifText,
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
@@ -2229,12 +2233,12 @@ class _NotificationCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           child: Ink(
             decoration: BoxDecoration(
-              color: hasUnread ? accent.withValues(alpha: 0.06) : Colors.white,
+              color: hasUnread ? accent.withValues(alpha: 0.06) : AppTheme.cardBackground,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color: hasUnread
                     ? accent.withValues(alpha: 0.28)
-                    : const Color(0xFFE5E7EB),
+                    : AppTheme.border,
               ),
             ),
             child: Padding(
@@ -2277,7 +2281,7 @@ class _NotificationCard extends StatelessWidget {
                               child: Text(
                                 item.title,
                                 style: TextStyle(
-                                  color: const Color(0xFF111827),
+                                  color: AppTheme.textPrimary,
                                   fontWeight: hasUnread
                                       ? FontWeight.w700
                                       : FontWeight.w600,
@@ -2408,12 +2412,12 @@ class VrToursTabPage extends StatelessWidget {
             children: [
               Icon(Icons.vrpano_rounded, size: 64, color: AppTheme.primary),
               const SizedBox(height: 16),
-              const Text(
+              Text(
                 'VR Tours',
                 style: TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.bold,
-                  color: Colors.white,
+                  color: AppTheme.textPrimary,
                 ),
               ),
               const SizedBox(height: 8),

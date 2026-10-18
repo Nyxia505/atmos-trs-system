@@ -278,7 +278,7 @@ const List<DotFormCatalogEntry> kDotFormCatalog = [
     code: 'DAE 1B.2',
     title: 'DAE 1B.2 — AE Fill-up',
     subtitle:
-        'Fills country-of-residence matrix from hotel DOT registers',
+        'Fills the official DAE 1B.2 workbook (daily and monthly sheets) from hotel registers',
     category: DotFormCategory.accommodation,
     fillMode: DotFormFillMode.atmosDerived,
     objectFilename: '3. DAE1B.2.xlsx',
@@ -297,7 +297,7 @@ const List<DotFormCatalogEntry> kDotFormCatalog = [
     code: 'DAE 1B.2 Dom',
     title: 'DAE 1B.2 — Domestic (Daily / AE / Monthly)',
     subtitle:
-        'Fills domestic overnight guests by PH region from hotel registers',
+        'Fills DAE1B.2 Domestic (daily, AE, and monthly sheets) from hotel registers',
     category: DotFormCategory.accommodation,
     fillMode: DotFormFillMode.atmosDerived,
     objectFilename: 'DAE1B.2.Domestic.xlsx',

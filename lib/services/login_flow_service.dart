@@ -7,6 +7,7 @@ import 'package:atmos_trs_system/services/dashboard_user_service.dart';
 import 'package:atmos_trs_system/services/tourist_profile_hydration.dart';
 import 'package:atmos_trs_system/services/tourist_activity_firestore_sync.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart';
+import 'package:atmos_trs_system/services/lgu_office_registry_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/services/welcome_notification_service.dart';
 import 'package:atmos_trs_system/services/pending_lgu_registration_cache.dart';
@@ -91,7 +92,8 @@ class LoginFlowService {
     if (storedUid == uid && storedRole == UserRole.tourist) {
       final cachedVerified = await _getCachedTouristVerified(uid);
       if (cachedVerified == true) {
-        if (await UserDirectoryService.hasCompletedTouristAccount(uid)) {
+        if (await UserDirectoryService.hasCompletedTouristAccount(uid) ||
+            await UserDirectoryService.touristEmailVerificationComplete(uid)) {
           profileFuture.ignore();
           return '/dashboard';
         }
@@ -193,6 +195,7 @@ class LoginFlowService {
     required String email,
     required String password,
   }) async {
+    unawaited(LguOfficeRegistryService.syncForCurrentUser());
     try {
       var profile =
           await UserDirectoryService.getProfileByUid(
@@ -221,7 +224,14 @@ class LoginFlowService {
             email: email,
           );
           await WelcomeNotificationService.ensureForUser(uid: uid);
-          await _setCachedTouristVerified(uid, profile.isVerified);
+          // A cached users snapshot can still say isVerified:false after OTP.
+          // Never clear the local flag from that snapshot.
+          if (profile.isVerified ||
+              await UserDirectoryService.touristEmailVerificationComplete(
+                uid,
+              )) {
+            await _setCachedTouristVerified(uid, true);
+          }
         }
         await RoleRouter.persistSessionAndGetRoute(
           profile: profile,

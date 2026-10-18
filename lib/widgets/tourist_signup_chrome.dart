@@ -1,3 +1,4 @@
+import 'package:atmos_trs_system/widgets/trip_plan_auth_brand.dart';
 import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/utils/logo_utils.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -82,9 +83,14 @@ class TouristSignupFooterPainter extends CustomPainter {
 
 /// Compact logo + ATMOS-TRS + tagline (mock header brand row).
 class TouristSignupBrandRow extends StatelessWidget {
-  const TouristSignupBrandRow({super.key, this.onDark = true});
+  const TouristSignupBrandRow({
+    super.key,
+    this.onDark = true,
+    this.tripPlanner = false,
+  });
 
   final bool onDark;
+  final bool tripPlanner;
 
   @override
   Widget build(BuildContext context) {
@@ -92,6 +98,10 @@ class TouristSignupBrandRow extends StatelessWidget {
     final subColor = onDark
         ? Colors.white.withValues(alpha: 0.9)
         : TouristSignupChrome.textMuted;
+
+    if (tripPlanner) {
+      return TripPlanAuthBrand(compact: true, onDark: onDark);
+    }
 
     return Row(
       children: [

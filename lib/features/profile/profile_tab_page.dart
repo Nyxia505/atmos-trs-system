@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/app_theme_controller.dart';
+import 'package:atmos_trs_system/navigation/shared_module_logout.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/config/user_profile_storage.dart';
@@ -43,13 +44,14 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
   bool _personalExpanded = false;
   bool _addressExpanded = false;
   bool _otpVerified = false;
+  bool _verificationResolved = false;
   bool _uploadingPhoto = false;
   Uint8List? _pendingPhotoBytes;
   final ImagePicker _imagePicker = ImagePicker();
 
   Color get _textPrimary => AppTheme.textPrimary;
   Color get _textMuted => AppTheme.unselectedMuted;
-  static const _border = Color(0xFFE5E7EB);
+  Color get _border => AppTheme.border;
 
   @override
   void initState() {
@@ -82,6 +84,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
           ? storedTouristId
           : uid;
       _otpVerified = otpVerified;
+      _verificationResolved = true;
       _isRefreshing = false;
     });
   }
@@ -278,10 +281,9 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
     final confirmed = await _confirmLogout(context);
     if (!confirmed) return;
     await unregisterTouristPushTopic();
-    await SessionStorage.clearSession();
     await UserProfileStorage.clearUserProfile();
     TouristActivityFirestoreSync.resetMergeCache();
-    AuthConfig.currentUserUid = null;
+    await signOutSharedModules();
     if (!context.mounted) return;
     navigateAfterLogout(context);
   }
@@ -462,6 +464,61 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
     );
   }
 
+  List<Widget> _personalInfoRows(UserProfile? profile) {
+    String shown(String? value) {
+      final text = value?.trim() ?? '';
+      return text.isEmpty ? '—' : text;
+    }
+
+    final rows = <Widget>[
+      ProfileInfoRow(label: 'First name', value: shown(profile?.firstName), dense: true),
+      if (profile?.middleName?.trim().isNotEmpty == true)
+        ProfileInfoRow(label: 'Middle name', value: profile!.middleName!.trim(), dense: true),
+      ProfileInfoRow(label: 'Last name', value: shown(profile?.lastName), dense: true),
+      if (profile?.suffix?.trim().isNotEmpty == true &&
+          profile!.suffix!.trim().toLowerCase() != 'none')
+        ProfileInfoRow(label: 'Suffix', value: profile.suffix!.trim(), dense: true),
+      ProfileInfoRow(label: 'Sex', value: shown(profile?.sex), dense: true),
+      if (profile?.civilStatus?.trim().isNotEmpty == true)
+        ProfileInfoRow(label: 'Civil status', value: profile!.civilStatus!.trim(), dense: true),
+      ProfileInfoRow(label: 'Nationality', value: shown(profile?.nationality), dense: true),
+      ProfileInfoRow(label: 'Date of birth', value: shown(profile?.dateOfBirth), dense: true),
+    ];
+    return rows;
+  }
+
+  List<Widget> _addressRows(UserProfile? profile) {
+    String? text(String? value) {
+      final trimmed = value?.trim() ?? '';
+      return trimmed.isEmpty ? null : trimmed;
+    }
+
+    final rows = <Widget>[
+      if (text(profile?.street) != null)
+        ProfileInfoRow(label: 'Street', value: text(profile?.street)!, dense: true),
+      if (text(profile?.barangay) != null)
+        ProfileInfoRow(label: 'Barangay', value: text(profile?.barangay)!, dense: true),
+      if (text(profile?.city) != null)
+        ProfileInfoRow(
+          label: 'City / municipality',
+          value: text(profile?.city)!,
+          dense: true,
+        ),
+      if (text(profile?.province) != null)
+        ProfileInfoRow(label: 'Province', value: text(profile?.province)!, dense: true),
+      if (text(profile?.country) != null)
+        ProfileInfoRow(label: 'Country', value: text(profile?.country)!, dense: true),
+    ];
+    if (rows.isNotEmpty) return rows;
+    return const [
+      ProfileInfoRow(
+        label: 'Address',
+        value: 'No address saved with this account',
+        dense: true,
+      ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final profile = _userProfile;
@@ -494,7 +551,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
                       padding: EdgeInsets.fromLTRB(pad, 12, pad, 24),
                       child: Column(
                         children: [
-                          if (!_otpVerified) ...[
+                          if (_verificationResolved && !_otpVerified) ...[
                             _buildEmailNotVerifiedBanner(),
                             const SizedBox(height: 16),
                           ],
@@ -504,118 +561,43 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
                             isLocal,
                             _otpVerified,
                           ),
-                          const SizedBox(height: 20),
+                          const SizedBox(height: 16),
                           ProfileSectionCard(
-                            title: 'Contact',
-                            subtitle: 'Reach you for account & travel updates',
-                            icon: Icons.contact_phone_outlined,
+                            title: 'Account Information',
+                            subtitle: 'Email registered to this account',
+                            icon: Icons.mail_outline_rounded,
                             children: [
-                              ProfileInfoRow(
-                                label: 'Mobile number',
-                                value: profile?.mobile ?? '—',
-                                icon: Icons.phone_outlined,
-                              ),
                               ProfileInfoRow(
                                 label: 'Email address',
                                 value: email,
                                 icon: Icons.email_outlined,
+                                maxLines: 3,
                               ),
                             ],
                           ),
-                          const SizedBox(height: 20),
+                          const SizedBox(height: 16),
                           const MyReviewsSection(),
-                          const SizedBox(height: 20),
+                          const SizedBox(height: 16),
                           _buildExpandableSection(
                             icon: Icons.badge_outlined,
                             title: 'Personal info',
-                            subtitle: 'Registration details on your tourist ID',
+                            subtitle: 'Details from your tourist registration',
                             expanded: _personalExpanded,
                             onToggle: () => setState(
                               () => _personalExpanded = !_personalExpanded,
                             ),
-                            children: [
-                              ProfileInfoRow(
-                                label: 'First name',
-                                value: profile?.firstName ?? '—',
-                                dense: true,
-                              ),
-                              ProfileInfoRow(
-                                label: 'Middle name',
-                                value: profile?.middleName ?? '—',
-                                dense: true,
-                              ),
-                              ProfileInfoRow(
-                                label: 'Last name',
-                                value: profile?.lastName ?? '—',
-                                dense: true,
-                              ),
-                              ProfileInfoRow(
-                                label: 'Sex',
-                                value: profile?.sex ?? '—',
-                                dense: true,
-                              ),
-                              ProfileInfoRow(
-                                label: 'Civil status',
-                                value: profile?.civilStatus ?? '—',
-                                dense: true,
-                              ),
-                              ProfileInfoRow(
-                                label: 'Nationality',
-                                value: profile?.nationality ?? '—',
-                                dense: true,
-                              ),
-                              ProfileInfoRow(
-                                label: 'Date of birth',
-                                value: profile?.dateOfBirth ?? '—',
-                                dense: true,
-                              ),
-                            ],
+                            children: _personalInfoRows(profile),
                           ),
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 16),
                           _buildExpandableSection(
                             icon: Icons.location_on_outlined,
                             title: 'Address',
-                            subtitle: 'Home or stay address on file',
+                            subtitle: 'Address saved with your registration',
                             expanded: _addressExpanded,
                             onToggle: () => setState(
                               () => _addressExpanded = !_addressExpanded,
                             ),
-                            children: [
-                              if (profile?.fullAddress.isNotEmpty == true)
-                                ProfileInfoRow(
-                                  label: 'Full address',
-                                  value: profile!.fullAddress,
-                                  maxLines: 4,
-                                  dense: true,
-                                )
-                              else ...[
-                                ProfileInfoRow(
-                                  label: 'Street',
-                                  value: profile?.street ?? '—',
-                                  dense: true,
-                                ),
-                                ProfileInfoRow(
-                                  label: 'Barangay',
-                                  value: profile?.barangay ?? '—',
-                                  dense: true,
-                                ),
-                                ProfileInfoRow(
-                                  label: 'City / municipality',
-                                  value: profile?.city ?? '—',
-                                  dense: true,
-                                ),
-                                ProfileInfoRow(
-                                  label: 'Province',
-                                  value: profile?.province ?? '—',
-                                  dense: true,
-                                ),
-                                ProfileInfoRow(
-                                  label: 'Country',
-                                  value: profile?.country ?? '—',
-                                  dense: true,
-                                ),
-                              ],
-                            ],
+                            children: _addressRows(profile),
                           ),
                           const SizedBox(height: 24),
                           AppLogoutButton(
@@ -922,26 +904,26 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          'Scan QR',
+          'Tourist QR',
           style: TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
             color: accent,
           ),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 8),
         Container(
-          padding: const EdgeInsets.all(4),
+          padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            color: AppTheme.cardBackground,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: const Color(0xFFE5E7EB)),
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppTheme.border),
           ),
           child: QrImageView(
             data: payload,
             version: QrVersions.auto,
-            size: 96,
-            backgroundColor: AppTheme.cardBackground,
+            size: 132,
+            backgroundColor: Colors.white,
             errorCorrectionLevel: QrErrorCorrectLevel.H,
           ),
         ),
@@ -1187,10 +1169,10 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
                 children: [
                   for (var i = 0; i < children.length; i++) ...[
                     if (i > 0)
-                      const Divider(
+                      Divider(
                         height: 1,
                         thickness: 1,
-                        color: Color(0xFFF3F4F6),
+                        color: AppTheme.border,
                       ),
                     children[i],
                   ],

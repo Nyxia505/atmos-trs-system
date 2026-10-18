@@ -17,13 +17,7 @@ void main() {
           body: SingleChildScrollView(
             child: SizedBox(
               width: size.width,
-              child: LandingFeaturesSection(
-                onQrLearnMore: () {},
-                onExploreVirtualTour: () {},
-                onSeeHowItWorks: () {},
-                onDigitalIdLearnMore: () {},
-                onStartPlanning: () {},
-              ),
+              child: const LandingFeaturesSection(),
             ),
           ),
         ),
@@ -39,8 +33,9 @@ void main() {
     expect(find.text('Smart Check-ins'), findsOneWidget);
     expect(find.text('Digital Tourist ID'), findsOneWidget);
     expect(find.text('Itinerary Planner'), findsOneWidget);
-    expect(find.text('Explore Now'), findsOneWidget);
-    expect(find.text('Start Planning'), findsOneWidget);
+    expect(find.text('Explore Now'), findsNothing);
+    expect(find.text('Start Planning'), findsNothing);
+    expect(find.text('Learn More'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -48,7 +43,7 @@ void main() {
     await pumpSection(tester, const Size(800, 900));
     expect(tester.takeException(), isNull);
     await pumpSection(tester, const Size(390, 844));
-    expect(find.text('See How It Works'), findsOneWidget);
+    expect(find.text('See How It Works'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

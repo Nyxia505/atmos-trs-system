@@ -26,6 +26,9 @@ class FaqChatStore extends ChangeNotifier {
   bool _loading = false;
   bool _initialized = false;
   bool _seededWelcome = false;
+  Future<void>? _welcomeInFlight;
+  Future<void>? _bindInFlight;
+  String? _bindingUid;
 
   List<FaqChatMessageRecord> get messages => List.unmodifiable(_messages);
   bool get isLoading => _loading;
@@ -52,6 +55,25 @@ class FaqChatStore extends ChangeNotifier {
   Future<void> bindUser([String? uid]) async {
     final resolved = await resolveUid(uid);
     if (_uid == resolved && _initialized) return;
+    if (_bindInFlight != null && _bindingUid == resolved) {
+      await _bindInFlight;
+      return;
+    }
+
+    final run = _bindUserNow(resolved);
+    _bindingUid = resolved;
+    _bindInFlight = run;
+    try {
+      await run;
+    } finally {
+      if (identical(_bindInFlight, run)) {
+        _bindInFlight = null;
+        _bindingUid = null;
+      }
+    }
+  }
+
+  Future<void> _bindUserNow(String? resolved) async {
 
     await _subscription?.cancel();
     _subscription = null;
@@ -62,14 +84,18 @@ class FaqChatStore extends ChangeNotifier {
     notifyListeners();
 
     if (resolved == null || resolved.isEmpty) {
-      _messages = await _readCache('guest');
+      _messages = _dedupeWelcomes(await _readCache('guest'));
       _loading = false;
       _initialized = true;
       notifyListeners();
+      if (_messages.isEmpty) {
+        _seededWelcome = true;
+        await _ensureWelcomeIfEmpty();
+      }
       return;
     }
 
-    _messages = await _readCache(resolved);
+    _messages = _dedupeWelcomes(await _readCache(resolved));
     _loading = false;
     notifyListeners();
 
@@ -114,7 +140,7 @@ class FaqChatStore extends ChangeNotifier {
       merged.putIfAbsent(local.id, () => local);
     }
 
-    _messages = merged.values.toList()
+    _messages = _dedupeWelcomes(merged.values.toList())
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
     unawaited(_writeCache(_uid!, _messages));
@@ -127,19 +153,51 @@ class FaqChatStore extends ChangeNotifier {
   }
 
   Future<void> _ensureWelcomeIfEmpty() async {
+    if (_welcomeInFlight != null) {
+      await _welcomeInFlight;
+      return;
+    }
+    final run = _writeWelcomeOnce();
+    _welcomeInFlight = run;
+    try {
+      await run;
+    } finally {
+      if (identical(_welcomeInFlight, run)) _welcomeInFlight = null;
+    }
+  }
+
+  Future<void> _writeWelcomeOnce() async {
     if (_messages.isNotEmpty) return;
-    if (_messages.any((m) => m.messageType == 'welcome')) return;
-    final uid = _uid;
-    if (uid == null || uid.isEmpty) return;
+    if (_messages.any(_isWelcomeMessage)) return;
 
     final chatbot = FaqChatbotService.instance;
     final welcome = chatbot.welcomeFor(null);
     await appendMessage(
       text: welcome,
       sender: 'ai',
-      language: 'en',
+      language: _languageCode(chatbot.sessionLanguage),
       messageType: 'welcome',
     );
+  }
+
+  bool _isWelcomeMessage(FaqChatMessageRecord message) {
+    if (message.messageType == 'welcome') return true;
+    final text = message.message.trim();
+    return text.startsWith('Hey! 👋 I\'m Tala AI') ||
+        text.startsWith('Kumusta! 👋 Ako si Tala AI');
+  }
+
+  List<FaqChatMessageRecord> _dedupeWelcomes(List<FaqChatMessageRecord> messages) {
+    final kept = <FaqChatMessageRecord>[];
+    var seenWelcome = false;
+    for (final message in messages) {
+      if (_isWelcomeMessage(message)) {
+        if (seenWelcome) continue;
+        seenWelcome = true;
+      }
+      kept.add(message);
+    }
+    return kept;
   }
 
   Future<void> appendMessage({
@@ -172,13 +230,23 @@ class FaqChatStore extends ChangeNotifier {
 
     if (uid != null && uid.isNotEmpty) {
       unawaited(_writeCache(uid, _messages));
-      try {
-        await _collection!.doc(record.id).set(record.toFirestore());
-      } catch (e) {
-        debugPrint('[FaqChatStore] save message failed: $e');
-      }
+      unawaited(_persistMessage(record));
     } else {
       unawaited(_writeCache('guest', _messages));
+    }
+  }
+
+  /// Firestore save must not block the chat. A hung write used to keep "Typing…" up.
+  Future<void> _persistMessage(FaqChatMessageRecord record) async {
+    final collection = _collection;
+    if (collection == null) return;
+    try {
+      await collection
+          .doc(record.id)
+          .set(record.toFirestore())
+          .timeout(const Duration(seconds: 8));
+    } catch (e) {
+      debugPrint('[FaqChatStore] save message failed: $e');
     }
   }
 

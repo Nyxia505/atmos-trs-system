@@ -32,7 +32,7 @@ class TouristFullPage extends StatelessWidget {
   /// Extra content inside the header under the title (e.g. a search field).
   final Widget? headerBottom;
 
-  static const Color background = Color(0xFFF8FAFC);
+  static Color get background => AppTheme.pageBackground;
 
   @override
   Widget build(BuildContext context) {

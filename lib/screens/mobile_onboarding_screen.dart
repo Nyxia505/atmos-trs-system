@@ -78,7 +78,7 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen>
   void _goTo(int index) {
     _pageController.animateToPage(
       index,
-      duration: const Duration(milliseconds: 450),
+      duration: const Duration(milliseconds: 300),
       curve: Curves.easeOutCubic,
     );
   }
@@ -112,7 +112,7 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen>
                     const Spacer(),
                     IgnorePointer(
                       child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 420),
+                        duration: const Duration(milliseconds: 300),
                         switchInCurve: Curves.easeOutCubic,
                         switchOutCurve: Curves.easeInCubic,
                         transitionBuilder: (child, animation) {
@@ -235,20 +235,42 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen>
       );
 
   Widget _buildNext() {
-    return SizedBox(
-      width: double.infinity,
-      child: FilledButton(
-        onPressed: () => _goTo(_pageIndex + 1),
-        style: _primaryStyle,
-        child: const Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text('Next'),
-            SizedBox(width: 8),
-            Icon(Icons.arrow_forward_rounded, size: 20),
-          ],
+    return Row(
+      children: [
+        if (_pageIndex > 0) ...[
+          Expanded(child: _buildBackButton()),
+          const SizedBox(width: 10),
+        ],
+        Expanded(
+          flex: _pageIndex > 0 ? 2 : 1,
+          child: FilledButton(
+            onPressed: () => _goTo(_pageIndex + 1),
+            style: _primaryStyle,
+            child: const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text('Next'),
+                SizedBox(width: 8),
+                Icon(Icons.arrow_forward_rounded, size: 20),
+              ],
+            ),
+          ),
         ),
+      ],
+    );
+  }
+
+  Widget _buildBackButton() {
+    return OutlinedButton(
+      onPressed: () => _goTo(_pageIndex - 1),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.white,
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.85)),
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        textStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
       ),
+      child: const Text('Back'),
     );
   }
 
@@ -257,6 +279,8 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen>
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        _buildBackButton(),
+        const SizedBox(height: 10),
         FilledButton(
           onPressed: () => _finish(route: '/signup'),
           style: _primaryStyle,

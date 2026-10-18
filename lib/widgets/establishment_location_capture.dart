@@ -198,7 +198,18 @@ class EstablishmentLocationCapture extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         child: SizedBox(
           height: 160,
-          child: Stack(
+          width: double.infinity,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final width = constraints.maxWidth;
+              final height = constraints.maxHeight;
+              if (!width.isFinite ||
+                  !height.isFinite ||
+                  width < 8 ||
+                  height < 8) {
+                return const ColoredBox(color: Color(0xFFF1F5F9));
+              }
+              return Stack(
             fit: StackFit.expand,
             children: [
               IgnorePointer(
@@ -243,6 +254,8 @@ class EstablishmentLocationCapture extends StatelessWidget {
                 ),
               ),
             ],
+              );
+            },
           ),
         ),
       ),

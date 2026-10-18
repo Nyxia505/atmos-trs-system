@@ -85,7 +85,7 @@ class AppUserProfile {
       fullName: data['fullName'] as String?,
       municipality: (data['municipality'] as String? ?? '').trim(),
       municipalityId: (data['municipalityId'] as String? ?? '').trim(),
-      isVerified: data['isVerified'] as bool? ?? false,
+      isVerified: data['isVerified'] == true,
       status: (data['status'] as String? ?? '').trim().toLowerCase(),
     );
   }
@@ -162,24 +162,73 @@ class UserDirectoryService {
     // Intentionally empty — kept for call-site compatibility.
   }
 
-  /// True only after in-app OTP sets `isVerified` on `users` / `tourists`.
-  static Future<bool> touristEmailVerificationComplete(String uid) async {
-    if (uid.isEmpty) return false;
-    if (await SessionStorage.isTouristEmailVerifiedCached(uid)) {
-      return true;
-    }
-    if (!_ready) return false;
-    final profile = await getProfileByUid(uid, preferServer: true);
-    if (profile != null && profile.isTourist && profile.isVerified) {
-      await SessionStorage.setTouristEmailVerified(uid, verified: true);
-      return true;
-    }
-    final touristsVerified = await getTouristIsVerifiedFromTouristsDoc(uid);
-    if (touristsVerified == true) {
-      await SessionStorage.setTouristEmailVerified(uid, verified: true);
-      return true;
+  /// True when any real source says this tourist finished in-app OTP.
+  ///
+  /// [usersIsVerified] / [touristsIsVerified] are `true` or `false` only after a
+  /// successful server read of that field. `null` means unknown (missing doc,
+  /// missing field, or the read failed). A failed read keeps [localCache].
+  static bool combineTouristVerification({
+    required bool localCache,
+    required bool? usersIsVerified,
+    required bool? touristsIsVerified,
+  }) {
+    if (usersIsVerified == true || touristsIsVerified == true) return true;
+    if (usersIsVerified == null && touristsIsVerified == null) {
+      return localCache;
     }
     return false;
+  }
+
+  /// Server value of `isVerified` when the doc and field exist.
+  /// Cache is used only to recover `true` after a server failure — a stale
+  /// cached `false` is ignored.
+  static Future<bool?> _readIsVerifiedFlag(
+    String collection,
+    String uid,
+  ) async {
+    if (!_ready || uid.isEmpty) return null;
+    try {
+      final doc = await _db.collection(collection).doc(uid).get(
+            const GetOptions(source: Source.server),
+          );
+      if (!doc.exists || doc.data() == null) return null;
+      final data = doc.data()!;
+      if (!data.containsKey('isVerified')) return null;
+      return data['isVerified'] == true;
+    } catch (_) {
+      try {
+        final doc = await _db.collection(collection).doc(uid).get(
+              const GetOptions(source: Source.cache),
+            );
+        if (!doc.exists || doc.data() == null) return null;
+        if (doc.data()!['isVerified'] == true) return true;
+      } catch (_) {}
+      return null;
+    }
+  }
+
+  /// True only after in-app OTP sets `isVerified` on `users` / `tourists`.
+  /// Firebase Auth `emailVerified` alone does not count.
+  static Future<bool> touristEmailVerificationComplete(String uid) async {
+    if (uid.isEmpty) return false;
+    final cached = await SessionStorage.isTouristEmailVerifiedCached(uid);
+    if (!_ready) return cached;
+
+    final usersFlag = await _readIsVerifiedFlag(collectionId, uid);
+    final touristsFlag = await _readIsVerifiedFlag('tourists', uid);
+    final verified = combineTouristVerification(
+      localCache: cached,
+      usersIsVerified: usersFlag,
+      touristsIsVerified: touristsFlag,
+    );
+    if (verified && !cached) {
+      await SessionStorage.setTouristEmailVerified(uid, verified: true);
+    } else if (!verified &&
+        cached &&
+        (usersFlag == false || touristsFlag == false)) {
+      await SessionStorage.setTouristEmailVerified(uid, verified: false);
+    }
+    return verified;
   }
 
   /// True when [email] maps to governor or any tourism/LGU staff account.
@@ -344,7 +393,8 @@ class UserDirectoryService {
     try {
       final doc = await _db.collection('tourists').doc(uid).get();
       if (!doc.exists || doc.data() == null) return null;
-      return doc.data()!['isVerified'] as bool?;
+      if (!doc.data()!.containsKey('isVerified')) return null;
+      return doc.data()!['isVerified'] == true;
     } catch (_) {
       return null;
     }

@@ -1,6 +1,7 @@
 import 'dart:async' show unawaited;
 
 import 'package:atmos_trs_system/config/app_theme.dart';
+import 'package:atmos_trs_system/navigation/trip_planner_access.dart';
 import 'package:atmos_trs_system/navigation/tripplan_entry_screen.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
 import 'package:atmos_trs_system/services/landing_intent_service.dart';
@@ -40,15 +41,27 @@ class LandingIntentNavigation {
       return;
     }
     if (intent.isItinerary) {
-      final heroController = OnboardingHeroVideo.read(context)?.controller;
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(
-          builder: (context) => TripPlanEntryScreen(
-            sharedHeroController: heroController,
-          ),
-        ),
-      );
+      await openPlanner(context);
     }
+  }
+
+  /// Opens the Trip Planner home when the signed-in account is a tourist.
+  static Future<bool> openPlanner(BuildContext context) async {
+    final access = await TripPlannerAccess.evaluate();
+    if (!context.mounted) return false;
+    if (access != TripPlannerAccessResult.allowed) {
+      await TripPlannerAccess.showDenied(context);
+      return false;
+    }
+    final heroController = OnboardingHeroVideo.read(context)?.controller;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (context) => TripPlanEntryScreen(
+          sharedHeroController: heroController,
+        ),
+      ),
+    );
+    return true;
   }
 
   /// Shows the post-signup / post-login chooser, then navigates to the chosen home.
@@ -93,15 +106,7 @@ class LandingIntentNavigation {
       return true;
     }
     if (choice == PostAuthDestination.itinerary) {
-      final heroController = OnboardingHeroVideo.read(context)?.controller;
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(
-          builder: (context) => TripPlanEntryScreen(
-            sharedHeroController: heroController,
-          ),
-        ),
-      );
-      return true;
+      return openPlanner(context);
     }
     return false;
   }
@@ -141,14 +146,7 @@ class LandingIntentNavigation {
           (r) => false,
         );
         if (!context.mounted) return;
-        final heroController = OnboardingHeroVideo.read(context)?.controller;
-        await Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(
-            builder: (context) => TripPlanEntryScreen(
-              sharedHeroController: heroController,
-            ),
-          ),
-        );
+        await openPlanner(context);
         return;
 
       case PostAuthDestination.vr:

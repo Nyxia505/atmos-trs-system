@@ -13,6 +13,7 @@ class PendingSpotCheckIn {
     this.maleCount = 0,
     this.filipinoCount = 0,
     this.foreignCount = 0,
+    this.originJson = '',
     this.isDemoQr = false,
   });
 
@@ -27,6 +28,9 @@ class PendingSpotCheckIn {
   final int maleCount;
   final int filipinoCount;
   final int foreignCount;
+
+  /// JSON from [VisitOriginBreakdown.toJson], empty on older pending scans.
+  final String originJson;
 
   /// Scanned from a dummy QR (LGU Debug data → Demo QR): no on-site GPS.
   final bool isDemoQr;
@@ -45,6 +49,7 @@ class PendingSpotCheckInStorage {
   static const _kMaleCount = 'pending_checkin_male_count';
   static const _kFilipinoCount = 'pending_checkin_filipino_count';
   static const _kForeignCount = 'pending_checkin_foreign_count';
+  static const _kOriginJson = 'pending_checkin_origin_json';
   static const _kSavedAt = 'pending_checkin_saved_at';
   static const _kIsDemoQr = 'pending_checkin_is_demo_qr';
 
@@ -93,6 +98,7 @@ class PendingSpotCheckInStorage {
     required int maleCount,
     int filipinoCount = 0,
     int foreignCount = 0,
+    String originJson = '',
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final mid = prefs.getString(_kMunicipalityId)?.trim() ?? '';
@@ -103,6 +109,11 @@ class PendingSpotCheckInStorage {
     await prefs.setInt(_kMaleCount, maleCount < 0 ? 0 : maleCount);
     await prefs.setInt(_kFilipinoCount, filipinoCount < 0 ? 0 : filipinoCount);
     await prefs.setInt(_kForeignCount, foreignCount < 0 ? 0 : foreignCount);
+    if (originJson.trim().isEmpty) {
+      await prefs.remove(_kOriginJson);
+    } else {
+      await prefs.setString(_kOriginJson, originJson);
+    }
   }
 
   /// Returns pending data without removing it.
@@ -130,6 +141,7 @@ class PendingSpotCheckInStorage {
       maleCount: males < 0 ? 0 : males,
       filipinoCount: filipinos < 0 ? 0 : filipinos,
       foreignCount: foreigners < 0 ? 0 : foreigners,
+      originJson: prefs.getString(_kOriginJson) ?? '',
       isDemoQr: prefs.getBool(_kIsDemoQr) ?? false,
     );
   }
@@ -145,6 +157,7 @@ class PendingSpotCheckInStorage {
     await prefs.remove(_kMaleCount);
     await prefs.remove(_kFilipinoCount);
     await prefs.remove(_kForeignCount);
+    await prefs.remove(_kOriginJson);
     await prefs.remove(_kSavedAt);
     await prefs.remove(_kIsDemoQr);
   }

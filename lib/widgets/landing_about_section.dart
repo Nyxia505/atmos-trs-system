@@ -8,11 +8,22 @@ class LandingAboutStat {
     required this.value,
     required this.label,
     required this.icon,
+    this.liveCount,
+    this.liveLoading = false,
+    this.liveUnavailable = false,
   });
 
   final String value;
   final String label;
   final IconData icon;
+
+  /// When set, the card counts up to this total. Other cards leave it null.
+  final int? liveCount;
+  final bool liveLoading;
+  final bool liveUnavailable;
+
+  bool get usesLiveCount =>
+      liveLoading || liveUnavailable || liveCount != null;
 }
 
 /// About copy, capitol photo, and statistics, matching the approved layout.
@@ -27,6 +38,7 @@ class LandingAboutShowcase extends StatefulWidget {
     required this.bleed,
     required this.compact,
     required this.tablet,
+    this.showNumbers = true,
   });
 
   final String body;
@@ -37,6 +49,7 @@ class LandingAboutShowcase extends StatefulWidget {
   final double bleed;
   final bool compact;
   final bool tablet;
+  final bool showNumbers;
 
   static const Color page = Color(0xFFFFF8F3);
   static const Color orange = Color(0xFFF97316);
@@ -160,14 +173,16 @@ class _LandingAboutShowcaseState extends State<LandingAboutShowcase>
                     ),
                   ],
                 ),
-              SizedBox(height: widget.compact ? 28 : 40),
-              const _NumbersHeading(),
-              const SizedBox(height: 22),
-              _StatsGrid(
-                stats: widget.stats,
-                compact: widget.compact,
-                tablet: widget.tablet,
-              ),
+              if (widget.showNumbers) ...[
+                SizedBox(height: widget.compact ? 28 : 40),
+                const _NumbersHeading(),
+                const SizedBox(height: 22),
+                _StatsGrid(
+                  stats: widget.stats,
+                  compact: widget.compact,
+                  tablet: widget.tablet,
+                ),
+              ],
             ],
           ),
         ),
@@ -465,8 +480,98 @@ class _StatCard extends StatefulWidget {
   State<_StatCard> createState() => _StatCardState();
 }
 
-class _StatCardState extends State<_StatCard> {
+class _StatCardState extends State<_StatCard>
+    with SingleTickerProviderStateMixin {
   bool _hover = false;
+  AnimationController? _count;
+  int _from = 0;
+  int _to = 0;
+  int? _displayed;
+
+  @override
+  void initState() {
+    super.initState();
+    _kickCount();
+  }
+
+  @override
+  void didUpdateWidget(covariant _StatCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.stat.liveCount != widget.stat.liveCount) {
+      _kickCount();
+    }
+  }
+
+  @override
+  void dispose() {
+    _count?.dispose();
+    super.dispose();
+  }
+
+  void _kickCount() {
+    final target = widget.stat.liveCount;
+    if (target == null) return;
+    if (_displayed == target && (_count == null || !_count!.isAnimating)) {
+      return;
+    }
+    if (_count != null && _count!.isAnimating && _to == target) return;
+    final from = _displayed ?? 0;
+    if (from == target) {
+      _displayed = target;
+      return;
+    }
+    _from = from;
+    _to = target;
+    _count?.dispose();
+    final reduce = WidgetsBinding
+        .instance
+        .platformDispatcher
+        .accessibilityFeatures
+        .disableAnimations;
+    _count = AnimationController(
+      vsync: this,
+      duration: reduce ? Duration.zero : const Duration(milliseconds: 1500),
+    );
+    _count!.addListener(() {
+      if (!mounted) return;
+      final t = Curves.easeOutCubic.transform(_count!.value);
+      setState(() {
+        _displayed = _from + ((_to - _from) * t).round();
+      });
+    });
+    _count!.forward();
+  }
+
+  String _grouped(int value) {
+    return value.toString().replaceAllMapped(
+      RegExp(r'\B(?=(\d{3})+(?!\d))'),
+      (_) => ',',
+    );
+  }
+
+  TextStyle get _valueStyle => GoogleFonts.montserrat(
+        color: LandingAboutShowcase.navy,
+        fontSize: 28,
+        fontWeight: FontWeight.w800,
+        height: 1,
+      );
+
+  Widget _liveCountLabel() {
+    if (widget.stat.liveLoading && widget.stat.liveCount == null) {
+      return const SizedBox(
+        width: 22,
+        height: 22,
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          color: LandingAboutShowcase.orange,
+        ),
+      );
+    }
+    if (widget.stat.liveUnavailable && widget.stat.liveCount == null) {
+      return Text('—', style: _valueStyle);
+    }
+    return Text(_grouped(_displayed ?? 0), maxLines: 1, style: _valueStyle);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -518,7 +623,9 @@ class _StatCardState extends State<_StatCard> {
                   FittedBox(
                     fit: BoxFit.scaleDown,
                     alignment: Alignment.centerLeft,
-                    child: Text(
+                    child: widget.stat.usesLiveCount
+                        ? _liveCountLabel()
+                        : Text(
                       widget.stat.value,
                       maxLines: 1,
                       style: GoogleFonts.montserrat(

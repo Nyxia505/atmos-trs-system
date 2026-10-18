@@ -17,6 +17,16 @@ class UserActivityService {
   /// Notifies Home / Visited UI after a QR check-in is recorded locally.
   static final ValueNotifier<int> visitedSpotsRevision = ValueNotifier<int>(0);
 
+  /// Notifies bookmark icons and Saved Spots as soon as the in-memory set changes.
+  static final ValueNotifier<int> savedSpotsRevision = ValueNotifier<int>(0);
+
+  static Set<String>? _savedIds;
+  static String? _savedIdsUid;
+  static List<String> _lastPersistedSaved = const [];
+  static Future<void> _savedPersistChain = Future<void>.value();
+  static int _saveGenerationClock = 0;
+  static final Map<String, int> _saveGeneration = {};
+
   static void _notifyVisitedChanged() {
     visitedSpotsRevision.value = visitedSpotsRevision.value + 1;
   }
@@ -38,6 +48,12 @@ class UserActivityService {
     if (id.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
     final previous = prefs.getString(_keyActivityBoundUid);
+    if (_savedIdsUid != null && _savedIdsUid != id) {
+      _savedIds = null;
+      _savedIdsUid = null;
+      _lastPersistedSaved = const [];
+      savedSpotsRevision.value++;
+    }
     _boundUidCache = id;
     await prefs.setString(_keyActivityBoundUid, id);
     await _migrateUnscopedKeysIfNeeded(prefs, id);
@@ -448,10 +464,29 @@ class UserActivityService {
     }
   }
 
+  static int _cloudPushTicket = 0;
+  static Future<void> _cloudPushChain = Future<void>.value();
+
+  /// One backup at a time. A newer save replaces an older in-flight snapshot
+  /// so an earlier write cannot drop spots that were just saved.
   static void _schedulePushActivityToCloud() {
-    final uid = AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
+    String? uid = AuthConfig.currentUserUid?.trim();
+    if (uid == null || uid.isEmpty) {
+      try {
+        if (Firebase.apps.isEmpty) return;
+        uid = FirebaseAuth.instance.currentUser?.uid;
+      } catch (e) {
+        debugPrint('UserActivityService.scheduleCloudPush: $e');
+        return;
+      }
+    }
     if (uid == null || uid.isEmpty) return;
-    pushVisitAndBadgeSnapshotToCloud(uid);
+    final ticket = ++_cloudPushTicket;
+    final savedUid = uid;
+    _cloudPushChain = _cloudPushChain.then((_) async {
+      if (ticket != _cloudPushTicket) return;
+      await pushVisitAndBadgeSnapshotToCloud(savedUid);
+    }).catchError((Object _) {});
   }
 
   /// After merging local + server lists (login / app start).
@@ -480,10 +515,19 @@ class UserActivityService {
       await _scoped(_keyRecentlyViewed),
       json.encode(viewed.map((v) => v.toJson()).toList()),
     );
+    final uniqueSaved = savedSpotIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
     await prefs.setStringList(
       await _scoped(_keySavedSpots),
-      savedSpotIds.toSet().toList(),
+      uniqueSaved,
     );
+    _savedIds = uniqueSaved.toSet();
+    _savedIdsUid = uid;
+    _lastPersistedSaved = List<String>.from(uniqueSaved);
+    savedSpotsRevision.value++;
     for (final t in [1, 5, 10, 25]) {
       if (sorted.length >= t) {
         await _checkBadgeAchievements(t);
@@ -500,35 +544,104 @@ class UserActivityService {
 
   // ============ SAVED SPOTS ============
 
+  /// In-memory saved ids. Empty until [ensureSavedSpotsLoaded] finishes.
+  static Set<String> savedSpotIdsSnapshot() =>
+      Set<String>.unmodifiable(_savedIds ?? const <String>{});
+
+  static bool isSpotSavedSync(String spotId) =>
+      _savedIds?.contains(spotId) ?? false;
+
+  /// Loads the signed-in tourist's saved ids once and reuses them after that.
+  static Future<void> ensureSavedSpotsLoaded() async {
+    final uid = await _activeUid();
+    if (_savedIds != null && _savedIdsUid == uid) return;
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList(await _scoped(_keySavedSpots)) ?? const [];
+    final unique = raw.map((id) => id.trim()).where((id) => id.isNotEmpty).toSet();
+    _savedIds = unique;
+    _savedIdsUid = uid;
+    _lastPersistedSaved = unique.toList();
+    savedSpotsRevision.value++;
+  }
+
   /// Get list of saved spot IDs
   static Future<List<String>> getSavedSpotIds() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getStringList(await _scoped(_keySavedSpots)) ?? [];
+    await ensureSavedSpotsLoaded();
+    return _savedIds!.toList();
   }
 
   /// Check if a spot is saved
   static Future<bool> isSpotSaved(String spotId) async {
-    final savedSpots = await getSavedSpotIds();
-    return savedSpots.contains(spotId);
+    await ensureSavedSpotsLoaded();
+    return _savedIds!.contains(spotId);
   }
 
-  /// Toggle save/unsave a spot
+  /// Toggle save/unsave a spot.
+  ///
+  /// The in-memory set updates before disk or Firestore so icons can repaint
+  /// immediately. A failed local write rolls that change back.
   static Future<bool> toggleSaveSpot(String spotId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final savedSpots = await getSavedSpotIds();
-    
-    bool isSaved;
-    if (savedSpots.contains(spotId)) {
-      savedSpots.remove(spotId);
-      isSaved = false;
-    } else {
-      savedSpots.add(spotId);
-      isSaved = true;
+    final id = spotId.trim();
+    if (id.isEmpty) return false;
+    if (_savedIds == null) {
+      await ensureSavedSpotsLoaded();
     }
-    
-    await prefs.setStringList(await _scoped(_keySavedSpots), savedSpots);
-    _schedulePushActivityToCloud();
-    return isSaved;
+    final cache = _savedIds!;
+    final nowSaved = !cache.contains(id);
+    if (nowSaved) {
+      cache.add(id);
+    } else {
+      cache.remove(id);
+    }
+    final generation = ++_saveGenerationClock;
+    _saveGeneration[id] = generation;
+    savedSpotsRevision.value++;
+
+    try {
+      await _enqueueSavedPersist();
+    } catch (_) {
+      // [_writeSavedCache] restores the previous set only when this write is
+      // still the latest change.
+    }
+    if (_saveGeneration[id] != generation) return nowSaved;
+    return isSpotSavedSync(id);
+  }
+
+  static Future<void> _enqueueSavedPersist() {
+    final done = _savedPersistChain.then((_) => _writeSavedCache());
+    _savedPersistChain = done.catchError((Object _) {});
+    return done;
+  }
+
+  static bool _sameIds(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    return a.toSet().containsAll(b);
+  }
+
+  static Future<void> _writeSavedCache() async {
+    var intended = List<String>.from(_savedIds ?? const <String>[]);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = await _scoped(_keySavedSpots);
+      while (true) {
+        intended = List<String>.from(_savedIds ?? const <String>[]);
+        await prefs.setStringList(key, intended);
+        final latest = List<String>.from(_savedIds ?? const <String>[]);
+        if (_sameIds(latest, intended)) {
+          _lastPersistedSaved = intended;
+          _schedulePushActivityToCloud();
+          return;
+        }
+      }
+    } catch (e) {
+      final latest = List<String>.from(_savedIds ?? const <String>[]);
+      if (_sameIds(latest, intended)) {
+        _savedIds = _lastPersistedSaved.toSet();
+        savedSpotsRevision.value++;
+      }
+      debugPrint('UserActivityService.toggleSaveSpot: $e');
+      rethrow;
+    }
   }
 
   /// Get saved spots count

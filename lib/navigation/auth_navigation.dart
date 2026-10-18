@@ -1,7 +1,11 @@
+import 'package:atmos_trs_system/navigation/login_route_args.dart';
 import 'package:flutter/material.dart';
 
 const String _kFromLoginArg = 'fromLogin';
 const String _kLoginDepthArg = 'loginDepth';
+
+/// ATMOS login Sign Up offers Tourist and Establishment only.
+const String kSignupTouristAndEstablishmentArg = 'signupTouristAndEstablishment';
 
 /// Horizontal shared-axis transition between the login and signup screens:
 /// the new screen fades in while sliding from the right, the screen under it
@@ -15,6 +19,21 @@ Route<T> authFadeRoute<T>({
     settings: RouteSettings(name: name, arguments: arguments),
     transitionDuration: const Duration(milliseconds: 460),
     reverseTransitionDuration: const Duration(milliseconds: 380),
+    pageBuilder: (context, _, __) => builder(context),
+    transitionsBuilder: _authSharedAxisTransition,
+  );
+}
+
+/// Registration → email verification. Short fade and slide so the handoff
+/// feels immediate once the verification request is accepted.
+Route<T> verificationHandoffRoute<T>({
+  required WidgetBuilder builder,
+  Object? arguments,
+}) {
+  return PageRouteBuilder<T>(
+    settings: RouteSettings(name: '/verify-otp', arguments: arguments),
+    transitionDuration: const Duration(milliseconds: 300),
+    reverseTransitionDuration: const Duration(milliseconds: 280),
     pageBuilder: (context, _, __) => builder(context),
     transitionsBuilder: _authSharedAxisTransition,
   );
@@ -71,12 +90,21 @@ int _loginDepth(BuildContext context) {
   return depth is int && depth > 0 ? depth : 1;
 }
 
-/// Login → account type chooser.
+/// Login → account type chooser, or tourist signup when opened from Trip Planner.
 void openSignupFromLogin(BuildContext context) {
+  final parsed = LoginRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
+  final touristOnly = parsed?.touristOnlySignup == true;
   Navigator.pushNamed(
     context,
-    '/signup',
-    arguments: const {_kFromLoginArg: true, _kLoginDepthArg: 1},
+    touristOnly ? '/signup-tourist' : '/signup',
+    arguments: {
+      _kFromLoginArg: true,
+      _kLoginDepthArg: 1,
+      if (parsed?.returnFeature != null)
+        LoginRouteArgs.returnFeatureKey: parsed!.returnFeature,
+      if (touristOnly) LoginRouteArgs.touristOnlySignupKey: true,
+      if (!touristOnly) kSignupTouristAndEstablishmentArg: true,
+    },
   );
 }
 

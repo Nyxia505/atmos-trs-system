@@ -11,6 +11,7 @@ class PendingLguCheckIn {
     this.maleCount = 0,
     this.filipinoCount = 0,
     this.foreignCount = 0,
+    this.originJson = '',
     this.anchorLat,
     this.anchorLng,
     this.isDemoQr = false,
@@ -25,6 +26,9 @@ class PendingLguCheckIn {
   final int maleCount;
   final int filipinoCount;
   final int foreignCount;
+
+  /// JSON from [VisitOriginBreakdown.toJson], empty on older pending scans.
+  final String originJson;
 
   /// Anchor printed on the LGU QR (`lat`/`lng`), when present.
   final double? anchorLat;
@@ -50,6 +54,7 @@ class PendingLguCheckInStorage {
   static const _kMaleCount = 'pending_lgu_checkin_male_count';
   static const _kFilipinoCount = 'pending_lgu_checkin_filipino_count';
   static const _kForeignCount = 'pending_lgu_checkin_foreign_count';
+  static const _kOriginJson = 'pending_lgu_checkin_origin_json';
   static const _kSavedAt = 'pending_lgu_checkin_saved_at';
   static const _kAnchorLat = 'pending_lgu_checkin_anchor_lat';
   static const _kAnchorLng = 'pending_lgu_checkin_anchor_lng';
@@ -97,6 +102,7 @@ class PendingLguCheckInStorage {
     required int maleCount,
     int filipinoCount = 0,
     int foreignCount = 0,
+    String originJson = '',
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final mid = prefs.getString(_kMunicipalityId)?.trim() ?? '';
@@ -106,6 +112,11 @@ class PendingLguCheckInStorage {
     await prefs.setInt(_kMaleCount, maleCount < 0 ? 0 : maleCount);
     await prefs.setInt(_kFilipinoCount, filipinoCount < 0 ? 0 : filipinoCount);
     await prefs.setInt(_kForeignCount, foreignCount < 0 ? 0 : foreignCount);
+    if (originJson.trim().isEmpty) {
+      await prefs.remove(_kOriginJson);
+    } else {
+      await prefs.setString(_kOriginJson, originJson);
+    }
   }
 
   static Future<PendingLguCheckIn?> peek() async {
@@ -130,6 +141,7 @@ class PendingLguCheckInStorage {
       maleCount: males < 0 ? 0 : males,
       filipinoCount: filipinos < 0 ? 0 : filipinos,
       foreignCount: foreigners < 0 ? 0 : foreigners,
+      originJson: prefs.getString(_kOriginJson) ?? '',
       anchorLat: prefs.getDouble(_kAnchorLat),
       anchorLng: prefs.getDouble(_kAnchorLng),
       isDemoQr: prefs.getBool(_kIsDemoQr) ?? false,
@@ -145,6 +157,7 @@ class PendingLguCheckInStorage {
     await prefs.remove(_kMaleCount);
     await prefs.remove(_kFilipinoCount);
     await prefs.remove(_kForeignCount);
+    await prefs.remove(_kOriginJson);
     await prefs.remove(_kSavedAt);
     await prefs.remove(_kAnchorLat);
     await prefs.remove(_kAnchorLng);

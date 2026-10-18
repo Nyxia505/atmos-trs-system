@@ -4,17 +4,17 @@ import 'package:atmos_trs_system/services/spot_review_service.dart';
 import 'package:flutter/material.dart';
 
 /// Bottom sheet for writing or editing a spot review.
-Future<bool?> showWriteSpotReviewSheet({
+Future<SpotReview?> showWriteSpotReviewSheet({
   required BuildContext context,
   required String spotId,
   required String spotName,
   SpotReview? existing,
 }) {
-  return showModalBottomSheet<bool>(
+  return showModalBottomSheet<SpotReview>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
-    backgroundColor: Colors.white,
+    backgroundColor: AppTheme.cardBackground,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
     ),
@@ -71,24 +71,29 @@ class _WriteSpotReviewSheetState extends State<_WriteSpotReviewSheet> {
       spotName: widget.spotName,
       rating: _rating,
       comment: _commentController.text,
+      existing: widget.existing,
     );
 
     if (!mounted) return;
-    setState(() => _submitting = false);
 
     switch (result) {
-      case SpotReviewSuccess():
-        Navigator.pop(context, true);
-        ScaffoldMessenger.of(context).showSnackBar(
+      case SpotReviewSuccess(:final review):
+        final messenger = ScaffoldMessenger.of(context);
+        messenger.showSnackBar(
           SnackBar(
             content: Text(
-              widget.existing != null ? 'Review updated' : 'Review posted',
+              widget.existing != null
+                  ? 'Review updated successfully!'
+                  : 'Review submitted successfully!',
             ),
             backgroundColor: AppTheme.primary,
             behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
           ),
         );
+        Navigator.pop(context, review);
       case SpotReviewFailure(:final message):
+        setState(() => _submitting = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(message),
@@ -145,7 +150,9 @@ class _WriteSpotReviewSheetState extends State<_WriteSpotReviewSheet> {
             children: List.generate(5, (i) {
               final star = i + 1;
               return IconButton(
-                onPressed: () => setState(() => _rating = star.toDouble()),
+                onPressed: _submitting
+                    ? null
+                    : () => setState(() => _rating = star.toDouble()),
                 icon: Icon(
                   star <= _rating ? Icons.star_rounded : Icons.star_outline_rounded,
                   color: accent,
@@ -160,10 +167,12 @@ class _WriteSpotReviewSheetState extends State<_WriteSpotReviewSheet> {
             minLines: 3,
             maxLines: 6,
             maxLength: 500,
+            readOnly: _submitting,
+            style: TextStyle(color: AppTheme.textPrimary),
             decoration: InputDecoration(
               hintText: 'Share your experience at this spot…',
               filled: true,
-              fillColor: const Color(0xFFF8FAFC),
+              fillColor: AppTheme.surfaceMuted,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(14),
                 borderSide: BorderSide.none,
@@ -173,7 +182,7 @@ class _WriteSpotReviewSheetState extends State<_WriteSpotReviewSheet> {
           const SizedBox(height: 8),
           Text(
             'You can review after scanning the QR code to check in here.',
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            style: TextStyle(fontSize: 12, color: AppTheme.unselectedMuted),
           ),
           const SizedBox(height: 16),
           FilledButton(
@@ -187,10 +196,13 @@ class _WriteSpotReviewSheetState extends State<_WriteSpotReviewSheet> {
               ),
             ),
             child: _submitting
-                ? const SizedBox(
+                ? SizedBox(
                     width: 22,
                     height: 22,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppTheme.onPrimary,
+                    ),
                   )
                 : Text(widget.existing != null ? 'Update review' : 'Post review'),
           ),

@@ -20,6 +20,22 @@ const String kAndroidApkDownloadUrl =
 
 bool get kHasAndroidApkDownload => kAndroidApkDownloadUrl.trim().isNotEmpty;
 
+/// Trip Planner Android APK. Leave empty until a file is hosted.
+/// Do not invent a URL.
+const String kTripPlannerApkDownloadUrl = '';
+
+bool get kHasTripPlannerApkDownload =>
+    kTripPlannerApkDownloadUrl.trim().isNotEmpty;
+
+/// Opens the hosted Trip Planner APK. Returns false when no URL is configured.
+Future<bool> openTripPlannerApkDownload() async {
+  final raw = kTripPlannerApkDownloadUrl.trim();
+  if (raw.isEmpty) return false;
+  final uri = Uri.tryParse(raw);
+  if (uri == null || !uri.hasScheme) return false;
+  return launchUrl(uri, mode: LaunchMode.externalApplication);
+}
+
 /// Play Store URL with install referrer so first open can resume the scanned QR.
 String googlePlayStoreUrlWithQrReferrer(String? checkInUrl) {
   final base = Uri.parse(kGooglePlayStoreAppUrl);

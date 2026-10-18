@@ -465,13 +465,75 @@ class TouristSpotsFirestoreService {
     );
   }
 
-  /// Update an existing spot by id.
+  /// Last user-facing reason [updateSpot] failed. Cleared on the next attempt.
+  static String? lastUpdateError;
+
+  /// Update an existing spot by id. Falls back to [updateLguTouristSpot] when
+  /// Firestore rules block the signed-in LGU write.
   static Future<bool> updateSpot(String id, Map<String, dynamic> fields) async {
-    if (!_isFirebaseInitialized || id.isEmpty) return false;
+    lastUpdateError = null;
+    if (!_isFirebaseInitialized || id.isEmpty) {
+      lastUpdateError = 'Firebase is not initialized. Restart the app and try again.';
+      return false;
+    }
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      lastUpdateError = 'Your session expired. Please sign in again.';
+      return false;
+    }
+    try {
+      await user.getIdToken(true);
+    } catch (e) {
+      debugPrint('[TouristSpots] update getIdToken failed: $e');
+      lastUpdateError = 'Could not refresh your login. Please sign in again.';
+      return false;
+    }
+
     try {
       await _firestore.collection(_collectionId).doc(id).update(fields);
       return true;
-    } catch (_) {
+    } on FirebaseException catch (e) {
+      debugPrint('[TouristSpots] updateSpot ${e.code} ${e.message}');
+      if (e.code == 'permission-denied') {
+        final viaCf = await _updateSpotViaCloudFunction(id, fields);
+        if (viaCf) return true;
+      }
+      lastUpdateError = _friendlyFirestoreWriteError(e);
+      return false;
+    } catch (e) {
+      debugPrint('[TouristSpots] updateSpot failed: $e');
+      final viaCf = await _updateSpotViaCloudFunction(id, fields);
+      if (viaCf) return true;
+      lastUpdateError = 'Could not update tourist spot. $e';
+      return false;
+    }
+  }
+
+  static Future<bool> _updateSpotViaCloudFunction(
+    String id,
+    Map<String, dynamic> fields,
+  ) async {
+    try {
+      final callable = FirebaseFunctions.instanceFor(region: 'asia-southeast1')
+          .httpsCallable(
+        'updateLguTouristSpot',
+        options: HttpsCallableOptions(timeout: const Duration(seconds: 30)),
+      );
+      final payload = <String, dynamic>{'spotId': id, ...fields};
+      payload.removeWhere((key, value) => value is FieldValue);
+      await callable.call<Map<String, dynamic>>(payload);
+      lastUpdateError = null;
+      return true;
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint('[TouristSpots] updateLguTouristSpot CF: ${e.code} ${e.message}');
+      lastUpdateError = e.message?.trim().isNotEmpty == true
+          ? e.message!.trim()
+          : 'Cloud Function error [${e.code}]. Deploy updateLguTouristSpot if this keeps failing.';
+      return false;
+    } catch (e) {
+      debugPrint('[TouristSpots] updateLguTouristSpot CF failed: $e');
+      lastUpdateError =
+          'Permission denied and Cloud Function fallback failed. Deploy updateLguTouristSpot / firestore.rules. ($e)';
       return false;
     }
   }
@@ -489,14 +551,16 @@ class TouristSpotsFirestoreService {
     if (mid.isEmpty) return false;
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return false;
+    double? lat = latitude;
+    double? lng = longitude;
     try {
       await user.getIdToken(true);
       final ref = _firestore.collection(_collectionId).doc(spotId.trim());
       final snap = await ref.get();
       if (!snap.exists) return false;
       final data = snap.data() ?? <String, dynamic>{};
-      final lat = latitude ?? (data['latitude'] as num?)?.toDouble();
-      final lng = longitude ?? (data['longitude'] as num?)?.toDouble();
+      lat ??= (data['latitude'] as num?)?.toDouble();
+      lng ??= (data['longitude'] as num?)?.toDouble();
       await ref.set({
         'qrValue': spotId.trim(),
         'qr_payload': spotQrData(
@@ -513,6 +577,20 @@ class TouristSpotsFirestoreService {
       return true;
     } catch (e) {
       debugPrint('[TouristSpots] ensureSpotQrMetadata failed: $e');
+      if (e is FirebaseException && e.code == 'permission-denied') {
+        return _updateSpotViaCloudFunction(spotId.trim(), {
+          'qrValue': spotId.trim(),
+          'qr_payload': spotQrData(
+            mid,
+            spotId.trim(),
+            latitude: lat,
+            longitude: lng,
+          ),
+          'municipalityId': mid,
+          if (lat != null) 'latitude': lat,
+          if (lng != null) 'longitude': lng,
+        });
+      }
       return false;
     }
   }

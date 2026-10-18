@@ -9,6 +9,7 @@ import 'package:atmos_trs_system/utils/mice_report_query.dart';
 import 'package:atmos_trs_system/utils/checkin_report_summary_csv.dart';
 import 'package:atmos_trs_system/utils/checkin_visitor_expansion.dart';
 import 'package:atmos_trs_system/utils/dae3_aggregates.dart';
+import 'package:atmos_trs_system/utils/dae1b2_template_fill.dart';
 import 'package:atmos_trs_system/utils/dot_report_preview.dart';
 import 'package:atmos_trs_system/utils/ae_register_report_query.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
@@ -118,6 +119,17 @@ class DotReportExportService {
       );
     }
 
+    if (form.id == 'dae1b2' || form.id == 'dae1b2_domestic') {
+      return _fillOfficialDae1b2(
+        form: form,
+        register: aeRegister,
+        scopeLabel: scopeLabel,
+        scopeSlug: scopeSlug,
+        startDate: startDate,
+        endDate: endDate,
+      );
+    }
+
     final preview = buildDotReportPreview(
       form: form,
       startDate: startDate,
@@ -194,17 +206,6 @@ class DotReportExportService {
           templateBytes: templateBytes,
           filtered: enriched,
           register: aeRegister,
-          scopeLabel: scopeLabel,
-          scopeSlug: scopeSlug,
-          startDate: startDate,
-          endDate: endDate,
-        );
-      case DotReportType.dae3b2Domestic when aeRegister.isEmpty:
-        final templateBytes = await fetchTemplateBytes(type.publicUrl);
-        return _fillDae3b2Domestic(
-          templateBytes: templateBytes,
-          filtered: enriched,
-          touristById: touristById,
           scopeLabel: scopeLabel,
           scopeSlug: scopeSlug,
           startDate: startDate,
@@ -530,6 +531,64 @@ class DotReportExportService {
     _writeRow(b, 33, ['', '', 'Name of Tourism Officer', '', '', '', '', '', '', '', 'Mayor']);
   }
 
+  Future<DotReportExportResult> _fillOfficialDae1b2({
+    required DotFormCatalogEntry form,
+    required AeRegisterReportData register,
+    required String scopeLabel,
+    required String scopeSlug,
+    required DateTime startDate,
+    required DateTime endDate,
+  }) async {
+    List<int>? bytes;
+    try {
+      final data = await rootBundle.load('forms_format/${form.localFilename}');
+      bytes = data.buffer.asUint8List().toList();
+    } catch (_) {}
+    if (bytes == null) {
+      try {
+        bytes = await fetchTemplateBytes(form.publicUrl);
+      } catch (_) {}
+    }
+    final s =
+        '${startDate.year}${startDate.month.toString().padLeft(2, '0')}${startDate.day.toString().padLeft(2, '0')}';
+    final e =
+        '${endDate.year}${endDate.month.toString().padLeft(2, '0')}${endDate.day.toString().padLeft(2, '0')}';
+    final slug = scopeSlug.trim().isEmpty ? 'report' : scopeSlug.trim();
+    if (bytes == null) {
+      final preview = buildDotReportPreview(
+        form: form,
+        startDate: startDate,
+        endDate: endDate,
+        checkIns: const [],
+        tourists: const [],
+        catalogSpots: const [],
+        scopeLabel: scopeLabel,
+        aeRegister: register,
+      );
+      return _workbookFromPreview(
+        form: form,
+        preview: preview,
+        scopeLabel: scopeLabel,
+        scopeSlug: scopeSlug,
+        startDate: startDate,
+        endDate: endDate,
+      );
+    }
+    final filled = Dae1b2TemplateFill.fill(
+      templateBytes: bytes,
+      register: register,
+      scopeLabel: scopeLabel,
+      withAeSheet: form.id == 'dae1b2_domestic',
+    );
+    return DotReportExportResult(
+      bytes: filled.bytes,
+      filename: 'DAE1B2_${form.id}_${slug}_${s}_$e.xlsx',
+      gaps: filled.gaps,
+      summary: filled.summary,
+      checkInsProcessed: filled.arrivals,
+    );
+  }
+
   DotReportExportResult _workbookFromPreview({
     required DotFormCatalogEntry form,
     required DotReportPreviewTable preview,
@@ -802,11 +861,13 @@ class DotReportExportService {
     }
 
     final fromRegister = register.isNotEmpty;
-    final rows = aggregateDae3PreferringRegister(
-      reports: register.reports,
-      checkIns: filtered,
-      scopeLabel: scopeLabel,
-    );
+    final rows = fromRegister
+        ? aggregateDae3PreferringRegister(
+            reports: register.reports,
+            checkIns: const [],
+            scopeLabel: scopeLabel,
+          )
+        : const <Dae3AggregateRow>[];
 
     const first = 3;
     const last = 43;
@@ -835,10 +896,8 @@ class DotReportExportService {
         'Type/class = register classification code (else AE type); rooms available = AE total rooms.',
         'Guests = check-ins; guest nights = Σ register guests; rooms occupied = register rows.',
       ] else ...[
-        'No hotel DOT register months in range — filled from QR check-ins as labeled proxy.',
-        'AE-ID uses tourist spot name as proxy — not accommodation_establishments registry.',
-        'Google Form / http(s) spot labels are excluded from AE-ID rows.',
-        'Total rooms available left blank (no hotel register in range).',
+        'No hotel DOT register months in range. Attraction QR visits are not used on DAE-3.',
+        'Hotels file the Daily Register on the establishment dashboard.',
       ],
       'Base file: ${DotReportType.dae3FormA.objectFilename} (Supabase bucket "${SupabaseReportTemplatesConfig.bucket}").',
       if (rows.length > capacity)
@@ -856,11 +915,14 @@ class DotReportExportService {
       gaps: gapList,
       summary: fromRegister
           ? 'DAE-3 filled from ${register.reports.length} hotel register month(s) (${written.length} rows)'
-          : 'DAE-3 filled from ${filtered.length} check-ins (${written.length} rows)',
-      checkInsProcessed: fromRegister ? register.combined.checkIns : filtered.length,
+          : 'DAE-3 is waiting for hotel DOT register months (0 rows)',
+      checkInsProcessed: fromRegister ? register.combined.checkIns : 0,
     );
   }
 
+  // Kept so older call sites can be traced; DAE 3B.2 with no register
+  // now exports the gap preview instead of QR rows.
+  // ignore: unused_element
   DotReportExportResult _fillDae3b2Domestic({
     required List<int> templateBytes,
     required List<Map<String, dynamic>> filtered,

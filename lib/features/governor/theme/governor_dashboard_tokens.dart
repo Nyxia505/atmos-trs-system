@@ -6,7 +6,7 @@ abstract final class GovernorDashboardTokens {
   static const Color primary = Color(0xFFF97316);
   static const Color primarySecondary = Color(0xFFFB923C);
   static const Color primaryDark = Color(0xFFEA580C);
-  static const Color background = Color(0xFFF8FAFC);
+  static const Color background = Color(0xFFF5F7FA);
   static const Color card = Color(0xFFFFFFFF);
   static const Color border = Color(0xFFE5E7EB);
   static const Color success = Color(0xFF22C55E);
@@ -43,12 +43,12 @@ abstract final class GovernorDashboardTokens {
     stops: [0.0, 0.55, 1.0],
   );
 
-  static const double radiusCard = 24;
+  static const double radiusCard = 20;
   static const double radiusLg = 20;
   static const double radiusMd = 16;
   static const double radiusSm = 12;
 
-  static const double sidebarExpanded = 268;
+  static const double sidebarExpanded = 240;
   static const double sidebarCollapsed = 72;
 
   static List<BoxShadow> get cardShadow => [

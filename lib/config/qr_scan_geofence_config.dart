@@ -51,6 +51,11 @@ const String kQrScreenPreviewParam = 'preview';
 /// Scans farther than this from the spot are refused.
 const double kQrScanSpotMaxDistanceMeters = 50.0;
 
+/// Oroquieta City Plaza grounds. Flagpole, seawall, food court, and food
+/// bazaar are one site: a pin on any of them still allows check-in at the
+/// others. Farther than this (another barangay, or at home) is still refused.
+const double kQrScanPlazaGroundsMaxDistanceMeters = 800.0;
+
 /// "QR near you" radius: when the app opens within this distance of a spot,
 /// the tourist gets a nearby notification (meters).
 const double kNearbySpotNotifyRadiusMeters = 1000.0;

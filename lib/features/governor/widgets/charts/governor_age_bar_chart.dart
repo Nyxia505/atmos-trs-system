@@ -36,11 +36,11 @@ class GovernorAgeBarChart extends StatelessWidget {
 
     return ChartTransition(
       swapKey: Object.hashAll([for (final r in series) r.label]),
-      builder: (context, progress) => _chart(totals, maxY, progress),
+      builder: (context, progress) => _chart(totals, sum, maxY, progress),
     );
   }
 
-  Widget _chart(List<int> totals, double maxY, double progress) {
+  Widget _chart(List<int> totals, int sum, double maxY, double progress) {
     return BarChart(
       BarChartData(
         maxY: maxY * 1.2,
@@ -54,12 +54,29 @@ class GovernorAgeBarChart extends StatelessWidget {
         ),
         borderData: FlBorderData(show: false),
         titlesData: FlTitlesData(
-          topTitles:
-              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           rightTitles:
               const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           leftTitles:
               const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          topTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: dense ? 16 : 18,
+              getTitlesWidget: (value, meta) {
+                final i = value.toInt();
+                if (sum == 0 || i < 0 || i >= totals.length) {
+                  return const SizedBox.shrink();
+                }
+                final pct = (totals[i] / sum * 100).round();
+                return Text(
+                  '$pct%',
+                  style: GovernorDashboardTokens.body(
+                    size: dense ? 9 : 10,
+                  ).copyWith(fontWeight: FontWeight.w700),
+                );
+              },
+            ),
+          ),
           bottomTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,

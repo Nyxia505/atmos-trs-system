@@ -61,7 +61,7 @@ class CategoryChips extends StatelessWidget {
                   duration: const Duration(milliseconds: 200),
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                   decoration: BoxDecoration(
-                    color: isSelected ? AppTheme.primary : Colors.white,
+                    color: isSelected ? AppTheme.primary : AppTheme.cardBackground,
                     borderRadius: BorderRadius.circular(_kChipRadius),
                     boxShadow: isSelected
                         ? null
@@ -79,7 +79,7 @@ class CategoryChips extends StatelessWidget {
                       Icon(
                         chip.icon,
                         size: 22,
-                        color: isSelected ? Colors.white : AppTheme.unselectedMuted,
+                        color: isSelected ? AppTheme.onPrimary : AppTheme.textPrimary,
                       ),
                       const SizedBox(width: 10),
                       Text(
@@ -87,7 +87,7 @@ class CategoryChips extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
-                          color: isSelected ? Colors.white : AppTheme.unselectedMuted,
+                          color: isSelected ? AppTheme.onPrimary : AppTheme.textPrimary,
                         ),
                       ),
                     ],

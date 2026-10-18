@@ -11,7 +11,9 @@ import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/navigation/role_router.dart';
 import 'package:atmos_trs_system/navigation/pending_checkin_navigation.dart';
+import 'package:atmos_trs_system/navigation/landing_intent_navigation.dart';
 import 'package:atmos_trs_system/services/landing_intent_service.dart';
+import 'package:atmos_trs_system/services/auth_service.dart';
 import 'package:atmos_trs_system/services/otp_delivery_service.dart';
 import 'package:atmos_trs_system/services/announcement_notification_sync.dart';
 import 'package:atmos_trs_system/services/tourist_activity_firestore_sync.dart';
@@ -44,6 +46,7 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
   final List<FocusNode> _digitFocusNodes = [];
   bool _submitting = false;
   bool _resending = false;
+  bool _checkingEmailVerified = false;
   bool _autoResendAttempted = false;
   bool _forceResendOnEntry = false;
   bool _otpAlreadySentFromSignup = false;
@@ -214,8 +217,6 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
           ? false
           : await OtpService.hasActiveOtp(otpKey);
       if (!hasActive && !forceResend && otpAlreadySent) {
-        await Future<void>.delayed(const Duration(milliseconds: 400));
-        if (!mounted) return;
         hasActive = await OtpService.hasActiveOtp(otpKey);
       }
       if (!mounted) return;
@@ -254,8 +255,6 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
         : await OtpService.hasActiveOtp(user.uid);
     // Brief retry — Firestore may lag right after signup save.
     if (!hasActive && !forceResend && otpAlreadySent) {
-      await Future<void>.delayed(const Duration(milliseconds: 400));
-      if (!mounted) return;
       hasActive = await OtpService.hasActiveOtp(user.uid);
     }
     if (!mounted) return;
@@ -391,10 +390,22 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
   }
 
   Future<void> _navigateAfterTouristVerification(String route) async {
+    final intent = await LandingIntentService.peek();
+    if (intent != null &&
+        intent.isItinerary &&
+        route == '/dashboard') {
+      await LandingIntentService.clear();
+      if (!mounted) return;
+      await LandingIntentNavigation.openPlanner(context);
+      return;
+    }
+
     // After signup/OTP on the installed app: go straight to dashboard.
     // Clear VR / Trip Planner landing intent so it does not open instead.
     await LandingIntentService.clear();
 
+    if (!mounted) return;
+    if (await openQrDestinationIfPending(context)) return;
     if (!mounted) return;
     await navigateToPendingSpotCheckInOrDashboard(
       context,
@@ -552,9 +563,9 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
     return KeyEventResult.ignored;
   }
 
-  Future<void> _submit() async {
+  Future<void> _submit({bool firebaseEmailVerified = false}) async {
     final code = _otpController.text.replaceAll(RegExp(r'\D'), '');
-    if (code.length != 6) {
+    if (!firebaseEmailVerified && code.length != 6) {
       _snack('Enter the 6-digit code.', isError: true);
       return;
     }
@@ -659,14 +670,27 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
         await user.getIdToken(true);
       } catch (_) {}
 
-      final outcome =
-          await OtpService.verifyOtp(uid: user.uid, enteredOtp: code);
-      if (!outcome.ok) {
-        setState(() {
-          _submitting = false;
-        });
-        _snack(outcome.message ?? 'Verification failed.', isError: true);
-        return;
+      if (firebaseEmailVerified) {
+        final confirmed = await AuthService.reloadAndCheckEmailVerified()
+            .timeout(const Duration(seconds: 12));
+        if (!confirmed) {
+          setState(() => _submitting = false);
+          _snack(
+            'Firebase still shows this email as unverified. Open the verification message, then try again, or enter the 6-digit code.',
+            isError: true,
+          );
+          return;
+        }
+      } else {
+        final outcome =
+            await OtpService.verifyOtp(uid: user.uid, enteredOtp: code);
+        if (!outcome.ok) {
+          setState(() {
+            _submitting = false;
+          });
+          _snack(outcome.message ?? 'Verification failed.', isError: true);
+          return;
+        }
       }
 
       final email = _deliveryEmailFor(user);
@@ -1042,24 +1066,18 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
       final otp = OtpService.generateSixDigitOtp();
       await OtpService.saveOtp(uid: user.uid, email: email, otp: otp);
       debugPrint('[OTP] resend: saved new code to Firestore for uid=${user.uid}');
+      unawaited(() async {
+        try {
+          await AuthService.sendEmailVerification();
+        } catch (e, st) {
+          debugPrint('[OTP] Firebase verification email: $e\n$st');
+        }
+      }());
 
       final pending = PendingRegistrationCache.forUid(user.uid);
-      final profile = await UserDirectoryService.getProfileByUid(user.uid);
-      final name = pending?.touristData['fullName']?.toString().trim() ??
-          (profile?.fullName?.trim().isNotEmpty == true
-              ? profile!.fullName!.trim()
-              : email.split('@').first);
-
-      var mobile = pending?.touristData['mobile']?.toString().trim() ?? '';
-      if (mobile.isEmpty && Firebase.apps.isNotEmpty) {
-        try {
-          final tourist = await FirebaseFirestore.instance
-              .collection('tourists')
-              .doc(user.uid)
-              .get();
-          mobile = tourist.data()?['mobile']?.toString().trim() ?? '';
-        } catch (_) {}
-      }
+      final pendingName = pending?.touristData['fullName']?.toString().trim() ?? '';
+      final name = pendingName.isNotEmpty ? pendingName : email.split('@').first;
+      final mobile = pending?.touristData['mobile']?.toString().trim() ?? '';
 
       final delivery = await OtpDeliveryService.deliverVerificationCode(
         uid: user.uid,
@@ -1115,6 +1133,16 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
       }
       // OTP is saved even when email fails — allow UI to treat resend as usable.
       return delivery.canCompleteRegistration;
+    } on FirebaseAuthException catch (e) {
+      if (mounted && showDeliverySnack) {
+        final msg = e.code == 'too-many-requests'
+            ? 'Too many emails were requested. Wait a minute, then resend.'
+            : e.code == 'network-request-failed'
+                ? 'Network error while sending the email. Try again.'
+                : 'Could not resend verification: ${e.message ?? e.code}';
+        _snack(msg, isError: true);
+      }
+      return false;
     } on FirebaseException catch (e) {
       if (mounted) {
         final msg = _formatFirestoreFailure(e);
@@ -1927,8 +1955,61 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
         t.contains('not delivered');
   }
 
+  Future<void> _onIveVerifiedMyEmail() async {
+    if (_checkingEmailVerified || _submitting || _resending) return;
+    final deferred = _pendingTourist();
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      _snack(
+        deferred != null
+            ? 'Enter the 6-digit code from your email. Your account is created after that code is confirmed.'
+            : 'Your session expired. Register again, then open the verification email.',
+        isError: true,
+      );
+      return;
+    }
+    setState(() => _checkingEmailVerified = true);
+    try {
+      final verified = await AuthService.reloadAndCheckEmailVerified()
+          .timeout(const Duration(seconds: 12));
+      if (!mounted) return;
+      if (!verified) {
+        _snack(
+          'Firebase still shows this email as unverified. Open the verification message, then try again, or enter the 6-digit code.',
+          isError: true,
+        );
+        return;
+      }
+      await _submit(firebaseEmailVerified: true);
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      if (e.code == 'too-many-requests') {
+        _snack(
+          'Too many verification checks. Wait a moment, then try again.',
+          isError: true,
+        );
+      } else if (e.code == 'network-request-failed') {
+        _snack('Network error while checking verification. Try again.', isError: true);
+      } else if (e.code == 'user-token-expired' || e.code == 'user-not-found') {
+        _snack('Your session expired. Log in again to finish verification.', isError: true);
+      } else {
+        _snack('Could not check verification: ${e.message ?? e.code}', isError: true);
+      }
+    } on TimeoutException {
+      if (mounted) {
+        _snack('Network timed out while checking verification. Try again.', isError: true);
+      }
+    } catch (e) {
+      if (mounted) {
+        _snack('Could not check verification. Check your connection and try again.', isError: true);
+      }
+    } finally {
+      if (mounted) setState(() => _checkingEmailVerified = false);
+    }
+  }
+
   Widget _buildResendRow() {
-    final canResend = !_resending && _cooldown <= 0;
+    final canResend = !_resending && _cooldown <= 0 && !_checkingEmailVerified;
     return Wrap(
       alignment: WrapAlignment.center,
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -1960,13 +2041,31 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
             child: Text(
-              _resending ? 'Sending…' : 'Resend Code',
+              _resending ? 'Sending…' : 'Resend Verification Email',
               style: const TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
               ),
             ),
           ),
+        TextButton(
+          onPressed: (_checkingEmailVerified || _submitting || _resending)
+              ? null
+              : _onIveVerifiedMyEmail,
+          style: TextButton.styleFrom(
+            foregroundColor: _verifyOrange,
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            minimumSize: Size.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          child: Text(
+            _checkingEmailVerified ? 'Checking…' : "I've Verified My Email",
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
       ],
     );
   }

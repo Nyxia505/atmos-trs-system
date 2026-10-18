@@ -110,4 +110,19 @@ class SpotReviewSummary {
     averageRating: 0,
     reviewCount: 0,
   );
+
+  /// Returns a summary that includes [review], replacing this user's older one.
+  SpotReviewSummary withReview(SpotReview review) {
+    final next = [
+      review,
+      ...reviews.where((item) => item.userId != review.userId),
+    ];
+    final average = next.map((item) => item.rating).reduce((a, b) => a + b) /
+        next.length;
+    return SpotReviewSummary(
+      reviews: next,
+      averageRating: average,
+      reviewCount: next.length,
+    );
+  }
 }

@@ -87,7 +87,7 @@ class TouristTutorial {
         title: 'Welcome to ATMOS!',
         body: 'Take a quick tour to learn what to tap and where to find '
             'things in Misamis Occidental, including VR tours.',
-        primaryLabel: 'Start tour',
+        primaryLabel: 'Next',
         icon: Icons.waving_hand_rounded,
       ),
       CoachStep(

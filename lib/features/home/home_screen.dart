@@ -1,7 +1,8 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'dart:async' show unawaited;
+import 'package:flutter/rendering.dart';
+import 'dart:async' show Timer, unawaited;
 import 'dart:convert';
 import 'package:atmos_trs_system/config/user_profile_storage.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
@@ -35,6 +36,7 @@ import 'package:atmos_trs_system/data/featured_destinations.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_display_spots.dart';
 import 'package:atmos_trs_system/data/tourist_spot_image_catalog.dart';
 import 'package:atmos_trs_system/widgets/recent_reviews_section.dart';
+import 'package:atmos_trs_system/widgets/save_spot_notice.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:atmos_trs_system/utils/visit_record_image_resolver.dart';
 import 'package:atmos_trs_system/services/tourist_activity_firestore_sync.dart';
@@ -43,6 +45,7 @@ import 'package:atmos_trs_system/features/home/widgets/earned_badges_page.dart';
 import 'package:atmos_trs_system/widgets/tourist_full_page.dart';
 import 'package:atmos_trs_system/features/navigation/tourist_tutorial.dart';
 import 'package:atmos_trs_system/utils/maps_directions_launcher.dart';
+import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 
 const double _kHomeCenterPanelMaxWidth = 480;
@@ -62,6 +65,427 @@ class _FeaturedCarouselScrollBehavior extends MaterialScrollBehavior {
     PointerDeviceKind.stylus,
     PointerDeviceKind.trackpad,
   };
+}
+
+const Duration _kDiscoverSlideDuration = Duration(milliseconds: 500);
+const Duration _kDiscoverSlideInterval = Duration(seconds: 4);
+const Duration _kDiscoverResumeDelay = Duration(seconds: 5);
+
+/// Lets the tutorial move the Discover carousel without owning its timer.
+class DiscoverCarouselHandle {
+  int logicalIndex = 0;
+  void Function(int logicalIndex)? animateToLogical;
+}
+
+class DiscoverFeaturedCarousel extends StatefulWidget {
+  const DiscoverFeaturedCarousel({
+    super.key,
+    required this.items,
+    required this.compact,
+    required this.handle,
+    required this.cardBuilder,
+    this.tourKey,
+  });
+
+  final List<Map<String, dynamic>> items;
+  final bool compact;
+  final DiscoverCarouselHandle handle;
+  final Widget Function(Map<String, dynamic> destination) cardBuilder;
+  final Key? tourKey;
+
+  @override
+  State<DiscoverFeaturedCarousel> createState() => _DiscoverFeaturedCarouselState();
+}
+
+class _DiscoverFeaturedCarouselState extends State<DiscoverFeaturedCarousel>
+    with WidgetsBindingObserver {
+  late final PageController _controller;
+  Timer? _autoTimer;
+  Timer? _resumeTimer;
+  int _logicalIndex = 0;
+  bool _tickerOn = true;
+  bool _appResumed = true;
+  bool _interactionPaused = false;
+  bool _userDrag = false;
+
+  int get _destinationCount => widget.items.length;
+
+  int get _originPage =>
+      _destinationCount <= 1 ? 0 : _destinationCount * 50;
+
+  int get _pageCount =>
+      _destinationCount <= 1 ? _destinationCount : _destinationCount * 100;
+
+  int _logicalOf(int page) {
+    final count = _destinationCount;
+    if (count <= 0) return 0;
+    final mod = page % count;
+    return mod < 0 ? mod + count : mod;
+  }
+
+  bool _sameDestinations(
+    List<Map<String, dynamic>> a,
+    List<Map<String, dynamic>> b,
+  ) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i]['spotId'] != b[i]['spotId']) return false;
+    }
+    return true;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _appResumed =
+        lifecycle == null || lifecycle == AppLifecycleState.resumed;
+    _controller = PageController(
+      initialPage: _originPage,
+      viewportFraction: 0.85,
+    );
+    widget.handle.logicalIndex = 0;
+    widget.handle.animateToLogical = _animateToLogical;
+    _startAuto();
+  }
+
+  @override
+  void didUpdateWidget(covariant DiscoverFeaturedCarousel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    widget.handle.animateToLogical = _animateToLogical;
+    if (_sameDestinations(oldWidget.items, widget.items)) return;
+    _logicalIndex = 0;
+    widget.handle.logicalIndex = 0;
+    _interactionPaused = false;
+    _resumeTimer?.cancel();
+    if (_controller.hasClients && _destinationCount > 0) {
+      _controller.jumpToPage(_originPage);
+    }
+    _startAuto();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final on = TickerMode.valuesOf(context).enabled;
+    if (on == _tickerOn) return;
+    _tickerOn = on;
+    if (on) {
+      _startAuto();
+    } else {
+      _autoTimer?.cancel();
+      _autoTimer = null;
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appResumed = state == AppLifecycleState.resumed;
+    if (_appResumed) {
+      _startAuto();
+    } else {
+      _autoTimer?.cancel();
+      _autoTimer = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _autoTimer?.cancel();
+    _resumeTimer?.cancel();
+    if (widget.handle.animateToLogical == _animateToLogical) {
+      widget.handle.animateToLogical = null;
+    }
+    WidgetsBinding.instance.removeObserver(this);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _startAuto() {
+    _autoTimer?.cancel();
+    if (!mounted ||
+        _destinationCount < 2 ||
+        !_tickerOn ||
+        !_appResumed ||
+        _interactionPaused) {
+      _autoTimer = null;
+      return;
+    }
+    _autoTimer = Timer.periodic(_kDiscoverSlideInterval, (_) => _tick());
+  }
+
+  void _tick() {
+    if (!mounted || _interactionPaused || !_tickerOn || !_appResumed) return;
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return;
+    if (!_isEffectivelyVisible()) return;
+    if (!_controller.hasClients) return;
+    if (_controller.position.isScrollingNotifier.value) return;
+    _advance();
+  }
+
+  bool _isEffectivelyVisible() {
+    final render = context.findRenderObject();
+    if (render is! RenderBox || !render.attached || !render.hasSize) {
+      return false;
+    }
+    RenderObject? node = render;
+    while (node != null) {
+      if (node is RenderOffstage && node.offstage) return false;
+      final parent = node.parent;
+      if (parent is RenderIndexedStack) {
+        final shown = _shownIndexedChild(parent);
+        if (shown == null) return false;
+        RenderObject? cursor = render;
+        while (cursor != null && !identical(cursor, parent)) {
+          if (identical(cursor, shown)) return true;
+          cursor = cursor.parent;
+        }
+        return false;
+      }
+      node = parent;
+    }
+    return true;
+  }
+
+  RenderBox? _shownIndexedChild(RenderIndexedStack stack) {
+    final index = stack.index;
+    if (index == null) return null;
+    RenderBox? child = stack.firstChild;
+    for (var i = 0; i < index && child != null; i++) {
+      child = stack.childAfter(child);
+    }
+    return child;
+  }
+
+  void _advance() {
+    final current = _controller.page?.round() ?? _originPage;
+    final last = _pageCount - 1;
+    if (current >= last) {
+      final logical = _logicalOf(current);
+      final reset = _originPage + logical;
+      _controller.jumpToPage(reset);
+      _controller.animateToPage(
+        reset + 1,
+        duration: _kDiscoverSlideDuration,
+        curve: Curves.easeInOutCubic,
+      );
+      return;
+    }
+    _controller.animateToPage(
+      current + 1,
+      duration: _kDiscoverSlideDuration,
+      curve: Curves.easeInOutCubic,
+    );
+  }
+
+  void _animateBy(int delta) {
+    if (_destinationCount < 2 || !_controller.hasClients || delta == 0) return;
+    final current = _controller.page?.round() ?? _originPage;
+    _controller.animateToPage(
+      current + delta,
+      duration: _kDiscoverSlideDuration,
+      curve: Curves.easeInOutCubic,
+    );
+  }
+
+  void _animateToLogical(int logical) {
+    final count = _destinationCount;
+    if (count == 0 || logical < 0 || logical >= count) return;
+    if (!_controller.hasClients) return;
+    final current = _controller.page?.round() ?? _originPage;
+    var delta = logical - _logicalOf(current);
+    if (delta == 0) return;
+    if (delta > count / 2) delta -= count;
+    if (delta < -count / 2) delta += count;
+    _animateBy(delta);
+  }
+
+  void _onUserInteractionStart() {
+    _interactionPaused = true;
+    _autoTimer?.cancel();
+    _autoTimer = null;
+    _resumeTimer?.cancel();
+    _resumeTimer = null;
+  }
+
+  void _onUserInteractionEnd() {
+    if (!_interactionPaused) return;
+    _resumeTimer?.cancel();
+    _resumeTimer = Timer(_kDiscoverResumeDelay, () {
+      if (!mounted) return;
+      _interactionPaused = false;
+      _startAuto();
+    });
+  }
+
+  void _onPointerUp() {
+    if (_controller.hasClients &&
+        _controller.position.isScrollingNotifier.value) {
+      return;
+    }
+    _onUserInteractionEnd();
+  }
+
+  void _setLogical(int page) {
+    final logical = _logicalOf(page);
+    widget.handle.logicalIndex = logical;
+    if (logical == _logicalIndex) return;
+    setState(() => _logicalIndex = logical);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = widget.items;
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          key: widget.tourKey,
+          height: widget.compact ? 168 : 228,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final showNav = constraints.maxWidth >= 520 && items.length > 1;
+              return Stack(
+                alignment: Alignment.center,
+                clipBehavior: Clip.none,
+                children: [
+                  Listener(
+                    onPointerDown: (_) => _onUserInteractionStart(),
+                    onPointerUp: (_) => _onPointerUp(),
+                    onPointerCancel: (_) => _onPointerUp(),
+                    child: NotificationListener<ScrollNotification>(
+                      onNotification: (notification) {
+                        if (notification is ScrollStartNotification &&
+                            notification.dragDetails != null) {
+                          _userDrag = true;
+                          _onUserInteractionStart();
+                        } else if (notification is ScrollEndNotification &&
+                            _userDrag) {
+                          _userDrag = false;
+                          _onUserInteractionEnd();
+                        }
+                        return false;
+                      },
+                      child: ScrollConfiguration(
+                        behavior: const _FeaturedCarouselScrollBehavior(),
+                        child: PageView.builder(
+                          controller: _controller,
+                          scrollDirection: Axis.horizontal,
+                          allowImplicitScrolling: true,
+                          onPageChanged: _setLogical,
+                          itemCount: _pageCount,
+                          itemBuilder: (context, index) =>
+                              widget.cardBuilder(items[_logicalOf(index)]),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (showNav) ...[
+                    Positioned(
+                      left: 4,
+                      child: _navButton(
+                        icon: Icons.chevron_left_rounded,
+                        enabled: items.length > 1,
+                        onPressed: () {
+                          _onUserInteractionStart();
+                          _animateBy(-1);
+                          _onUserInteractionEnd();
+                        },
+                      ),
+                    ),
+                    Positioned(
+                      right: 4,
+                      child: _navButton(
+                        icon: Icons.chevron_right_rounded,
+                        enabled: items.length > 1,
+                        onPressed: () {
+                          _onUserInteractionStart();
+                          _animateBy(1);
+                          _onUserInteractionEnd();
+                        },
+                      ),
+                    ),
+                  ],
+                ],
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(items.length, (index) {
+            final selected = _logicalIndex == index;
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: items.length < 2
+                  ? null
+                  : () {
+                      _onUserInteractionStart();
+                      _animateToLogical(index);
+                      _onUserInteractionEnd();
+                    },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                width: selected ? 28 : 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  gradient: selected
+                      ? LinearGradient(
+                          colors: [AppTheme.primary, AppTheme.primaryDark],
+                        )
+                      : null,
+                  color: selected ? null : Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+            );
+          }),
+        ),
+      ],
+    );
+  }
+
+  Widget _navButton({
+    required IconData icon,
+    required VoidCallback onPressed,
+    required bool enabled,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: enabled ? onPressed : null,
+        borderRadius: BorderRadius.circular(24),
+        child: Ink(
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: enabled ? 0.95 : 0.5),
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.12),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Icon(
+              icon,
+              size: 26,
+              color: enabled ? AppTheme.primary : AppTheme.unselectedMuted,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Six priority VR / featured destinations on the home Discover carousel.
@@ -128,10 +552,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   UserProfile? _userProfile = UserProfileStorage.cachedProfile;
   bool _profileLoaded = UserProfileStorage.cachedProfile != null;
-  final PageController _featuredController = PageController(
-    viewportFraction: 0.85,
-  );
-  int _currentFeaturedIndex = 0;
+  final DiscoverCarouselHandle _discoverCarousel = DiscoverCarouselHandle();
 
   // User stats from storage
   activity.UserStats _userStats = activity.UserStats(
@@ -204,7 +625,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 Text(
                   subtitle,
-                  style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                  style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 13),
                 ),
               ],
             ),
@@ -226,6 +647,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     activity.UserActivityService.visitedSpotsRevision
         .addListener(_onVisitedSpotsChanged);
+    activity.UserActivityService.savedSpotsRevision
+        .addListener(_onSavedSpotsChanged);
     unawaited(_loadCachedStats());
     _loadAllData();
     _fetchWeather();
@@ -302,53 +725,6 @@ class _HomeScreenState extends State<HomeScreen> {
           (d) => (d['category'] as String?)?.toLowerCase() == selectedLower,
         )
         .toList();
-  }
-
-  void _goToFeaturedPage(int delta) {
-    final count = _filteredFeaturedDestinations.length;
-    if (count <= 1 || !_featuredController.hasClients) return;
-    final next = (_currentFeaturedIndex + delta).clamp(0, count - 1);
-    if (next == _currentFeaturedIndex) return;
-    _featuredController.animateToPage(
-      next,
-      duration: const Duration(milliseconds: 520),
-      curve: Curves.easeInOutCubic,
-    );
-  }
-
-  Widget _featuredCarouselNavButton({
-    required IconData icon,
-    required VoidCallback onPressed,
-    required bool enabled,
-  }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: enabled ? onPressed : null,
-        borderRadius: BorderRadius.circular(24),
-        child: Ink(
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: enabled ? 0.95 : 0.5),
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.12),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: Icon(
-              icon,
-              size: 26,
-              color: enabled ? AppTheme.primary : Colors.grey.shade400,
-            ),
-          ),
-        ),
-      ),
-    );
   }
 
   Future<void> _loadAllData() async {
@@ -490,21 +866,58 @@ class _HomeScreenState extends State<HomeScreen> {
       _openSpotDestinationDetail(known);
       return;
     }
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => MunicipalityMapAndSpotsScreen(
-          municipalityIdOrName: entry.spotName,
+    if (_isMunicipalityVisit(entry)) {
+      final municipalityId = _municipalityIdForVisit(entry) ?? entry.spotName;
+      Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => MunicipalityMapAndSpotsScreen(
+            municipalityIdOrName: municipalityId,
+            spotsOnly: true,
+          ),
         ),
+      );
+      return;
+    }
+    final spotId = entry.spotId.trim();
+    final spotName = entry.spotName.trim();
+    if (spotId.isEmpty && spotName.isEmpty) return;
+    _openSpotDestinationDetail(
+      TouristSpotFirestore(
+        id: spotId.isEmpty ? spotName : spotId,
+        name: spotName.isEmpty ? 'Visited place' : spotName,
+        category: entry.category.trim().isEmpty ? 'Spot' : entry.category.trim(),
+        latitude: 0,
+        longitude: 0,
+        rating: 0,
+        image: entry.imageUrl,
+        vrLink: '',
       ),
     );
+  }
+
+  bool _isMunicipalityVisit(activity.VisitRecord entry) {
+    final sid = entry.spotId.trim().toLowerCase();
+    if (sid.startsWith('lgu_')) return true;
+    final name = entry.spotName.trim().toLowerCase();
+    if (name.isEmpty) return false;
+    for (final municipality in getMisamisOccidentalMunicipalities()) {
+      final municipalityName = municipality.name.trim().toLowerCase();
+      if (sid == municipality.id || name == municipalityName) return true;
+    }
+    return false;
   }
 
   List<TouristSpotFirestore> get _spotsForVisitImages => _allDestinationSpots;
 
   Future<void> _loadFirestoreSpotsCache() async {
+    final peeked = TouristSpotsRepository.peekCachedSpots();
+    if (peeked.isNotEmpty && _cachedFirestoreSpots.isEmpty && mounted) {
+      setState(() => _cachedFirestoreSpots = peeked);
+    }
     final spots = await TouristSpotsRepository.getTouristSpots();
     if (mounted) {
       setState(() => _cachedFirestoreSpots = spots);
+      activity.UserActivityService.savedSpotsRevision.value++;
     }
   }
 
@@ -575,11 +988,43 @@ class _HomeScreenState extends State<HomeScreen> {
     await NotificationBadgeNotifier.instance.refresh(userId: uid);
   }
 
+  void _onSavedSpotsChanged() {
+    if (!mounted) return;
+    final ids = activity.UserActivityService.savedSpotIdsSnapshot();
+    setState(() {
+      _savedSpotIds = ids;
+      _userStats = activity.UserStats(
+        placesVisited: _userStats.placesVisited,
+        badgesEarned: _userStats.badgesEarned,
+        daysAsTourist: _userStats.daysAsTourist,
+        savedSpots: ids.length,
+      );
+    });
+  }
+
   Future<void> _loadSavedSpots() async {
-    final savedIds = await activity.UserActivityService.getSavedSpotIds();
-    if (mounted) {
-      setState(() => _savedSpotIds = savedIds.toSet());
-    }
+    await activity.UserActivityService.ensureSavedSpotsLoaded();
+    if (!mounted) return;
+    _onSavedSpotsChanged();
+  }
+
+  Future<void> _toggleSaveSpot(TouristSpotFirestore spot) async {
+    final name = spot.name.trim().isEmpty ? 'This destination' : spot.name.trim();
+    final future = activity.UserActivityService.toggleSaveSpot(spot.id);
+    final saved = activity.UserActivityService.isSpotSavedSync(spot.id);
+    if (!mounted) return;
+    SaveSpotNotice.show(
+      context,
+      saved ? '$name saved!' : '$name removed from saved',
+    );
+    final result = await future;
+    if (!mounted || result == saved) return;
+    if (activity.UserActivityService.isSpotSavedSync(spot.id) == saved) return;
+    SaveSpotNotice.show(
+      context,
+      'Could not update $name. Try again.',
+      error: true,
+    );
   }
 
   /// Builds image widget for spot or visit: supports assets (assets/...) and network URLs.
@@ -602,36 +1047,6 @@ class _HomeScreenState extends State<HomeScreen> {
       height: height,
       fit: BoxFit.cover,
     );
-  }
-
-  Future<void> _toggleSaveSpot(TouristSpotFirestore spot) async {
-    final isSaved = await activity.UserActivityService.toggleSaveSpot(spot.id);
-    if (mounted) {
-      setState(() {
-        if (isSaved) {
-          _savedSpotIds.add(spot.id);
-        } else {
-          _savedSpotIds.remove(spot.id);
-        }
-        _userStats = activity.UserStats(
-          placesVisited: _userStats.placesVisited,
-          badgesEarned: _userStats.badgesEarned,
-          daysAsTourist: _userStats.daysAsTourist,
-          savedSpots: _savedSpotIds.length,
-        );
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            isSaved ? '${spot.name} saved!' : '${spot.name} removed from saved',
-          ),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: isSaved ? AppTheme.primary : Colors.grey.shade700,
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    }
   }
 
   Future<void> _checkInToSpot(TouristSpotFirestore spot) async {
@@ -719,13 +1134,8 @@ class _HomeScreenState extends State<HomeScreen> {
   void _showVrCardForTour() {
     final filtered = _filteredFeaturedDestinations;
     final index = filtered.indexWhere((d) => _featuredDetail(d).hasVrTour);
-    if (index < 0 || index == _currentFeaturedIndex) return;
-    if (!_featuredController.hasClients) return;
-    _featuredController.animateToPage(
-      index,
-      duration: const Duration(milliseconds: 520),
-      curve: Curves.easeInOutCubic,
-    );
+    if (index < 0 || index == _discoverCarousel.logicalIndex) return;
+    _discoverCarousel.animateToLogical?.call(index);
   }
 
   /// Opens the visible Discover card if it has a VR tour, otherwise the first
@@ -734,9 +1144,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final keys = _tourKeys;
     if (keys == null) return;
     final filtered = _filteredFeaturedDestinations;
+    final visible = _discoverCarousel.logicalIndex < filtered.length
+        ? filtered[_discoverCarousel.logicalIndex]
+        : null;
     final candidates = [
-      if (_currentFeaturedIndex < filtered.length)
-        filtered[_currentFeaturedIndex],
+      if (visible != null) visible,
       ...filtered,
       ...kFeaturedDestinations,
     ];
@@ -757,7 +1169,8 @@ class _HomeScreenState extends State<HomeScreen> {
     _unregisterTourCallbacks();
     activity.UserActivityService.visitedSpotsRevision
         .removeListener(_onVisitedSpotsChanged);
-    _featuredController.dispose();
+    activity.UserActivityService.savedSpotsRevision
+        .removeListener(_onSavedSpotsChanged);
     super.dispose();
   }
 
@@ -817,7 +1230,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   BoxDecoration _homeMiniCardDecoration(Color accent) {
     return BoxDecoration(
-      color: Colors.white,
+      color: AppTheme.cardBackground,
       borderRadius: BorderRadius.circular(12),
       border: Border.all(color: accent.withValues(alpha: 0.15)),
       boxShadow: [
@@ -848,7 +1261,7 @@ class _HomeScreenState extends State<HomeScreen> {
           maxHeight: maxH,
         ),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: AppTheme.cardBackground,
           borderRadius: BorderRadius.circular(24),
           boxShadow: [
             BoxShadow(
@@ -887,13 +1300,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   if (trailingLabel != null) ...[
                     Text(
                       trailingLabel,
-                      style: TextStyle(color: Colors.grey.shade500),
+                      style: TextStyle(color: AppTheme.unselectedMuted),
                     ),
                     const SizedBox(width: 4),
                   ],
                   IconButton(
                     onPressed: () => Navigator.pop(context),
-                    icon: Icon(Icons.close, color: Colors.grey.shade600),
+                    icon: Icon(Icons.close, color: AppTheme.unselectedMuted),
                     tooltip: 'Close',
                   ),
                 ],
@@ -1135,7 +1548,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 gaplessPlayback: true,
               );
             }
-            return Icon(Icons.person, color: Colors.grey.shade400, size: 28);
+            return Icon(Icons.person, color: AppTheme.unselectedMuted, size: 28);
           },
         ),
       );
@@ -1150,11 +1563,11 @@ class _HomeScreenState extends State<HomeScreen> {
           fit: BoxFit.cover,
           gaplessPlayback: true,
           errorBuilder: (_, __, ___) =>
-              Icon(Icons.person, color: Colors.grey.shade400, size: 28),
+              Icon(Icons.person, color: AppTheme.unselectedMuted, size: 28),
         ),
       );
     }
-    return Icon(Icons.person, color: Colors.grey.shade400, size: 28);
+    return Icon(Icons.person, color: AppTheme.unselectedMuted, size: 28);
   }
 
   Widget _buildHeader(BuildContext context, Color accent) {
@@ -1326,9 +1739,9 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (context, setModalState) => Container(
           height: MediaQuery.of(context).size.height * 0.6,
           padding: const EdgeInsets.all(20),
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          decoration: BoxDecoration(
+            color: AppTheme.cardBackground,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1388,7 +1801,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             Text(
                               'No notifications',
                               style: TextStyle(
-                                color: Colors.grey.shade500,
+                                color: AppTheme.unselectedMuted,
                                 fontSize: 16,
                               ),
                             ),
@@ -1396,7 +1809,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             Text(
                               'You\'re all caught up!',
                               style: TextStyle(
-                                color: Colors.grey.shade400,
+                                color: AppTheme.unselectedMuted,
                                 fontSize: 14,
                               ),
                             ),
@@ -1501,7 +1914,7 @@ class _HomeScreenState extends State<HomeScreen> {
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: notification.isRead
-              ? Colors.grey.shade50
+              ? AppTheme.cardBackground
               : AppTheme.primary.withOpacity(0.05),
           borderRadius: BorderRadius.circular(12),
           border: notification.isRead
@@ -1565,12 +1978,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox(height: 4),
                   Text(
                     notification.message,
-                    style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                    style: TextStyle(fontSize: 13, color: AppTheme.unselectedMuted),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     timeAgo,
-                    style: TextStyle(fontSize: 11, color: Colors.grey.shade400),
+                    style: TextStyle(fontSize: 11, color: AppTheme.unselectedMuted),
                   ),
                 ],
               ),
@@ -1630,12 +2043,12 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 16),
             Text(
               'No places visited yet',
-              style: TextStyle(color: Colors.grey.shade500, fontSize: 16),
+              style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 16),
             ),
             const SizedBox(height: 8),
             Text(
               'Scan a destination QR code at the tourist spot to add it here.',
-              style: TextStyle(color: Colors.grey.shade400, fontSize: 14),
+              style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 14),
             ),
           ],
         ),
@@ -1773,7 +2186,7 @@ class _HomeScreenState extends State<HomeScreen> {
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: Colors.grey.shade50,
+            color: AppTheme.cardBackground,
             borderRadius: BorderRadius.circular(12),
           ),
           child: Row(
@@ -1827,13 +2240,13 @@ class _HomeScreenState extends State<HomeScreen> {
                         Icon(
                           Icons.access_time,
                           size: 12,
-                          color: Colors.grey.shade500,
+                          color: AppTheme.unselectedMuted,
                         ),
                         const SizedBox(width: 4),
                         Text(
                           timeLabel,
                           style: TextStyle(
-                            color: Colors.grey.shade500,
+                            color: AppTheme.unselectedMuted,
                             fontSize: 12,
                           ),
                         ),
@@ -1863,8 +2276,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildSavedSpotsBody({VoidCallback? onListChanged}) {
-    final savedSpots = _savedSpotIds.map(_spotForSavedId).toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
+    final savedSpots =
+        activity.UserActivityService.savedSpotIdsSnapshot()
+            .map(_spotForSavedId)
+            .toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
 
     if (savedSpots.isEmpty) {
       return Center(
@@ -1879,12 +2295,12 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 16),
             Text(
               'No saved spots',
-              style: TextStyle(color: Colors.grey.shade500, fontSize: 16),
+              style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 16),
             ),
             const SizedBox(height: 8),
             Text(
               'Tap the bookmark icon to save spots!',
-              style: TextStyle(color: Colors.grey.shade400, fontSize: 14),
+              style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 14),
             ),
           ],
         ),
@@ -1905,30 +2321,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _showSavedSpotsDialog() async {
     if (!mounted) return;
+    unawaited(_loadFirestoreSpotsCache());
 
-    Future<void> prepareSavedList() async {
-      await Future.wait([
-        _loadSavedSpots(),
-        _loadFirestoreSpotsCache(),
-      ]);
-    }
-
-    Widget savedBody({
-      required VoidCallback onListChanged,
-      required Future<void> future,
-    }) {
-      return FutureBuilder<void>(
-        future: future,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          return _buildSavedSpotsBody(onListChanged: onListChanged);
-        },
+    Widget savedBody({required VoidCallback onListChanged}) {
+      return ListenableBuilder(
+        listenable: activity.UserActivityService.savedSpotsRevision,
+        builder: (context, _) =>
+            _buildSavedSpotsBody(onListChanged: onListChanged),
       );
     }
-
-    final prepareFuture = prepareSavedList();
 
     if (_isMobileLayout) {
       await Navigator.of(context).push<void>(
@@ -1936,17 +2337,13 @@ class _HomeScreenState extends State<HomeScreen> {
           fullscreenDialog: true,
           builder: (ctx) => StatefulBuilder(
             builder: (ctx, setSheetState) => Scaffold(
-              backgroundColor: AppTheme.cardBackground,
+              backgroundColor: AppTheme.pageBackground,
               appBar: _mobileSheetAppBar(ctx, title: 'Saved Spots'),
-              body: savedBody(
-                future: prepareFuture,
-                onListChanged: () => setSheetState(() {}),
-              ),
+              body: savedBody(onListChanged: () => setSheetState(() {})),
             ),
           ),
         ),
       );
-      if (mounted) await _loadSavedSpots();
       return;
     }
 
@@ -1954,13 +2351,10 @@ class _HomeScreenState extends State<HomeScreen> {
       title: 'Saved Spots',
       icon: Icons.bookmark_rounded,
       body: StatefulBuilder(
-        builder: (context, setSheetState) => savedBody(
-          future: prepareFuture,
-          onListChanged: () => setSheetState(() {}),
-        ),
+        builder: (context, setSheetState) =>
+            savedBody(onListChanged: () => setSheetState(() {})),
       ),
     );
-    if (mounted) await _loadSavedSpots();
   }
 
   Widget _buildSavedSpotItem(
@@ -1977,7 +2371,7 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: Colors.grey.shade50,
+            color: AppTheme.cardBackground,
             borderRadius: BorderRadius.circular(12),
           ),
           child: Row(
@@ -2111,13 +2505,7 @@ class _HomeScreenState extends State<HomeScreen> {
               color: Colors.transparent,
               child: InkWell(
                 onTap: () {
-                  setState(() {
-                    _selectedFeaturedCategoryIndex = index;
-                    _currentFeaturedIndex = 0;
-                  });
-                  if (_featuredController.hasClients) {
-                    _featuredController.jumpToPage(0);
-                  }
+                  setState(() => _selectedFeaturedCategoryIndex = index);
                 },
                 borderRadius: BorderRadius.circular(20),
                 child: AnimatedContainer(
@@ -2133,12 +2521,12 @@ class _HomeScreenState extends State<HomeScreen> {
                             colors: [AppTheme.primary, AppTheme.primaryDark],
                           )
                         : null,
-                    color: isSelected ? null : Colors.white,
+                    color: isSelected ? null : AppTheme.cardBackground,
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
                       color: isSelected
                           ? Colors.transparent
-                          : Colors.grey.shade300,
+                          : AppTheme.border,
                     ),
                     boxShadow: isSelected
                         ? [
@@ -2161,7 +2549,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
-                      color: isSelected ? Colors.white : Colors.grey.shade700,
+                      color: isSelected ? AppTheme.onPrimary : AppTheme.textPrimary,
                     ),
                   ),
                 ),
@@ -2181,7 +2569,7 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: AppTheme.cardBackground,
             borderRadius: BorderRadius.circular(20),
             boxShadow: [
               BoxShadow(
@@ -2202,7 +2590,7 @@ class _HomeScreenState extends State<HomeScreen> {
               Expanded(
                 child: Text(
                   'No featured destinations for this category yet.',
-                  style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+                  style: TextStyle(color: AppTheme.textPrimary, fontSize: 13),
                 ),
               ),
             ],
@@ -2211,81 +2599,12 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          key: _tourKeys?.discover,
-          height: _compactSpotImages ? 168 : 228,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final showNav = constraints.maxWidth >= 520 && items.length > 1;
-              return Stack(
-                alignment: Alignment.center,
-                clipBehavior: Clip.none,
-                children: [
-                  ScrollConfiguration(
-                    behavior: const _FeaturedCarouselScrollBehavior(),
-                    child: PageView.builder(
-                      controller: _featuredController,
-                      scrollDirection: Axis.horizontal,
-                      allowImplicitScrolling: true,
-                      onPageChanged: (index) =>
-                          setState(() => _currentFeaturedIndex = index),
-                      itemCount: items.length,
-                      itemBuilder: (context, index) =>
-                          _buildFeaturedCard(items[index]),
-                    ),
-                  ),
-                  if (showNav) ...[
-                    Positioned(
-                      left: 4,
-                      child: _featuredCarouselNavButton(
-                        icon: Icons.chevron_left_rounded,
-                        enabled: _currentFeaturedIndex > 0,
-                        onPressed: () => _goToFeaturedPage(-1),
-                      ),
-                    ),
-                    Positioned(
-                      right: 4,
-                      child: _featuredCarouselNavButton(
-                        icon: Icons.chevron_right_rounded,
-                        enabled: _currentFeaturedIndex < items.length - 1,
-                        onPressed: () => _goToFeaturedPage(1),
-                      ),
-                    ),
-                  ],
-                ],
-              );
-            },
-          ),
-        ),
-        const SizedBox(height: 12),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: List.generate(
-            items.length,
-            (index) => AnimatedContainer(
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeOutCubic,
-              margin: const EdgeInsets.symmetric(horizontal: 4),
-              width: _currentFeaturedIndex == index ? 28 : 8,
-              height: 8,
-              decoration: BoxDecoration(
-                gradient: _currentFeaturedIndex == index
-                    ? LinearGradient(
-                        colors: [AppTheme.primary, AppTheme.primaryDark],
-                      )
-                    : null,
-                color: _currentFeaturedIndex == index
-                    ? null
-                    : Colors.grey.shade300,
-                borderRadius: BorderRadius.circular(4),
-              ),
-            ),
-          ),
-        ),
-      ],
+    return DiscoverFeaturedCarousel(
+      items: items,
+      compact: _compactSpotImages,
+      handle: _discoverCarousel,
+      tourKey: _tourKeys?.discover,
+      cardBuilder: _buildFeaturedCard,
     );
   }
 
@@ -2393,6 +2712,36 @@ class _HomeScreenState extends State<HomeScreen> {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
+                ),
+              ),
+              Positioned(
+                top: 12,
+                right: 12,
+                child: ListenableBuilder(
+                  listenable: activity.UserActivityService.savedSpotsRevision,
+                  builder: (context, _) {
+                    final spot = _spotFromFeatured(destination);
+                    final isSaved =
+                        activity.UserActivityService.isSpotSavedSync(spot.id);
+                    return Material(
+                      color: Colors.white,
+                      shape: const CircleBorder(),
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: () => unawaited(_toggleSaveSpot(spot)),
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Icon(
+                            isSaved ? Icons.bookmark : Icons.bookmark_border,
+                            color: isSaved
+                                ? AppTheme.primary
+                                : AppTheme.unselectedMuted,
+                            size: 22,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ),
               Positioned(
@@ -2520,9 +2869,11 @@ class _HomeScreenState extends State<HomeScreen> {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setModalState) {
-          final currentlySaved = _savedSpotIds.contains(spot.id);
+      builder: (context) => ListenableBuilder(
+        listenable: activity.UserActivityService.savedSpotsRevision,
+        builder: (context, _) {
+          final currentlySaved =
+              activity.UserActivityService.isSpotSavedSync(spot.id);
           final maxWidth = 400.0;
 
           return Center(
@@ -2530,9 +2881,9 @@ class _HomeScreenState extends State<HomeScreen> {
               margin: const EdgeInsets.fromLTRB(24, 0, 24, 24),
               constraints: BoxConstraints(maxWidth: maxWidth),
               padding: const EdgeInsets.all(20),
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.all(Radius.circular(20)),
+              decoration: BoxDecoration(
+                color: AppTheme.cardBackground,
+                borderRadius: const BorderRadius.all(Radius.circular(20)),
                 boxShadow: [
                   BoxShadow(
                     color: Color(0x1A000000),
@@ -2612,9 +2963,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     children: [
                       Expanded(
                         child: OutlinedButton.icon(
-                          onPressed: () async {
-                            await _toggleSaveSpot(spot);
-                            setModalState(() {});
+                          onPressed: () {
+                            unawaited(_toggleSaveSpot(spot));
                           },
                           icon: Icon(
                             currentlySaved
@@ -2736,21 +3086,24 @@ class _HomeScreenState extends State<HomeScreen> {
         MaterialPageRoute<void>(
           fullscreenDialog: true,
           builder: (ctx) => Scaffold(
-            backgroundColor: AppTheme.cardBackground,
+            backgroundColor: AppTheme.pageBackground,
             appBar: _mobileSheetAppBar(
               ctx,
               title: 'All Destinations',
               subtitle: '${spots.length} spots',
             ),
-            body: ListView.builder(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-              itemCount: spots.length,
-              itemBuilder: (context, index) {
-                return _buildDestinationListItem(
-                  spots[index],
-                  listContext: ctx,
-                );
-              },
+            body: ListenableBuilder(
+              listenable: activity.UserActivityService.savedSpotsRevision,
+              builder: (context, _) => ListView.builder(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                itemCount: spots.length,
+                itemBuilder: (context, index) {
+                  return _buildDestinationListItem(
+                    spots[index],
+                    listContext: ctx,
+                  );
+                },
+              ),
             ),
           ),
         ),
@@ -2763,12 +3116,15 @@ class _HomeScreenState extends State<HomeScreen> {
       icon: Icons.explore_rounded,
       trailingLabel: '${spots.length} spots',
       heightFraction: 0.82,
-      body: ListView.builder(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-        itemCount: spots.length,
-        itemBuilder: (context, index) {
-          return _buildDestinationListItem(spots[index]);
-        },
+      body: ListenableBuilder(
+        listenable: activity.UserActivityService.savedSpotsRevision,
+        builder: (context, _) => ListView.builder(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          itemCount: spots.length,
+          itemBuilder: (context, index) {
+            return _buildDestinationListItem(spots[index]);
+          },
+        ),
       ),
     );
   }
@@ -2782,18 +3138,21 @@ class _HomeScreenState extends State<HomeScreen> {
         MaterialPageRoute<void>(
           fullscreenDialog: true,
           builder: (ctx) => Scaffold(
-            backgroundColor: AppTheme.cardBackground,
+            backgroundColor: AppTheme.pageBackground,
             appBar: _mobileSheetAppBar(
               ctx,
               title: 'Priority Destinations',
               subtitle: countLabel,
             ),
-            body: ListView.builder(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-              itemCount: destinations.length,
-              itemBuilder: (context, index) => _buildPriorityDestinationItem(
-                destinations[index],
-                listContext: ctx,
+            body: ListenableBuilder(
+              listenable: activity.UserActivityService.savedSpotsRevision,
+              builder: (context, _) => ListView.builder(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                itemCount: destinations.length,
+                itemBuilder: (context, index) => _buildPriorityDestinationItem(
+                  destinations[index],
+                  listContext: ctx,
+                ),
               ),
             ),
           ),
@@ -2807,11 +3166,14 @@ class _HomeScreenState extends State<HomeScreen> {
       icon: Icons.auto_awesome_rounded,
       trailingLabel: countLabel,
       heightFraction: 0.82,
-      body: ListView.builder(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-        itemCount: destinations.length,
-        itemBuilder: (context, index) =>
-            _buildPriorityDestinationItem(destinations[index]),
+      body: ListenableBuilder(
+        listenable: activity.UserActivityService.savedSpotsRevision,
+        builder: (context, _) => ListView.builder(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          itemCount: destinations.length,
+          itemBuilder: (context, index) =>
+              _buildPriorityDestinationItem(destinations[index]),
+        ),
       ),
     );
   }
@@ -2822,7 +3184,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }) {
     final navContext = listContext ?? context;
     final spot = _spotFromFeatured(destination);
-    final isSaved = _savedSpotIds.contains(spot.id);
+    final isSaved = activity.UserActivityService.isSpotSavedSync(spot.id);
     final hasVr = _featuredDetail(destination).hasVrTour;
     final location = destination['location']?.toString() ?? '';
 
@@ -2835,7 +3197,7 @@ class _HomeScreenState extends State<HomeScreen> {
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: Colors.grey.shade50,
+          color: AppTheme.cardBackground,
           borderRadius: BorderRadius.circular(16),
         ),
         child: Row(
@@ -2868,7 +3230,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: Colors.grey.shade600,
+                        color: AppTheme.unselectedMuted,
                         fontSize: 12,
                       ),
                     ),
@@ -2892,11 +3254,10 @@ class _HomeScreenState extends State<HomeScreen> {
             IconButton(
               icon: Icon(
                 isSaved ? Icons.bookmark : Icons.bookmark_border,
-                color: isSaved ? AppTheme.primary : Colors.grey.shade400,
+                color: isSaved ? AppTheme.primary : AppTheme.unselectedMuted,
               ),
-              onPressed: () async {
-                await _toggleSaveSpot(spot);
-                setState(() {});
+              onPressed: () {
+                unawaited(_toggleSaveSpot(spot));
               },
             ),
           ],
@@ -2936,7 +3297,7 @@ class _HomeScreenState extends State<HomeScreen> {
     TouristSpotFirestore spot, {
     BuildContext? listContext,
   }) {
-    final isSaved = _savedSpotIds.contains(spot.id);
+    final isSaved = activity.UserActivityService.isSpotSavedSync(spot.id);
     final navContext = listContext ?? context;
 
     return GestureDetector(
@@ -2948,7 +3309,7 @@ class _HomeScreenState extends State<HomeScreen> {
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: Colors.grey.shade50,
+          color: AppTheme.cardBackground,
           borderRadius: BorderRadius.circular(16),
         ),
         child: Row(
@@ -2999,11 +3360,10 @@ class _HomeScreenState extends State<HomeScreen> {
             IconButton(
               icon: Icon(
                 isSaved ? Icons.bookmark : Icons.bookmark_border,
-                color: isSaved ? AppTheme.primary : Colors.grey.shade400,
+                color: isSaved ? AppTheme.primary : AppTheme.unselectedMuted,
               ),
-              onPressed: () async {
-                await _toggleSaveSpot(spot);
-                setState(() {});
+              onPressed: () {
+                unawaited(_toggleSaveSpot(spot));
               },
             ),
           ],
@@ -3132,11 +3492,11 @@ class _HomeScreenState extends State<HomeScreen> {
                               height: imageH,
                             )
                           : Container(
-                              color: Colors.grey.shade200,
+                              color: AppTheme.border,
                               child: Icon(
                                 Icons.place_rounded,
                                 size: 42,
-                                color: Colors.grey.shade500,
+                                color: AppTheme.unselectedMuted,
                               ),
                             ),
                     ),
@@ -3187,7 +3547,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             Icon(
                               Icons.schedule_rounded,
                               size: 16,
-                              color: Colors.grey.shade600,
+                              color: AppTheme.unselectedMuted,
                             ),
                             const SizedBox(width: 6),
                             Expanded(
@@ -3198,7 +3558,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w700,
-                                  color: Colors.grey.shade700,
+                                  color: AppTheme.textPrimary,
                                 ),
                               ),
                             ),
@@ -3279,7 +3639,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           Text(
                             'Start your journey',
                             style: TextStyle(
-                              color: Colors.grey.shade800,
+                              color: AppTheme.textPrimary,
                               fontSize: 16,
                               fontWeight: FontWeight.w700,
                             ),
@@ -3289,7 +3649,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             'Scan a destination QR code to record your visit here.',
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                              color: Colors.grey.shade600,
+                              color: AppTheme.unselectedMuted,
                               fontSize: 13,
                               height: 1.35,
                             ),
@@ -3342,7 +3702,7 @@ class _HomeScreenState extends State<HomeScreen> {
         width: cardW,
         margin: const EdgeInsets.only(right: 12),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: AppTheme.cardBackground,
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
             BoxShadow(
@@ -3374,7 +3734,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       : Container(
                           width: cardW,
                           height: imageH,
-                          color: Colors.grey.shade200,
+                          color: AppTheme.border,
                           child: const Icon(Icons.place, size: 40),
                         ),
                 ),
@@ -3423,13 +3783,13 @@ class _HomeScreenState extends State<HomeScreen> {
                       Icon(
                         Icons.access_time,
                         size: 12,
-                        color: Colors.grey.shade500,
+                        color: AppTheme.unselectedMuted,
                       ),
                       const SizedBox(width: 4),
                       Text(
                         timeLabel,
                         style: TextStyle(
-                          color: Colors.grey.shade500,
+                          color: AppTheme.unselectedMuted,
                           fontSize: 11,
                         ),
                       ),
@@ -3463,7 +3823,6 @@ class _FeaturedDestinationFullScreenPage extends StatefulWidget {
 class _FeaturedDestinationFullScreenPageState
     extends State<_FeaturedDestinationFullScreenPage> {
   bool _isSaved = false;
-  bool _isSaving = false;
 
   String get _spotId => widget.destination['spotId']?.toString() ?? '';
   double get _lat => (widget.destination['latitude'] as num?)?.toDouble() ?? 0;
@@ -3472,7 +3831,22 @@ class _FeaturedDestinationFullScreenPageState
   @override
   void initState() {
     super.initState();
-    _loadSaved();
+    _isSaved = activity.UserActivityService.isSpotSavedSync(_spotId);
+    activity.UserActivityService.savedSpotsRevision.addListener(_onSavedRevision);
+    unawaited(_loadSaved());
+  }
+
+  @override
+  void dispose() {
+    activity.UserActivityService.savedSpotsRevision
+        .removeListener(_onSavedRevision);
+    super.dispose();
+  }
+
+  void _onSavedRevision() {
+    final saved = activity.UserActivityService.isSpotSavedSync(_spotId);
+    if (!mounted || saved == _isSaved) return;
+    setState(() => _isSaved = saved);
   }
 
   Future<void> _loadSaved() async {
@@ -3482,9 +3856,9 @@ class _FeaturedDestinationFullScreenPageState
       if (mounted) setState(() => _isSaved = false);
       return;
     }
-    final saved = await activity.UserActivityService.isSpotSaved(spotId);
+    await activity.UserActivityService.ensureSavedSpotsLoaded();
     if (!mounted) return;
-    setState(() => _isSaved = saved);
+    setState(() => _isSaved = activity.UserActivityService.isSpotSavedSync(spotId));
   }
 
   Future<void> _launchDirections() async {
@@ -3504,20 +3878,22 @@ class _FeaturedDestinationFullScreenPageState
   Future<void> _toggleSave() async {
     final spotId = _spotId;
     if (spotId.isEmpty) return;
-    if (_isSaving) return;
-    setState(() => _isSaving = true);
-    final savedNow = await activity.UserActivityService.toggleSaveSpot(spotId);
+    final name = widget.destination['name']?.toString().trim();
+    final label = (name == null || name.isEmpty) ? 'This destination' : name;
+    final future = activity.UserActivityService.toggleSaveSpot(spotId);
+    final savedNow = activity.UserActivityService.isSpotSavedSync(spotId);
     if (!mounted) return;
-    setState(() {
-      _isSaved = savedNow;
-      _isSaving = false;
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(savedNow ? 'Saved to your list' : 'Removed from saved'),
-        backgroundColor: AppTheme.primary,
-        behavior: SnackBarBehavior.floating,
-      ),
+    SaveSpotNotice.show(
+      context,
+      savedNow ? '$label saved!' : '$label removed from saved',
+    );
+    final result = await future;
+    if (!mounted || result == savedNow) return;
+    if (activity.UserActivityService.isSpotSavedSync(spotId) == savedNow) return;
+    SaveSpotNotice.show(
+      context,
+      'Could not update $label. Try again.',
+      error: true,
     );
   }
 
@@ -3640,7 +4016,7 @@ class _FeaturedDestinationFullScreenPageState
                     nearbyAttractionsNote:
                         destination['nearbyAttractionsNote']?.toString() ?? '',
                     isSaved: _isSaved,
-                    isSaving: _isSaving,
+                    isSaving: false,
                     onDirections: () {
                       _launchDirections();
                     },
@@ -3762,7 +4138,7 @@ class _FeaturedDestinationDetailBody extends StatelessWidget {
           style: TextStyle(
             fontSize: 15,
             height: 1.5,
-            color: Colors.grey.shade800,
+            color: AppTheme.textPrimary,
           ),
         ),
         const SizedBox(height: 18),
@@ -3877,7 +4253,7 @@ class _FeaturedDestinationDetailBody extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 13,
                   height: 1.4,
-                  color: Colors.grey.shade700,
+                  color: AppTheme.textPrimary,
                 ),
               ),
               const SizedBox(height: 8),
@@ -3927,7 +4303,7 @@ class _FeaturedDestinationDetailBody extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 13,
                   height: 1.4,
-                  color: Colors.grey.shade700,
+                  color: AppTheme.textPrimary,
                 ),
               ),
               const SizedBox(height: 8),
@@ -3968,7 +4344,7 @@ class _FeaturedDestinationDetailBody extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 13,
                   height: 1.4,
-                  color: Colors.grey.shade700,
+                  color: AppTheme.textPrimary,
                 ),
               ),
               const SizedBox(height: 8),
@@ -4032,7 +4408,7 @@ class _FeaturedNearbyRestaurantTile extends StatelessWidget {
         child: Container(
       width: 176,
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.cardBackground,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: accent.withValues(alpha: 0.12)),
         boxShadow: [
@@ -4053,7 +4429,7 @@ class _FeaturedNearbyRestaurantTile extends StatelessWidget {
               height: 118,
               width: double.infinity,
               decoration: BoxDecoration(
-                color: const Color(0xFFF3F4F6),
+                color: AppTheme.surfaceMuted,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
                   color: Colors.black.withValues(alpha: 0.08),
@@ -4216,7 +4592,7 @@ class _NearbySummaryCard extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
-                      color: Colors.grey.shade700,
+                      color: AppTheme.textPrimary,
                     ),
                   ),
                 ],
@@ -4285,7 +4661,7 @@ class _InfoChip extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
-                      color: Color(0xFF111827),
+                      color: AppTheme.textPrimary,
                       height: 1.2,
                     ),
                   ),
