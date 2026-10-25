@@ -16,7 +16,6 @@ import 'package:atmos_trs_system/navigation/role_router.dart';
 import 'package:atmos_trs_system/navigation/trip_planner_access.dart';
 import 'package:atmos_trs_system/data/landing_lgu_destinations.dart';
 import 'package:atmos_trs_system/screens/municipality_map_and_spots_screen.dart';
-import 'package:atmos_trs_system/widgets/atmos_brand_title.dart';
 import 'package:atmos_trs_system/widgets/atmos_square_logo.dart';
 import 'package:atmos_trs_system/widgets/hero_video_branding_overlay.dart';
 import 'package:atmos_trs_system/widgets/landing_about_section.dart';
@@ -1260,11 +1259,7 @@ class _LandingPageState extends State<LandingPage> {
       mainAxisAlignment: MainAxisAlignment.center,
       mainAxisSize: MainAxisSize.min,
       children: [
-        AtmosBrandTitle(
-          fontSize: titleSize,
-          letterSpacing: narrow ? 0.85 : 1.0,
-          textAlign: TextAlign.start,
-        ),
+        _LandingHeaderWordmark(fontSize: titleSize),
         const SizedBox(height: 2),
         Text(
           _kAppMeaning,
@@ -2338,15 +2333,26 @@ class _LandingPageState extends State<LandingPage> {
     final uid = user?.uid ?? '';
 
     // Staff must open their own dashboards — never the tourist /dashboard.
+    // OPTACA / provincial → Trip Planner OPTACA portal (not ATMOS tourist shell).
     final emailRole = SessionStorage.getRoleFromEmail(email);
     if (emailRole == UserRole.governor) {
       if (!mounted) return;
       Navigator.of(context).pushNamed('/governor-dashboard');
       return;
     }
+    if (emailRole == UserRole.provincialTourism) {
+      if (!mounted) return;
+      Navigator.of(context).pushNamed('/trip-planner-admin');
+      return;
+    }
     if (emailRole == UserRole.tourism) {
       if (!mounted) return;
       Navigator.of(context).pushNamed('/lgu-dashboard');
+      return;
+    }
+    if (emailRole == UserRole.tourismEstablishment) {
+      if (!mounted) return;
+      Navigator.of(context).pushNamed('/establishment-dashboard');
       return;
     }
 
@@ -2358,7 +2364,14 @@ class _LandingPageState extends State<LandingPage> {
       if (!mounted) return;
       if (route == '/governor-dashboard' ||
           route == '/lgu-dashboard' ||
-          route == '/tourism-dashboard') {
+          route == '/tourism-dashboard' ||
+          route == '/provincial-tourism-dashboard' ||
+          route == '/establishment-dashboard') {
+        // OPTACA: Open Dashboard opens Trip Planner admin, not ATMOS provincial.
+        if (route == '/provincial-tourism-dashboard') {
+          Navigator.of(context).pushNamed('/trip-planner-admin');
+          return;
+        }
         Navigator.of(context).pushNamed(route);
         return;
       }
@@ -2373,8 +2386,16 @@ class _LandingPageState extends State<LandingPage> {
         Navigator.of(context).pushNamed('/governor-dashboard');
         return;
       }
+      if (storedRole == UserRole.provincialTourism) {
+        Navigator.of(context).pushNamed('/trip-planner-admin');
+        return;
+      }
       if (storedRole == UserRole.tourism) {
         Navigator.of(context).pushNamed('/lgu-dashboard');
+        return;
+      }
+      if (storedRole == UserRole.tourismEstablishment) {
+        Navigator.of(context).pushNamed('/establishment-dashboard');
         return;
       }
     }
@@ -2475,7 +2496,7 @@ class _LandingPageState extends State<LandingPage> {
     }
   }
 
-  /// Downloads the hosted Trip Planner APK. Does not open login or a dashboard.
+  /// Downloads the hosted Trip Planner APK (does not open the in-app module).
   Future<void> _downloadTripPlannerApk() async {
     if (!kHasTripPlannerApkDownload) {
       _showApkDownloadMessage(
@@ -2492,47 +2513,12 @@ class _LandingPageState extends State<LandingPage> {
   }
 
   Widget _buildHeroApkDownloads() {
-    final align = _isMobile ? WrapAlignment.center : WrapAlignment.start;
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      alignment: align,
-      children: [
-        _heroApkDownloadButton(
-          label: 'Download VR Tour App',
-          onPressed: () => unawaited(_downloadVrTourApk()),
-        ),
-        _heroApkDownloadButton(
-          label: 'Download Trip Planner App',
-          onPressed: () => unawaited(_downloadTripPlannerApk()),
-        ),
-      ],
-    );
-  }
-
-  Widget _heroApkDownloadButton({
-    required String label,
-    required VoidCallback onPressed,
-  }) {
-    return FilledButton(
-      onPressed: onPressed,
-      style: FilledButton.styleFrom(
-        backgroundColor: _primaryOrange,
-        foregroundColor: Colors.white,
-        elevation: 6,
-        shadowColor: _primaryOrange.withValues(alpha: 0.45),
-        padding: EdgeInsets.symmetric(
-          horizontal: _isMobile ? 16 : 18,
-          vertical: 12,
-        ),
-        minimumSize: const Size(44, 44),
-        tapTargetSize: MaterialTapTargetSize.padded,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
-      ),
+    return _HeroApkDownloadSection(
+      centered: _isMobile,
+      compact: _isMobile,
+      color: _primaryOrange,
+      onDownloadVrTour: () => unawaited(_downloadVrTourApk()),
+      onDownloadTripPlanner: () => unawaited(_downloadTripPlannerApk()),
     );
   }
 
@@ -5620,4 +5606,262 @@ class _DestinationsBackdropPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// Orange hero download actions. Same APK callbacks as before; presentation only.
+class _HeroApkDownloadSection extends StatefulWidget {
+  const _HeroApkDownloadSection({
+    required this.centered,
+    required this.compact,
+    required this.color,
+    required this.onDownloadVrTour,
+    required this.onDownloadTripPlanner,
+  });
+
+  final bool centered;
+  final bool compact;
+  final Color color;
+  final VoidCallback onDownloadVrTour;
+  final VoidCallback onDownloadTripPlanner;
+
+  @override
+  State<_HeroApkDownloadSection> createState() => _HeroApkDownloadSectionState();
+}
+
+class _HeroApkDownloadSectionState extends State<_HeroApkDownloadSection>
+    with TickerProviderStateMixin {
+  late final AnimationController _arrow;
+  late final AnimationController _caption;
+  bool _captionStarted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _arrow = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+    _caption = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 720),
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final reduce = MediaQuery.disableAnimationsOf(context);
+    if (reduce) {
+      _arrow.stop();
+      _arrow.value = 0;
+      _caption.value = 1;
+      return;
+    }
+    if (!_arrow.isAnimating) {
+      _arrow.repeat(reverse: true);
+    }
+    if (!_captionStarted) {
+      _captionStarted = true;
+      _caption.forward();
+    }
+  }
+
+  @override
+  void dispose() {
+    _arrow.dispose();
+    _caption.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final gap = widget.compact ? 10.0 : 12.0;
+    return Column(
+      crossAxisAlignment: widget.centered
+          ? CrossAxisAlignment.center
+          : CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          alignment: widget.centered
+              ? WrapAlignment.center
+              : WrapAlignment.start,
+          children: [
+            _HeroApkDownloadButton(
+              label: 'Download VR Tour App',
+              color: widget.color,
+              compact: widget.compact,
+              arrow: _arrow,
+              onPressed: widget.onDownloadVrTour,
+            ),
+            _HeroApkDownloadButton(
+              label: 'Download Trip Planner App',
+              color: widget.color,
+              compact: widget.compact,
+              arrow: _arrow,
+              onPressed: widget.onDownloadTripPlanner,
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        FadeTransition(
+          opacity: CurvedAnimation(parent: _caption, curve: Curves.easeOut),
+          child: Text(
+            'Download the app to get started',
+            textAlign: widget.centered ? TextAlign.center : TextAlign.start,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.92),
+              fontSize: widget.compact ? 12.5 : 13,
+              fontWeight: FontWeight.w500,
+              letterSpacing: 0.15,
+              height: 1.3,
+              shadows: const [
+                Shadow(
+                  color: Color(0x99000000),
+                  blurRadius: 8,
+                  offset: Offset(0, 1),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Header wordmark only. Subtitle and logo stay on the existing styles.
+class _LandingHeaderWordmark extends StatelessWidget {
+  const _LandingHeaderWordmark({required this.fontSize});
+
+  final double fontSize;
+
+  static const Color _atmos = Color(0xFF222222);
+  static const Color _trs = Color(0xFFFF7518);
+
+  @override
+  Widget build(BuildContext context) {
+    final base = AtmosBrandTypography.landingAppMark(
+      color: _atmos,
+      fontSize: fontSize,
+    );
+    return Text.rich(
+      TextSpan(
+        children: [
+          const TextSpan(text: 'ATMOS'),
+          const TextSpan(text: '\u2013'),
+          TextSpan(text: 'TRS', style: base.copyWith(color: _trs)),
+        ],
+      ),
+      style: base,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      textAlign: TextAlign.start,
+    );
+  }
+}
+
+class _HeroApkDownloadButton extends StatefulWidget {
+  const _HeroApkDownloadButton({
+    required this.label,
+    required this.color,
+    required this.compact,
+    required this.arrow,
+    required this.onPressed,
+  });
+
+  final String label;
+  final Color color;
+  final bool compact;
+  final Animation<double> arrow;
+  final VoidCallback onPressed;
+
+  @override
+  State<_HeroApkDownloadButton> createState() => _HeroApkDownloadButtonState();
+}
+
+class _HeroApkDownloadButtonState extends State<_HeroApkDownloadButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduce = MediaQuery.disableAnimationsOf(context);
+    final hovering = _hovered && !reduce;
+    final horizontal = widget.compact ? 16.0 : 18.0;
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      cursor: SystemMouseCursors.click,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOutCubic,
+        transform: Matrix4.translationValues(0, hovering ? -3 : 0, 0),
+        transformAlignment: Alignment.center,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: widget.color,
+          borderRadius: BorderRadius.circular(999),
+          boxShadow: [
+            BoxShadow(
+              color: widget.color.withValues(alpha: hovering ? 0.5 : 0.34),
+              blurRadius: hovering ? 18 : 10,
+              offset: Offset(0, hovering ? 8 : 4),
+            ),
+          ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: widget.onPressed,
+            borderRadius: BorderRadius.circular(999),
+            hoverColor: Colors.white.withValues(alpha: 0.08),
+            splashColor: Colors.white.withValues(alpha: 0.16),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 44, minWidth: 44),
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: horizontal,
+                  vertical: 12,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AnimatedBuilder(
+                      animation: widget.arrow,
+                      builder: (context, child) {
+                        final travel = reduce
+                            ? 0.0
+                            : widget.arrow.value * (hovering ? 6.0 : 3.5);
+                        return Transform.translate(
+                          offset: Offset(0, travel),
+                          child: child,
+                        );
+                      },
+                      child: const Icon(
+                        Icons.arrow_downward_rounded,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      widget.label,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 14,
+                        height: 1.1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

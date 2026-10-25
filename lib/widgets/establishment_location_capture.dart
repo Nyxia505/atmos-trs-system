@@ -23,6 +23,11 @@ class EstablishmentLocationCapture extends StatelessWidget {
     this.dashboardStyle = false,
     this.pinIcon = Icons.hotel_rounded,
     this.emptyPinMessage,
+    this.showMapPreview = true,
+    this.showStatus = true,
+    this.mapHeight = 160,
+    this.adjustLatitude,
+    this.adjustLongitude,
   });
 
   final double? latitude;
@@ -41,6 +46,18 @@ class EstablishmentLocationCapture extends StatelessWidget {
 
   /// Overrides the "Map pin required / No map pin yet" status text.
   final String? emptyPinMessage;
+
+  /// When false, only the Get location / Adjust pin actions are shown.
+  final bool showMapPreview;
+
+  /// When false, the "Pin: lat, lng" line is hidden.
+  final bool showStatus;
+
+  final double mapHeight;
+
+  /// Map center for Adjust Pin when a saved pin is not set yet.
+  final double? adjustLatitude;
+  final double? adjustLongitude;
 
   String get _emptyText =>
       emptyPinMessage ??
@@ -197,7 +214,7 @@ class EstablishmentLocationCapture extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
         child: SizedBox(
-          height: 160,
+          height: mapHeight,
           width: double.infinity,
           child: LayoutBuilder(
             builder: (context, constraints) {
@@ -391,22 +408,26 @@ class EstablishmentLocationCapture extends StatelessWidget {
     if (dashboardStyle) return _dashboardLayout(context, accent);
     final lat = latitude;
     final lng = longitude;
+    final adjustLat = _hasPin ? lat! : adjustLatitude;
+    final adjustLng = _hasPin ? lng! : adjustLongitude;
+    final canAdjust = adjustLat != null && adjustLng != null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          _hasPin
-              ? 'Pin: ${lat!.toStringAsFixed(5)}, ${lng!.toStringAsFixed(5)}'
-              : _emptyText,
-          style: TextStyle(
-            fontSize: 13,
-            height: 1.35,
-            color: _hasPin ? const Color(0xFF334155) : Colors.red.shade700,
-            fontWeight: FontWeight.w600,
+        if (showStatus)
+          Text(
+            _hasPin
+                ? 'Pin: ${lat!.toStringAsFixed(5)}, ${lng!.toStringAsFixed(5)}'
+                : _emptyText,
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.35,
+              color: _hasPin ? const Color(0xFF334155) : Colors.red.shade700,
+              fontWeight: FontWeight.w600,
+            ),
           ),
-        ),
-        if (_hasPin) ...[
-          const SizedBox(height: 10),
+        if (showMapPreview && _hasPin) ...[
+          if (showStatus) const SizedBox(height: 10),
           _pinPreview(context, accent, lat!, lng!),
         ],
         const SizedBox(height: 10),
@@ -425,7 +446,7 @@ class EstablishmentLocationCapture extends StatelessWidget {
                         ),
                       )
                     : Icon(Icons.my_location_rounded, color: accent),
-                label: Text(busy ? 'Getting location…' : 'Get location'),
+                label: Text(busy ? 'Getting location…' : 'Get Location'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: accent,
                   side: BorderSide(color: accent.withValues(alpha: 0.55)),
@@ -434,17 +455,17 @@ class EstablishmentLocationCapture extends StatelessWidget {
                 ),
               ),
             ),
-            if (_hasPin) ...[
+            if (canAdjust) ...[
               const SizedBox(width: 8),
               Expanded(
                 child: OutlinedButton.icon(
                   onPressed: () => _openMapPreview(
                     context,
-                    latitude: lat!,
-                    longitude: lng!,
+                    latitude: adjustLat,
+                    longitude: adjustLng,
                   ),
                   icon: Icon(Icons.tune_rounded, color: accent),
-                  label: const Text('Adjust pin'),
+                  label: const Text('Adjust Pin'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: accent,
                     side: BorderSide(color: accent.withValues(alpha: 0.55)),

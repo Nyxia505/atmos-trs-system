@@ -19,6 +19,7 @@ import 'trip_plan_host_bridge.dart';
 import 'auth/auth_navigation.dart';
 import 'auth/login_screen.dart';
 import 'auth/registration_screen.dart';
+import 'profile_feature_pages.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -96,12 +97,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
     if (picked == null) return;
 
+    final bytes = await picked.readAsBytes();
+    if (bytes.length > 5 * 1024 * 1024) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Choose a photo smaller than 5 MB.')),
+      );
+      return;
+    }
+
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Uploading photo…')),
     );
 
-    final bytes = await picked.readAsBytes();
     final url = await uploadAndSaveProfilePhoto(uid: uid, bytes: bytes);
     if (!context.mounted) return;
 
@@ -271,11 +280,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 'Edit Profile Photo',
                 onTap: () => _pickProfilePhoto(context),
               ),
-              _MenuItem(Icons.lock_outline, 'Change Password', onTap: () {}),
+              _MenuItem(
+                Icons.lock_outline,
+                'Change Password',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const ChangePasswordScreen(),
+                  ),
+                ),
+              ),
               _MenuItem(
                 Icons.notifications_outlined,
                 'Notification Settings',
-                onTap: () {},
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const NotificationSettingsScreen(),
+                  ),
+                ),
               ),
               if (_showAdminMenu)
                 _MenuItem(
@@ -299,8 +320,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 'Saved Places',
                 onTap: () => _openFavorites(context),
               ),
-              _MenuItem(Icons.history, 'Travel History', onTap: () {}),
-              _MenuItem(Icons.star_border, 'My Reviews', onTap: () {}),
+              _MenuItem(
+                Icons.history,
+                'Travel History',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const TravelHistoryScreen(),
+                  ),
+                ),
+              ),
+              _MenuItem(
+                Icons.star_border,
+                'My Reviews',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const MyReviewsScreen(),
+                  ),
+                ),
+              ),
               _MenuItem(
                 Icons.map_outlined,
                 'Map & Routes',
@@ -314,8 +351,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ]),
             const SizedBox(height: 12),
             _buildSection(context, 'Support', [
-              _MenuItem(Icons.help_outline, 'Help & FAQ', onTap: () {}),
-              _MenuItem(Icons.info_outline, 'About the App', onTap: () {}),
+              _MenuItem(
+                Icons.help_outline,
+                'Help & FAQ',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const HelpFaqScreen(),
+                  ),
+                ),
+              ),
+              _MenuItem(
+                Icons.info_outline,
+                'About the App',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const AboutAppScreen(),
+                  ),
+                ),
+              ),
             if (!tourismIsGuestSession())
               _MenuItem(
                 Icons.logout,
@@ -564,7 +617,7 @@ class _FavoriteSpotsScreenState extends State<FavoriteSpotsScreen> {
     return Scaffold(
       backgroundColor: AppColors.planPageBg,
       appBar: AppBar(
-        title: const Text('My Favorites'),
+        title: const Text('Saved Places'),
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
       ),
@@ -573,7 +626,7 @@ class _FavoriteSpotsScreenState extends State<FavoriteSpotsScreen> {
               child: Padding(
                 padding: EdgeInsets.all(24),
                 child: Text(
-                  'No favorites yet.\nOpen a spot and tap the heart to save it here.',
+                  'No saved places yet.\nOpen a spot and tap the heart to save it here.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: AppColors.textGrey,
@@ -631,9 +684,16 @@ class _FavoriteSpotsScreenState extends State<FavoriteSpotsScreen> {
                         fontSize: 13,
                       ),
                     ),
-                    trailing: const Icon(
-                      Icons.chevron_right_rounded,
-                      color: AppColors.textGrey,
+                    trailing: IconButton(
+                      tooltip: 'Remove',
+                      icon: const Icon(Icons.bookmark_remove_outlined),
+                      color: AppColors.primary,
+                      onPressed: () {
+                        SpotInteractionHistoryStore.instance.recordFavorited(
+                          spot,
+                          favorited: false,
+                        );
+                      },
                     ),
                     onTap: () {
                       Navigator.of(context).push(

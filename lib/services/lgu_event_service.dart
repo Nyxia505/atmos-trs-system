@@ -1,6 +1,7 @@
 import 'dart:async' show unawaited;
 import 'dart:convert';
 
+import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
 import 'package:atmos_trs_system/services/announcement_push_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -19,6 +20,9 @@ class LguEventService {
   final FirebaseFirestore _firestore;
 
   static const String collection = 'announcements';
+
+  /// Trip Planner catalog already stored in Firestore. Shown on the LGU Events page.
+  static const String eventsCollection = 'events';
   static const String typeEvent = 'Event';
   static const String typePromo = 'Promo';
   static const String typeAlert = 'Alert';
@@ -381,15 +385,18 @@ class LguEventService {
         debugPrint('[LguEventService] whereIn fallback: $e');
         snap = await _firestore.collection(collection).limit(80).get();
       }
-      final list = snap.docs
-          .map((d) => {'id': d.id, ...d.data()})
-          .where((e) => _matchesMunicipality(e, municipalityId))
-          .toList();
+      final list = _mergeById([
+        ...snap.docs.map((d) => {'id': d.id, ...d.data()}),
+        ...await _loadEventsCatalog(),
+      ]).where((e) => _matchesMunicipality(e, municipalityId)).toList();
       list.sort(_sortByCreatedAtDesc);
       return list;
     } catch (e) {
       debugPrint('[LguEventService] loadForMunicipality: $e');
-      return [];
+      final catalog = await _loadEventsCatalog();
+      final list = catalog.where((event) => _matchesMunicipality(event, municipalityId)).toList();
+      list.sort(_sortByCreatedAtDesc);
+      return list;
     }
   }
 
@@ -409,15 +416,18 @@ class LguEventService {
       } catch (_) {
         snap = await _firestore.collection(collection).limit(limit).get();
       }
-      final list = snap.docs
-          .map((d) => {'id': d.id, ...d.data()})
-          .where(isVisibleToTourists)
-          .toList();
+      final list = _mergeById([
+        ...snap.docs.map((d) => {'id': d.id, ...d.data()}),
+        ...await _loadEventsCatalog(),
+      ]).where(isVisibleToTourists).toList();
       list.sort(_sortByCreatedAtDesc);
       return list;
     } catch (e) {
       debugPrint('[LguEventService] loadPublishedProvinceWide: $e');
-      return [];
+      final catalog = await _loadEventsCatalog();
+      final list = catalog.where(isVisibleToTourists).toList();
+      list.sort(_sortByCreatedAtDesc);
+      return list;
     }
   }
 
@@ -503,7 +513,10 @@ class LguEventService {
       } catch (_) {
         snap = await _firestore.collection(collection).limit(100).get();
       }
-      final list = snap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+      final list = _mergeById([
+        ...snap.docs.map((d) => {'id': d.id, ...d.data()}),
+        ...await _loadEventsCatalog(),
+      ]);
       list.sort(_sortByCreatedAtDesc);
       return list;
     } catch (e) {
@@ -836,11 +849,146 @@ class LguEventService {
   }
 
   /// Live updates for the LGU calendar and post lists.
+  /// Includes LGU posts (`announcements`) and the Trip Planner `events` catalog.
   Stream<List<Map<String, dynamic>>> watchAnnouncements() {
     if (Firebase.apps.isEmpty) return const Stream.empty();
-    return _firestore.collection(collection).limit(200).snapshots().map(
-          (snap) => snap.docs.map((d) => {'id': d.id, ...d.data()}).toList(),
-        );
+    return Stream.multi((controller) {
+      List<Map<String, dynamic>>? posts;
+      List<Map<String, dynamic>>? catalog;
+      void emit() {
+        if (posts == null && catalog == null) return;
+        controller.add(_mergeById([
+          ...?posts,
+          ...?catalog,
+        ]));
+      }
+
+      final postsSub = _firestore.collection(collection).limit(200).snapshots().listen(
+        (snap) {
+          posts = snap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+          emit();
+        },
+        onError: (Object e) {
+          debugPrint('[LguEventService] watch announcements: $e');
+          posts ??= const [];
+          emit();
+        },
+      );
+      final catalogSub =
+          _firestore.collection(eventsCollection).limit(200).snapshots().listen(
+        (snap) {
+          catalog = snap.docs
+              .map((d) => normalizeCatalogEvent(d.id, d.data()))
+              .where((e) => (e['title']?.toString().trim() ?? '').isNotEmpty)
+              .toList();
+          emit();
+        },
+        onError: (Object e) {
+          debugPrint('[LguEventService] watch events: $e');
+          catalog ??= const [];
+          emit();
+        },
+      );
+      controller.onCancel = () {
+        postsSub.cancel();
+        catalogSub.cancel();
+      };
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> _loadEventsCatalog() async {
+    if (Firebase.apps.isEmpty) return [];
+    try {
+      final snap = await _firestore.collection(eventsCollection).limit(200).get();
+      return snap.docs
+          .map((d) => normalizeCatalogEvent(d.id, d.data()))
+          .where((e) => (e['title']?.toString().trim() ?? '').isNotEmpty)
+          .toList();
+    } catch (e) {
+      debugPrint('[LguEventService] events catalog: $e');
+      return [];
+    }
+  }
+
+  /// Maps a Trip Planner `events` document onto the LGU calendar shape.
+  static Map<String, dynamic> normalizeCatalogEvent(
+    String id,
+    Map<String, dynamic> data,
+  ) {
+    final municipality =
+        (data['municipalityName'] ?? data['municipality'] ?? '').toString().trim();
+    final storedId = data['municipalityId']?.toString().trim() ?? '';
+    final municipalityId = storedId.isNotEmpty
+        ? storedId
+        : municipalityIdForLabel(municipality);
+    final start = data['startsAt'] ??
+        data['startAt'] ??
+        data['start_at'] ??
+        data['date'] ??
+        data['eventDate'] ??
+        data['event_date'];
+    final image = data['imageUrl'] ??
+        data['image_url'] ??
+        data['imagePath'] ??
+        data['image'];
+    final venue = data['venue']?.toString().trim() ?? '';
+    final location = data['location']?.toString().trim() ?? '';
+    return {
+      ...data,
+      'id': id,
+      'title': data['title'] ?? data['name'] ?? data['eventTitle'] ?? '',
+      'content': data['content'] ?? data['description'] ?? data['body'] ?? '',
+      'type': data['type'] ?? data['eventType'] ?? data['event_type'] ?? typeEvent,
+      'municipalityName': municipality,
+      'municipalityId': municipalityId,
+      'startsAt': start,
+      'location': location.isNotEmpty
+          ? location
+          : (venue.isNotEmpty ? venue : municipality),
+      'imageUrl': image,
+      'published': data['published'] ?? true,
+      'status': data['status'] ?? 'approved',
+      'allDay': data['allDay'] ?? true,
+      'catalogSource': eventsCollection,
+    };
+  }
+
+  static String municipalityIdForLabel(String raw) {
+    final name = raw.trim().toLowerCase();
+    if (name.isEmpty) return '';
+    final list = getMisamisOccidentalMunicipalities();
+    for (final m in list) {
+      if (m.id.toLowerCase() == name || m.name.toLowerCase() == name) {
+        return m.id;
+      }
+    }
+    String? bestId;
+    var bestLength = 0;
+    for (final m in list) {
+      final label = m.name.toLowerCase();
+      if (name.contains(label) || label.contains(name)) {
+        if (m.name.length > bestLength) {
+          bestId = m.id;
+          bestLength = m.name.length;
+        }
+      }
+    }
+    return bestId ?? '';
+  }
+
+  static List<Map<String, dynamic>> _mergeById(
+    List<Map<String, dynamic>> items,
+  ) {
+    final seen = <String>{};
+    final out = <Map<String, dynamic>>[];
+    for (final item in items) {
+      final id = item['id']?.toString() ?? '';
+      final source = item['catalogSource']?.toString() ?? 'announcements';
+      final key = id.isEmpty ? '$source:${item['title']}:${item['startsAt']}' : '$source:$id';
+      if (!seen.add(key)) continue;
+      out.add(item);
+    }
+    return out;
   }
 
   /// Legacy: keep for older pending items a Governor may still want to publish.

@@ -84,4 +84,71 @@ void main() {
     expect(stats.foreign, 0);
     expect(stats.local, 0);
   });
+
+  test('categories come from the tourist spot when the check-in has none', () {
+    final now = DateTime(2026, 10, 19, 12);
+    final stats = VisitAnalyticsSnapshot.build(
+      now: now,
+      range: 'This Month',
+      categoryBySpotId: const {
+        'spot-beach': 'Beach',
+        'spot-park': 'park',
+      },
+      categoryNamesByKey: const {
+        'beach': 'Beach',
+        'park': 'Park',
+      },
+      checkIns: [
+        {
+          'spotId': 'spot-beach',
+          'timestamp': DateTime(2026, 10, 2, 9),
+          'visitorCount': 3,
+        },
+        {
+          'spotId': 'spot-park',
+          'categoryId': 'park',
+          'timestamp': DateTime(2026, 10, 3, 9),
+          'visitorCount': 1,
+        },
+        {
+          'spotId': 'missing',
+          'timestamp': DateTime(2026, 10, 4, 9),
+          'visitorCount': 1,
+        },
+        {
+          'spotId': 'spot-beach',
+          'spotCategory': 'Beach',
+          'timestamp': DateTime(2026, 9, 30, 9),
+          'visitorCount': 9,
+        },
+      ],
+    );
+
+    expect(stats.categories.map((row) => row.name).toList(), [
+      'Beach',
+      'Park',
+      'Other',
+    ]);
+    expect(stats.categories.map((row) => row.count).toList(), [3, 1, 1]);
+    expect(
+      stats.categories.fold<int>(0, (sum, row) => sum + row.count),
+      5,
+    );
+  });
+
+  test('no visits in the selected period leaves categories empty', () {
+    final stats = VisitAnalyticsSnapshot.build(
+      now: DateTime(2026, 10, 19),
+      range: 'This Month',
+      checkIns: const [
+        {
+          'spotCategory': 'Beach',
+          'timestamp': '2026-08-01T10:00:00',
+          'visitorCount': 4,
+        },
+      ],
+    );
+
+    expect(stats.categories, isEmpty);
+  });
 }

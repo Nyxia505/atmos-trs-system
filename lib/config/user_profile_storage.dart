@@ -1,3 +1,5 @@
+import 'package:atmos_trs_system/utils/email_utils.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Stores user profile data from signup for display in Profile tab.
@@ -5,12 +7,27 @@ class UserProfileStorage {
   UserProfileStorage._();
 
   static UserProfile? _memoryCache;
+  static String? _ownerUid;
+  static bool _diskLoaded = false;
 
-  /// In-memory profile for instant UI (Home header) after app restart.
+  /// In-memory profile for the signed-in account only.
   static UserProfile? get cachedProfile {
     final p = _memoryCache;
-    if (p != null && p.firstName.trim().isNotEmpty) return p;
-    return null;
+    if (p == null || p.firstName.trim().isEmpty) return null;
+    if (!_belongsToSignedInUser(p)) return null;
+    return p;
+  }
+
+  /// True when this profile was saved for the current Firebase user.
+  /// Older installs have no owner id, so the saved email is compared instead.
+  static bool _belongsToSignedInUser(UserProfile profile) {
+    final auth = FirebaseAuth.instance.currentUser;
+    if (auth == null) return true;
+    final owner = _ownerUid;
+    if (owner != null && owner.isNotEmpty) return owner == auth.uid;
+    final authEmail = normalizeEmail(auth.email ?? '');
+    if (authEmail.isEmpty) return true;
+    return normalizeEmail(profile.email) == authEmail;
   }
 
   /// Loads SharedPreferences into [cachedProfile] before the first frame.
@@ -18,6 +35,7 @@ class UserProfileStorage {
     await getUserProfile();
   }
 
+  static const _keyOwnerUid = 'user_profile_owner_uid';
   static const _keyFirstName = 'user_first_name';
   static const _keyMiddleName = 'user_middle_name';
   static const _keyLastName = 'user_last_name';
@@ -62,6 +80,11 @@ class UserProfileStorage {
     String? profilePhotoUrl,
   }) async {
     final prefs = await SharedPreferences.getInstance();
+    final ownerUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (ownerUid.isNotEmpty) {
+      await prefs.setString(_keyOwnerUid, ownerUid);
+      _ownerUid = ownerUid;
+    }
     await prefs.setString(_keyFirstName, firstName);
     if (middleName != null) await prefs.setString(_keyMiddleName, middleName);
     await prefs.setString(_keyLastName, lastName);
@@ -128,14 +151,24 @@ class UserProfileStorage {
     }
   }
 
-  /// Get user profile data
+  /// Get user profile data for the signed-in account.
+  /// A profile left on the device by a previous login is discarded.
   static Future<UserProfile?> getUserProfile() async {
-    final cached = cachedProfile;
-    if (cached != null) return cached;
+    await _loadFromDisk();
+    final profile = _memoryCache;
+    if (profile == null || profile.firstName.trim().isEmpty) return null;
+    if (_belongsToSignedInUser(profile)) return profile;
+    await clearUserProfile();
+    return null;
+  }
 
+  static Future<void> _loadFromDisk() async {
+    if (_diskLoaded) return;
     final prefs = await SharedPreferences.getInstance();
+    _ownerUid = prefs.getString(_keyOwnerUid);
     final firstName = prefs.getString(_keyFirstName);
-    if (firstName == null) return null;
+    _diskLoaded = true;
+    if (firstName == null) return;
 
     _memoryCache = UserProfile(
       firstName: firstName,
@@ -157,13 +190,15 @@ class UserProfileStorage {
       profileImageBase64: prefs.getString(_keyProfileImage),
       profilePhotoUrl: prefs.getString(_keyProfilePhotoUrl),
     );
-    return _memoryCache;
   }
 
   /// Clear user profile data on logout
   static Future<void> clearUserProfile() async {
     _memoryCache = null;
+    _ownerUid = null;
+    _diskLoaded = true;
     final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyOwnerUid);
     await prefs.remove(_keyFirstName);
     await prefs.remove(_keyMiddleName);
     await prefs.remove(_keyLastName);

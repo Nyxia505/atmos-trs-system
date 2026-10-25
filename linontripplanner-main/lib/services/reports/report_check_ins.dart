@@ -115,6 +115,15 @@ String checkInIdentity(Map<String, dynamic> raw, String fallbackDocId) {
 /// Resolves which municipality a check-in belongs to, falling back to the
 /// municipality of the named tourist spot.
 Municipality? municipalityFromCheckIn(Map<String, dynamic> raw) {
+  final idHint = checkInStringField(raw, const [
+    'municipalityId',
+    'municipality_id',
+    'lguId',
+    'lgu_id',
+  ]);
+  var matched = matchMunicipalityByLocalityHint(idHint);
+  if (matched != null) return matched;
+
   final hint = checkInStringField(raw, const [
     'visitMunicipality',
     'visitedMunicipality',
@@ -132,7 +141,7 @@ Municipality? municipalityFromCheckIn(Map<String, dynamic> raw) {
     'place',
     'destination',
   ]);
-  var matched = matchMunicipalityByLocalityHint(hint);
+  matched = matchMunicipalityByLocalityHint(hint);
   if (matched != null) return matched;
 
   final spotHint = checkInSpotName(raw);

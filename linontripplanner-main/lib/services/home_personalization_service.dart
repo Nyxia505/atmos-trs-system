@@ -1,5 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show ValueNotifier;
+import 'package:flutter/foundation.dart' show ValueNotifier, debugPrint, kDebugMode;
 
 import '../algorithms/collaborative_filtering.dart';
 import '../data.dart';
@@ -20,6 +20,7 @@ class HomePersonalizationService {
 
   TravelHistoryProfile? _profile;
   List<CollaborativeUserProfile> _peers = [];
+  int _refreshEpoch = 0;
 
   bool get hasPersonalization => allSpots.isNotEmpty;
 
@@ -35,35 +36,63 @@ class HomePersonalizationService {
 
   /// Reloads profile, interactions, and recomputes home rankings.
   Future<void> refresh() async {
+    final epoch = ++_refreshEpoch;
     final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (kDebugMode) {
+      debugPrint(
+        'HomePersonalization ${DateTime.now().toIso8601String()} '
+        'refresh start epoch=$epoch source=tourist_spots',
+      );
+    }
     if (uid == null) {
       _profile = null;
       _peers = [];
       await SpotInteractionHistoryStore.instance.load();
+      if (epoch != _refreshEpoch) return;
       await HomeRecommendationService.instance.recompute(profile: null);
       revision.value++;
       return;
     }
     try {
       await Future(() async {
-        _profile = await fetchTravelHistoryProfile(uid);
+        final profile = await fetchTravelHistoryProfile(uid);
+        if (epoch != _refreshEpoch) return;
+        _profile = profile;
         if (_profile!.hasSignals) {
           await saveRecommendationProfileForCollaborativeFiltering(
             uid: uid,
             profile: _profile!,
           );
         }
-        _peers = await loadCollaborativePeerProfiles(excludeUid: uid);
+        if (epoch != _refreshEpoch) return;
+        final peers = await loadCollaborativePeerProfiles(excludeUid: uid);
+        if (epoch != _refreshEpoch) return;
+        _peers = peers;
         await SpotInteractionHistoryStore.instance.load();
+        if (epoch != _refreshEpoch) return;
         if (_profile != null) {
           SpotInteractionHistoryStore.instance
               .mergeVisitedKeys(_profile!.visitedSpotNameKeys);
         }
       }).timeout(const Duration(seconds: 12));
-    } catch (_) {
-      // Keep last good profile on timeout.
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          'HomePersonalization ${DateTime.now().toIso8601String()} '
+          'refresh kept last profile (timeout or error) epoch=$epoch',
+        );
+      }
     }
 
+    if (epoch != _refreshEpoch) {
+      if (kDebugMode) {
+        debugPrint(
+          'HomePersonalization ${DateTime.now().toIso8601String()} '
+          'ignored stale refresh epoch=$epoch',
+        );
+      }
+      return;
+    }
     await HomeRecommendationService.instance.recompute(profile: _profile);
     revision.value++;
   }
@@ -77,11 +106,12 @@ class HomePersonalizationService {
     final profile = _profile;
     if (allSpots.isEmpty) return const [];
 
+    final catalog = authoritativeHomeTouristSpots();
     if (profile == null || !profile.hasSignals) {
       final featured =
           HomeRecommendationService.instance.featuredSpots(limit: limit);
       if (featured.isNotEmpty) return featured;
-      return List<TouristSpot>.from(allSpots)
+      return List<TouristSpot>.from(catalog)
         ..sort((a, b) => b.rating.compareTo(a.rating));
     }
 
@@ -90,7 +120,7 @@ class HomePersonalizationService {
     if (_peers.isNotEmpty) {
       ranked.addAll(
         CollaborativeFiltering.rankSpots(
-          catalog: allSpots,
+          catalog: catalog,
           targetItems: vectors.items,
           targetTags: vectors.tags,
           peers: _peers,
@@ -107,7 +137,7 @@ class HomePersonalizationService {
       if (out.length >= limit) break;
     }
     if (out.isEmpty) {
-      return List<TouristSpot>.from(allSpots)
+      return List<TouristSpot>.from(catalog)
         ..sort((a, b) => b.rating.compareTo(a.rating));
     }
     return out.take(limit).toList();

@@ -117,15 +117,23 @@ class AeSheetFrame extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final viewport = constraints.maxWidth;
+        // Border.all is drawn inside this frame, so the sheet must fit
+        // the inner width. An extra left border on the rows overflows by 1px.
+        const frameBorder = 1.0;
+        final outer = constraints.maxWidth;
+        final viewport = outer.isFinite
+            ? (outer - frameBorder * 2).clamp(0.0, double.infinity)
+            : outer;
         final base = minWidth > 0 ? minWidth : (viewport.isFinite ? viewport : 0);
-        final scale = viewport.isFinite && base > 0 && viewport > base ? viewport / base : 1.0;
+        final scale = viewport.isFinite && base > 0 && viewport > base
+            ? viewport / base
+            : 1.0;
         final width = base > 0 ? base * scale : null;
         return Container(
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: AeSheetKit.grid),
+            border: Border.all(color: AeSheetKit.grid, width: frameBorder),
           ),
           clipBehavior: Clip.antiAlias,
           child: SingleChildScrollView(
@@ -134,12 +142,7 @@ class AeSheetFrame extends StatelessWidget {
               width: width,
               child: AeSheetScale(
                 scale: scale,
-                child: Container(
-                  decoration: const BoxDecoration(
-                    border: Border(left: BorderSide(color: AeSheetKit.grid)),
-                  ),
-                  child: child,
-                ),
+                child: child,
               ),
             ),
           ),

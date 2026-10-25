@@ -268,16 +268,33 @@ Future<String?> _fetchBestProfilePhotoUrlInner(
   return null;
 }
 
-/// Uploads face photo to Supabase and saves `profilePhotoUrl` on `users` + `tourists`.
+Future<String> _uploadProfileBytes(String uid, Uint8List bytes) async {
+  try {
+    final ref = FirebaseStorage.instance.ref('user_profiles/$uid/profile.jpg');
+    await ref.putData(
+      bytes,
+      SettableMetadata(contentType: 'image/jpeg'),
+    );
+    return ref.getDownloadURL();
+  } catch (e) {
+    debugPrint('Firebase Storage profile upload failed, using fallback: $e');
+    return uploadUserProfileImage(bytes, 'user_profiles/$uid');
+  }
+}
+
+/// Uploads face photo and saves `profilePhotoUrl` on `users` + `tourists`.
 Future<String?> uploadAndSaveProfilePhoto({
   required String uid,
   required Uint8List bytes,
 }) async {
   if (uid.trim().isEmpty || bytes.isEmpty) return null;
+  if (bytes.length > 5 * 1024 * 1024) {
+    throw StateError('Image must be 5 MB or smaller.');
+  }
   final id = uid.trim();
 
   try {
-    final url = await uploadUserProfileImage(bytes, 'user_profiles/$id');
+    final url = await _uploadProfileBytes(id, bytes);
 
     final auth = FirebaseAuth.instance.currentUser;
     if (auth != null && auth.uid == id) {

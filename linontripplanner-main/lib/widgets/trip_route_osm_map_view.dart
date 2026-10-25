@@ -18,12 +18,29 @@ class TripBusMarker {
   final LatLng point;
   final String kind;
   final String label;
+  final String name;
+  final String municipality;
+  final String routeTypeLabel;
+  final double? distanceKmFromRoute;
+  final String? nearSpotName;
+  final bool isRecommendedDropOff;
+  final String dropOffNote;
 
   const TripBusMarker({
     required this.point,
     required this.kind,
     required this.label,
+    this.name = '',
+    this.municipality = '',
+    this.routeTypeLabel = '',
+    this.distanceKmFromRoute,
+    this.nearSpotName,
+    this.isRecommendedDropOff = false,
+    this.dropOffNote = '',
   });
+
+  String get displayName =>
+      name.trim().isNotEmpty ? name.trim() : label.trim();
 }
 
 /// OpenStreetMap trip route (web fallback — no Google Maps API key / billing).
@@ -44,6 +61,9 @@ class TripRouteOsmMapView extends StatefulWidget {
   final String endPinTitle;
   final String endPinDetail;
   final List<TripBusMarker> busMarkers;
+  final bool showTouristSpots;
+  final bool showBusStops;
+  final bool showBusTerminals;
 
   const TripRouteOsmMapView({
     super.key,
@@ -62,6 +82,9 @@ class TripRouteOsmMapView extends StatefulWidget {
     this.endPinTitle = 'End Point',
     this.endPinDetail = '',
     this.busMarkers = const [],
+    this.showTouristSpots = true,
+    this.showBusStops = true,
+    this.showBusTerminals = true,
   });
 
   @override
@@ -121,46 +144,52 @@ class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
     }
 
     for (final bus in widget.busMarkers) {
+      final isStop = bus.kind == 'stop';
+      if (isStop && !widget.showBusStops) continue;
+      if (!isStop && !widget.showBusTerminals) continue;
       if (start != null && _same(bus.point, start)) continue;
       if (end != null && _same(bus.point, end)) continue;
-      final stop = bus.kind == 'stop';
       markers.add(
         _busMarker(
           _toOsm(bus.point),
-          color: stop ? const Color(0xFF7B1FA2) : const Color(0xFF1565C0),
-          icon: stop ? Icons.directions_bus : Icons.directions_bus_filled,
-          title: stop ? 'Bus stop' : 'Bus terminal',
-          detail: bus.label,
+          color: bus.isRecommendedDropOff
+              ? const Color(0xFF2E7D32)
+              : (isStop ? const Color(0xFF7B1FA2) : const Color(0xFF1565C0)),
+          icon: isStop ? Icons.directions_bus : Icons.directions_bus_filled,
+          title: isStop ? 'Bus stop' : 'Bus terminal',
+          bus: bus,
         ),
       );
     }
 
-    for (final spot in widget.spots) {
-      if (spot.latitude == null || spot.longitude == null) continue;
-      final pos = LatLng(spot.latitude!, spot.longitude!);
-      if (start != null && _same(pos, start)) continue;
-      if (end != null && _same(pos, end)) continue;
-      final fit = evaluateBudgetFit(spot, widget.budget);
-      final exactMatch =
-          widget.exactBudgetSpotNames.contains(spot.name) ||
-          fit.exactBudgetMatch;
-      markers.add(
-        _pinMarker(
-          _toOsm(pos),
-          exactMatch ? Colors.green : Colors.orange,
-          spot.name,
-          onTap: widget.compact
-              ? null
-              : () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => SpotDetailScreen(spot: spot),
-                    ),
-                  );
-                },
-        ),
-      );
+    if (widget.showTouristSpots) {
+      for (final spot in widget.spots) {
+        if (spot.latitude == null || spot.longitude == null) continue;
+        final pos = LatLng(spot.latitude!, spot.longitude!);
+        if (start != null && _same(pos, start)) continue;
+        if (end != null && _same(pos, end)) continue;
+        final fit = evaluateBudgetFit(spot, widget.budget);
+        final exactMatch =
+            widget.exactBudgetSpotNames.contains(spot.name) ||
+            fit.exactBudgetMatch;
+        markers.add(
+          _pinMarker(
+            _toOsm(pos),
+            exactMatch ? Colors.green : Colors.orange,
+            spot.name,
+            onTap: widget.compact
+                ? null
+                : () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => SpotDetailScreen(spot: spot),
+                      ),
+                    );
+                  },
+          ),
+        );
+      }
     }
     return markers;
   }
@@ -266,8 +295,24 @@ class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
     required Color color,
     required IconData icon,
     required String title,
-    required String detail,
+    required TripBusMarker bus,
   }) {
+    final lines = <String>[
+      bus.displayName,
+      if (bus.municipality.trim().isNotEmpty) 'Municipality: ${bus.municipality}',
+      'Location: ${bus.point.latitude.toStringAsFixed(5)}, '
+          '${bus.point.longitude.toStringAsFixed(5)}',
+      if (bus.routeTypeLabel.trim().isNotEmpty)
+        'Transport: ${bus.routeTypeLabel}',
+      if (bus.distanceKmFromRoute != null)
+        'Distance to ${bus.nearSpotName ?? 'destination'}: '
+            '${bus.distanceKmFromRoute!.toStringAsFixed(1)} km',
+      if (bus.isRecommendedDropOff)
+        'Recommended drop-off point'
+      else if (bus.dropOffNote.trim().isNotEmpty)
+        bus.dropOffNote.trim(),
+    ];
+    final detail = lines.join('\n');
     return Marker(
       point: point,
       width: 44,

@@ -1,12 +1,14 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../admin_dashboard_screen.dart';
 import '../data.dart';
 import '../firestore_loader.dart';
 import '../home_screen.dart';
 import '../services/admin_accounts_service.dart';
 import '../services/admin_session_bootstrap.dart';
 import '../services/auth_roles.dart';
+import '../trip_plan_host_bridge.dart';
 
 /// Blocks admin UI unless the signed-in user has admin or municipal_manager role.
 class AdminAccessGate extends StatefulWidget {
@@ -53,8 +55,24 @@ class _AdminAccessGateState extends State<AdminAccessGate> {
     if (!mounted) return;
     final roleOk = AuthRoles.canAccessAdminDashboard();
     final accountOk = await AdminAccountsService.isCurrentUserAdminAccount();
+    final hostOk = TripPlanHostBridge.isHostCatalogAdmin?.call() == true;
+    final optacaOk = AuthRoles.isOptacaDestinationViewer();
+    // Never revoke a still-signed-in OPTACA/host session just because the
+    // Trip Planner users cache has not loaded yet after refresh.
+    final signedIn = FirebaseAuth.instance.currentUser != null;
+    final allowed = roleOk ||
+        accountOk ||
+        hostOk ||
+        optacaOk ||
+        (signedIn && isLikelyAdminSession());
     setState(() {
-      _allowed = roleOk || accountOk;
+      // Background re-check must not revoke a session that was already allowed
+      // (users cache race after browser refresh / hot restart).
+      if (silent && _allowed && !allowed && signedIn) {
+        _loading = false;
+        return;
+      }
+      _allowed = allowed;
       _loading = false;
     });
   }
@@ -100,6 +118,21 @@ class _AdminAccessGateState extends State<AdminAccessGate> {
               const SizedBox(height: 24),
               FilledButton(
                 onPressed: () {
+                  // OPTACA / catalog admins: reopen Trip Planner admin — never
+                  // dump into the tourist HomeScreen (ATMOS TRS tourist shell).
+                  if (isLikelyAdminSession() ||
+                      AuthRoles.canAccessAdminDashboard() ||
+                      TripPlanHostBridge.isHostCatalogAdmin?.call() == true) {
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const AdminAccessGate(
+                          child: AdminDashboardScreen(),
+                        ),
+                      ),
+                      (_) => false,
+                    );
+                    return;
+                  }
                   Navigator.of(context).pushAndRemoveUntil(
                     MaterialPageRoute<void>(
                       builder: (_) => const HomeScreen(),
@@ -107,7 +140,12 @@ class _AdminAccessGateState extends State<AdminAccessGate> {
                     (_) => false,
                   );
                 },
-                child: const Text('Open app home'),
+                child: Text(
+                  isLikelyAdminSession() ||
+                          TripPlanHostBridge.isHostCatalogAdmin?.call() == true
+                      ? 'Open Dashboard'
+                      : 'Open app home',
+                ),
               ),
             ],
           ),

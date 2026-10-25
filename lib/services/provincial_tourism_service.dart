@@ -365,29 +365,27 @@ class ProvincialTourismService {
       }
     }
 
+    // QR enrollment uses Firestore `qrValue` + `qr_payload` (see spot_qr_helper).
+    // Full QR audit lives in OptacaDataQualityAudit; keep a short ops preview here.
+    var missingQrPreview = 0;
     for (final s in spots) {
       final id = s['id']?.toString() ?? '';
+      if (id.isEmpty) continue;
+      final payload =
+          (s['qr_payload'] ?? s['qrPayload'] ?? '').toString().trim();
+      if (payload.isNotEmpty) continue;
       final name = s['name']?.toString() ?? 'Spot';
-      final qr = s['qrCode']?.toString() ??
-          s['qrPayload']?.toString() ??
-          s['qrData']?.toString() ??
-          '';
-      final hasQr = qr.trim().isNotEmpty ||
-          (s['hasQr'] == true) ||
-          (s['qrGenerated'] == true);
-      if (!hasQr && id.isNotEmpty) {
-        alerts.add(
-          ProvincialAlert(
-            id: 'qr_$id',
-            title: 'Missing QR: $name',
-            message: 'Spot may be missing a check-in QR code.',
-            severity: ProvincialAlertSeverity.info,
-            municipalityId: municipalityIdOf(s),
-          ),
-        );
-        // Cap QR-missing noise so the badge stays actionable.
-        if (alerts.where((a) => a.id.startsWith('qr_')).length >= 5) break;
-      }
+      alerts.add(
+        ProvincialAlert(
+          id: 'qr_$id',
+          title: 'Missing QR: $name',
+          message: 'No qr_payload — spot is not enrolled for tourist check-in.',
+          severity: ProvincialAlertSeverity.warning,
+          municipalityId: municipalityIdOf(s),
+        ),
+      );
+      missingQrPreview++;
+      if (missingQrPreview >= 5) break;
     }
 
     final now = DateTime.now();

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart'
     show debugPrint, kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'firebase_options.dart';
+import 'services/notification_prefs.dart';
 
 /// Same topic string as Cloud Function `EVENTS_FCM_TOPIC` in `functions/index.js`.
 const String kEventsFcmTopic = 'tourism_events';
@@ -99,7 +100,11 @@ String _eventNotificationTitle(Map<String, dynamic> data, String? fallback) {
   return 'New event';
 }
 
-void _showForegroundNotification(RemoteMessage message) {
+Future<void> _showForegroundNotification(RemoteMessage message) async {
+  if (message.data['type'] == 'new_event') {
+    final prefs = await NotificationPrefs.load();
+    if (!prefs.events) return;
+  }
   final n = message.notification;
   final data = message.data;
   final fromData = _eventNotificationBodyFromData(data);
@@ -144,8 +149,13 @@ Future<void> _subscribeToEventsTopic(FirebaseMessaging messaging) async {
       'initPushNotifications: FCM token ready (${token.substring(0, 12)}…)',
     );
   }
-  await messaging.subscribeToTopic(kEventsFcmTopic);
-  debugPrint('initPushNotifications: subscribed to topic $kEventsFcmTopic');
+  try {
+    final prefs = await NotificationPrefs.load();
+    await NotificationPrefs.applyDelivery(prefs);
+  } catch (e) {
+    await messaging.subscribeToTopic(kEventsFcmTopic);
+    debugPrint('initPushNotifications: prefs unavailable, subscribed ($e)');
+  }
 }
 
 /// Request notification permission, subscribe to [kEventsFcmTopic], and show

@@ -20,14 +20,14 @@ const String kAndroidApkDownloadUrl =
 
 bool get kHasAndroidApkDownload => kAndroidApkDownloadUrl.trim().isNotEmpty;
 
-/// Trip Planner Android APK. Leave empty until a file is hosted.
-/// Do not invent a URL.
-const String kTripPlannerApkDownloadUrl = '';
+/// Trip Planner Android APK (linontripplanner-main release build).
+const String kTripPlannerApkDownloadUrl =
+    'https://github.com/Nyxia505/atmos-trs-system/releases/latest/download/trip-planner.apk';
 
 bool get kHasTripPlannerApkDownload =>
     kTripPlannerApkDownloadUrl.trim().isNotEmpty;
 
-/// Opens the hosted Trip Planner APK. Returns false when no URL is configured.
+/// Opens the hosted Trip Planner APK download. Returns false when URL is missing.
 Future<bool> openTripPlannerApkDownload() async {
   final raw = kTripPlannerApkDownloadUrl.trim();
   if (raw.isEmpty) return false;

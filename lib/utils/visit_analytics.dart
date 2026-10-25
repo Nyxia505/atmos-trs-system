@@ -1,4 +1,5 @@
 import 'package:atmos_trs_system/services/governor_firestore_service.dart';
+import 'package:atmos_trs_system/services/spot_category_service.dart';
 import 'package:atmos_trs_system/utils/checkin_visitor_count.dart';
 import 'package:atmos_trs_system/utils/checkin_visitor_expansion.dart';
 
@@ -49,6 +50,9 @@ class VisitAnalyticsSnapshot {
     String range = 'This Month',
     DateTime? now,
     DateTime? Function(Map<String, dynamic> checkIn)? parseTime,
+    Map<String, String> categoryBySpotId = const {},
+    Map<String, String> categoryBySpotName = const {},
+    Map<String, String> categoryNamesByKey = const {},
   }) {
     final clock = now ?? DateTime.now();
     final readTime = parseTime ?? GovernorFirestoreService.parseCheckInTime;
@@ -82,8 +86,19 @@ class VisitAnalyticsSnapshot {
         hours[when.hour] = (hours[when.hour] ?? 0) + weight;
       }
 
-      final category = _categoryOf(checkIn);
-      categories[category] = (categories[category] ?? 0) + weight;
+      if (_inSelectedRange(when, range, clock)) {
+        final category = _categoryOf(
+          checkIn,
+          categoryBySpotId: categoryBySpotId,
+          categoryBySpotName: categoryBySpotName,
+          categoryNamesByKey: categoryNamesByKey,
+          knownNames: categories.keys,
+        );
+        final visits = checkInVisitorCount(checkIn);
+        if (visits > 0) {
+          categories[category] = (categories[category] ?? 0) + visits;
+        }
+      }
       final municipality = _municipalityOf(checkIn);
       if (municipality.isNotEmpty) {
         municipalities[municipality] =
@@ -162,7 +177,7 @@ class VisitAnalyticsSnapshot {
             others: ages[label]!.others,
           ),
       ],
-      categories: _ranked(categories, 5),
+      categories: _ranked(categories),
       municipalities: _ranked(municipalities, 8),
       spots: _ranked(spots, 8),
       arrivals: _arrivals(checkIns, readTime, range, clock),
@@ -251,11 +266,95 @@ String? _originLabel(CheckInVisitorUnit unit) {
   return null;
 }
 
-String _categoryOf(Map<String, dynamic> checkIn) {
-  final raw = checkIn['spotCategory']?.toString().trim() ??
-      checkIn['category']?.toString().trim() ??
+const _unclassifiedCategory = {
+  'other',
+  'spot',
+  'uncategorized',
+  'unclassified',
+  'n/a',
+  'na',
+  'none',
+  'null',
+  'all',
+};
+
+bool _inSelectedRange(DateTime? when, String range, DateTime now) {
+  if (when == null) return false;
+  if (range == 'This Year') {
+    final diff = (now.year - when.year) * 12 + (now.month - when.month);
+    return diff >= 0 && diff < 12;
+  }
+  if (range == 'This Month') {
+    return when.year == now.year && when.month == now.month;
+  }
+  final days = range == 'This Week' ? 7 : 14;
+  final day = DateTime(when.year, when.month, when.day);
+  final diff = DateTime(now.year, now.month, now.day).difference(day).inDays;
+  return diff >= 0 && diff < days;
+}
+
+String? _usableCategory(String? raw, Map<String, String> categoryNamesByKey) {
+  final value = raw?.trim() ?? '';
+  if (value.isEmpty) return null;
+  final mapped = categoryNamesByKey[value] ??
+      categoryNamesByKey[value.toLowerCase()] ??
+      categoryNamesByKey[SpotCategoryNames.keyOf(value)];
+  final label = (mapped ?? value).trim().replaceAll(RegExp(r'\s+'), ' ');
+  if (label.isEmpty || _unclassifiedCategory.contains(label.toLowerCase())) {
+    return null;
+  }
+  return label;
+}
+
+String _categoryOf(
+  Map<String, dynamic> checkIn, {
+  Map<String, String> categoryBySpotId = const {},
+  Map<String, String> categoryBySpotName = const {},
+  Map<String, String> categoryNamesByKey = const {},
+  Iterable<String> knownNames = const [],
+}) {
+  String? pick(String? raw) {
+    final usable = _usableCategory(raw, categoryNamesByKey);
+    if (usable == null) return null;
+    return SpotCategoryNames.canonicalMatch(usable, [
+          ...SpotCategoryService.builtIn,
+          ...knownNames,
+        ]) ??
+        usable;
+  }
+
+  for (final key in [
+    'spotCategory',
+    'category',
+    'categoryName',
+    'category_name',
+    'spot_category',
+  ]) {
+    final named = pick(checkIn[key]?.toString());
+    if (named != null) return named;
+  }
+
+  final categoryId = checkIn['categoryId']?.toString().trim() ??
+      checkIn['category_id']?.toString().trim() ??
       '';
-  return raw.isEmpty ? 'Other' : raw;
+  final fromCategoryId = pick(categoryId);
+  if (fromCategoryId != null) return fromCategoryId;
+
+  for (final key in ['spotId', 'spot_id', 'touristSpotId', 'location_id']) {
+    final id = checkIn[key]?.toString().trim() ?? '';
+    if (id.isEmpty) continue;
+    final fromSpot = pick(categoryBySpotId[id]);
+    if (fromSpot != null) return fromSpot;
+  }
+
+  for (final key in ['spot_name', 'spotName', 'location', 'name']) {
+    final name = checkIn[key]?.toString().trim().toLowerCase() ?? '';
+    if (name.isEmpty) continue;
+    final fromName = pick(categoryBySpotName[name]);
+    if (fromName != null) return fromName;
+  }
+
+  return 'Other';
 }
 
 String _municipalityOf(Map<String, dynamic> checkIn) {
@@ -298,11 +397,12 @@ String _topKey(Map<String, int> counts) {
   return counts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
 }
 
-List<({String name, int count})> _ranked(Map<String, int> counts, int limit) {
+List<({String name, int count})> _ranked(Map<String, int> counts, [int? limit]) {
   final rows = counts.entries.where((e) => e.value > 0).toList()
     ..sort((a, b) => b.value.compareTo(a.value));
+  final taken = limit == null ? rows : rows.take(limit);
   return [
-    for (final row in rows.take(limit)) (name: row.key, count: row.value),
+    for (final row in taken) (name: row.key, count: row.value),
   ];
 }
 

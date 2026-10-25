@@ -3,7 +3,7 @@ description: "ATMOS TRS"
 
 publish_to: 'none'
 
-version: 1.0.8+9
+version: 1.0.9+10
 
 environment:
   sdk: ^3.11.0
@@ -115,6 +115,7 @@ flutter:
     - assets/images/ae_photos_collage.png
     # Municipality / destination heroes for Visited place thumbnails
     - assets/images/oroquieta City plaza.jpeg
+    - assets/images/Kenjelo.jpg
     - assets/images/iloveoro.jpg
     - assets/images/ozamis city.webp
     - assets/images/Cotta Fort & Shrine.jpg
@@ -151,7 +152,10 @@ flutter:
     - forms_format/DAE1B.2.Domestic.xlsx
 
   fonts:
-    - family: Sacrifice
+    - family: HolidayCalling
+      fonts:
+        - asset: assets/fonts/holiday-calling-non-commercial-use.noncommercialuse.ttf
+    - family: Sacrifice 
       fonts:
         - asset: assets/fonts/sacrifice-font/SacrificeDemo-8Ox1B.ttf
 

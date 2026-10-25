@@ -49,10 +49,13 @@ class BusItineraryPlan {
   const BusItineraryPlan({required this.days, this.error});
 }
 
-/// Builds each day's road sequence:
-/// start → bus stop/terminal → tourist spots (nearest road) → bus stop/terminal
-/// when the next municipality needs a ride. Spot order inside a municipality
-/// uses nearest neighbor. Locked days keep the user's spot order.
+/// Builds each day's tourist road sequence (start → spots by nearest road).
+///
+/// Bus stops/terminals may still appear as [ItineraryRouteNode]s for map
+/// guidance and fare/timeline context, but they use [ItineraryRouteNode.onRoad]
+/// `false` so they are **not** mandatory polyline waypoints.
+/// Spot order inside a municipality uses nearest neighbor. Locked days keep
+/// the user's spot order.
 Future<BusItineraryPlan> buildBusItineraryPlan({
   required Municipality start,
   required List<List<TouristSpot>> days,
@@ -142,21 +145,22 @@ Future<BusItineraryPlan> buildBusItineraryPlan({
           direction: direction,
         );
         if (linked == null) {
+          // Transport guidance only — missing hubs must not break tourist routing.
           errors.add(
-            'No bus connection from ${cursor.place} to $muni'
-            '${direction == null ? '' : ' on the ${direction.name} route'}.',
+            'No verified bus hub from ${cursor.place} to $muni'
+            '${direction == null ? '' : ' on the ${direction.name} route'} '
+            '(tourist road route continues without it).',
           );
-          roadOpen = false;
-          break;
+        } else {
+          if (!_samePoint(cursor.point, linked.departPoint)) {
+            nodes.add(linked.depart);
+          }
+          if (!_samePoint(nodes.last.point, linked.arrive.point)) {
+            nodes.add(linked.arrive);
+          }
+          // Keep road cursor on tourist points; hubs are display-only.
+          cursorIsBus = false;
         }
-        if (!_samePoint(cursor.point, linked.departPoint)) {
-          nodes.add(linked.depart);
-        }
-        if (!_samePoint(nodes.last.point, linked.arrive.point)) {
-          nodes.add(linked.arrive);
-        }
-        cursor = linked.arrive;
-        cursorIsBus = true;
       } else if (!cursorIsBus && _isBareStart(nodes)) {
         final nearest = await _nearestStop(
           municipality: muni,
@@ -165,12 +169,13 @@ Future<BusItineraryPlan> buildBusItineraryPlan({
           direction: direction,
         );
         if (nearest == null) {
-          errors.add('No bus stop or terminal is saved for $muni.');
+          errors.add(
+            'No bus stop or terminal is saved for $muni '
+            '(shown as a transport guide only when available).',
+          );
         } else {
           final node = _busNode(nearest);
           if (!_samePoint(cursor.point, node.point)) nodes.add(node);
-          cursor = node;
-          cursorIsBus = true;
         }
       }
 
@@ -228,15 +233,15 @@ Future<BusItineraryPlan> buildBusItineraryPlan({
         );
         if (depart == null) {
           errors.add(
-            'No bus connection from ${cursor.place} to $later'
-            '${direction == null ? '' : ' on the ${direction.name} route'}.',
+            'No verified bus hub from ${cursor.place} to $later'
+            '${direction == null ? '' : ' on the ${direction.name} route'} '
+            '(tourist road route continues without it).',
           );
-          roadOpen = false;
         } else {
+          // Display-only hub: do not move the road cursor onto the bus so
+          // Day N+1 still starts from this day's last tourist spot.
           final node = _busNode(depart);
           if (!_samePoint(cursor.point, node.point)) nodes.add(node);
-          cursor = node;
-          cursorIsBus = true;
         }
       }
     }
@@ -509,12 +514,14 @@ bool _connects(
 ItineraryRouteNode _busNode(BusLocation stop) {
   final kind = stop.locationType == 'terminal' ? 'terminal' : 'stop';
   final title = kind == 'terminal' ? 'Bus terminal' : 'Bus stop';
+  // Display-only: keep hubs on the map / timeline, never as road waypoints.
   return ItineraryRouteNode(
     point: LatLng(stop.latitude, stop.longitude),
     place: stop.municipality,
     label: stop.name,
     detail: '$title · ${stop.name}, ${stop.municipality}',
     busKind: kind,
+    onRoad: false,
   );
 }
 

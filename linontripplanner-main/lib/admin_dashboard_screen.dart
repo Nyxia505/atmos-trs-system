@@ -29,6 +29,7 @@ import 'tourist_registry_tab.dart';
 import 'trip_planner_utils.dart';
 import 'auth/auth_navigation.dart';
 import 'theme/tourism_app_theme.dart';
+import 'trip_plan_host_bridge.dart';
 import 'widgets/admin_high_rating_spots_map.dart';
 import 'widgets/municipality_image.dart';
 import 'widgets/responsive_layout.dart';
@@ -50,7 +51,7 @@ const _kGovernorNavItems = [
   (icon: Icons.people_outline_rounded, label: 'Tourist Monitoring'),
   (icon: Icons.place_outlined, label: 'Tourist Spots'),
   (icon: Icons.star_outline_rounded, label: 'Featured Destinations'),
-  (icon: Icons.view_in_ar_outlined, label: 'Destinations & VR Tours'),
+  (icon: Icons.view_in_ar_outlined, label: 'Virtual Tours'),
   (icon: Icons.location_city_outlined, label: 'Municipality Performance'),
   (icon: Icons.route_outlined, label: 'Trip Planner Analytics'),
   (icon: Icons.grid_on_outlined, label: 'Matrix Fares'),
@@ -87,7 +88,7 @@ String? _portalPageSubtitle(int selected) {
     1 => 'Registered tourists and recorded QR check-ins',
     2 => 'Spot catalog used by the public app and QR check-in',
     3 => 'Spots highlighted on the tourist home screen',
-    4 => 'Virtual tours linked to destinations',
+    4 => 'LGU virtual tours across the province (view only for OPTACA)',
     5 => 'Recorded QR arrivals by municipality',
     6 => 'Saved trip plans. Separate from QR arrivals.',
     7 => 'Fare matrix for the trip planner',
@@ -95,7 +96,7 @@ String? _portalPageSubtitle(int selected) {
     9 => 'Accommodation establishments on file',
     10 => 'Provincial figures from recorded visits',
     11 => 'Filled DOT forms from current ATMOS data',
-    12 => 'Spots missing an image, coordinates, or municipality',
+    12 => 'Live QR enrollment and catalog data-quality audit',
     13 => 'Bus stops and spot QR tools',
     14 => 'Stops used by the trip planner bus route',
     15 => 'QR codes for tourist spots',
@@ -196,7 +197,33 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     super.dispose();
   }
 
+  Future<void> _openAddTouristSpotModal() async {
+    if (!AuthRoles.canEditTouristSpotCatalog()) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        final size = MediaQuery.sizeOf(ctx);
+        return Dialog(
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          clipBehavior: Clip.antiAlias,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: SizedBox(
+            width: size.width < 640 ? size.width : 560,
+            height: size.height * 0.9,
+            child: const AdminSpotFormPage(),
+          ),
+        );
+      },
+    );
+    await loadTouristSpotsFromFirestore();
+    tourismCatalogRevision.value++;
+    if (mounted) setState(() {});
+  }
+
   Widget _buildGovernorMainColumn(int selected) {
+    final canEditSpots =
+        selected == 2 && AuthRoles.canEditTouristSpotCatalog();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -204,6 +231,23 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           _GovernorPageHeader(
             title: _portalPageTitle(selected),
             subtitle: _portalPageSubtitle(selected),
+            actions: canEditSpots
+                ? [
+                    FilledButton.icon(
+                      onPressed: _openAddTouristSpotModal,
+                      icon: const Icon(Icons.add, size: 20),
+                      label: const Text('Add tourist spot'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: OptacaAdminTheme.primary,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
+                      ),
+                    ),
+                  ]
+                : null,
           ),
         Expanded(
           child: RepaintBoundary(
@@ -581,8 +625,13 @@ class _GovernorSidebar extends StatelessWidget {
 class _GovernorPageHeader extends StatelessWidget {
   final String title;
   final String? subtitle;
+  final List<Widget>? actions;
 
-  const _GovernorPageHeader({required this.title, this.subtitle});
+  const _GovernorPageHeader({
+    required this.title,
+    this.subtitle,
+    this.actions,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -594,29 +643,40 @@ class _GovernorPageHeader extends StatelessWidget {
         decoration: const BoxDecoration(
           border: Border(bottom: BorderSide(color: OptacaAdminTheme.border)),
         ),
-        child: Column(
+        child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-                color: OptacaAdminTheme.text,
-                height: 1.15,
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      color: OptacaAdminTheme.text,
+                      height: 1.15,
+                    ),
+                  ),
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle!,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        height: 1.35,
+                        color: OptacaAdminTheme.textMuted,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
-            if (subtitle != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                subtitle!,
-                style: const TextStyle(
-                  fontSize: 13,
-                  height: 1.35,
-                  color: OptacaAdminTheme.textMuted,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
+            if (actions != null && actions!.isNotEmpty) ...[
+              const SizedBox(width: 12),
+              ...actions!,
             ],
           ],
         ),
@@ -758,30 +818,42 @@ class _AlertsQualityTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final host = TripPlanHostBridge.alertsQualityPanel;
+    if (host != null) return host(context);
+
+    // Standalone Trip Planner fallback (ATMOS host not wired).
     final missingImage = <String>[];
     final missingCoordinates = <String>[];
     final missingMunicipality = <String>[];
+    final missingQr = <String>[];
     for (final spot in allSpots) {
       if (spot.imagePath.trim().isEmpty) missingImage.add(spot.displayName);
       if (spot.latitude == null || spot.longitude == null) {
         missingCoordinates.add(spot.displayName);
       }
-      if (spot.location.trim().isEmpty) missingMunicipality.add(spot.displayName);
+      if (spot.location.trim().isEmpty) {
+        missingMunicipality.add(spot.displayName);
+      }
+      // Trip Planner TouristSpot model has no qr fields — flag via Firestore id when empty name/location already covered.
     }
     final groups = [
       (title: 'Missing image', icon: Icons.image_not_supported_outlined, names: missingImage),
       (title: 'Missing coordinates', icon: Icons.wrong_location_outlined, names: missingCoordinates),
       (title: 'Missing municipality', icon: Icons.location_off_outlined, names: missingMunicipality),
+      (title: 'Missing QR (open from ATMOS for full QR audit)', icon: Icons.qr_code_2_outlined, names: missingQr),
     ];
-    final total = missingImage.length + missingCoordinates.length + missingMunicipality.length;
+    final total = missingImage.length +
+        missingCoordinates.length +
+        missingMunicipality.length;
     if (total == 0) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(32),
           child: Text(
-            'No data-quality alerts in the loaded spots.',
+            'No basic catalog gaps in loaded spots.\n'
+            'Open this portal from ATMOS for the full QR + quality audit.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: AppColors.textGrey),
+            style: TextStyle(color: AppColors.textGrey, height: 1.4),
           ),
         ),
       );
@@ -791,7 +863,10 @@ class _AlertsQualityTab extends StatelessWidget {
       children: [
         Text(
           '$total item${total == 1 ? '' : 's'} to review',
-          style: const TextStyle(color: AppColors.textGrey, fontWeight: FontWeight.w600),
+          style: const TextStyle(
+            color: AppColors.textGrey,
+            fontWeight: FontWeight.w600,
+          ),
         ),
         const SizedBox(height: 12),
         for (final group in groups)
@@ -802,8 +877,13 @@ class _AlertsQualityTab extends StatelessWidget {
               clipBehavior: Clip.antiAlias,
               child: ExpansionTile(
                 leading: Icon(group.icon, color: const Color(0xFFC2410C)),
-                title: Text(group.title, style: const TextStyle(fontWeight: FontWeight.w700)),
-                subtitle: Text('${group.names.length} spot${group.names.length == 1 ? '' : 's'}'),
+                title: Text(
+                  group.title,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                subtitle: Text(
+                  '${group.names.length} spot${group.names.length == 1 ? '' : 's'}',
+                ),
                 children: [
                   for (final name in group.names)
                     ListTile(
@@ -908,6 +988,10 @@ class _OverviewTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('tourists').snapshots(),
+      builder: (context, touristSnap) {
+        final registryCount = touristSnap.data?.docs.length ?? 0;
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance.collection('qr_checkins').snapshots(),
       builder: (context, snap) {
         final docs = snap.data?.docs ?? const [];
@@ -923,7 +1007,12 @@ class _OverviewTab extends StatelessWidget {
           final id = _qrIdentity(data);
           if (id.isNotEmpty) todayIds.add(id);
         }
-        final totalTourists = users.length;
+        final seededTourists = users
+            .where((user) => AppRole.fromString(user.role) == AppRole.tourist)
+            .length;
+        final totalTourists = registryCount > 0
+            ? registryCount
+            : (seededTourists > 0 ? seededTourists : users.length);
         final touristsToday = todayIds.length;
         final totalCheckins = docs.length;
         final activeSpots = allSpots.length;
@@ -1144,6 +1233,8 @@ class _OverviewTab extends StatelessWidget {
         ],
       ),
         );
+      },
+    );
       },
     );
   }
@@ -2550,13 +2641,14 @@ class _SpotsListTabState extends State<_SpotsListTab> {
         child: CircularProgressIndicator(color: AppColors.primary),
       );
     }
+    final canEdit = AuthRoles.canEditTouristSpotCatalog();
     return RefreshIndicator(
       color: AppColors.primary,
       onRefresh: () => _refresh(),
       child: Stack(
       children: [
         ListView.builder(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+          padding: EdgeInsets.fromLTRB(16, 16, 16, canEdit ? 80 : 24),
           physics: const AlwaysScrollableScrollPhysics(),
           itemCount: allSpots.length + 1,
           itemBuilder: (context, index) {
@@ -2568,7 +2660,8 @@ class _SpotsListTabState extends State<_SpotsListTab> {
                   children: [
                     Text(
                       '${allSpots.length} tourist spot'
-                      '${allSpots.length == 1 ? '' : 's'} from Firestore',
+                      '${allSpots.length == 1 ? '' : 's'} from Firestore'
+                      '${canEdit ? '' : ' · View only'}',
                       style: const TextStyle(
                         color: AppColors.textGrey,
                         fontSize: 13,
@@ -2585,6 +2678,7 @@ class _SpotsListTabState extends State<_SpotsListTab> {
                         ),
                       ),
                     ],
+                    if (canEdit) ...[
                     const SizedBox(height: 8),
                     OutlinedButton.icon(
                   onPressed: () async {
@@ -2621,6 +2715,7 @@ class _SpotsListTabState extends State<_SpotsListTab> {
                     'Delete no-picture & duplicates in Firebase',
                   ),
                 ),
+                    ],
                   ],
                 ),
               );
@@ -2691,19 +2786,16 @@ class _SpotsListTabState extends State<_SpotsListTab> {
                         onPressed: () =>
                             _showSpotRatingsSheet(context, spot, widget.onChanged),
                       ),
+                      if (canEdit) ...[
                       IconButton(
                         icon: const Icon(Icons.edit_outlined, size: 22),
                         tooltip: 'Edit',
                         onPressed: () async {
                           final listIndex = index - 1;
-                          await Navigator.push(
+                          await _openSpotFormModal(
                             context,
-                            MaterialPageRoute(
-                              builder: (_) => AdminSpotFormPage(
-                                existing: spot,
-                                index: listIndex,
-                              ),
-                            ),
+                            existing: spot,
+                            index: listIndex,
                           );
                           await _refresh();
                           widget.onChanged();
@@ -2718,11 +2810,40 @@ class _SpotsListTabState extends State<_SpotsListTab> {
                         tooltip: 'Delete',
                         onPressed: () {
                           _confirmDelete(context, spot.name, () {
-                            allSpots.removeAt(index - 1);
-                            widget.onChanged();
+                            () async {
+                              final listIndex = index - 1;
+                              try {
+                                await deleteTouristSpotFromFirestore(spot);
+                                if (listIndex >= 0 &&
+                                    listIndex < allSpots.length) {
+                                  allSpots.removeAt(listIndex);
+                                }
+                                tourismCatalogRevision.value++;
+                                widget.onChanged();
+                                if (mounted) {
+                                  await _refresh(silent: true);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Deleted "${spot.name}"'),
+                                      backgroundColor: Colors.green,
+                                    ),
+                                  );
+                                }
+                              } catch (e) {
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Delete failed: $e'),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
+                                }
+                              }
+                            }();
                           });
                         },
                       ),
+                      ],
                     ],
                   ),
                 ),
@@ -2731,24 +2852,25 @@ class _SpotsListTabState extends State<_SpotsListTab> {
           },
         ),
         if (allSpots.isEmpty)
-          const Center(
+          Center(
             child: Text(
-              'No tourist spots.\nTap + to add, or pull down to refresh.',
+              canEdit
+                  ? 'No tourist spots.\nTap + to add, or pull down to refresh.'
+                  : 'No tourist spots yet.\nLGUs manage destinations from their municipal dashboards.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: AppColors.textGrey, fontSize: 15),
+              style: const TextStyle(color: AppColors.textGrey, fontSize: 15),
             ),
           ),
+        if (canEdit)
         Positioned(
           right: 16,
           bottom: 16,
           child: FloatingActionButton(
             heroTag: 'spotsFab',
             backgroundColor: AppColors.primary,
+            tooltip: 'Add tourist spot',
             onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const AdminSpotFormPage()),
-              );
+              await _openSpotFormModal(context);
               await _refresh();
               widget.onChanged();
             },
@@ -2757,6 +2879,28 @@ class _SpotsListTabState extends State<_SpotsListTab> {
         ),
       ],
     ),
+    );
+  }
+
+  Future<void> _openSpotFormModal(
+    BuildContext context, {
+    TouristSpot? existing,
+    int? index,
+  }) async {
+    final size = MediaQuery.sizeOf(context);
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: SizedBox(
+          width: size.width < 640 ? size.width : 560,
+          height: size.height * 0.9,
+          child: AdminSpotFormPage(existing: existing, index: index),
+        ),
+      ),
     );
   }
 }
@@ -4373,11 +4517,26 @@ class _AdminSpotFormPageState extends State<AdminSpotFormPage> {
   ];
   late String _type;
   bool _uploadingImage = false;
+  bool _saving = false;
+  String? _saveError;
   Uint8List? _previewBytes;
 
   @override
   void initState() {
     super.initState();
+    if (!AuthRoles.canEditTouristSpotCatalog()) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'You do not have permission to edit tourist spots.',
+            ),
+          ),
+        );
+        Navigator.of(context).maybePop();
+      });
+    }
     _nameController = TextEditingController(text: widget.existing?.name ?? '');
     _locationController = TextEditingController(
       text: widget.existing?.location ??
@@ -4483,7 +4642,13 @@ class _AdminSpotFormPageState extends State<AdminSpotFormPage> {
   }
 
   Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (_saving) return;
+    if (!_formKey.currentState!.validate()) {
+      setState(() {
+        _saveError = 'Please fill required fields (name and municipality).';
+      });
+      return;
+    }
     final name = _nameController.text.trim();
     final walkingRaw = _walkingMinutesController.text.trim();
     final walkingMinutes = walkingRaw.isEmpty
@@ -4517,21 +4682,28 @@ class _AdminSpotFormPageState extends State<AdminSpotFormPage> {
       ratingCount: widget.existing?.ratingCount ?? 0,
       updatedAtMs: widget.existing?.updatedAtMs ?? 0,
     );
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
     try {
       await upsertTouristSpotToFirestore(spot, oldName: widget.existing?.name);
-      await loadTouristSpotsFromFirestore();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Save failed: $e'),
-            backgroundColor: Colors.orange,
-          ),
-        );
+      try {
+        await loadTouristSpotsFromFirestore();
+        tourismCatalogRevision.value++;
+      } catch (e) {
+        debugPrint('reload after spot save (non-fatal): $e');
       }
-      return;
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      debugPrint('AdminSpotFormPage save failed: $e');
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _saveError = 'Save failed: $e';
+        });
+      }
     }
-    if (mounted) Navigator.pop(context);
   }
 
   @override
@@ -4721,20 +4893,42 @@ class _AdminSpotFormPageState extends State<AdminSpotFormPage> {
                   hintText: 'Firebase Storage URL or any image URL',
                 ),
               ),
+              if (_saveError != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _saveError!,
+                  style: TextStyle(
+                    color: Colors.red.shade700,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
               const SizedBox(height: 24),
               ElevatedButton(
-                onPressed: () => _save(),
+                onPressed: _saving ? null : _save,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
+                  disabledBackgroundColor:
+                      AppColors.primary.withValues(alpha: 0.5),
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10),
                   ),
                 ),
-                child: const Text(
-                  'Save',
-                  style: TextStyle(color: Colors.white),
-                ),
+                child: _saving
+                    ? const SizedBox(
+                        height: 22,
+                        width: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text(
+                        'Save',
+                        style: TextStyle(color: Colors.white),
+                      ),
               ),
             ],
           ),
@@ -5345,85 +5539,371 @@ class _AdminCheckInsTab extends StatelessWidget {
   }
 }
 
-class _AdminVrTourTab extends StatelessWidget {
-  const _AdminVrTourTab();
+class _VrTourThumb extends StatelessWidget {
+  const _VrTourThumb({required this.path});
+
+  final String path;
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _portalSectionTitle('Virtual experiences'),
-          const SizedBox(height: 12),
-          _portalListCard(
-            child: Padding(
-              padding: const EdgeInsets.all(22),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+    final fallback = Container(
+      color: AppColors.primary.withValues(alpha: 0.12),
+      child: const Icon(Icons.vrpano_rounded, color: AppColors.primary),
+    );
+    if (path.isEmpty) return fallback;
+    if (path.startsWith('assets/')) {
+      return Image.asset(
+        path,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => fallback,
+      );
+    }
+    return Image.network(
+      path,
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) => fallback,
+    );
+  }
+}
+
+class _AdminVrTourTab extends StatefulWidget {
+  const _AdminVrTourTab();
+
+  @override
+  State<_AdminVrTourTab> createState() => _AdminVrTourTabState();
+}
+
+class _AdminVrTourTabState extends State<_AdminVrTourTab> {
+  final _search = TextEditingController();
+  String _municipality = 'All';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  static String _vrLinkOf(Map<String, dynamic> d) {
+    for (final key in const ['vr_link', 'vrLink', 'vrTourUrl', 'vrUrl', 'vr_url']) {
+      final v = d[key]?.toString().trim() ?? '';
+      if (v.isNotEmpty) return v;
+    }
+    return '';
+  }
+
+  static String _muniOf(Map<String, dynamic> d) {
+    final name = d['municipality']?.toString().trim() ?? '';
+    if (name.isNotEmpty) return name;
+    return d['municipalityId']?.toString().trim() ?? 'Unassigned';
+  }
+
+  static String _imageOf(Map<String, dynamic> d) {
+    for (final key in const ['image_url', 'imageUrl', 'image', 'thumbnail']) {
+      final v = d[key]?.toString().trim() ?? '';
+      if (v.isNotEmpty) return v;
+    }
+    return '';
+  }
+
+  /// Fallback Clear Pano catalog when ATMOS host bridge is not wired.
+  static List<Map<String, dynamic>> _fallbackKnownVr() => const [
+        {
+          'id': 'oroquieta_city_boulevard_and_peoples_park',
+          'name': 'Oroquieta City Boulevard And People\u2019s Park',
+          'municipality': 'Oroquieta City',
+          'municipalityId': 'oroquieta',
+          'vr_link': 'https://tours.clearpano.com/aCxkEqVT',
+          'image_url': 'assets/images/oroquieta City plaza.jpeg',
+        },
+        {
+          'id': 'oroquieta_kenjelo_farm_resort',
+          'name': 'Kenjelo Farm and Recreation Resort',
+          'municipality': 'Oroquieta City',
+          'municipalityId': 'oroquieta',
+          'vr_link': 'https://tours.clearpano.com/Rpj4vYOF',
+          'image_url': 'assets/images/Kenjelo.jpg',
+        },
+        {
+          'id': 'jimenez_st_john_the_baptist_church',
+          'name': 'Jimenez Church (St John The Baptist)',
+          'municipality': 'Jimenez',
+          'municipalityId': 'jimenez',
+          'vr_link': 'https://tours.clearpano.com/Yx3FCtm9',
+          'image_url': 'assets/images/Jimenez.png',
+        },
+        {
+          'id': 'clarin_suman_capital',
+          'name': 'Clarin Suman Capital',
+          'municipality': 'Clarin',
+          'municipalityId': 'clarin',
+          'vr_link': 'https://tours.clearpano.com/GmFjcb6k',
+          'image_url': 'assets/images/Clarin.png',
+        },
+        {
+          'id': 'ozamiz_cotta_fort_shrine',
+          'name': 'Cotta Fort & Shrine',
+          'municipality': 'Ozamis City',
+          'municipalityId': 'ozamiz',
+          'vr_link': 'https://tours.clearpano.com/rDNLii_q',
+          'image_url': 'assets/images/Cotta Fort & Shrine.jpg',
+        },
+      ];
+
+  static List<Map<String, dynamic>> _mergeVrSpots(
+    List<Map<String, dynamic>> firestoreSpots,
+  ) {
+    final merger = TripPlanHostBridge.mergeKnownVrDestinations;
+    if (merger != null) return merger(firestoreSpots);
+
+    final byId = {
+      for (final s in firestoreSpots)
+        if ((s['id']?.toString() ?? '').isNotEmpty) s['id'].toString(): s,
+    };
+    final out = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    for (final known in _fallbackKnownVr()) {
+      final id = known['id']!.toString();
+      final existing = byId[id];
+      if (existing != null) {
+        final merged = Map<String, dynamic>.from(existing);
+        if (_vrLinkOf(merged).isEmpty) {
+          merged['vr_link'] = known['vr_link'];
+          merged['hasVR'] = true;
+        }
+        out.add(merged);
+      } else {
+        out.add(Map<String, dynamic>.from(known));
+      }
+      seen.add(id);
+    }
+    for (final s in firestoreSpots) {
+      final id = s['id']?.toString() ?? '';
+      if (seen.contains(id)) continue;
+      if (_vrLinkOf(s).isEmpty) continue;
+      out.add(s);
+      if (id.isNotEmpty) seen.add(id);
+    }
+    out.sort(
+      (a, b) => (a['name']?.toString() ?? '')
+          .toLowerCase()
+          .compareTo((b['name']?.toString() ?? '').toLowerCase()),
+    );
+    return out;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canEdit = AuthRoles.canEditVirtualTourLinks();
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('tourist_spots').snapshots(),
+      builder: (context, snap) {
+        if (snap.hasError) {
+          return Center(child: Text('Could not load virtual tours.\n${snap.error}'));
+        }
+        if (!snap.hasData) {
+          return const Center(child: CircularProgressIndicator(color: AppColors.primary));
+        }
+
+        final firestoreSpots = snap.data!.docs
+            .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
+            .toList();
+        final withVr = _mergeVrSpots(firestoreSpots);
+
+        final munis = <String>{
+          'All',
+          ...withVr.map(_muniOf).where((m) => m.isNotEmpty),
+        }.toList()
+          ..sort((a, b) {
+            if (a == 'All') return -1;
+            if (b == 'All') return 1;
+            return a.compareTo(b);
+          });
+
+        final q = _search.text.trim().toLowerCase();
+        final filtered = withVr.where((d) {
+          final name = (d['name']?.toString() ?? '').toLowerCase();
+          final muni = _muniOf(d);
+          if (q.isNotEmpty && !name.contains(q) && !muni.toLowerCase().contains(q)) {
+            return false;
+          }
+          if (_municipality != 'All' && muni != _municipality) return false;
+          return true;
+        }).toList();
+
+        final counts = <String, int>{};
+        for (final d in withVr) {
+          final m = _muniOf(d);
+          counts[m] = (counts[m] ?? 0) + 1;
+        }
+
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Virtual Tours',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.textDark,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0EA5E9).withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                  child: Text(
+                    canEdit ? 'LGU-managed' : 'View Only',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF0284C7),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Tours linked by each LGU on tourist_spots.vr_link. OPTACA can preview only.',
+              style: TextStyle(fontSize: 13, color: AppColors.textGrey, height: 1.35),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _search,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                hintText: 'Search virtual tours',
+                prefixIcon: const Icon(Icons.search_rounded),
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              initialValue: munis.contains(_municipality) ? _municipality : 'All',
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: 'Municipality',
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              items: [
+                for (final m in munis)
+                  DropdownMenuItem(
+                    value: m,
+                    child: Text(
+                      m == 'All' ? 'All' : '$m (${counts[m] ?? 0})',
+                    ),
+                  ),
+              ],
+              onChanged: (v) => setState(() => _municipality = v ?? 'All'),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              '${filtered.length} virtual tour${filtered.length == 1 ? '' : 's'}',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textGrey,
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (withVr.isEmpty)
+              _portalListCard(
+                child: const Padding(
+                  padding: EdgeInsets.all(28),
+                  child: Column(
                     children: [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Icon(
-                          Icons.view_in_ar,
-                          color: AppColors.primary,
-                          size: 32,
+                      Icon(Icons.vrpano_outlined, size: 40, color: AppColors.textGrey),
+                      SizedBox(height: 12),
+                      Text(
+                        'No virtual tours yet',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                          color: AppColors.textDark,
                         ),
                       ),
-                      const SizedBox(width: 16),
-                      const Expanded(
-                        child: Text(
-                          '360° & VR tours',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textDark,
-                          ),
-                        ),
+                      SizedBox(height: 6),
+                      Text(
+                        'When an LGU links a 360° tour to a destination, it appears here automatically.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: AppColors.textGrey, height: 1.4),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Publish immersive tours for key destinations. Link panorama or VR content from '
-                    'Firebase Storage or an external provider when your content pipeline is ready.',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: AppColors.textGrey,
-                      height: 1.45,
+                ),
+              )
+            else if (filtered.isEmpty)
+              _portalListCard(
+                child: const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'No tours match this filter.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AppColors.textGrey),
+                  ),
+                ),
+              )
+            else
+              for (final d in filtered) ...[
+                _portalListCard(
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+                    leading: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: SizedBox(
+                        width: 56,
+                        height: 56,
+                        child: _VrTourThumb(path: _imageOf(d)),
+                      ),
+                    ),
+                    title: Text(
+                      d['name']?.toString() ?? 'Destination',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    subtitle: Text(
+                      '${_muniOf(d)} · 360° tour linked',
+                      style: const TextStyle(fontSize: 12.5, color: AppColors.textGrey),
+                    ),
+                    trailing: FilledButton.tonal(
+                      onPressed: () async {
+                        final preview = TripPlanHostBridge.openVrPreview;
+                        if (preview == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Open this portal from ATMOS to preview the virtual tour.',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+                        await preview(
+                          context,
+                          spotId: d['id']?.toString() ?? '',
+                          spotName: d['name']?.toString() ?? 'VR Tour',
+                          vrLink: _vrLinkOf(d),
+                          imageUrl: _imageOf(d),
+                        );
+                      },
+                      child: const Text('Preview'),
                     ),
                   ),
-                  const SizedBox(height: 20),
-                  OutlinedButton.icon(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'VR tour editor will connect to your media library.',
-                          ),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.add_rounded),
-                    label: const Text('Add VR experience'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.primary,
-                      side: const BorderSide(color: AppColors.primary),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
+                ),
+                const SizedBox(height: 8),
+              ],
+          ],
+        );
+      },
     );
   }
 }
@@ -6031,6 +6511,25 @@ class _AdminSettingsTabState extends State<_AdminSettingsTab> {
                 ),
                 onTap: widget.onOpenSpotsQr,
               ),
+              if (TripPlanHostBridge.openDebugDataHub != null) ...[
+                const Divider(height: 1),
+                ListTile(
+                  leading: Icon(
+                    Icons.analytics_outlined,
+                    color: AppColors.primary.withValues(alpha: 0.9),
+                  ),
+                  title: const Text('Debug data hub'),
+                  subtitle: const Text(
+                    'Charts, seed all LGUs, full purge — same as the Governor dashboard',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  trailing: const Icon(
+                    Icons.chevron_right,
+                    color: AppColors.textGrey,
+                  ),
+                  onTap: () => TripPlanHostBridge.openDebugDataHub!(context),
+                ),
+              ],
               const Divider(height: 1),
               ListTile(
                 leading: Icon(

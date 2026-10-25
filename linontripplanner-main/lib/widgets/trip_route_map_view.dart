@@ -9,7 +9,6 @@ import '../municipal_road_distances.dart'
         roadTableIndexFor;
 import '../municipality_coordinates.dart' show getMunicipalityCoordinates;
 import '../road_route_service.dart';
-import '../services/bus_location_store.dart';
 import '../tourist_plan/tourist_travel_estimates.dart' show formatHoursMinutes;
 import 'trip_route_osm_map_view.dart';
 
@@ -37,6 +36,9 @@ class TripRouteMapView extends StatefulWidget {
   final String endPinTitle;
   final String endPinDetail;
   final List<TripBusMarker> busMarkers;
+  final bool showTouristSpots;
+  final bool showBusStops;
+  final bool showBusTerminals;
 
   const TripRouteMapView({
     super.key,
@@ -55,6 +57,9 @@ class TripRouteMapView extends StatefulWidget {
     this.endPinTitle = 'End Point',
     this.endPinDetail = '',
     this.busMarkers = const [],
+    this.showTouristSpots = true,
+    this.showBusStops = true,
+    this.showBusTerminals = true,
   });
 
   @override
@@ -195,9 +200,8 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
   /// request passes through every town between consecutive stops.
   ///
   /// When a coastal or highland route is selected, stops come only from that
-  /// path: bus terminals in route order, then spots whose municipality is on
-  /// the path. Spots on the other route are left off so the line cannot jump
-  /// onto it.
+  /// path: town centers (road network), then tourist spots on the path.
+  /// Bus stops/terminals are map markers only — never polyline waypoints.
   List<RoadStop> get _routeStops {
     final visit = widget.visitStops;
     if (visit != null) return _orderedStops(visit);
@@ -227,21 +231,8 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
     final raw = <RoadStop>[];
     for (final town in towns) {
       final idx = roadTableIndexFor(town.name);
-      final buses = BusLocationStore.instance.alongMunicipalities(
-        [town.name],
-        direction,
-      );
-      if (buses.isEmpty) {
-        final center = getMunicipalityCoordinates(town);
-        if (center != null) raw.add((place: town.name, point: center));
-      } else {
-        for (final bus in buses) {
-          raw.add((
-            place: town.name,
-            point: LatLng(bus.latitude, bus.longitude),
-          ));
-        }
-      }
+      final center = getMunicipalityCoordinates(town);
+      if (center != null) raw.add((place: town.name, point: center));
       if (idx != null) {
         for (final point in spotsByTown[idx] ?? const <LatLng>[]) {
           raw.add((place: town.name, point: point));
@@ -321,6 +312,9 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
       endPinTitle: widget.endPinTitle,
       endPinDetail: widget.endPinDetail,
       busMarkers: widget.busMarkers,
+      showTouristSpots: widget.showTouristSpots,
+      showBusStops: widget.showBusStops,
+      showBusTerminals: widget.showBusTerminals,
     );
     return widget.compact ? IgnorePointer(child: map) : map;
   }

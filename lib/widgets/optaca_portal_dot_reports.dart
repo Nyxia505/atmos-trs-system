@@ -9,21 +9,7 @@ import 'package:atmos_trs_system/widgets/dot_report_export_panel.dart';
 /// Province-wide DOT Excel and PDF forms for the OPTACA Portal Reports tab.
 /// Same panel as Provincial Tourism → DOT Reports.
 class OptacaPortalDotReports extends StatefulWidget {
-  const OptacaPortalDotReports({
-    super.key,
-    this.previewOnly = false,
-    this.rangeStart,
-    this.rangeEnd,
-    this.municipalityName,
-  });
-
-  /// Filled preview and gaps only, without the form-type card.
-  final bool previewOnly;
-
-  /// Applied report-filter range. Null start means all dates.
-  final DateTime? rangeStart;
-  final DateTime? rangeEnd;
-  final String? municipalityName;
+  const OptacaPortalDotReports({super.key});
 
   @override
   State<OptacaPortalDotReports> createState() => _OptacaPortalDotReportsState();
@@ -84,8 +70,14 @@ class _OptacaPortalDotReportsState extends State<OptacaPortalDotReports> {
           spotId: s['id']?.toString() ?? '',
           name: s['name']?.toString() ?? 'Unknown',
           dotAttractionCode: s['dotAttractionCode']?.toString() ?? '',
+          municipalityId: ProvincialTourismService.municipalityIdOf(s),
+          municipalityName: ProvincialTourismService.municipalityNameOf(
+            ProvincialTourismService.municipalityIdOf(s),
+          ),
+          status: s['status']?.toString() ?? '',
         ),
     ];
+    final width = MediaQuery.sizeOf(context).width;
     return DotReportExportPanel(
           primaryColor: AppTheme.brandOrange,
           textDark: GovernorDashboardTokens.text,
@@ -94,11 +86,7 @@ class _OptacaPortalDotReportsState extends State<OptacaPortalDotReports> {
           scopeLabel: 'Misamis Occidental (OPTACA)',
           scopeSlug: 'misamis_occidental_optaca',
           isProvincial: true,
-          isMobile: false,
-          previewOnly: widget.previewOnly,
-          externalStart: widget.rangeStart,
-          externalEnd: widget.rangeEnd,
-          externalMunicipalityName: widget.municipalityName,
+          isMobile: width < 900,
           checkIns: _checkIns,
           tourists: _tourists,
           catalogSpots: catalog,

@@ -126,6 +126,21 @@ class SpotRatingsStore {
     }
   }
 
+  Future<void> remove(SpotRating rating) async {
+    await ensureLoaded();
+    final key = _dedupeKey(rating);
+    spotRatings.removeWhere((r) => _dedupeKey(r) == key);
+    revision.value++;
+    await _persist();
+    if (rating.id.trim().isEmpty) return;
+    try {
+      await deleteSpotRatingFromFirestore(rating.id);
+    } catch (e) {
+      debugPrint('SpotRatingsStore delete failed: $e');
+      rethrow;
+    }
+  }
+
   List<SpotRating> forSpot(String spotName) {
     final key = spotName.trim().toLowerCase();
     return spotRatings

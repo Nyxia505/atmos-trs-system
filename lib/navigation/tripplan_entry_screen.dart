@@ -1,13 +1,22 @@
 import 'dart:async' show unawaited;
 
+import 'package:atmos_trs_system/config/vr_tour_config.dart';
+import 'package:atmos_trs_system/config/module_shell_prefs.dart';
 import 'package:atmos_trs_system/navigation/login_route_args.dart';
 import 'package:atmos_trs_system/navigation/post_logout_navigation.dart';
 import 'package:atmos_trs_system/navigation/shared_module_logout.dart';
+import 'package:atmos_trs_system/models/tourist_spot.dart';
+import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
+import 'package:atmos_trs_system/widgets/lgu_debug_data_dialogs.dart';
+import 'package:atmos_trs_system/widgets/optaca_alerts_quality_panel.dart';
+import 'package:atmos_trs_system/widgets/optaca_portal_dot_reports.dart';
 import 'package:flutter/material.dart';
 import 'package:trip_plan/admin_dashboard_screen.dart';
+import 'package:trip_plan/admin_reports_tab.dart';
 import 'package:trip_plan/home_screen.dart';
 import 'package:trip_plan/maps_platform_init.dart';
 import 'package:trip_plan/widgets/admin_access_gate.dart';
+import 'package:trip_plan/firestore_loader.dart';
 import 'package:trip_plan/services/tourism_session.dart';
 import 'package:trip_plan/theme/tourism_app_theme.dart';
 import 'package:trip_plan/trip_plan_host_bridge.dart';
@@ -40,6 +49,38 @@ class _TripPlanEntryScreenState extends State<TripPlanEntryScreen> {
   void initState() {
     super.initState();
     TripPlanHostBridge.embeddedInAtmos = true;
+    if (widget.adminDashboard) {
+      unawaited(
+        ModuleShellPrefs.setActiveShell(ModuleShellPrefs.tripPlannerAdmin),
+      );
+      TripPlanHostBridge.isHostCatalogAdmin = () {
+        // Sync hint for AdminAccessGate while users/{uid} is still loading.
+        return true;
+      };
+      AdminReportsTab.dotReportsBuilder = (context, _) =>
+          const OptacaPortalDotReports();
+      TripPlanHostBridge.openDebugDataHub = (ctx) {
+        LguDebugDataDialogs.openHub(
+          context: ctx,
+          municipalityId: '',
+          municipalityName: 'All municipalities',
+          spots: const <TouristSpot>[],
+          onDone: () {
+            unawaited(loadUsersFromFirestore());
+            unawaited(loadTouristSpotsFromFirestore());
+            if (!ctx.mounted) return;
+            ScaffoldMessenger.of(ctx).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Seed data is loaded. Overview and Tourist Monitoring use the same tourists and check-ins as the tourism dashboard.',
+                ),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          },
+        );
+      };
+    }
     TripPlanHostBridge.onSignedOut = signOutSharedModules;
     TripPlanHostBridge.openSharedLogin = (ctx) {
       Navigator.of(ctx).pushNamed(
@@ -65,6 +106,25 @@ class _TripPlanEntryScreenState extends State<TripPlanEntryScreen> {
     TripPlanHostBridge.leaveToHost = (ctx) {
       navigateAfterLogout(ctx);
     };
+    TripPlanHostBridge.openVrPreview = (
+      ctx, {
+      required String spotId,
+      required String spotName,
+      String? vrLink,
+      String? imageUrl,
+    }) {
+      return openVrForTouristSpot(
+        ctx,
+        spotId: spotId,
+        spotName: spotName,
+        vrLink: vrLink,
+        imageUrl: imageUrl,
+        allowWeb: true,
+      );
+    };
+    TripPlanHostBridge.mergeKnownVrDestinations = mergeKnownVrDestinations;
+    TripPlanHostBridge.alertsQualityPanel =
+        (context) => const OptacaAlertsQualityPanel();
     unawaited(_bootstrap());
   }
 
@@ -77,10 +137,16 @@ class _TripPlanEntryScreenState extends State<TripPlanEntryScreen> {
   @override
   void dispose() {
     TripPlanHostBridge.embeddedInAtmos = false;
+    AdminReportsTab.dotReportsBuilder = null;
+    TripPlanHostBridge.openDebugDataHub = null;
     TripPlanHostBridge.onSignedOut = null;
     TripPlanHostBridge.openSharedLogin = null;
     TripPlanHostBridge.openSharedSignup = null;
     TripPlanHostBridge.leaveToHost = null;
+    TripPlanHostBridge.openVrPreview = null;
+    TripPlanHostBridge.mergeKnownVrDestinations = null;
+    TripPlanHostBridge.alertsQualityPanel = null;
+    TripPlanHostBridge.isHostCatalogAdmin = null;
     super.dispose();
   }
 

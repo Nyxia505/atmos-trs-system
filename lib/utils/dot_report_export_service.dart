@@ -10,6 +10,7 @@ import 'package:atmos_trs_system/utils/checkin_report_summary_csv.dart';
 import 'package:atmos_trs_system/utils/checkin_visitor_expansion.dart';
 import 'package:atmos_trs_system/utils/dae3_aggregates.dart';
 import 'package:atmos_trs_system/utils/dae1b2_template_fill.dart';
+import 'package:atmos_trs_system/utils/dae3_form_a_template_fill.dart';
 import 'package:atmos_trs_system/utils/dot_report_preview.dart';
 import 'package:atmos_trs_system/utils/ae_register_report_query.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
@@ -119,6 +120,17 @@ class DotReportExportService {
       );
     }
 
+    if (form.id == 'dae3b_form_a_intl') {
+      return _fillOfficialDae3FormA(
+        form: form,
+        register: aeRegister,
+        scopeLabel: scopeLabel,
+        scopeSlug: scopeSlug,
+        startDate: startDate,
+        endDate: endDate,
+      );
+    }
+
     if (form.id == 'dae1b2' || form.id == 'dae1b2_domestic') {
       return _fillOfficialDae1b2(
         form: form,
@@ -211,10 +223,18 @@ class DotReportExportService {
           startDate: startDate,
           endDate: endDate,
         );
+      case DotReportType.dae3bFormAInternational:
+        return _fillOfficialDae3FormA(
+          form: type.catalogEntry,
+          register: aeRegister,
+          scopeLabel: scopeLabel,
+          scopeSlug: scopeSlug,
+          startDate: startDate,
+          endDate: endDate,
+        );
       case DotReportType.dae3b2Domestic:
       case DotReportType.var4DomesticTravelers:
       case DotReportType.var5InternationalVisitors:
-      case DotReportType.dae3bFormAInternational:
         final form = type.catalogEntry;
         final preview = buildDotReportPreview(
           form: form,
@@ -529,6 +549,63 @@ class DotReportExportService {
     ]);
     _writeRow(b, 29, ['NOTE:  PLEASE FILL UP ONLY COLUMNS WITH QUESTION MARK (?).']);
     _writeRow(b, 33, ['', '', 'Name of Tourism Officer', '', '', '', '', '', '', '', 'Mayor']);
+  }
+
+  Future<DotReportExportResult> _fillOfficialDae3FormA({
+    required DotFormCatalogEntry form,
+    required AeRegisterReportData register,
+    required String scopeLabel,
+    required String scopeSlug,
+    required DateTime startDate,
+    required DateTime endDate,
+  }) async {
+    List<int>? bytes;
+    try {
+      final data = await rootBundle.load('forms_format/${form.localFilename}');
+      bytes = data.buffer.asUint8List().toList();
+    } catch (_) {}
+    if (bytes == null) {
+      try {
+        bytes = await fetchTemplateBytes(form.publicUrl);
+      } catch (_) {}
+    }
+    final s =
+        '${startDate.year}${startDate.month.toString().padLeft(2, '0')}${startDate.day.toString().padLeft(2, '0')}';
+    final e =
+        '${endDate.year}${endDate.month.toString().padLeft(2, '0')}${endDate.day.toString().padLeft(2, '0')}';
+    final slug = scopeSlug.trim().isEmpty ? 'report' : scopeSlug.trim();
+    if (bytes == null) {
+      final preview = buildDotReportPreview(
+        form: form,
+        startDate: startDate,
+        endDate: endDate,
+        checkIns: const [],
+        tourists: const [],
+        catalogSpots: const [],
+        scopeLabel: scopeLabel,
+        aeRegister: register,
+      );
+      return _workbookFromPreview(
+        form: form,
+        preview: preview,
+        scopeLabel: scopeLabel,
+        scopeSlug: scopeSlug,
+        startDate: startDate,
+        endDate: endDate,
+      );
+    }
+    final filled = Dae3FormATemplateFill.fill(
+      templateBytes: bytes,
+      register: register,
+      scopeLabel: scopeLabel,
+    );
+    return DotReportExportResult(
+      bytes: filled.bytes,
+      filename: 'DAE3_FORM_A_${slug}_${s}_$e.xlsx',
+      gaps: filled.gaps,
+      summary: filled.summary,
+      checkInsProcessed: filled.arrivals,
+    );
   }
 
   Future<DotReportExportResult> _fillOfficialDae1b2({

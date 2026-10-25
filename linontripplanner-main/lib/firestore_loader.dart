@@ -168,8 +168,14 @@ Future<void> loadTouristSpotsFromFirestore() async {
     ..addAll(loaded);
   // Lock curated files (Piduan Falls, Panaon Seaside, …) and drop duplicates.
   applyCuratedTouristSpotImageUrls();
+  touristSpotCatalogGeneration++;
   if (kDebugMode) {
-    debugPrint('loadTouristSpotsFromFirestore: ${allSpots.length} spots');
+    debugPrint(
+      'loadTouristSpotsFromFirestore ${DateTime.now().toIso8601String()} '
+      'collection=tourist_spots count=${allSpots.length} '
+      'gen=$touristSpotCatalogGeneration '
+      'ids=${allSpots.take(12).map((s) => s.firestoreDocId).join(',')}',
+    );
   }
   } catch (e) {
     if (_isNonPermissionRecoverableFirestoreError(e)) {
@@ -487,6 +493,45 @@ Future<void> deleteFeaturedSpotFromFirestoreByName(String name) async {
       .delete();
 }
 
+/// Deletes one tourist spot document from Firestore (`tourist_spots`).
+Future<void> deleteTouristSpotFromFirestore(TouristSpot spot) async {
+  await ensurePermanentStaffRoleForCatalogWrite();
+  final col = FirebaseFirestore.instance.collection(kTouristSpotsCollection);
+  final id = spot.firestoreDocId?.trim();
+  if (id != null && id.isNotEmpty) {
+    await col.doc(id).delete();
+    return;
+  }
+  await col.doc(buildStableDocId(spot.name, 'spot')).delete();
+}
+
+/// Maps a display location name to the LGU `municipalityId` slug used in rules.
+String municipalityIdFromLocationName(String location) {
+  final n = location
+      .toLowerCase()
+      .trim()
+      .replaceAll(RegExp(r'[^a-z0-9\s]'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ');
+  if (n.contains('oroquieta')) return 'oroquieta';
+  if (n.contains('ozamiz') || n.contains('ozamis')) return 'ozamiz';
+  if (n.contains('tangub')) return 'tangub';
+  if (n.contains('don victoriano') || n == 'dvc') return 'dvc';
+  if (n.contains('lopez jaena')) return 'lopezjaena';
+  if (n.contains('sapang dalaga')) return 'sapangdalaga';
+  if (n.contains('aloran')) return 'aloran';
+  if (n.contains('baliangao')) return 'baliangao';
+  if (n.contains('bonifacio')) return 'bonifacio';
+  if (n.contains('calamba')) return 'calamba';
+  if (n.contains('clarin')) return 'clarin';
+  if (n.contains('concepcion')) return 'concepcion';
+  if (n.contains('jimenez')) return 'jimenez';
+  if (n.contains('panaon')) return 'panaon';
+  if (n.contains('plaridel')) return 'plaridel';
+  if (n.contains('sinacaban')) return 'sinacaban';
+  if (n.contains('tudela')) return 'tudela';
+  return n.replaceAll(' ', '');
+}
+
 Future<void> upsertTouristSpotToFirestore(
   TouristSpot spot, {
   String? oldName,
@@ -507,7 +552,9 @@ Future<void> upsertTouristSpotToFirestore(
       await col.doc(oldSlugId).delete().catchError((_) {});
     }
   }
-  await col.doc(docId).set({
+  final location = spot.location.trim();
+  final municipalityId = municipalityIdFromLocationName(location);
+  final payload = <String, dynamic>{
     'name': spot.name,
     'priceRange': spot.priceRange,
     // App reads Supabase URL from `image_url` (not legacy Firebase `imagePath`).
@@ -515,22 +562,28 @@ Future<void> upsertTouristSpotToFirestore(
     'imageUrl': spot.imagePath,
     'image': spot.imagePath,
     'imagePath': spot.imagePath,
-    'location': spot.location,
+    'location': location,
+    'municipality': location,
+    if (municipalityId.isNotEmpty) 'municipalityId': municipalityId,
     'rating': spot.rating.clamp(0.0, 5.0),
     'description': spot.description,
     'type': spot.type,
     if (spot.latitude != null) 'latitude': spot.latitude,
     if (spot.longitude != null) 'longitude': spot.longitude,
-    if (spot.walkingDistanceMinutes != null)
-      'walkingDistanceMinutes': spot.walkingDistanceMinutes
-    else
-      'walkingDistanceMinutes': FieldValue.delete(),
     'entranceFee': spot.entranceFee,
     'foodAndDrinksPrice': spot.foodAndDrinksPrice,
     'otherSouvenirsPrice': spot.otherSouvenirsPrice,
-    'transportationFee': FieldValue.delete(),
     'updatedAt': FieldValue.serverTimestamp(),
-  }, SetOptions(merge: true));
+  };
+  if (spot.walkingDistanceMinutes != null) {
+    payload['walkingDistanceMinutes'] = spot.walkingDistanceMinutes;
+  } else if (spot.firestoreDocId != null &&
+      spot.firestoreDocId!.trim().isNotEmpty) {
+    // Only delete on update of an existing doc — avoid FieldValue.delete on create.
+    payload['walkingDistanceMinutes'] = FieldValue.delete();
+    payload['transportationFee'] = FieldValue.delete();
+  }
+  await col.doc(docId).set(payload, SetOptions(merge: true));
 }
 
 Future<void> upsertMunicipalityToFirestore(
@@ -574,6 +627,8 @@ DateTime? _eventDateFromDoc(Map<String, dynamic> d) {
     'dateTime',
     'date_time',
     'date',
+    'startsAt',
+    'publishedAt',
     'eventDate',
     'event_date',
     'scheduledAt',
@@ -590,6 +645,46 @@ DateTime? _eventDateFromDoc(Map<String, dynamic> d) {
   final updated = d['updatedAt'];
   if (updated is Timestamp) return updated.toDate();
   return null;
+}
+
+/// ATMOS LGU events live in `announcements`. Show them beside `events`
+/// without copying documents into another collection.
+Future<void> _appendAnnouncementEvents(List<TourismEvent> loaded) async {
+  try {
+    final snapshot =
+        await fetchPublicFirestoreCollection(kAnnouncementsCollection);
+    final seen = loaded.map((event) => event.id).toSet();
+    for (final doc in snapshot.docs) {
+      final id = 'announcement_${doc.id}';
+      if (!seen.add(id)) continue;
+      final data = doc.data();
+      final title = _eventTitleFromDoc(data);
+      if (title == null) continue;
+      final when = _eventDateFromDoc(data) ?? DateTime.now();
+      loaded.add(
+        TourismEvent(
+          id: id,
+          title: title,
+          imagePath: _eventOrAnnouncementImagePathFromFirestore(data),
+          venue: _str(data, 'venue') ?? _str(data, 'location') ?? '',
+          municipality: _str(data, 'municipalityName') ??
+              _str(data, 'municipality') ??
+              '',
+          dateTime: when,
+          eventType: _str(data, 'type') ??
+              _str(data, 'eventType') ??
+              'Announcement',
+          description: _str(data, 'description') ??
+              _str(data, 'content') ??
+              _str(data, 'body') ??
+              '',
+        ),
+      );
+    }
+    loaded.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+  } catch (e) {
+    debugPrint('loadEventsFromFirestore announcements: $e');
+  }
 }
 
 /// Loads [tourismEvents] from Firestore `events`, newest first.
@@ -625,6 +720,7 @@ Future<void> loadEventsFromFirestore() async {
         );
       }
       loaded.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+      await _appendAnnouncementEvents(loaded);
 
       // Never wipe a good in-memory list with an empty/failed catalog read.
       if (loaded.isEmpty && tourismEvents.isNotEmpty) {
@@ -734,16 +830,20 @@ Future<void> upsertTourismEventToFirestore(TourismEvent e) async {
   }, SetOptions(merge: true));
 
   // Spark-safe push: Supabase Edge Function → FCM topic `tourism_events`.
-  // (Firebase Cloud Functions require Blaze; this path does not.)
+  // Non-fatal: event is already saved if this fails.
   if (isNew) {
-    await broadcastTourismEventPushViaSupabase(
-      eventId: docRef.id,
-      title: e.title,
-      municipality: e.municipality,
-      venue: e.venue,
-      description: e.description,
-      dateTime: e.dateTime,
-    );
+    try {
+      await broadcastTourismEventPushViaSupabase(
+        eventId: docRef.id,
+        title: e.title,
+        municipality: e.municipality,
+        venue: e.venue,
+        description: e.description,
+        dateTime: e.dateTime,
+      );
+    } catch (e) {
+      debugPrint('tourism event push (non-fatal): $e');
+    }
   }
 }
 
@@ -900,6 +1000,18 @@ Future<String> upsertSpotRatingToFirestore(SpotRating rating) async {
   });
 }
 
+/// Removes one review the signed-in user owns.
+Future<void> deleteSpotRatingFromFirestore(String id) async {
+  final docId = id.trim();
+  if (docId.isEmpty) return;
+  await runFirestore(() async {
+    await FirebaseFirestore.instance
+        .collection(kSpotRatingsCollection)
+        .doc(docId)
+        .delete();
+  });
+}
+
 /// Reads a profile image URL from a Firestore user/tourist document (incl. nested fields).
 String profilePhotoSourceFromFirestoreMap(Map<String, dynamic> d) {
   final flat = _touristDocFlattened(d);
@@ -1048,8 +1160,14 @@ Future<void> loadUsersFromFirestore() async {
     } catch (_) {}
   }
 
-  final role = loaded.isEmpty ? '' : AppRole.fromString(loaded.first.role);
-  final staff = role == AppRole.admin || role == AppRole.municipalManager;
+  final ownRole = loaded.isEmpty ? '' : loaded.first.role;
+  final role = AppRole.fromString(ownRole);
+  // OPTACA (optaca@gmail.com) and ATMOS tourism staff must see the same
+  // seeded tourist accounts the tourism dashboard writes into `users`.
+  final staff = role == AppRole.admin ||
+      role == AppRole.municipalManager ||
+      AuthRoles.isAtmosStaffAdminRole(ownRole) ||
+      AuthRoles.canAccessAdminDashboard();
   if (staff) {
     final snapshot = await col.get();
     loaded.clear();
@@ -1744,6 +1862,10 @@ Map<String, int> touristVisitCountsFromVisitsSnapshot(
     for (final key in const [
       'touristID',
       'touristId',
+      'tourist_id',
+      'userId',
+      'user_id',
+      'firebaseUid',
       'touristDocumentId',
       'tourist_document_id',
     ]) {

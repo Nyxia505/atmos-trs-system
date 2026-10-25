@@ -163,7 +163,7 @@ class _TouristRegistryTabState extends State<TouristRegistryTab> {
 
                     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                       stream: FirebaseFirestore.instance
-                          .collection(kTouristVisitsCollection)
+                          .collection('qr_checkins')
                           .snapshots(),
                       builder: (context, visitsSnap) {
                         final visitCounts = visitsSnap.hasData
@@ -342,7 +342,7 @@ class _TouristRegistryTabState extends State<TouristRegistryTab> {
     color: AppColors.textDark,
   );
 
-  /// Prefer counts from [kTouristVisitsCollection] when any exist; else field on doc.
+  /// Prefer QR check-in counts (including tourism-dashboard seed rows); else the field on the tourist doc.
   static int _mergedVisitCount(
     TouristRegistryEntry e,
     Map<String, int> visitCounts,

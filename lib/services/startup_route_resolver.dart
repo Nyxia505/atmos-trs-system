@@ -5,6 +5,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
+import 'package:atmos_trs_system/config/module_shell_prefs.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/config/user_profile_storage.dart';
 import 'package:atmos_trs_system/navigation/role_router.dart';
@@ -36,16 +37,30 @@ class StartupRouteResolver {
     );
 
     if (firebaseUser == null) {
-      final storedUid = storedUidBeforeRestore;
-      if (storedUid != null) {
-        debugPrint('Startup: clearing stale session (no Firebase Auth user).');
-        await SessionStorage.clearSession();
-        AuthConfig.currentUserUid = null;
+      // Auth restore can lag behind SharedPreferences on web. Give one more
+      // short chance before wiping the session (avoids false logout on refresh).
+      await Future<void>.delayed(const Duration(milliseconds: 750));
+      final lateUser = FirebaseAuth.instance.currentUser;
+      if (lateUser == null) {
+        final storedUid = storedUidBeforeRestore;
+        if (storedUid != null) {
+          debugPrint(
+            'Startup: clearing stale session (no Firebase Auth user after wait).',
+          );
+          await SessionStorage.clearSession();
+          AuthConfig.currentUserUid = null;
+        }
+        return _applyQrWelcomeIfNeeded(route, firebaseUser: null);
       }
-      return _applyQrWelcomeIfNeeded(route, firebaseUser: null);
+      return _routeForRestoredUser(lateUser);
     }
 
+    return _routeForRestoredUser(firebaseUser);
+  }
+
+  static Future<String> _routeForRestoredUser(User firebaseUser) async {
     AuthConfig.currentUserUid = firebaseUser.uid;
+    var route = kIsWeb ? '/landing' : '/login';
     final storedUid = await SessionStorage.getStoredUser();
     if (storedUid == firebaseUser.uid) {
       final role = await SessionStorage.getStoredRole();
@@ -54,10 +69,10 @@ class StartupRouteResolver {
           route = '/governor-dashboard';
           break;
         case UserRole.provincialTourism:
-          route = '/provincial-tourism-dashboard';
+          route = await _provincialOrTripPlannerAdminRoute();
           break;
         case UserRole.tourism:
-          route = '/lgu-dashboard';
+          route = await _lguOrTripPlannerAdminRoute();
           break;
         case UserRole.tourismEstablishment:
           route = '/establishment-dashboard';
@@ -72,9 +87,9 @@ class StartupRouteResolver {
       if (roleFromEmail == UserRole.governor) {
         route = '/governor-dashboard';
       } else if (roleFromEmail == UserRole.provincialTourism) {
-        route = '/provincial-tourism-dashboard';
+        route = await _provincialOrTripPlannerAdminRoute();
       } else if (roleFromEmail == UserRole.tourism) {
-        route = '/lgu-dashboard';
+        route = await _lguOrTripPlannerAdminRoute();
       } else {
         route = '/dashboard';
       }
@@ -82,10 +97,28 @@ class StartupRouteResolver {
 
     if (route == '/governor-dashboard' ||
         route == '/provincial-tourism-dashboard' ||
-        route == '/lgu-dashboard') {
+        route == '/lgu-dashboard' ||
+        route == '/trip-planner-admin') {
       unawaited(LguOfficeRegistryService.syncForCurrentUser());
     }
     return _applyQrWelcomeIfNeeded(route, firebaseUser: firebaseUser);
+  }
+
+  /// OPTACA / catalog admin: restore Trip Planner admin shell after refresh.
+  static Future<String> _provincialOrTripPlannerAdminRoute() async {
+    return _maybeTripPlannerAdminShell('/provincial-tourism-dashboard');
+  }
+
+  static Future<String> _lguOrTripPlannerAdminRoute() async {
+    return _maybeTripPlannerAdminShell('/lgu-dashboard');
+  }
+
+  static Future<String> _maybeTripPlannerAdminShell(String fallback) async {
+    final shell = await ModuleShellPrefs.getActiveShell();
+    if (shell == ModuleShellPrefs.tripPlannerAdmin) {
+      return '/trip-planner-admin';
+    }
+    return fallback;
   }
 
   static Future<String> _applyQrWelcomeIfNeeded(
@@ -236,7 +269,7 @@ class StartupRouteResolver {
             role: UserRole.provincialTourism,
             email: email,
           );
-          route = '/provincial-tourism-dashboard';
+          route = await _provincialOrTripPlannerAdminRoute();
         } else {
           await SessionStorage.saveSession(
             firebaseUser.uid,
@@ -252,6 +285,11 @@ class StartupRouteResolver {
       }
     }
 
+    if (route == '/provincial-tourism-dashboard' ||
+        route == '/lgu-dashboard' ||
+        route == '/governor-dashboard') {
+      route = await _maybeTripPlannerAdminShell(route);
+    }
     return _applyQrWelcomeIfNeeded(route, firebaseUser: firebaseUser);
   }
 
@@ -261,6 +299,14 @@ class StartupRouteResolver {
     required GlobalKey<NavigatorState> navigatorKey,
   }) async {
     try {
+      // Do not kick OPTACA off Trip Planner admin while Auth/profile is refining.
+      if (currentRoute == '/trip-planner-admin' &&
+          FirebaseAuth.instance.currentUser != null &&
+          await ModuleShellPrefs.getActiveShell() ==
+              ModuleShellPrefs.tripPlannerAdmin) {
+        return;
+      }
+
       final firebaseUser = FirebaseAuth.instance.currentUser;
       if (firebaseUser != null) {
         final staffFastRoute = await _resolveTrustedStaffRoute(firebaseUser);
@@ -269,7 +315,8 @@ class StartupRouteResolver {
         }
       }
 
-      final authoritative = await resolveAuthoritativeRoute();
+      var authoritative = await resolveAuthoritativeRoute();
+      authoritative = await _maybeTripPlannerAdminShell(authoritative);
       if (authoritative == currentRoute) return;
 
       // Keep verified tourists on the dashboard if Firestore is briefly stale.
@@ -303,7 +350,8 @@ class StartupRouteResolver {
     final emailRole = SessionStorage.getRoleFromEmail(firebaseUser.email ?? '');
     if (emailRole != storedRole) return null;
 
-    return SessionStorage.getDashboardRoute(storedRole);
+    final base = SessionStorage.getDashboardRoute(storedRole);
+    return _maybeTripPlannerAdminShell(base);
   }
 
   /// Waits for Firebase Auth persistence to restore the signed-in user after restart.
@@ -317,9 +365,9 @@ class StartupRouteResolver {
     if (user != null) return user;
 
     final timeout = hasStoredSession
-        ? const Duration(seconds: 8)
+        ? const Duration(seconds: 12)
         : kIsWeb
-            ? const Duration(seconds: 3)
+            ? const Duration(seconds: 5)
             : const Duration(milliseconds: 1500);
 
     try {

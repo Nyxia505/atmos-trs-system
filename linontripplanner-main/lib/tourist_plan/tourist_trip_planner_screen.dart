@@ -4,7 +4,6 @@ import 'package:flutter/services.dart';
 import '../data.dart';
 import '../municipal_road_distances.dart'
     show RoadRouteDirection, RoadRouteOption;
-import '../services/bus_location_store.dart';
 import '../services/saved_trip_store.dart';
 import '../services/tourism_session.dart';
 import '../services/trip_post_finish_rating.dart';
@@ -519,28 +518,100 @@ class _RouteTimeline extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<int>(
-      valueListenable: BusLocationStore.instance.revision,
-      builder: (context, _, __) {
-        final stops = BusLocationStore.instance.alongMunicipalities(
-          option.municipalities.map((m) => m.name),
-          option.direction,
-        );
-        if (stops.isEmpty) {
-          return const Padding(
-            padding: EdgeInsets.only(top: 8),
-            child: Text(
-              'No bus stops are saved for this route.',
-              style: TextStyle(fontSize: 13, height: 1.35),
-            ),
-          );
-        }
-        return _timeline(stops);
-      },
-    );
+    // Use the full ordered municipality path from the road graph — not bus hubs.
+    final towns = option.municipalities;
+    if (towns.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 8),
+        child: Text(
+          'No municipalities are available for this route.',
+          style: TextStyle(fontSize: 13, height: 1.35),
+        ),
+      );
+    }
+    return _timeline(towns);
   }
 
-  Widget _timeline(List<BusLocation> stops) {
+  String _roleLabel(int index, int total) {
+    if (total <= 1) return 'Starting Point · Final Destination';
+    if (index == 0) return 'Starting Point';
+    if (index == total - 1) return 'Final Destination';
+    return 'Along this route';
+  }
+
+  Widget _timeline(List<Municipality> towns) {
+    final body = Column(
+      children: [
+        for (var i = 0; i < towns.length; i++) ...[
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 22,
+                child: Center(
+                  child: Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: accent,
+                    ),
+                  ),
+                ),
+              ),
+              Icon(Icons.arrow_forward, size: 16, color: accent),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      towns[i].name,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        height: 1.2,
+                      ),
+                    ),
+                    Text(
+                      _roleLabel(i, towns.length),
+                      style: const TextStyle(fontSize: 12, height: 1.2),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (i < towns.length - 1)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SizedBox(
+                width: 22,
+                child: Column(
+                  children: [
+                    Container(
+                      width: 2,
+                      height: 8,
+                      color: accent.withValues(alpha: 0.45),
+                    ),
+                    Icon(
+                      Icons.arrow_downward,
+                      size: 14,
+                      color: accent,
+                    ),
+                    Container(
+                      width: 2,
+                      height: 8,
+                      color: accent.withValues(alpha: 0.45),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ],
+    );
+
     return DecoratedBox(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -549,76 +620,12 @@ class _RouteTimeline extends StatelessWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-        child: Column(
-          children: [
-            for (var i = 0; i < stops.length; i++) ...[
-              Row(
-                children: [
-                  SizedBox(
-                    width: 22,
-                    child: Center(
-                      child: Container(
-                        width: 12,
-                        height: 12,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: accent,
-                        ),
-                      ),
-                    ),
-                  ),
-                  Icon(Icons.arrow_forward, size: 16, color: accent),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          stops[i].name,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            height: 1.2,
-                          ),
-                        ),
-                        Text(
-                          stops[i].municipality,
-                          style: const TextStyle(fontSize: 12, height: 1.2),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              if (i < stops.length - 1)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: SizedBox(
-                    width: 22,
-                    child: Column(
-                      children: [
-                        Container(
-                          width: 2,
-                          height: 8,
-                          color: accent.withValues(alpha: 0.45),
-                        ),
-                        Icon(
-                          Icons.arrow_downward,
-                          size: 14,
-                          color: accent,
-                        ),
-                        Container(
-                          width: 2,
-                          height: 8,
-                          color: accent.withValues(alpha: 0.45),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-            ],
-          ],
-        ),
+        child: towns.length > 8
+            ? ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 280),
+                child: SingleChildScrollView(child: body),
+              )
+            : body,
       ),
     );
   }

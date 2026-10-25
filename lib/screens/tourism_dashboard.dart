@@ -1952,7 +1952,48 @@ class _LguDashboardState extends State<LguDashboard>
         checkIns: _realCheckIns,
         tourists: _realTouristsList,
         parseTime: _parseCheckInTimestamp,
+        categoryBySpotId: _analyticsCategoryBySpotId(),
+        categoryBySpotName: _analyticsCategoryBySpotName(),
+        categoryNamesByKey: _analyticsCategoryNamesByKey(),
       );
+
+  Map<String, String> _analyticsCategoryBySpotId() {
+    final map = <String, String>{};
+    for (final spot in _touristSpots) {
+      final category = spot.category.trim();
+      if (category.isEmpty) continue;
+      final id = spot.id.trim();
+      if (id.isNotEmpty) map[id] = category;
+      final qr = spot.qrValue.trim();
+      if (qr.isNotEmpty) map[qr] = category;
+    }
+    return map;
+  }
+
+  Map<String, String> _analyticsCategoryBySpotName() {
+    final map = <String, String>{};
+    for (final spot in _touristSpots) {
+      final category = spot.category.trim();
+      final name = spot.name.trim().toLowerCase();
+      if (category.isEmpty || name.isEmpty) continue;
+      map[name] = category;
+    }
+    return map;
+  }
+
+  Map<String, String> _analyticsCategoryNamesByKey() {
+    final map = <String, String>{};
+    for (final name in _categories) {
+      if (name == 'All') continue;
+      final trimmed = name.trim();
+      if (trimmed.isEmpty) continue;
+      map[trimmed] = trimmed;
+      map[trimmed.toLowerCase()] = trimmed;
+      final key = SpotCategoryNames.keyOf(trimmed);
+      if (key.isNotEmpty) map[key] = trimmed;
+    }
+    return map;
+  }
 
   int get _lguAnalyticsDailyAvg => _lguVisitAnalytics.dailyAverage;
 
@@ -5285,6 +5326,26 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
+  void _openAddSpotQr() {
+    final municipalityId = _effectiveLguMunicipalityId();
+    if (municipalityId == null || municipalityId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Set your LGU municipality in Settings before adding a spot QR.',
+          ),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+    _showGenerateSpotQrDialog(
+      municipalityId: municipalityId,
+      municipalityDisplayName:
+          _effectiveLguQrDisplayName() ?? municipalityId,
+    );
+  }
+
   List<Widget> _buildSpotActionButtons(TouristSpot spot) {
     return [
       if (_spotHasVr(spot))
@@ -5422,8 +5483,7 @@ class _LguDashboardState extends State<LguDashboard>
       child: _buildFramedContentShell(
         title: 'Tourist Spots',
         subtitle:
-            'One place for destinations: edit spot details, paste VR tour URLs, '
-            'and manage QR codes',
+            'Destinations for your LGU. Edit details and VR tour URLs here.',
         showAddSpotButton: true,
         body: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -5462,23 +5522,10 @@ class _LguDashboardState extends State<LguDashboard>
         _effectiveLguQrDisplayName() ?? effectiveMunicipalityId;
     final spots = List<TouristSpot>.from(_touristSpots)
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-    final spotsNeedingQr = spots
-        .where((s) => (s.qrPayload ?? '').trim().isEmpty)
-        .toList();
     final savedCount =
         spots.where((s) => (s.qrPayload ?? '').trim().isNotEmpty).length;
 
-    void openAddDialog() {
-      if (effectiveMunicipalityId == null || effectiveMunicipalityId.isEmpty) {
-        return;
-      }
-      _showGenerateSpotQrDialog(
-        municipalityId: effectiveMunicipalityId,
-        municipalityDisplayName:
-            municipalityDisplayName ?? effectiveMunicipalityId,
-        candidates: spotsNeedingQr,
-      );
-    }
+    void openAddDialog() => _openAddSpotQr();
 
     return RefreshIndicator(
       onRefresh: _loadData,
@@ -5486,7 +5533,7 @@ class _LguDashboardState extends State<LguDashboard>
       child: _buildFramedContentShell(
         title: 'Spot QR Codes',
         subtitle:
-            'Each tourist spot has its own check-in QR so you can see where visitors go.',
+            'Add a unique check-in QR for each tourist spot in your LGU.',
         actions: [
           if (effectiveMunicipalityId != null &&
               effectiveMunicipalityId.isNotEmpty) ...[
@@ -5933,6 +5980,7 @@ class _LguDashboardState extends State<LguDashboard>
     final controller = TextEditingController();
     final entered = await showDialog<String>(
       context: dialogContext,
+      useRootNavigator: true,
       builder: (ctx) => AlertDialog(
         backgroundColor: _cardBg,
         title: Text(
@@ -5966,9 +6014,7 @@ class _LguDashboardState extends State<LguDashboard>
         ],
       ),
     );
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      controller.dispose();
-    });
+    Future<void>.delayed(const Duration(milliseconds: 400), controller.dispose);
     if (entered == null || !mounted) return null;
 
     final result = await SpotCategoryService.instance.add(entered);
@@ -6006,35 +6052,36 @@ class _LguDashboardState extends State<LguDashboard>
   void _showGenerateSpotQrDialog({
     required String municipalityId,
     required String municipalityDisplayName,
-    required List<TouristSpot> candidates,
   }) {
     final nameController = TextEditingController();
     final descriptionController = TextEditingController();
-    final latController = TextEditingController();
-    final lngController = TextEditingController();
     final anchor = getMunicipalityAnchorCoordinates(municipalityId);
-    if (anchor != null) {
-      latController.text = anchor.lat.toStringAsFixed(6);
-      lngController.text = anchor.lng.toStringAsFixed(6);
-    }
-
-    var createNewSpot = true;
-    String selectedCategory = 'Beach';
-    TouristSpot? selectedExisting =
-        candidates.isNotEmpty ? candidates.first : null;
+    final categoryChoices = _categories.where((c) => c != 'All').toList();
+    var selectedCategory = categoryChoices.contains('Beach')
+        ? 'Beach'
+        : (categoryChoices.isEmpty ? 'Beach' : categoryChoices.first);
+    double? pinLat;
+    double? pinLng;
     var saving = false;
 
     showDialog<void>(
       context: context,
+      barrierColor: Colors.black26,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) {
-          final canGenerateExisting =
-              !createNewSpot && selectedExisting != null;
-          final generateEnabled = !saving &&
-              (createNewSpot || canGenerateExisting);
+          if (!categoryChoices.contains(selectedCategory)) {
+            categoryChoices.add(selectedCategory);
+          }
+          final safeCategory = categoryChoices.contains(selectedCategory)
+              ? selectedCategory
+              : categoryChoices.first;
 
           return AlertDialog(
             backgroundColor: _cardBg,
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 24,
+            ),
             title: Text(
               'Add QR Code',
               style: GoogleFonts.inter(
@@ -6044,59 +6091,25 @@ class _LguDashboardState extends State<LguDashboard>
               ),
             ),
             content: SizedBox(
-              width: 460,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      'Create a new tourist spot with its own unique QR, or attach a QR to an existing spot that still needs one. Spots with a saved QR cannot get another.',
-                      style: GoogleFonts.inter(
-                        color: _textMuted,
-                        fontSize: 13,
-                        height: 1.35,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    SegmentedButton<bool>(
-                      segments: const [
-                        ButtonSegment<bool>(
-                          value: true,
-                          label: Text('New spot'),
-                          icon: Icon(Icons.add_location_alt_outlined, size: 18),
+              width: 520,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(context).height * 0.68,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Create a tourist spot in $municipalityDisplayName and generate its unique check-in QR.',
+                        style: GoogleFonts.inter(
+                          color: _textMuted,
+                          fontSize: 13,
+                          height: 1.35,
                         ),
-                        ButtonSegment<bool>(
-                          value: false,
-                          label: Text('Existing'),
-                          icon: Icon(Icons.list_alt_rounded, size: 18),
-                        ),
-                      ],
-                      selected: {createNewSpot},
-                      onSelectionChanged: saving
-                          ? null
-                          : (s) => setDialogState(() {
-                                createNewSpot = s.first;
-                              }),
-                      style: ButtonStyle(
-                        foregroundColor:
-                            WidgetStateProperty.resolveWith((states) {
-                          if (states.contains(WidgetState.selected)) {
-                            return Colors.white;
-                          }
-                          return _textDark;
-                        }),
-                        backgroundColor:
-                            WidgetStateProperty.resolveWith((states) {
-                          if (states.contains(WidgetState.selected)) {
-                            return _primaryOrange;
-                          }
-                          return Colors.white;
-                        }),
                       ),
-                    ),
-                    const SizedBox(height: 16),
-                    if (createNewSpot) ...[
+                      const SizedBox(height: 16),
                       _buildDialogTextField(
                         nameController,
                         'Tourist Spot Name',
@@ -6106,7 +6119,7 @@ class _LguDashboardState extends State<LguDashboard>
                       const SizedBox(height: 14),
                       InputDecorator(
                         decoration: InputDecoration(
-                          labelText: 'Category (optional)',
+                          labelText: 'Category',
                           filled: true,
                           fillColor: const Color(0xFFF9FAFB),
                           border: OutlineInputBorder(
@@ -6120,19 +6133,14 @@ class _LguDashboardState extends State<LguDashboard>
                         ),
                         child: DropdownButtonHideUnderline(
                           child: DropdownButton<String>(
-                            value: _categories.contains(selectedCategory)
-                                ? selectedCategory
-                                : 'Beach',
+                            value: safeCategory,
                             isExpanded: true,
                             items: [
-                              ..._categories
-                                  .where((c) => c != 'All')
-                                  .map(
-                                    (c) => DropdownMenuItem(
-                                      value: c,
-                                      child: Text(c),
-                                    ),
-                                  ),
+                              for (final category in categoryChoices)
+                                DropdownMenuItem(
+                                  value: category,
+                                  child: Text(category),
+                                ),
                               DropdownMenuItem(
                                 value: SpotCategoryService.addNewValue,
                                 child: Text(
@@ -6146,21 +6154,24 @@ class _LguDashboardState extends State<LguDashboard>
                             ],
                             onChanged: saving
                                 ? null
-                                : (v) async {
-                                    if (v == null) return;
-                                    if (v == SpotCategoryService.addNewValue) {
+                                : (value) async {
+                                    if (value == null) return;
+                                    if (value == SpotCategoryService.addNewValue) {
                                       final created =
                                           await _promptNewSpotCategory(
                                         dialogContext,
                                       );
                                       if (created == null) return;
+                                      if (!categoryChoices.contains(created)) {
+                                        categoryChoices.add(created);
+                                      }
                                       setDialogState(
                                         () => selectedCategory = created,
                                       );
                                       return;
                                     }
                                     setDialogState(
-                                      () => selectedCategory = v,
+                                      () => selectedCategory = value,
                                     );
                                   },
                           ),
@@ -6174,188 +6185,84 @@ class _LguDashboardState extends State<LguDashboard>
                         maxLines: 3,
                       ),
                       const SizedBox(height: 14),
-                      _buildSpotGpsFields(
-                        latController: latController,
-                        lngController: lngController,
+                      SpotLocationPicker(
+                        fallbackLatitude: anchor?.lat,
+                        fallbackLongitude: anchor?.lng,
+                        autoLocate: false,
+                        placePinOnFallback: false,
+                        accentColor: _primaryOrange,
                         municipalityId: municipalityId,
-                        autoLocate: true,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Saved under $municipalityDisplayName only.',
-                        style: GoogleFonts.inter(
-                          color: _textMuted,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ] else if (candidates.isEmpty) ...[
-                      Container(
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: _tintOrange,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: _primaryOrange.withValues(alpha: 0.25),
-                          ),
-                        ),
-                        child: Text(
-                          'All existing spots already have a saved QR. Switch to New spot to add another unique code.',
-                          style: GoogleFonts.inter(
-                            color: _textDark,
-                            fontSize: 13,
-                            height: 1.35,
-                          ),
-                        ),
-                      ),
-                    ] else ...[
-                      InputDecorator(
-                        decoration: InputDecoration(
-                          labelText: 'Existing spot without QR',
-                          filled: true,
-                          fillColor: const Color(0xFFF9FAFB),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: _panelBorder),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: _panelBorder),
-                          ),
-                        ),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<TouristSpot>(
-                            value: selectedExisting,
-                            isExpanded: true,
-                            items: candidates
-                                .map(
-                                  (s) => DropdownMenuItem(
-                                    value: s,
-                                    child: Text(
-                                      s.name,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: saving
-                                ? null
-                                : (v) => setDialogState(
-                                      () => selectedExisting = v,
-                                    ),
-                          ),
-                        ),
+                        onChanged: (pin) {
+                          pinLat = pin.latitude;
+                          pinLng = pin.longitude;
+                          setDialogState(() {});
+                        },
                       ),
                     ],
-                  ],
+                  ),
                 ),
               ),
             ),
             actions: [
               TextButton(
-                onPressed:
-                    saving ? null : () => Navigator.pop(dialogContext),
+                onPressed: saving ? null : () => Navigator.pop(dialogContext),
                 child: const Text(
                   'Cancel',
                   style: TextStyle(color: _textMuted),
                 ),
               ),
               ElevatedButton.icon(
-                onPressed: !generateEnabled
+                onPressed: saving
                     ? null
                     : () async {
-                        if (createNewSpot) {
-                          final name = nameController.text.trim();
-                          if (name.isEmpty) {
-                            ScaffoldMessenger.of(this.context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Tourist Spot Name is required.',
-                                ),
-                                backgroundColor: Colors.redAccent,
-                              ),
-                            );
-                            return;
-                          }
-                          final coordError = _validateSpotCoordinates(
-                            latController.text,
-                            lngController.text,
-                          );
-                          if (coordError != null) {
-                            ScaffoldMessenger.of(this.context).showSnackBar(
-                              SnackBar(
-                                content: Text(coordError),
-                                backgroundColor: Colors.redAccent,
-                              ),
-                            );
-                            return;
-                          }
-                          final lat = _tryParseCoord(latController.text)!;
-                          final lng = _tryParseCoord(lngController.text)!;
-                          final mid = normalizeMunicipalityId(municipalityId);
-                          if (mid.isEmpty) {
-                            ScaffoldMessenger.of(this.context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Could not determine your LGU municipality.',
-                                ),
-                                backgroundColor: Colors.redAccent,
-                              ),
-                            );
-                            return;
-                          }
-
-                          setDialogState(() => saving = true);
-                          final result =
-                              await TouristSpotsFirestoreService.addSpotDetailed(
-                            TouristSpot(
-                              id: '',
-                              name: name,
-                              category: selectedCategory,
-                              municipality: municipalityDisplayName,
-                              description:
-                                  descriptionController.text.trim(),
-                              rating: 0,
-                              latitude: lat,
-                              longitude: lng,
-                              status: 'Active',
-                              visitors: 0,
-                              municipalityId: mid,
-                            ),
-                          );
-                          if (!dialogContext.mounted) return;
-                          Navigator.pop(dialogContext);
-                          if (!mounted) return;
-                          if (result.ok) await _loadData();
-                          if (!mounted) return;
+                        if (saving) return;
+                        final name = nameController.text.trim();
+                        if (name.isEmpty) {
                           ScaffoldMessenger.of(this.context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                result.ok
-                                    ? 'Unique QR created for "$name"'
-                                    : (result.error ??
-                                        'Failed to create spot QR. Check Firebase.'),
-                              ),
-                              backgroundColor: result.ok
-                                  ? _primaryOrange
-                                  : Colors.redAccent,
-                              behavior: SnackBarBehavior.floating,
-                              duration: Duration(
-                                seconds: result.ok ? 4 : 8,
-                              ),
+                            const SnackBar(
+                              content: Text('Tourist Spot Name is required.'),
+                              backgroundColor: Colors.redAccent,
                             ),
                           );
                           return;
                         }
-
-                        final spot = selectedExisting;
-                        if (spot == null) return;
-                        if ((spot.qrPayload ?? '').trim().isNotEmpty) {
+                        final duplicate = _touristSpots.any(
+                          (spot) =>
+                              spot.name.trim().toLowerCase() ==
+                              name.toLowerCase(),
+                        );
+                        if (duplicate) {
+                          ScaffoldMessenger.of(this.context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                '"$name" already exists. Use a different spot name.',
+                              ),
+                              backgroundColor: Colors.redAccent,
+                            ),
+                          );
+                          return;
+                        }
+                        if (pinLat == null || pinLng == null) {
                           ScaffoldMessenger.of(this.context).showSnackBar(
                             const SnackBar(
                               content: Text(
-                                'This spot already has a saved QR. Pick another or create a new spot.',
+                                'Search a location, tap the map, or use Get Location to place the pin.',
                               ),
+                              backgroundColor: Colors.redAccent,
+                            ),
+                          );
+                          return;
+                        }
+                        final mid = normalizeMunicipalityId(municipalityId);
+                        final outside = coordinatesOutsideMunicipalityMessage(
+                          lat: pinLat!,
+                          lng: pinLng!,
+                          municipalityId: mid,
+                        );
+                        if (outside != null) {
+                          ScaffoldMessenger.of(this.context).showSnackBar(
+                            SnackBar(
+                              content: Text(outside),
                               backgroundColor: Colors.redAccent,
                             ),
                           );
@@ -6363,33 +6270,47 @@ class _LguDashboardState extends State<LguDashboard>
                         }
 
                         setDialogState(() => saving = true);
-                        final mid = normalizeMunicipalityId(
-                          spot.municipalityId.isNotEmpty
-                              ? spot.municipalityId
-                              : municipalityId,
-                        );
-                        final ok =
-                            await TouristSpotsFirestoreService.ensureSpotQrMetadata(
-                          spotId: spot.id,
-                          municipalityId:
-                              mid.isNotEmpty ? mid : municipalityId,
-                          latitude: spot.latitude,
-                          longitude: spot.longitude,
+                        final result =
+                            await TouristSpotsFirestoreService.addSpotDetailed(
+                          TouristSpot(
+                            id: '',
+                            name: name,
+                            category: safeCategory,
+                            municipality: municipalityDisplayName,
+                            description: descriptionController.text.trim(),
+                            rating: 0,
+                            latitude: pinLat!,
+                            longitude: pinLng!,
+                            status: 'Active',
+                            visitors: 0,
+                            municipalityId: mid,
+                          ),
                         );
                         if (!dialogContext.mounted) return;
+                        if (!result.ok) {
+                          setDialogState(() => saving = false);
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(this.context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                result.error ??
+                                    'Failed to create spot QR. Check Firebase.',
+                              ),
+                              backgroundColor: Colors.redAccent,
+                              behavior: SnackBarBehavior.floating,
+                              duration: const Duration(seconds: 8),
+                            ),
+                          );
+                          return;
+                        }
                         Navigator.pop(dialogContext);
                         if (!mounted) return;
-                        if (ok) await _loadData();
+                        await _loadData();
                         if (!mounted) return;
                         ScaffoldMessenger.of(this.context).showSnackBar(
                           SnackBar(
-                            content: Text(
-                              ok
-                                  ? 'Unique QR generated for ${spot.name}'
-                                  : 'Failed to generate QR. Check Firebase.',
-                            ),
-                            backgroundColor:
-                                ok ? _primaryOrange : Colors.redAccent,
+                            content: Text('Unique QR created for "$name"'),
+                            backgroundColor: _primaryOrange,
                             behavior: SnackBarBehavior.floating,
                           ),
                         );
@@ -6404,11 +6325,7 @@ class _LguDashboardState extends State<LguDashboard>
                         ),
                       )
                     : const Icon(Icons.qr_code_2_rounded, size: 18),
-                label: Text(
-                  saving
-                      ? 'Saving…'
-                      : (createNewSpot ? 'Create & Generate' : 'Generate'),
-                ),
+                label: Text(saving ? 'Saving…' : 'Create & Generate'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _primaryOrange,
                   foregroundColor: Colors.white,
@@ -6419,13 +6336,9 @@ class _LguDashboardState extends State<LguDashboard>
         },
       ),
     ).whenComplete(() {
-      // The route still rebuilds during its exit transition (e.g. after
-      // _loadData), so dispose only once the dialog is fully gone.
-      Future<void>.delayed(const Duration(milliseconds: 600), () {
+      Future<void>.delayed(const Duration(milliseconds: 400), () {
         nameController.dispose();
         descriptionController.dispose();
-        latController.dispose();
-        lngController.dispose();
       });
     });
   }
@@ -6664,16 +6577,33 @@ class _LguDashboardState extends State<LguDashboard>
     final dotCodeController = TextEditingController();
     final latController = TextEditingController();
     final lngController = TextEditingController();
-    String selectedCategory = 'Beach';
+    final anchor = getMunicipalityAnchorCoordinates(normalizedStored);
+    if (anchor != null) {
+      latController.text = anchor.lat.toStringAsFixed(6);
+      lngController.text = anchor.lng.toStringAsFixed(6);
+    }
+    String selectedCategory = _categories.contains('Beach')
+        ? 'Beach'
+        : _categories.where((c) => c != 'All').firstOrNull ?? 'Beach';
 
     showDialog(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minWidth: 440, maxWidth: 520),
-            child: AlertDialog(
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final categoryChoices = _categories.where((c) => c != 'All').toList();
+          if (!categoryChoices.contains(selectedCategory) &&
+              selectedCategory.isNotEmpty) {
+            categoryChoices.add(selectedCategory);
+          }
+          final safeCategory = categoryChoices.contains(selectedCategory)
+              ? selectedCategory
+              : (categoryChoices.isEmpty ? null : categoryChoices.first);
+          return AlertDialog(
               backgroundColor: _cardBg,
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
               title: Text(
                 'Add Tourist Spot',
                 style: TextStyle(
@@ -6682,7 +6612,16 @@ class _LguDashboardState extends State<LguDashboard>
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              content: SingleChildScrollView(
+              content: SizedBox(
+                width: 480,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: math.max(
+                      240,
+                      MediaQuery.sizeOf(context).height * 0.62,
+                    ),
+                  ),
+                  child: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -6699,19 +6638,37 @@ class _LguDashboardState extends State<LguDashboard>
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: DropdownButton<String>(
-                        value: selectedCategory,
+                        value: safeCategory,
                         isExpanded: true,
                         dropdownColor: _cardBg,
                         underline: const SizedBox(),
                         style: TextStyle(color: _textDark, fontSize: 16),
-                        items: _categories
-                            .where((c) => c != 'All')
-                            .map(
-                              (c) => DropdownMenuItem(value: c, child: Text(c)),
-                            )
-                            .toList(),
-                        onChanged: (value) =>
-                            setDialogState(() => selectedCategory = value!),
+                        items: [
+                          ...categoryChoices.map(
+                            (c) => DropdownMenuItem(value: c, child: Text(c)),
+                          ),
+                          DropdownMenuItem(
+                            value: SpotCategoryService.addNewValue,
+                            child: Text(
+                              '+ Add New Category',
+                              style: TextStyle(
+                                color: _primaryOrange,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                        onChanged: (value) async {
+                          if (value == null) return;
+                          if (value == SpotCategoryService.addNewValue) {
+                            final created =
+                                await _promptNewSpotCategory(dialogContext);
+                            if (created == null) return;
+                            setDialogState(() => selectedCategory = created);
+                            return;
+                          }
+                          setDialogState(() => selectedCategory = value);
+                        },
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -6771,6 +6728,8 @@ class _LguDashboardState extends State<LguDashboard>
                     ),
                   ],
                 ),
+                  ),
+                ),
               ),
               actions: [
                 TextButton(
@@ -6829,7 +6788,7 @@ class _LguDashboardState extends State<LguDashboard>
                     final spot = TouristSpot(
                       id: '',
                       name: nameController.text.trim(),
-                      category: selectedCategory,
+                      category: safeCategory ?? selectedCategory,
                       municipality: cityTrim,
                       description: descriptionController.text.trim(),
                       rating: 0,
@@ -6900,10 +6859,9 @@ class _LguDashboardState extends State<LguDashboard>
                   child: const Text('Add'),
                 ),
               ],
-            ),
-          ),
+            );
+          },
         ),
-      ),
     );
   }
 
@@ -7336,6 +7294,7 @@ class _LguDashboardState extends State<LguDashboard>
           printedLatitude: printedSpot?.latitude,
           printedLongitude: printedSpot?.longitude,
           accentColor: _primaryOrange,
+          municipalityId: municipalityId,
           onChanged: (pin) {
             latController.text = pin.latitude.toStringAsFixed(6);
             lngController.text = pin.longitude.toStringAsFixed(6);
@@ -8460,6 +8419,9 @@ class _LguDashboardState extends State<LguDashboard>
               parseTime: _parseCheckInTimestamp,
               rankSpots: true,
               rankingTitle: 'Top spots',
+              categoryBySpotId: _analyticsCategoryBySpotId(),
+              categoryBySpotName: _analyticsCategoryBySpotName(),
+              categoryNamesByKey: _analyticsCategoryNamesByKey(),
             ),
           ],
         ),
@@ -8617,6 +8579,11 @@ class _LguDashboardState extends State<LguDashboard>
             spotId: s.id,
             name: s.name,
             dotAttractionCode: s.dotAttractionCode,
+            municipalityId: s.municipalityId.isNotEmpty
+                ? s.municipalityId
+                : (_storedMunicipalityId ?? ''),
+            municipalityName: _municipalityName ?? scopeName,
+            status: s.status,
           ),
         )
         .toList();

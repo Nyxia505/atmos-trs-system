@@ -1,6 +1,7 @@
 import 'dart:async' show unawaited;
 
 import 'package:atmos_trs_system/config/auth_config.dart';
+import 'package:atmos_trs_system/config/module_shell_prefs.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
 import 'package:atmos_trs_system/features/governor/theme/governor_dashboard_tokens.dart';
@@ -18,13 +19,13 @@ import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/provincial_report_builder.dart';
-import 'package:atmos_trs_system/widgets/atmos_table_kit.dart';
 import 'package:atmos_trs_system/utils/visit_stats.dart';
 import 'package:atmos_trs_system/widgets/dot_report_export_panel.dart';
 import 'package:atmos_trs_system/widgets/optaca_accounts_panel.dart';
-import 'package:atmos_trs_system/widgets/optaca_enroll_attraction_dialog.dart';
+import 'package:atmos_trs_system/widgets/optaca_alerts_quality_panel.dart';
 import 'package:atmos_trs_system/widgets/optaca_establishment_review_panel.dart';
 import 'package:atmos_trs_system/widgets/optaca_stakeholder_reports_panel.dart';
+import 'package:atmos_trs_system/widgets/optaca_trip_planner_catalog.dart';
 import 'package:atmos_trs_system/widgets/report_export_preview.dart';
 import 'package:atmos_trs_system/widgets/ui_skeleton.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -65,11 +66,6 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
   List<Map<String, dynamic>> _campaigns = [];
   Set<String> _ackAlertIds = {};
 
-  // Destinations filters
-  String _destSearch = '';
-  String _destCategory = 'All';
-  String _destMunicipality = 'All';
-
   // Insights
   String _insightSearch = '';
 
@@ -98,6 +94,7 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
     _NavItem(Icons.location_city_rounded, 'Municipality Performance'),
     _NavItem(Icons.insights_rounded, 'Tourist Insights'),
     _NavItem(Icons.event_rounded, 'Events & Campaigns'),
+    _NavItem(Icons.route_rounded, 'Trip Planner'),
     _NavItem(Icons.assessment_rounded, 'DOT Reports'),
     _NavItem(Icons.hotel_rounded, 'Establishments'),
     _NavItem(Icons.manage_accounts_rounded, 'Accounts'),
@@ -110,21 +107,13 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
   static const _performanceIndex = 2;
   static const _insightsIndex = 3;
   static const _eventsIndex = 4;
-  static const _reportsIndex = 5;
-  static const _establishmentsIndex = 6;
-  static const _accountsIndex = 7;
-  static const _alertsIndex = 8;
-  static const _settingsIndex = 9;
+  static const _tripPlannerIndex = 5;
+  static const _reportsIndex = 6;
+  static const _establishmentsIndex = 7;
+  static const _accountsIndex = 8;
+  static const _alertsIndex = 9;
+  static const _settingsIndex = 10;
   static const _bottomNavItemCount = 5;
-
-  static const _categories = [
-    'All',
-    'Beach',
-    'Falls',
-    'Historical',
-    'Mountain',
-    'Resort',
-  ];
 
   static const _reportTypes = [
     'DOT Visitor to Attraction Report',
@@ -152,6 +141,9 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
   }
 
   Future<void> _bootstrap() async {
+    unawaited(
+      ModuleShellPrefs.setActiveShell(ModuleShellPrefs.provincialTourism),
+    );
     final email = await SessionStorage.getStoredEmail();
     if (email != null && email.isNotEmpty) {
       _profileEmail = email;
@@ -449,14 +441,12 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
             searchController: _searchController,
             onSearchChanged: (q) {
               setState(() {
-                if (_selectedIndex == _destinationsIndex) {
-                  _destSearch = q;
-                } else if (_selectedIndex == _insightsIndex) {
+                if (_selectedIndex == _insightsIndex) {
                   _insightSearch = q;
                 }
               });
             },
-            searchHint: 'Search destinations, tourists, municipalities...',
+            searchHint: 'Search tourists, municipalities...',
             notificationCount: (_alerts.length + _pendingEvents).clamp(0, 99),
             onNotifications: () => _go(_alertsIndex),
           ),
@@ -501,6 +491,7 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
       _performanceIndex => _buildPerformanceTab(),
       _insightsIndex => _buildInsightsTab(),
       _eventsIndex => _buildEventsTab(),
+      _tripPlannerIndex => _buildTripPlannerTab(),
       _reportsIndex => _buildReportsTab(),
       _establishmentsIndex => _buildEstablishmentsTab(),
       _accountsIndex => const OptacaAccountsPanel(),
@@ -1011,48 +1002,7 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
     ];
   }
 
-  // ─── Destinations ────────────────────────────────────────────
-  static ({Color color, IconData icon}) _categoryVisual(String category) {
-    final c = category.toLowerCase();
-    if (c == 'all') {
-      return (color: GovernorDashboardTokens.primary, icon: Icons.apps_rounded);
-    }
-    if (c.contains('beach')) {
-      return (color: const Color(0xFF0EA5E9), icon: Icons.beach_access_rounded);
-    }
-    if (c.contains('fall') || c.contains('lake') || c.contains('river')) {
-      return (color: const Color(0xFF0D9488), icon: Icons.water_rounded);
-    }
-    if (c.contains('mountain') || c.contains('hill')) {
-      return (color: const Color(0xFF16A34A), icon: Icons.terrain_rounded);
-    }
-    if (c.contains('church')) {
-      return (color: const Color(0xFF8B5CF6), icon: Icons.church_rounded);
-    }
-    if (c.contains('histor') || c.contains('fort') || c.contains('heritage')) {
-      return (color: const Color(0xFFA16207), icon: Icons.account_balance_rounded);
-    }
-    if (c.contains('park') || c.contains('garden')) {
-      return (color: const Color(0xFF65A30D), icon: Icons.park_rounded);
-    }
-    if (c.contains('resort')) {
-      return (color: const Color(0xFFEC4899), icon: Icons.pool_rounded);
-    }
-    return (color: GovernorDashboardTokens.primary, icon: Icons.place_rounded);
-  }
-
-  static bool _spotHasVr(Map<String, dynamic> s) {
-    final url =
-        (s['vrTourUrl'] ?? s['vrUrl'] ?? s['vrLink'] ?? '').toString().trim();
-    return url.isNotEmpty || s['hasVr'] == true;
-  }
-
-  Future<void> _toggleFeatured(Map<String, dynamic> s, bool v) async {
-    final id = s['id']?.toString() ?? '';
-    final ok = await _service.setDestinationFeatured(spotId: id, featured: v);
-    if (ok && mounted) setState(() => s['provincialFeatured'] = v);
-  }
-
+  // ─── Destinations (view-only LGU catalog) ─────────────────────
   Widget _tabHeader({
     required IconData icon,
     required String title,
@@ -1108,341 +1058,6 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
     );
   }
 
-  Widget _softChip({
-    required String label,
-    required Color color,
-    IconData? icon,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(99),
-        border: Border.all(color: color.withValues(alpha: 0.2)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (icon != null) ...[
-            Icon(icon, size: 12, color: color),
-            const SizedBox(width: 4),
-          ],
-          Text(
-            label,
-            style: GovernorDashboardTokens.sectionTitle(size: 11, color: color),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _statusChip(String status) {
-    final s = status.toLowerCase();
-    final active = s != 'inactive' && s != 'closed';
-    final color = active ? const Color(0xFF16A34A) : const Color(0xFF64748B);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(99),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 5),
-          Text(
-            active ? 'Active' : (s.isEmpty ? 'Inactive' : '${s[0].toUpperCase()}${s.substring(1)}'),
-            style: GovernorDashboardTokens.sectionTitle(size: 11, color: color),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _categoryPill(String category, int count) {
-    final selected = _destCategory == category;
-    final v = _categoryVisual(category);
-    final accent = GovernorDashboardTokens.primary;
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 180),
-      decoration: BoxDecoration(
-        color: selected ? accent : Colors.white,
-        borderRadius: BorderRadius.circular(99),
-        border: Border.all(
-          color: selected ? accent : GovernorDashboardTokens.border,
-        ),
-        boxShadow: selected
-            ? [
-                BoxShadow(
-                  color: accent.withValues(alpha: 0.25),
-                  blurRadius: 10,
-                  offset: const Offset(0, 3),
-                ),
-              ]
-            : null,
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(99),
-          onTap: () => setState(() => _destCategory = category),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(11, 7, 8, 7),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  v.icon,
-                  size: 15,
-                  color: selected ? Colors.white : v.color,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  category,
-                  style: GovernorDashboardTokens.sectionTitle(
-                    size: 12.5,
-                    color: selected ? Colors.white : GovernorDashboardTokens.text,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Container(
-                  constraints: const BoxConstraints(minWidth: 20),
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: selected
-                        ? Colors.white.withValues(alpha: 0.25)
-                        : GovernorDashboardTokens.mutedSurface,
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                  child: Text(
-                    '$count',
-                    textAlign: TextAlign.center,
-                    style: GovernorDashboardTokens.sectionTitle(
-                      size: 11,
-                      color: selected
-                          ? Colors.white
-                          : GovernorDashboardTokens.subtitle,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDestinationsTab() {
-    final munis = ['All', ...getMisamisOccidentalMunicipalities().map((m) => m.name)];
-    final q = _destSearch.trim().toLowerCase();
-    final base = _spots.where((s) {
-      final name = (s['name']?.toString() ?? '').toLowerCase();
-      final mid = ProvincialTourismService.municipalityIdOf(s);
-      final mname = ProvincialTourismService.municipalityNameOf(mid);
-      if (q.isNotEmpty &&
-          !name.contains(q) &&
-          !mname.toLowerCase().contains(q)) {
-        return false;
-      }
-      if (_destMunicipality != 'All' && mname != _destMunicipality) {
-        return false;
-      }
-      return true;
-    }).toList();
-    bool inCategory(Map<String, dynamic> s, String cat) =>
-        cat == 'All' ||
-        (s['category']?.toString() ?? '').toLowerCase().contains(cat.toLowerCase());
-    final filtered = base.where((s) => inCategory(s, _destCategory)).toList();
-
-    final visitCounts = <String, int>{};
-    for (final c in _periodCheckIns) {
-      final sid = c['spotId']?.toString() ?? c['spot_id']?.toString() ?? '';
-      if (sid.isEmpty) continue;
-      visitCounts[sid] = (visitCounts[sid] ?? 0) + 1;
-    }
-    int visitsOf(Map<String, dynamic> s) => visitCounts[s['id']?.toString()] ?? 0;
-
-    final totalVisits = filtered.fold<int>(0, (a, s) => a + visitsOf(s));
-    final vrCount = filtered.where(_spotHasVr).length;
-    final featuredCount =
-        filtered.where((s) => s['provincialFeatured'] == true).length;
-    final lguCount = {
-      for (final s in filtered) ProvincialTourismService.municipalityIdOf(s),
-    }.where((id) => id.isNotEmpty).length;
-    final filtersActive =
-        _destCategory != 'All' || _destMunicipality != 'All' || q.isNotEmpty;
-
-    return ListView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
-      children: [
-        _tabHeader(
-          icon: Icons.place_rounded,
-          title: 'Destinations',
-          subtitle:
-              'Enroll a new attraction and its check-in QR, or review spots across the province.',
-          trailing: FilledButton.icon(
-            onPressed: () => showOptacaEnrollAttractionDialog(
-              context: context,
-              onEnrolled: _loadData,
-            ),
-            icon: const Icon(Icons.qr_code_2_rounded),
-            label: const Text('Enroll attraction QR'),
-          ),
-        ),
-        const SizedBox(height: 16),
-        _kpiGrid(
-          children: [
-            _simpleKpi(
-              title: 'Destinations',
-              value: '${filtered.length}',
-              icon: Icons.place_rounded,
-              accent: GovernorDashboardTokens.primary,
-              subtitle: filtersActive
-                  ? 'of ${_spots.length} total'
-                  : 'across $lguCount LGUs',
-            ),
-            _simpleKpi(
-              title: 'Visits',
-              value: '$totalVisits',
-              icon: Icons.qr_code_scanner_rounded,
-              accent: const Color(0xFF3B82F6),
-              subtitle: 'QR check-ins · $_selectedTimeFilter',
-            ),
-            _simpleKpi(
-              title: 'VR-ready',
-              value: '$vrCount',
-              icon: Icons.vrpano_rounded,
-              accent: const Color(0xFF8B5CF6),
-              subtitle: '360° tours linked',
-            ),
-            _simpleKpi(
-              title: 'Featured',
-              value: '$featuredCount',
-              icon: Icons.star_rounded,
-              accent: const Color(0xFFF59E0B),
-              subtitle: 'Provincial highlights',
-            ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        _panel(
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Icon(
-                    Icons.tune_rounded,
-                    size: 18,
-                    color: GovernorDashboardTokens.primary,
-                  ),
-                  const SizedBox(width: 8),
-                  Text('Filters', style: GovernorDashboardTokens.sectionTitle()),
-                  const Spacer(),
-                  if (filtersActive)
-                    TextButton.icon(
-                      onPressed: () => setState(() {
-                        _destCategory = 'All';
-                        _destMunicipality = 'All';
-                        _destSearch = '';
-                        _searchController.clear();
-                      }),
-                      icon: const Icon(Icons.filter_alt_off_outlined, size: 16),
-                      label: const Text('Clear'),
-                      style: TextButton.styleFrom(
-                        foregroundColor: GovernorDashboardTokens.primaryDark,
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              LayoutBuilder(
-                builder: (context, c) {
-                  final pills = Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final cat in _categories)
-                        _categoryPill(
-                          cat,
-                          base.where((s) => inCategory(s, cat)).length,
-                        ),
-                    ],
-                  );
-                  final dropdown = DropdownButtonFormField<String>(
-                    key: ValueKey(_destMunicipality),
-                    initialValue: _destMunicipality,
-                    isExpanded: true,
-                    decoration: InputDecoration(
-                      labelText: 'Municipality',
-                      isDense: true,
-                      filled: true,
-                      fillColor: GovernorDashboardTokens.background,
-                      prefixIcon: Icon(
-                        Icons.location_city_rounded,
-                        size: 18,
-                        color: GovernorDashboardTokens.primary,
-                      ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide:
-                            BorderSide(color: GovernorDashboardTokens.border),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide:
-                            BorderSide(color: GovernorDashboardTokens.border),
-                      ),
-                    ),
-                    items: [
-                      for (final m in munis)
-                        DropdownMenuItem(value: m, child: Text(m)),
-                    ],
-                    onChanged: (v) =>
-                        setState(() => _destMunicipality = v ?? 'All'),
-                  );
-                  if (c.maxWidth < 760) {
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [pills, const SizedBox(height: 12), dropdown],
-                    );
-                  }
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Expanded(child: pills),
-                      const SizedBox(width: 12),
-                      SizedBox(width: 280, child: dropdown),
-                    ],
-                  );
-                },
-              ),
-            ],
-          ),
-          padding: const EdgeInsets.all(14),
-        ),
-        const SizedBox(height: 14),
-        if (filtered.isEmpty)
-          _panel(
-            _emptyMessage(
-              icon: Icons.travel_explore_rounded,
-              title: 'No destinations match',
-              message: 'Try another category or municipality.',
-            ),
-          )
-        else
-          _destinationsTable(filtered, visitsOf),
-      ],
-    );
-  }
-
   Widget _emptyMessage({
     required IconData icon,
     required String title,
@@ -1474,290 +1089,18 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
     );
   }
 
-  Widget _destinationsTable(
-    List<Map<String, dynamic>> rows,
-    int Function(Map<String, dynamic>) visitsOf,
-  ) {
-    final maxVisits =
-        rows.map(visitsOf).fold<int>(0, (a, b) => a > b ? a : b).clamp(1, 1 << 30);
-    final headStyle = GovernorDashboardTokens.sectionTitle(
-      size: 11,
-      color: GovernorDashboardTokens.subtitle,
-    );
-
-    return _panel(
-      LayoutBuilder(
-        builder: (context, c) {
-          if (c.maxWidth < 760) {
-            return Column(
-              children: [
-                for (var i = 0; i < rows.length; i++) ...[
-                  if (i > 0) const SizedBox(height: 8),
-                  _destinationCard(rows[i], visitsOf(rows[i])),
-                ],
-              ],
-            );
-          }
-          Widget head(String t, int flex, {TextAlign align = TextAlign.left}) =>
-              Expanded(
-                flex: flex,
-                child: Text(t.toUpperCase(), textAlign: align, style: headStyle),
-              );
-          return Column(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                decoration: BoxDecoration(
-                  color: GovernorDashboardTokens.background,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  children: [
-                    head('Destination', 10),
-                    head('Category', 4),
-                    head('Visits', 4),
-                    head('Status', 3),
-                    head('VR', 3),
-                    head('Featured', 3, align: TextAlign.center),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 4),
-              for (var i = 0; i < rows.length; i++)
-                _destinationRow(
-                  rows[i],
-                  visitsOf(rows[i]),
-                  maxVisits,
-                  striped: i.isOdd,
-                ),
-            ],
-          );
-        },
-      ),
-      padding: const EdgeInsets.all(12),
+  Widget _buildDestinationsTab() {
+    return const OptacaTripPlannerCatalog(
+      showSectionTabs: false,
+      initialTabIndex: 0,
     );
   }
 
-  Widget _destinationAvatar(String category, {double size = 38}) {
-    final v = _categoryVisual(category);
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: v.color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(size * 0.3),
-      ),
-      child: Icon(v.icon, size: size * 0.5, color: v.color),
-    );
-  }
-
-  Widget _vrCell(Map<String, dynamic> s) {
-    if (!_spotHasVr(s)) {
-      return Text(
-        '—',
-        style: GovernorDashboardTokens.body(
-          size: 13,
-          color: GovernorDashboardTokens.subtitle,
-        ),
-      );
-    }
-    return _softChip(
-      label: '360° VR',
-      color: const Color(0xFF8B5CF6),
-      icon: Icons.vrpano_rounded,
-    );
-  }
-
-  Widget _featuredSwitch(Map<String, dynamic> s) {
-    final featured = s['provincialFeatured'] == true;
-    return Tooltip(
-      message: featured ? 'Featured on provincial home' : 'Feature this destination',
-      child: Transform.scale(
-        scale: 0.85,
-        child: Switch(
-          value: featured,
-          activeTrackColor: GovernorDashboardTokens.primary,
-          onChanged: (v) => _toggleFeatured(s, v),
-        ),
-      ),
-    );
-  }
-
-  Widget _destinationRow(
-    Map<String, dynamic> s,
-    int visits,
-    int maxVisits, {
-    required bool striped,
-  }) {
-    final name = s['name']?.toString() ?? '—';
-    final category = s['category']?.toString() ?? '';
-    final muni = ProvincialTourismService.municipalityNameOf(
-      ProvincialTourismService.municipalityIdOf(s),
-    );
-    final status = (s['status']?.toString().isNotEmpty == true)
-        ? s['status'].toString()
-        : 'active';
-    final v = _categoryVisual(category);
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: AtmosHoverLift(
-      radius: BorderRadius.circular(12),
-      restColor: striped ? GovernorDashboardTokens.background : Colors.white,
-      child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Row(
-        children: [
-          Expanded(
-            flex: 10,
-            child: Row(
-              children: [
-                _destinationAvatar(category),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: GovernorDashboardTokens.sectionTitle(size: 13.5),
-                      ),
-                      const SizedBox(height: 2),
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.location_on_outlined,
-                            size: 12,
-                            color: GovernorDashboardTokens.subtitle,
-                          ),
-                          const SizedBox(width: 3),
-                          Flexible(
-                            child: Text(
-                              muni,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: GovernorDashboardTokens.body(size: 12),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            flex: 4,
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: category.isEmpty
-                  ? Text('—', style: GovernorDashboardTokens.body(size: 13))
-                  : _softChip(label: category, color: v.color),
-            ),
-          ),
-          Expanded(
-            flex: 4,
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 30,
-                  child: Text(
-                    '$visits',
-                    style: GovernorDashboardTokens.sectionTitle(size: 13.5),
-                  ),
-                ),
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(99),
-                    child: LinearProgressIndicator(
-                      value: visits / maxVisits,
-                      minHeight: 5,
-                      backgroundColor: GovernorDashboardTokens.mutedSurface,
-                      color: GovernorDashboardTokens.primary,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-              ],
-            ),
-          ),
-          Expanded(
-            flex: 3,
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: _statusChip(status),
-            ),
-          ),
-          Expanded(
-            flex: 3,
-            child: Align(alignment: Alignment.centerLeft, child: _vrCell(s)),
-          ),
-          Expanded(
-            flex: 3,
-            child: Center(child: _featuredSwitch(s)),
-          ),
-        ],
-      ),
-      ),
-      ),
-    );
-  }
-
-  Widget _destinationCard(Map<String, dynamic> s, int visits) {
-    final name = s['name']?.toString() ?? '—';
-    final category = s['category']?.toString() ?? '';
-    final muni = ProvincialTourismService.municipalityNameOf(
-      ProvincialTourismService.municipalityIdOf(s),
-    );
-    final status = (s['status']?.toString().isNotEmpty == true)
-        ? s['status'].toString()
-        : 'active';
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 12, 4, 12),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: GovernorDashboardTokens.border),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _destinationAvatar(category, size: 42),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(name, style: GovernorDashboardTokens.sectionTitle(size: 14)),
-                const SizedBox(height: 2),
-                Text(muni, style: GovernorDashboardTokens.body(size: 12)),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    if (category.isNotEmpty)
-                      _softChip(
-                        label: category,
-                        color: _categoryVisual(category).color,
-                      ),
-                    _statusChip(status),
-                    _softChip(
-                      label: '$visits visit${visits == 1 ? '' : 's'}',
-                      color: const Color(0xFF3B82F6),
-                      icon: Icons.qr_code_scanner_rounded,
-                    ),
-                    if (_spotHasVr(s)) _vrCell(s),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          _featuredSwitch(s),
-        ],
-      ),
+  // ─── Trip Planner: Destinations + Virtual Tour (view-only) ───
+  Widget _buildTripPlannerTab() {
+    return const OptacaTripPlannerCatalog(
+      showSectionTabs: true,
+      initialTabIndex: 0,
     );
   }
 
@@ -2503,6 +1846,7 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
     );
   }
 
+  // ─── Trip Planner: same LGU Events & Posts calendar ─────────
   // ─── Events & campaigns ──────────────────────────────────────
   Widget _buildEventsTab() {
     final pending = _announcements.where((a) {
@@ -2866,6 +2210,11 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
             spotId: s['id']?.toString() ?? '',
             name: s['name']?.toString() ?? 'Unknown',
             dotAttractionCode: s['dotAttractionCode']?.toString() ?? '',
+            municipalityId: ProvincialTourismService.municipalityIdOf(s),
+            municipalityName: ProvincialTourismService.municipalityNameOf(
+              ProvincialTourismService.municipalityIdOf(s),
+            ),
+            status: s['status']?.toString() ?? '',
           ),
         )
         .toList();
@@ -2943,6 +2292,11 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
                   s['attractionCode']?.toString() ??
                   s['code']?.toString() ??
                   '',
+              municipalityId: ProvincialTourismService.municipalityIdOf(s),
+              municipalityName: ProvincialTourismService.municipalityNameOf(
+                ProvincialTourismService.municipalityIdOf(s),
+              ),
+              status: s['status']?.toString() ?? '',
             ),
         ];
         final scope = _reportMunicipality == 'All'
@@ -3019,84 +2373,20 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
     }
   }
 
-  // ─── Alerts ──────────────────────────────────────────────────
+  // ─── Alerts & Quality (live QR + catalog audit) ──────────────
   Widget _buildAlertsTab() {
-    final alerts = _alerts;
-    Color sevColor(ProvincialAlertSeverity s) {
-      switch (s) {
-        case ProvincialAlertSeverity.critical:
-          return GovernorDashboardTokens.danger;
-        case ProvincialAlertSeverity.warning:
-          return GovernorDashboardTokens.primaryDark;
-        case ProvincialAlertSeverity.info:
-          return const Color(0xFF3B82F6);
-      }
-    }
-
-    return ListView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text('Alerts & Quality',
-                  style: GovernorDashboardTokens.heading(size: 20)),
-            ),
-            _timeFilters(),
-          ],
-        ),
-        const SizedBox(height: 12),
-        if (alerts.isEmpty)
-          _panel(Text('No open alerts. Quality looks healthy for this period.',
-              style: GovernorDashboardTokens.body()))
-        else
-          ...alerts.map((a) {
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: _panel(
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: sevColor(a.severity).withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        a.severity.name.toUpperCase(),
-                        style: GovernorDashboardTokens.sectionTitle(
-                          size: 11,
-                          color: sevColor(a.severity),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(a.title,
-                              style: GovernorDashboardTokens.sectionTitle()),
-                          Text(a.message, style: GovernorDashboardTokens.body()),
-                        ],
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () async {
-                        await ProvincialTourismService.acknowledgeAlert(a.id);
-                        setState(() => _ackAlertIds = {..._ackAlertIds, a.id});
-                      },
-                      child: const Text('Acknowledge'),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }),
-      ],
+    return OptacaAlertsQualityPanel(
+      spotsCache: _spots,
+      checkInsCache: _checkIns,
+      announcementsCache: _announcements,
+      timeFilter: _selectedTimeFilter,
+      acknowledgedIds: _ackAlertIds,
+      timeFilterWidget: _timeFilters(),
+      onAcknowledge: (id) async {
+        await ProvincialTourismService.acknowledgeAlert(id);
+        if (!mounted) return;
+        setState(() => _ackAlertIds = {..._ackAlertIds, id});
+      },
     );
   }
 

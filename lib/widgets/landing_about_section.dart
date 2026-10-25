@@ -308,31 +308,51 @@ class _CapitolPhoto extends StatelessWidget {
               ),
             ),
             const Padding(
-              padding: EdgeInsets.fromLTRB(18, 16, 18, 16),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.end,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Provincial Governor',
-                    style: TextStyle(
-                      color: LandingAboutShowcase.orange,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      height: 1.2,
+              padding: EdgeInsets.fromLTRB(14, 16, 14, 14),
+              child: Align(
+                alignment: Alignment.bottomLeft,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Color(0xF5FFFFFF),
+                    borderRadius: BorderRadius.all(Radius.circular(12)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Color(0x330F172A),
+                        blurRadius: 12,
+                        offset: Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(12, 8, 12, 8),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Provincial Governor',
+                          style: TextStyle(
+                            color: LandingAboutShowcase.orange,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            height: 1.15,
+                            letterSpacing: 0.1,
+                          ),
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          'Misamis Occidental',
+                          style: TextStyle(
+                            color: LandingAboutShowcase.navy,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            height: 1.2,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  SizedBox(height: 4),
-                  Text(
-                    'Misamis Occidental',
-                    style: TextStyle(
-                      color: LandingAboutShowcase.navy,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                      height: 1.3,
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
           ],

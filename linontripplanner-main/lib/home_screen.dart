@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:smooth_page_indicator/smooth_page_indicator.dart';
@@ -71,16 +72,18 @@ class _HomeScreenState extends State<HomeScreen> {
     final ranked =
         HomePersonalizationService.instance.featuredRanked(limit: 8);
     if (ranked.isNotEmpty) {
-      return ranked.map((e) => e.spot).toList(growable: false);
+      return [
+        for (final e in ranked) ?liveAuthoritativeTouristSpot(e.spot),
+      ];
     }
     // Warm-up fallback before first recompute finishes.
     if (featuredSpots.isNotEmpty) {
       return [
         for (final f in recommendedFeaturedForBanner)
-          findTouristSpotByNameFuzzy(f.name),
-      ].whereType<TouristSpot>().toList();
+          ?_authoritativeNamed(f.name),
+      ];
     }
-    return List<TouristSpot>.from(allSpots)
+    return List<TouristSpot>.from(authoritativeHomeTouristSpots())
       ..sort((a, b) => b.rating.compareTo(a.rating));
   }
 
@@ -92,9 +95,15 @@ class _HomeScreenState extends State<HomeScreen> {
     final ranked =
         HomePersonalizationService.instance.recommendedRanked(limit: 12);
     if (ranked.isNotEmpty) {
-      return ranked.map((e) => e.spot).toList(growable: false);
+      return [
+        for (final e in ranked) ?liveAuthoritativeTouristSpot(e.spot),
+      ];
     }
-    return HomePersonalizationService.instance.personalizedSpots(limit: 12);
+    return [
+      for (final s
+          in HomePersonalizationService.instance.personalizedSpots(limit: 12))
+        ?liveAuthoritativeTouristSpot(s),
+    ];
   }
 
   List<Municipality> get _homeMunicipalities {
@@ -123,19 +132,46 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool _spotMatchesSearch(TouristSpot spot) {
     return _textMatchesSearch(spot.name) ||
-        _textMatchesSearch(spot.location) ||
-        _textMatchesSearch(spot.description) ||
-        _textMatchesSearch(spot.type) ||
-        _textMatchesSearch(spot.category) ||
-        _textMatchesSearch(spot.priceRange);
+        _textMatchesSearch(spot.displayName) ||
+        _textMatchesSearch(spot.location);
+  }
+
+  String? _loggedHomeSpotIds;
+
+  TouristSpot? _authoritativeNamed(String name) {
+    final named = canonicalTouristSpotByName(name);
+    if (named == null) return null;
+    return liveAuthoritativeTouristSpot(named);
   }
 
   List<TouristSpot> _spotsForHomeGrid() {
-    final seenNames = <String>{};
-    final base = _isSearching ? allSpots : _recommendedForYouSpots;
-    return _filterSpots(
-      base.where((s) => seenNames.add(s.name)).toList(),
-    );
+    final seenIds = <String>{};
+    final base = _isSearching
+        ? canonicalTouristSpotsForDisplay()
+        : _recommendedForYouSpots;
+    final resolved = <TouristSpot>[];
+    for (final s in base) {
+      final live = _isSearching
+          ? liveSpotsPageRecord(s)
+          : liveAuthoritativeTouristSpot(s);
+      if (live == null) continue;
+      final id = live.firestoreDocId ?? live.name;
+      if (!seenIds.add(id)) continue;
+      resolved.add(live);
+    }
+    final shown = _filterSpots(resolved);
+    if (kDebugMode) {
+      final ids = shown.map((s) => s.firestoreDocId).join(',');
+      if (ids != _loggedHomeSpotIds) {
+        _loggedHomeSpotIds = ids;
+        debugPrint(
+          'HomeSpots ${DateTime.now().toIso8601String()} '
+          'source=tourist_spots searching=$_isSearching '
+          'count=${shown.length} ids=$ids',
+        );
+      }
+    }
+    return shown;
   }
 
   List<TouristSpot> get _displayFeaturedSpots =>
@@ -469,7 +505,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'TripPlan',
+                    'Trip Plan',
                     style: TextStyle(
                       fontFamily: AppFonts.holidayCalling,
                       color: AppColors.primary,
@@ -633,7 +669,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _homeUiTick.value++;
           final q = value.trim();
           if (q.length >= 3) {
-            final matches = allSpots
+            final matches = canonicalTouristSpotsForDisplay()
                 .where(_spotMatchesSearch)
                 .map((s) => s.name)
                 .take(8);
@@ -703,6 +739,7 @@ class _HomeScreenState extends State<HomeScreen> {
           itemBuilder: (context, index) {
             final spot = recommended[index];
             return GestureDetector(
+              key: ValueKey('featured-${spot.firestoreDocId ?? spot.name}'),
               onTap: () {
                 unawaited(SpotInteractionHistoryStore.instance.recordViewed(spot));
                 Navigator.push(
@@ -752,6 +789,7 @@ class _HomeScreenState extends State<HomeScreen> {
           itemBuilder: (context, index) {
             final spot = recommended[index];
             return GestureDetector(
+              key: ValueKey('rec-${spot.firestoreDocId ?? spot.name}'),
               onTap: () {
                 unawaited(
                   SpotInteractionHistoryStore.instance.recordViewed(spot),

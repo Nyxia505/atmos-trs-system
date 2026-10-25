@@ -16,6 +16,9 @@ class VisitAnalyticsBoard extends StatefulWidget {
     this.parseTime,
     this.rankSpots = false,
     this.rankingTitle,
+    this.categoryBySpotId = const {},
+    this.categoryBySpotName = const {},
+    this.categoryNamesByKey = const {},
   });
 
   final List<Map<String, dynamic>> checkIns;
@@ -25,6 +28,15 @@ class VisitAnalyticsBoard extends StatefulWidget {
   /// Rank tourist spots. Otherwise rank municipalities by visitors.
   final bool rankSpots;
   final String? rankingTitle;
+
+  /// Spot document id (and QR value) → category name from tourist spots.
+  final Map<String, String> categoryBySpotId;
+
+  /// Lowercase spot name → category name.
+  final Map<String, String> categoryBySpotName;
+
+  /// Category id or slug → display name (built-in and LGU-created).
+  final Map<String, String> categoryNamesByKey;
 
   @override
   State<VisitAnalyticsBoard> createState() => _VisitAnalyticsBoardState();
@@ -40,6 +52,9 @@ class _VisitAnalyticsBoardState extends State<VisitAnalyticsBoard> {
       tourists: widget.tourists,
       range: _range,
       parseTime: widget.parseTime,
+      categoryBySpotId: widget.categoryBySpotId,
+      categoryBySpotName: widget.categoryBySpotName,
+      categoryNamesByKey: widget.categoryNamesByKey,
     );
     final rankingTitle = widget.rankingTitle ??
         (widget.rankSpots ? 'Top spots' : 'City ranking');
@@ -138,22 +153,44 @@ class _VisitAnalyticsBoardState extends State<VisitAnalyticsBoard> {
   }
 
   Widget _categoriesCard(VisitAnalyticsSnapshot snapshot) {
+    final rows = snapshot.categories;
+    final total = rows.fold<int>(0, (sum, row) => sum + row.count);
+    var colorIndex = 0;
     return GovernorChartCard(
       title: 'Top categories',
       icon: Icons.donut_large_rounded,
       child: GovernorDonutChart(
-        emptyMessage: 'No category check-ins yet',
+        centerLabel: total > 0 ? '$total\nvisits' : null,
+        emptyMessage: 'No category visit data available for this period.',
+        showCounts: true,
         segments: [
-          for (var i = 0; i < snapshot.categories.length; i++)
+          for (final row in rows)
             GovernorDonutSegment(
-              label: snapshot.categories[i].name,
-              value: snapshot.categories[i].count.toDouble(),
-              color: GovernorDashboardTokens.categoryPalette[
-                  i % GovernorDashboardTokens.categoryPalette.length],
+              label: row.name,
+              value: row.count.toDouble(),
+              color: _categoryColor(row.name, colorIndex++),
             ),
         ],
       ),
     );
+  }
+
+  static const _categoryColors = <Color>[
+    Color(0xFFF97316),
+    Color(0xFF2563EB),
+    Color(0xFF16A34A),
+    Color(0xFF7C3AED),
+    Color(0xFFDB2777),
+    Color(0xFF0891B2),
+    Color(0xFFCA8A04),
+    Color(0xFFEA580C),
+    Color(0xFF4F46E5),
+    Color(0xFF0F766E),
+  ];
+
+  Color _categoryColor(String name, int index) {
+    if (name.toLowerCase() == 'other') return const Color(0xFF94A3B8);
+    return _categoryColors[index % _categoryColors.length];
   }
 
   Widget _genderCard(VisitAnalyticsSnapshot snapshot) {

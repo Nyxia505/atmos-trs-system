@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
 import 'package:atmos_trs_system/models/municipality.dart';
 
@@ -86,6 +88,61 @@ bool isMisamisOccidentalMunicipalityId(String? municipalityId) {
   final id = normalizeMunicipalityId(municipalityId);
   if (id.isEmpty) return false;
   return misamisOccidentalMunicipalityIdSet().contains(id);
+}
+
+double _distanceKm(double lat1, double lng1, double lat2, double lng2) {
+  const earthKm = 6371.0;
+  final dLat = (lat2 - lat1) * math.pi / 180;
+  final dLng = (lng2 - lng1) * math.pi / 180;
+  final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+      math.cos(lat1 * math.pi / 180) *
+          math.cos(lat2 * math.pi / 180) *
+          math.sin(dLng / 2) *
+          math.sin(dLng / 2);
+  return earthKm * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+}
+
+/// Null when [lat]/[lng] sit in [municipalityId]. Otherwise a short message.
+String? coordinatesOutsideMunicipalityMessage({
+  required double lat,
+  required double lng,
+  required String municipalityId,
+}) {
+  final target = normalizeMunicipalityId(municipalityId);
+  final anchor = getMunicipalityAnchorCoordinates(target);
+  if (anchor == null) {
+    return 'Could not determine your LGU municipality.';
+  }
+
+  Municipality? nearest;
+  var nearestKm = double.infinity;
+  for (final municipality in getMisamisOccidentalMunicipalities()) {
+    final km = _distanceKm(lat, lng, municipality.lat, municipality.lng);
+    if (km < nearestKm) {
+      nearestKm = km;
+      nearest = municipality;
+    }
+  }
+  final ownKm = _distanceKm(lat, lng, anchor.lat, anchor.lng);
+  String? ownName;
+  if (nearest != null && nearest.id == target) {
+    ownName = nearest.name;
+  } else {
+    for (final municipality in getMisamisOccidentalMunicipalities()) {
+      if (municipality.id == target) {
+        ownName = municipality.name;
+        break;
+      }
+    }
+  }
+  final label = ownName ?? target;
+  if (nearest != null && nearest.id != target) {
+    return 'That pin is closer to ${nearest.name}. Place it inside $label.';
+  }
+  if (ownKm > 30) {
+    return 'That pin is outside $label. Search or move the pin inside your municipality.';
+  }
+  return null;
 }
 
 /// Municipal center (Misamis Occidental list) for LGU QR proximity when the QR has no embedded anchor.

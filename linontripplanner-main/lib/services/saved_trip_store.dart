@@ -155,20 +155,30 @@ class SavedTripStore {
     _loaded = true;
     try {
       final raw = (await _sp()).getString(_key);
-      if (raw == null || raw.isEmpty) return;
-      final list = jsonDecode(raw) as List<dynamic>;
-      trips
-        ..clear()
-        ..addAll(
-          list.whereType<Map>().map(
-                (e) => SavedTripPlan.fromJson(Map<String, dynamic>.from(e)),
-              ),
-        );
+      if (raw != null && raw.isNotEmpty) {
+        final list = jsonDecode(raw) as List<dynamic>;
+        trips
+          ..clear()
+          ..addAll(
+            list.whereType<Map>().map(
+                  (e) => SavedTripPlan.fromJson(Map<String, dynamic>.from(e)),
+                ),
+          );
+      }
       await _mergeFromFirestore();
       revision.value++;
     } catch (e) {
       debugPrint('SavedTripStore load failed: $e');
     }
+  }
+
+  /// Reloads this user's trips from Firestore `tourist_trip`.
+  Future<void> refresh() async {
+    await ensureLoaded();
+    await _mergeFromFirestore();
+    trips.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    revision.value++;
+    await _persist();
   }
 
   Future<void> _mergeFromFirestore() async {

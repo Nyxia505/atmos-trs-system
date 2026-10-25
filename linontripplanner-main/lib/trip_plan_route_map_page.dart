@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import 'algorithms/bus_itinerary_route.dart';
+import 'algorithms/drop_off_suggestions.dart' show transportMarkersNearSpots;
 import 'algorithms/road_nearest_neighbor.dart';
 import 'data.dart';
 import 'municipal_road_distances.dart' show RoadRouteDirection;
 import 'municipality_coordinates.dart' show getMunicipalityCoordinates;
 import 'road_route_service.dart';
+import 'services/bus_location_store.dart';
 import 'trip_route_fare_service.dart';
 import 'widgets/trip_route_map_view.dart';
 import 'widgets/trip_route_osm_map_view.dart';
@@ -14,6 +16,9 @@ import 'widgets/trip_route_osm_map_view.dart';
 /// Full-screen map: nearest-road itinerary with a blue start pin and a red
 /// end pin. [spotDays] is the user's per-day selection; visit order inside an
 /// unlocked day is calculated here and reported through [onOrderSaved].
+///
+/// Bus stops/terminals are shown as transportation guides only — they do not
+/// become mandatory waypoints on the tourist road polyline.
 class TripPlanRouteMapPage extends StatefulWidget {
   final Municipality start;
   final Municipality end;
@@ -86,13 +91,22 @@ class _TripPlanRouteMapPageState extends State<TripPlanRouteMapPage> {
   String? _orderError;
   bool _ordering = true;
 
+  bool _showTouristSpots = true;
+  bool _showBusStops = true;
+  bool _showBusTerminals = true;
+
   /// Missing-coordinate notes are not shown. Other route errors still are.
   String? get _visibleOrderError {
     final raw = _orderError;
     if (raw == null || raw.trim().isEmpty) return null;
     final kept = raw
         .split(RegExp(r'(?<=\.)\s+'))
-        .where((part) => !part.startsWith('No coordinates are saved'))
+        .where(
+          (part) =>
+              !part.startsWith('No coordinates are saved') &&
+              !part.startsWith('No verified bus hub') &&
+              !part.startsWith('No bus stop or terminal'),
+        )
         .join(' ')
         .trim();
     return kept.isEmpty ? null : kept;
@@ -101,7 +115,19 @@ class _TripPlanRouteMapPageState extends State<TripPlanRouteMapPage> {
   @override
   void initState() {
     super.initState();
+    BusLocationStore.instance.ensureListening();
+    BusLocationStore.instance.revision.addListener(_onBusStoreChanged);
     _orderDays();
+  }
+
+  @override
+  void dispose() {
+    BusLocationStore.instance.revision.removeListener(_onBusStoreChanged);
+    super.dispose();
+  }
+
+  void _onBusStoreChanged() {
+    if (mounted) setState(() {});
   }
 
   List<List<TouristSpot>> get _inputDays {
@@ -117,6 +143,7 @@ class _TripPlanRouteMapPageState extends State<TripPlanRouteMapPage> {
       shouldShowTransportationFees(widget.transportMode);
 
   Future<void> _orderDays() async {
+    await BusLocationStore.instance.ensureLoaded();
     final BusItineraryPlan result;
     if (_usesPublicTransport) {
       result = await buildBusItineraryPlan(
@@ -147,7 +174,7 @@ class _TripPlanRouteMapPageState extends State<TripPlanRouteMapPage> {
     ]);
   }
 
-  /// Car and motorcycle follow the spots by road, with no bus stops.
+  /// Car and motorcycle follow the spots by road, with no bus waypoints.
   BusItineraryPlan _drivingPlan(RoadItineraryOrder ordered) {
     final origin = getMunicipalityCoordinates(widget.start);
     if (origin == null) {
@@ -156,7 +183,8 @@ class _TripPlanRouteMapPageState extends State<TripPlanRouteMapPage> {
           for (final day in ordered.days)
             BusDayRoute(nodes: const [], spots: day),
         ],
-        error: ordered.error ?? 'No coordinates are saved for ${widget.start.name}.',
+        error: ordered.error ??
+            'No coordinates are saved for ${widget.start.name}.',
       );
     }
     final startName = widget.start.shortName.isNotEmpty
@@ -192,8 +220,7 @@ class _TripPlanRouteMapPageState extends State<TripPlanRouteMapPage> {
   List<BusDayRoute> get _routes =>
       _plan?.days ??
       [
-        for (final day in _inputDays)
-          BusDayRoute(nodes: const [], spots: day),
+        for (final day in _inputDays) BusDayRoute(nodes: const [], spots: day),
       ];
 
   List<ItineraryRouteNode> _nodesFor(int? dayIndex) {
@@ -212,33 +239,63 @@ class _TripPlanRouteMapPageState extends State<TripPlanRouteMapPage> {
     return all;
   }
 
+  List<TouristSpot> _spotsFor(int? dayIndex) {
+    final routes = _routes;
+    if (dayIndex != null) {
+      if (dayIndex < 0 || dayIndex >= routes.length) return const [];
+      return routes[dayIndex].spots;
+    }
+    final out = <TouristSpot>[];
+    final seen = <String>{};
+    for (final day in routes) {
+      for (final spot in day.spots) {
+        if (seen.add(spot.name)) out.add(spot);
+      }
+    }
+    return out;
+  }
+
   _DisplayedRoute _routeFor(int? dayIndex) {
     final nodes = _nodesFor(dayIndex);
-    final roadNodes = nodes.where((node) => node.onRoad).toList();
-    final start = nodes.isEmpty ? null : nodes.first;
-    final end = nodes.length < 2 ? null : nodes.last;
+    // Tourist itinerary waypoints only (bus hubs use onRoad: false).
+    final roadNodes = [
+      for (final node in nodes)
+        if (node.onRoad && !node.isBus) node,
+    ];
+    final start = roadNodes.isEmpty
+        ? (nodes.isEmpty ? null : nodes.first)
+        : roadNodes.first;
+    final end = roadNodes.length < 2 ? null : roadNodes.last;
     final stops = <RoadStop>[
       for (final node in roadNodes) (place: node.place, point: node.point),
     ];
-    final spots = <TouristSpot>[];
-    final seenSpots = <String>{};
-    final buses = <TripBusMarker>[];
-    final seenBuses = <String>{};
+    final spots = _spotsFor(dayIndex);
+
+    // Transport markers: nearby known hubs + any itinerary bus nodes.
+    final buses = transportMarkersNearSpots(
+      spots: spots,
+      direction: widget.direction,
+    );
+    final seen = {
+      for (final b in buses)
+        '${b.point.latitude.toStringAsFixed(5)},${b.point.longitude.toStringAsFixed(5)}',
+    };
     for (final node in nodes) {
-      final spot = node.spot;
-      if (spot != null && seenSpots.add(spot.name)) spots.add(spot);
       if (!node.isBus) continue;
       final key =
           '${node.point.latitude.toStringAsFixed(5)},${node.point.longitude.toStringAsFixed(5)}';
-      if (!seenBuses.add(key)) continue;
+      if (!seen.add(key)) continue;
       buses.add(
         TripBusMarker(
           point: node.point,
           kind: node.busKind!,
           label: node.detail,
+          name: node.label,
+          municipality: node.place,
         ),
       );
     }
+
     return _DisplayedRoute(
       stops: stops,
       startPoint: start?.point,
@@ -289,10 +346,11 @@ class _TripPlanRouteMapPageState extends State<TripPlanRouteMapPage> {
               height: 52,
               child: ListView(
                 scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 children: [
                   ChoiceChip(
-                    label: const Text('Entire itinerary'),
+                    label: const Text('Entire Route'),
                     selected: _day == null,
                     onSelected: _ordering
                         ? null
@@ -311,11 +369,38 @@ class _TripPlanRouteMapPageState extends State<TripPlanRouteMapPage> {
                 ],
               ),
             ),
+          SizedBox(
+            height: 48,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              children: [
+                FilterChip(
+                  label: const Text('Tourist Spots'),
+                  selected: _showTouristSpots,
+                  onSelected: (v) => setState(() => _showTouristSpots = v),
+                ),
+                const SizedBox(width: 8),
+                FilterChip(
+                  label: const Text('Bus Stops'),
+                  selected: _showBusStops,
+                  onSelected: (v) => setState(() => _showBusStops = v),
+                ),
+                const SizedBox(width: 8),
+                FilterChip(
+                  label: const Text('Bus Terminals'),
+                  selected: _showBusTerminals,
+                  onSelected: (v) => setState(() => _showBusTerminals = v),
+                ),
+              ],
+            ),
+          ),
           if (_visibleOrderError != null)
             Material(
               color: const Color(0xFFFFF3E0),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 child: Text(
                   _visibleOrderError!,
                   style: const TextStyle(fontSize: 13, height: 1.35),
@@ -348,6 +433,9 @@ class _TripPlanRouteMapPageState extends State<TripPlanRouteMapPage> {
                     endPinPoint: displayed.endPoint,
                     endPinDetail: displayed.endDetail,
                     busMarkers: displayed.buses,
+                    showTouristSpots: _showTouristSpots,
+                    showBusStops: _showBusStops,
+                    showBusTerminals: _showBusTerminals,
                   ),
           ),
         ],

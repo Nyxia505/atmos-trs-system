@@ -8,6 +8,7 @@ import 'auth_role_claims.dart'
     show persistLongTermStaffRoleClaims, refreshAuthRoleClaims;
 import 'auth_roles.dart';
 import '../firestore_loader.dart';
+import '../trip_plan_host_bridge.dart';
 import 'tourism_session.dart';
 
 /// True when the signed-in user should use the admin dashboard (no network).
@@ -15,8 +16,14 @@ bool isKnownAdminEmail(String email) =>
     AdminAccountsService.emailMatchesDefaultAdmin(email);
 
 bool isLikelyAdminSession() {
-  final email = FirebaseAuth.instance.currentUser?.email ?? '';
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return false;
+  final email = user.email ?? '';
   if (isKnownAdminEmail(email)) return true;
+  // Host ATMOS already authorized this embed (OPTACA / provincial / LGU).
+  if (TripPlanHostBridge.isHostCatalogAdmin?.call() == true) return true;
+  // OPTACA demo emails before users/{uid} is cached.
+  if (AuthRoles.isOptacaDestinationViewer()) return true;
   return AuthRoles.canAccessAdminDashboard();
 }
 

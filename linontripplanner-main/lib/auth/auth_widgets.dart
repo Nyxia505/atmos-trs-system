@@ -165,7 +165,7 @@ class AuthLoginBrandHeader extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           const Text(
-            'TripPlan',
+            'Trip Plan',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontFamily: AppFonts.holidayCalling,
@@ -180,11 +180,10 @@ class AuthLoginBrandHeader extends StatelessWidget {
             'Misamis Occidental Tourism Trip Planner',
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontFamily: AppFonts.holidayCalling,
               color: Colors.white.withValues(alpha: 0.95),
-              fontSize: 23,
-              fontWeight: FontWeight.w400,
-              height: 1.15,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              height: 1.2,
             ),
           ),
         ],

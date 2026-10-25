@@ -51,6 +51,7 @@ class _MappingScreenState extends State<MappingScreen> {
   Future<void> _loadMarkers() async {
     setState(() => _loadingMarkers = true);
     await bootstrapAppFirestoreOnce();
+    await BusLocationStore.instance.ensureLoaded();
     if (!mounted) return;
 
     final markers = <Marker>[

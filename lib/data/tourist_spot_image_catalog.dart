@@ -40,6 +40,7 @@ abstract final class MisamisOccidentalImages {
   static const String lumantas = '${kPrefix}lumantas river side garden.webp';
   static const String barkoBarko = '${kPrefix}barko-barko villaflor.webp';
   static const String tripplan = '${kPrefix}tripplan.png';
+  static const String kenjeloFarm = '${kPrefix}Kenjelo.jpg';
 }
 
 /// Local image paths / URLs for tourist spots and municipalities.

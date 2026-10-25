@@ -4999,11 +4999,26 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   Widget _buildGovernorDotReportExports() {
     final catalog = _governorAllSpots
         .map(
-          (s) => DotVar2SpotCatalogEntry(
-            spotId: s['id']?.toString() ?? '',
-            name: s['name']?.toString() ?? 'Unknown',
-            dotAttractionCode: s['dotAttractionCode']?.toString() ?? '',
-          ),
+          (s) {
+            final munName = (s['municipality']?.toString() ??
+                    s['city']?.toString() ??
+                    '')
+                .trim();
+            var mid = normalizeMunicipalityId(
+              (s['municipalityId']?.toString() ?? '').trim(),
+            );
+            if (mid.isEmpty) {
+              mid = normalizeMunicipalityId(getMunicipalityIdFromName(munName));
+            }
+            return DotVar2SpotCatalogEntry(
+              spotId: s['id']?.toString() ?? '',
+              name: s['name']?.toString() ?? 'Unknown',
+              dotAttractionCode: s['dotAttractionCode']?.toString() ?? '',
+              municipalityId: mid,
+              municipalityName: munName,
+              status: s['status']?.toString() ?? '',
+            );
+          },
         )
         .toList();
 

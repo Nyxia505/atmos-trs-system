@@ -107,11 +107,29 @@ class DotVar2SpotCatalogEntry {
     required this.spotId,
     required this.name,
     this.dotAttractionCode = '',
+    this.municipalityId = '',
+    this.municipalityName = '',
+    this.status = '',
   });
 
   final String spotId;
   final String name;
   final String dotAttractionCode;
+  final String municipalityId;
+  final String municipalityName;
+  /// Spot lifecycle status from Firestore (`active`, `inactive`, …).
+  final String status;
+
+  /// Eligible for municipality-wide VAR 2 aggregation (not closed/inactive).
+  bool get isEligibleForVar2 {
+    final s = status.trim().toLowerCase();
+    if (s.isEmpty) return true;
+    return s != 'inactive' &&
+        s != 'closed' &&
+        s != 'archived' &&
+        s != 'deleted' &&
+        s != 'draft';
+  }
 }
 
 Var2Sex _normalizeSex(String? sex) {

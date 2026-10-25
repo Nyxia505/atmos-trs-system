@@ -88,13 +88,35 @@ Future<void> ensurePermanentStaffRoleForCatalogWrite() async {
   }
 
   final email = (auth.email ?? '').trim();
-  if (email.isNotEmpty && isKnownAdminEmail(email)) {
-    await AdminAccountsService.applyAdminRoleIfRegistered();
+
+  // Already has staff JWT — skip noisy admin_accounts / Cloud Function bootstrap.
+  try {
+    final claims = await auth.getIdTokenResult();
+    final staff = claims.claims?['staff'] == true ||
+        claims.claims?['staff'] == 'true' ||
+        claims.claims?['admin'] == true ||
+        claims.claims?['admin'] == 'true';
+    if (staff) return;
+  } catch (_) {}
+
+  // OPTACA / default admin / provincial: allow catalog writes even when
+  // admin_accounts bootstrap or claims sync fails (common on demo accounts).
+  if ((email.isNotEmpty && isKnownAdminEmail(email)) ||
+      AuthRoles.isOptacaDestinationViewer()) {
+    try {
+      await AdminAccountsService.applyAdminRoleIfRegistered();
+    } catch (e) {
+      debugPrint('catalog write bootstrap (non-fatal): $e');
+    }
     return;
   }
 
   if (await AdminAccountsService.isCurrentUserAdminAccount()) {
-    await AdminAccountsService.applyAdminRoleIfRegistered();
+    try {
+      await AdminAccountsService.applyAdminRoleIfRegistered();
+    } catch (e) {
+      debugPrint('catalog write admin bootstrap (non-fatal): $e');
+    }
     return;
   }
 

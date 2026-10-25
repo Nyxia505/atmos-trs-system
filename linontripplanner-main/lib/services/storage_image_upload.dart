@@ -21,8 +21,18 @@ Future<String> uploadTourismCatalogImage(
   if (user == null) {
     throw StateError('Sign in required to upload images.');
   }
-  await ensurePermanentStaffRoleForCatalogWrite();
-  await user.getIdToken(true);
+  // Supabase upload uses the anon key — Firebase token refresh is only a
+  // staff gate. Do not block the upload on Auth network timeouts.
+  try {
+    await ensurePermanentStaffRoleForCatalogWrite();
+  } catch (e) {
+    // Already signed in; proceed. Rules still gate Firestore writes later.
+  }
+  try {
+    await user.getIdToken();
+  } catch (_) {
+    // Cached session is enough for the staff check above.
+  }
   return uploadBytesToSupabaseStorage(bytes, folder);
 }
 

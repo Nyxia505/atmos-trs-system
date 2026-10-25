@@ -8,7 +8,6 @@ import 'services/reports/report_models.dart';
 import 'services/reports/reports_service.dart';
 import 'widgets/reports/report_analytics_view.dart';
 import 'widgets/reports/report_export_dialog.dart';
-import 'widgets/reports/report_filter_bar.dart';
 import 'widgets/reports/report_preview_page.dart';
 import 'widgets/tourism_plan_ui.dart';
 
@@ -45,9 +44,6 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
   bool _loading = true;
   bool _exporting = false;
 
-  /// Cached so build() does not re-sort the catalog on every frame.
-  ReportFilterOptions _options = ReportsService.filterOptions();
-
   /// Token guarding against a slow earlier load overwriting a newer one.
   int _loadToken = 0;
 
@@ -72,10 +68,6 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
       if (!mounted || token != _loadToken) return;
       setState(() {
         _dataset = dataset;
-        // A refresh may have added spots, events, or fares.
-        _options = ReportsService.filterOptions(
-          municipality: _filters.effectiveMunicipality,
-        );
         _loading = false;
       });
     } on ReportDataException catch (e) {
@@ -303,39 +295,27 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (dotReports != null) ...[
+                _sectionTitle('Official DOT forms'),
+                const SizedBox(height: 6),
+                const Text(
+                  'Same forms as ATMOS TRS tourism@gmail.com: preview, then Excel or PDF.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.35,
+                    color: AppColors.textGrey,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                dotReports(context, _filters),
+                const SizedBox(height: 28),
+              ],
               _sectionTitle('Exports & summaries'),
               const SizedBox(height: 12),
               _reportCards(),
               const SizedBox(height: 24),
               _sectionTitle('Analytics'),
               const SizedBox(height: 12),
-              ReportFilterBar(
-                kind: _kind,
-                applied: _filters,
-                options: _options,
-                busy: _loading || _exporting,
-                onApply: (next) {
-                  setState(() {
-                    _filters = next;
-                    _options = ReportsService.filterOptions(
-                      municipality: next.effectiveMunicipality,
-                    );
-                  });
-                  _load();
-                },
-                onReset: () {
-                  setState(() {
-                    _filters = ReportFilters.none;
-                    _options = ReportsService.filterOptions();
-                  });
-                  _load();
-                },
-              ),
-              if (dotReports != null) ...[
-                const SizedBox(height: 16),
-                dotReports(context, _filters),
-              ],
-              const SizedBox(height: 16),
               _analytics(),
             ],
           ),

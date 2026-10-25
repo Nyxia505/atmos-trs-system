@@ -151,9 +151,16 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
     } catch (e) {
       if (mounted) {
         setState(() => _uploadingImage = false);
+        final network = e.toString().contains('network-request-failed') ||
+            e.toString().contains('SocketException') ||
+            e.toString().contains('ClientException');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Supabase upload failed: $e'),
+            content: Text(
+              network
+                  ? 'Image upload timed out. Check your connection, then tap the image to retry — or Save without an image.'
+                  : 'Image upload failed: $e',
+            ),
             backgroundColor: Colors.red,
           ),
         );
@@ -183,6 +190,38 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+
+    // Retry pending image upload before writing Firestore (URL may still be empty).
+    if (_imageController.text.trim().isEmpty &&
+        _previewBytes != null &&
+        _previewBytes!.isNotEmpty) {
+      setState(() => _uploadingImage = true);
+      try {
+        final slug = _folderSlug(
+          _titleController.text.trim().isEmpty
+              ? 'event'
+              : _titleController.text.trim(),
+        );
+        final url =
+            await uploadTourismCatalogImage(_previewBytes!, 'events/$slug');
+        if (mounted) _imageController.text = url;
+      } catch (e) {
+        if (mounted) {
+          setState(() => _uploadingImage = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Could not upload image ($e). Saving event without image.',
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      } finally {
+        if (mounted) setState(() => _uploadingImage = false);
+      }
+    }
+
     final ev = TourismEvent(
       id: widget.existing?.id ?? '',
       title: _titleController.text.trim(),
@@ -195,7 +234,9 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
     );
     try {
       await upsertTourismEventToFirestore(ev);
-      await loadEventsFromFirestore();
+      try {
+        await loadEventsFromFirestore();
+      } catch (_) {}
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

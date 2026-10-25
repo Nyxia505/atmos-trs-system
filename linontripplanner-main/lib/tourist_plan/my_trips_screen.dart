@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../data.dart';
 import '../services/saved_trip_store.dart';
-import '../services/trip_post_finish_rating.dart';
 import '../spot_detail_screen.dart';
 import '../trip_plan_route_map_page.dart';
 import '../trip_route_fare_service.dart';
@@ -12,8 +11,11 @@ import 'tourist_trip_planner_screen.dart';
 import 'tourist_travel_estimates.dart';
 
 void _openTripPlanner(BuildContext context) {
-  final nav = tourismRootNavigatorKey.currentState ?? Navigator.of(context);
-  nav.pushNamed(TouristTripPlannerScreen.routeName);
+  Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => const TouristTripPlannerScreen(),
+    ),
+  );
 }
 
 /// Bottom-nav Trips tab — finished Plan my trip results.
@@ -27,11 +29,29 @@ class MyTripsScreen extends StatefulWidget {
 }
 
 class _MyTripsScreenState extends State<MyTripsScreen> {
+  bool _loading = true;
+  String? _error;
+
   @override
   void initState() {
     super.initState();
-    SavedTripStore.instance.ensureLoaded();
     SavedTripStore.instance.revision.addListener(_onRev);
+    _reload();
+  }
+
+  Future<void> _reload() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      await SavedTripStore.instance.refresh();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = 'Could not load your trips. Pull to try again.');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   @override
@@ -58,7 +78,28 @@ class _MyTripsScreenState extends State<MyTripsScreen> {
       body: Column(
         children: [
           Expanded(
-            child: trips.isEmpty
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _error != null
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(28),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.cloud_off, size: 48),
+                              const SizedBox(height: 12),
+                              Text(_error!, textAlign: TextAlign.center),
+                              const SizedBox(height: 12),
+                              TextButton(
+                                onPressed: _reload,
+                                child: const Text('Try again'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    : trips.isEmpty
                 ? Center(
                     child: Padding(
                       padding: const EdgeInsets.all(28),
@@ -199,6 +240,11 @@ class _TripCard extends StatelessWidget {
                     ),
                   ],
                 ),
+              ),
+              IconButton(
+                tooltip: 'Edit in planner',
+                onPressed: () => _openTripPlanner(context),
+                icon: const Icon(Icons.edit_outlined, color: AppColors.primary),
               ),
               IconButton(
                 tooltip: 'Delete',

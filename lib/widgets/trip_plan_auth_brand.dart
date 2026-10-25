@@ -34,7 +34,7 @@ class TripPlanAuthBrand extends StatelessWidget {
         ),
         SizedBox(height: compact ? 6 : 8),
         Text(
-          'TripPlan',
+          'Trip Plan',
           textAlign: TextAlign.center,
           style: TextStyle(
             fontFamily: 'HolidayCalling',

@@ -258,6 +258,16 @@ class SpotInteractionHistoryStore {
     final sp = await SharedPreferences.getInstance();
     await sp.setStringList(_favoritedKey, _favorited.toList());
     revision.value++;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return;
+    try {
+      await FirebaseFirestore.instance.collection(kTouristCollection).doc(uid).set({
+        'favoritedSpotKeys': _favorited.toList(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      if (kDebugMode) debugPrint('recordFavorited Firestore: $e');
+    }
   }
 
   Future<void> recordItinerarySpots(Iterable<TouristSpot> spots) async {

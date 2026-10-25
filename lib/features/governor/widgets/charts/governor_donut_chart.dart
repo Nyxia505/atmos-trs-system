@@ -23,6 +23,7 @@ class GovernorDonutChart extends StatefulWidget {
     this.emptyMessage = 'No data yet',
     this.showLegend = true,
     this.dense = false,
+    this.showCounts = false,
   });
 
   final List<GovernorDonutSegment> segments;
@@ -30,6 +31,7 @@ class GovernorDonutChart extends StatefulWidget {
   final String emptyMessage;
   final bool showLegend;
   final bool dense;
+  final bool showCounts;
 
   @override
   State<GovernorDonutChart> createState() => _GovernorDonutChartState();
@@ -52,6 +54,10 @@ class _GovernorDonutChartState extends State<GovernorDonutChart> {
       );
     }
 
+    final touched = _touched != null && _touched! < widget.segments.length
+        ? widget.segments[_touched!]
+        : null;
+
     return Row(
       children: [
         Expanded(
@@ -66,12 +72,21 @@ class _GovernorDonutChartState extends State<GovernorDonutChart> {
                 builder: (context, progress) => _pie(total, progress),
               ),
               if (widget.centerLabel != null)
-                Text(
-                  widget.centerLabel!,
-                  textAlign: TextAlign.center,
-                  style: GovernorDashboardTokens.sectionTitle(
-                    size: widget.dense ? 11 : 13,
+                IgnorePointer(
+                  child: Text(
+                    widget.centerLabel!,
+                    textAlign: TextAlign.center,
+                    style: GovernorDashboardTokens.sectionTitle(
+                      size: widget.dense ? 11 : 13,
+                    ),
                   ),
+                ),
+              if (touched != null && widget.showCounts)
+                Positioned(
+                  top: 0,
+                  left: 4,
+                  right: 4,
+                  child: IgnorePointer(child: _tooltip(touched, total)),
                 ),
             ],
           ),
@@ -79,7 +94,7 @@ class _GovernorDonutChartState extends State<GovernorDonutChart> {
         if (widget.showLegend) ...[
           const SizedBox(width: 8),
           Expanded(
-            flex: 4,
+            flex: widget.showCounts ? 6 : 4,
             child: _legend(total),
           ),
         ],
@@ -141,8 +156,34 @@ class _GovernorDonutChartState extends State<GovernorDonutChart> {
     );
   }
 
+  Widget _tooltip(GovernorDonutSegment segment, double total) {
+    final pct = total <= 0 ? 0 : (segment.value / total) * 100;
+    final visits = segment.value.round();
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Material(
+        color: const Color(0xFF1F2937),
+        elevation: 2,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          child: Text(
+            '${segment.label}\n$visits visit${visits == 1 ? '' : 's'} · ${pct.toStringAsFixed(pct >= 10 || pct == 0 ? 0 : 1)}%',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              height: 1.25,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _legend(double total) {
-    return Column(
+    final rows = Column(
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -162,7 +203,9 @@ class _GovernorDonutChartState extends State<GovernorDonutChart> {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    s.label,
+                    widget.showCounts
+                        ? '${s.label} · ${s.value.round()}'
+                        : s.label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: GovernorDashboardTokens.body(
@@ -171,6 +214,7 @@ class _GovernorDonutChartState extends State<GovernorDonutChart> {
                     ),
                   ),
                 ),
+                const SizedBox(width: 4),
                 Text(
                   '${((s.value / total) * 100).round()}%',
                   style: GovernorDashboardTokens.sectionTitle(
@@ -182,5 +226,7 @@ class _GovernorDonutChartState extends State<GovernorDonutChart> {
           ),
       ],
     );
+    if (!widget.showCounts) return rows;
+    return SingleChildScrollView(child: rows);
   }
 }

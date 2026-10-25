@@ -115,12 +115,12 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
     return [for (final f in kDotFormCatalog) if (allowed.contains(f.id)) f];
   }
 
-  /// Spot scope lists VAR only. Establishment scope lists DAE and CUS.
-  /// All spots and establishments lists every family.
+  /// Spot / municipality-spots scope lists VAR only. Establishment scope lists
+  /// DAE and CUS. All spots and establishments lists every family.
   List<DotFormCatalogEntry> get _scopedCatalog {
     final base = _catalog;
     return switch (_entityKind) {
-      DotReportEntityKind.spot => [
+      DotReportEntityKind.spot || DotReportEntityKind.municipalitySpots => [
           for (final f in base)
             if (f.category == DotFormCategory.attraction) f,
         ],
@@ -132,6 +132,27 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         ],
       DotReportEntityKind.all => base,
     };
+  }
+
+  bool get _isAttractionScope =>
+      _entityKind == DotReportEntityKind.spot ||
+      _entityKind == DotReportEntityKind.municipalitySpots;
+
+  /// Municipality id used for "all spots in municipality" / LGU filter.
+  String get _resolvedMunicipalityFilter {
+    if (!widget.isProvincial) {
+      return normalizeMunicipalityId(widget.municipalityId);
+    }
+    return normalizeMunicipalityId(_entityMunicipalityFilter);
+  }
+
+  String get _resolvedMunicipalityDisplayName {
+    final mid = _resolvedMunicipalityFilter;
+    if (mid.isNotEmpty) {
+      return DotReportEntityScope.municipalityDisplayName(mid);
+    }
+    if (!widget.isProvincial) return widget.scopeLabel;
+    return '';
   }
 
   void _syncFormToScope() {
@@ -335,28 +356,77 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
     unawaited(_refreshPreview());
   }
 
-  List<DotReportEntityOption> get _spotOptions {
+  List<DotVar2SpotCatalogEntry> get _catalogForMunicipalityFilter {
     final munFilter = normalizeMunicipalityId(_entityMunicipalityFilter);
+    if (!widget.isProvincial || munFilter.isEmpty) {
+      return widget.catalogSpots;
+    }
+    final filtered = [
+      for (final s in widget.catalogSpots)
+        if (_catalogEntryInMunicipality(s, munFilter)) s,
+    ];
+    // If catalog rows lack municipality metadata, do not silently drop them
+    // for single-spot pickers — keep the full list.
+    final anyMeta = widget.catalogSpots.any(
+      (s) =>
+          s.municipalityId.trim().isNotEmpty ||
+          s.municipalityName.trim().isNotEmpty,
+    );
+    return anyMeta ? filtered : widget.catalogSpots;
+  }
+
+  bool _catalogEntryInMunicipality(
+    DotVar2SpotCatalogEntry s,
+    String munFilter,
+  ) {
+    final mid = normalizeMunicipalityId(s.municipalityId);
+    if (mid.isNotEmpty) {
+      return municipalityIdsForQuery(munFilter)
+          .map(normalizeMunicipalityId)
+          .contains(mid);
+    }
+    final fromName = normalizeMunicipalityId(
+      getMunicipalityIdFromName(s.municipalityName),
+    );
+    return fromName.isNotEmpty && fromName == munFilter;
+  }
+
+  /// Eligible spots for the selected municipality (VAR 2 all-spots scope).
+  List<DotVar2SpotCatalogEntry> get _eligibleMunicipalitySpots {
+    final mid = _resolvedMunicipalityFilter;
+    final source = !widget.isProvincial
+        ? widget.catalogSpots
+        : [
+            for (final s in widget.catalogSpots)
+              if (mid.isNotEmpty && _catalogEntryInMunicipality(s, mid)) s,
+          ];
+    return [
+      for (final s in source)
+        if (s.isEligibleForVar2 &&
+            (s.spotId.trim().isNotEmpty || s.name.trim().isNotEmpty))
+          s,
+    ];
+  }
+
+  List<DotReportEntityOption> get _spotOptions {
     final out = <DotReportEntityOption>[];
-    for (final s in widget.catalogSpots) {
+    for (final s in _catalogForMunicipalityFilter) {
       if (s.spotId.trim().isEmpty && s.name.trim().isEmpty) continue;
-      // Catalog may not carry municipality — LGU catalog is already scoped.
+      final munId = s.municipalityId.trim().isNotEmpty
+          ? s.municipalityId.trim()
+          : (widget.isProvincial ? '' : (widget.municipalityId ?? ''));
+      final munName = s.municipalityName.trim().isNotEmpty
+          ? s.municipalityName.trim()
+          : (widget.isProvincial ? '' : widget.scopeLabel);
       out.add(
         DotReportEntityOption(
           id: s.spotId.trim().isNotEmpty ? s.spotId.trim() : s.name.trim(),
           name: s.name.trim().isEmpty ? s.spotId : s.name.trim(),
           kind: DotReportEntityKind.spot,
-          municipalityId: widget.isProvincial ? '' : (widget.municipalityId ?? ''),
-          municipalityName: widget.isProvincial ? '' : widget.scopeLabel,
+          municipalityId: munId,
+          municipalityName: munName,
         ),
       );
-    }
-    // Provincial spot maps often include municipality on raw governor spots —
-    // catalog from governor/optaca may lack mid; mun filter only applies when
-    // we later enrich. For now filter is no-op unless we pass mid on catalog.
-    if (widget.isProvincial && munFilter.isNotEmpty) {
-      // Keep all spots if catalog has no municipality metadata.
-      return out;
     }
     out.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return out;
@@ -383,22 +453,31 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         baseLabel: widget.scopeLabel,
         kind: _entityKind,
         entity: _selectedEntity,
+        municipalityName: _entityKind == DotReportEntityKind.municipalitySpots
+            ? _resolvedMunicipalityDisplayName
+            : null,
       );
 
   String get _effectiveScopeSlug => DotReportEntityScope.slugFor(
         baseSlug: widget.scopeSlug,
         kind: _entityKind,
         entityId: _selectedEntity?.id,
+        municipalityId: _entityKind == DotReportEntityKind.municipalitySpots
+            ? _resolvedMunicipalityFilter
+            : null,
       );
 
   List<DotVar2SpotCatalogEntry> get _effectiveCatalog {
+    if (_entityKind == DotReportEntityKind.municipalitySpots) {
+      return _eligibleMunicipalitySpots;
+    }
     if (_entityKind != DotReportEntityKind.spot || _selectedEntity == null) {
       return widget.catalogSpots;
     }
     final id = _selectedEntity!.id.toLowerCase();
     final name = _selectedEntity!.name.toLowerCase();
     final matched = [
-      for (final s in widget.catalogSpots)
+      for (final s in _catalogForMunicipalityFilter)
         if (s.spotId.trim().toLowerCase() == id ||
             s.name.trim().toLowerCase() == name)
           s,
@@ -408,6 +487,8 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       DotVar2SpotCatalogEntry(
         spotId: _selectedEntity!.id,
         name: _selectedEntity!.name,
+        municipalityId: _selectedEntity!.municipalityId,
+        municipalityName: _selectedEntity!.municipalityName,
       ),
     ];
   }
@@ -459,6 +540,17 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
 
   void _onFormSelected(DotFormCatalogEntry form) {
     setState(() {
+      if (!_locked) {
+        final spotHidesThisForm = _isAttractionScope &&
+            form.category != DotFormCategory.attraction;
+        final establishmentHidesThisForm =
+            _entityKind == DotReportEntityKind.establishment &&
+                form.category == DotFormCategory.attraction;
+        if (spotHidesThisForm || establishmentHidesThisForm) {
+          _entityKind = DotReportEntityKind.all;
+          _selectedEntity = null;
+        }
+      }
       _selected = form;
       _formSearchController.text = form.title;
       _lastGapsPreview = null;
@@ -707,8 +799,14 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         ? 'All municipalities (province)'
         : 'All spots & establishments in this LGU';
     final hint = widget.isProvincial
-        ? 'OPTACA / Governor: pick any spot or establishment in Misamis Occidental.'
+        ? 'OPTACA / Governor: pick one spot, all spots in an LGU, or one establishment.'
         : 'LGU: only tourist spots and establishments under your municipality.';
+    final munSpots = _eligibleMunicipalitySpots;
+    final munName = _resolvedMunicipalityDisplayName;
+    final munFilterRequired =
+        _entityKind == DotReportEntityKind.municipalitySpots;
+    final showMunFilter = widget.isProvincial &&
+        (_entityKind != DotReportEntityKind.all || munFilterRequired);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -732,6 +830,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         ),
         const SizedBox(height: 8),
         DropdownButtonFormField<DotReportEntityKind>(
+          key: ValueKey('fill_for_${_entityKind.name}'),
           initialValue: _entityKind,
           decoration: InputDecoration(
             labelText: 'Fill forms for',
@@ -746,6 +845,14 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
             const DropdownMenuItem(
               value: DotReportEntityKind.spot,
               child: Text('One tourist spot (VAR / attraction QR)'),
+            ),
+            DropdownMenuItem(
+              value: DotReportEntityKind.municipalitySpots,
+              child: Text(
+                widget.isProvincial
+                    ? 'All tourist spots within selected municipality'
+                    : 'All tourist spots in this municipality',
+              ),
             ),
             const DropdownMenuItem(
               value: DotReportEntityKind.establishment,
@@ -764,19 +871,28 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
                   unawaited(_refreshPreview());
                 },
         ),
-        if (widget.isProvincial &&
-            _entityKind != DotReportEntityKind.all) ...[
+        if (showMunFilter) ...[
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
+            key: ValueKey('mun_filter_$_entityMunicipalityFilter'),
             initialValue: _entityMunicipalityFilter,
             decoration: InputDecoration(
-              labelText: 'Filter list by LGU (optional)',
+              labelText: munFilterRequired
+                  ? 'Select city / municipality'
+                  : 'Filter list by LGU (optional)',
               isDense: true,
               border:
                   OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             ),
             items: [
-              const DropdownMenuItem(value: '', child: Text('All LGUs')),
+              DropdownMenuItem(
+                value: '',
+                child: Text(
+                  munFilterRequired
+                      ? 'Select city / municipality'
+                      : 'All LGUs',
+                ),
+              ),
               for (final m in getMisamisOccidentalMunicipalities())
                 DropdownMenuItem(value: m.id, child: Text(m.name)),
             ],
@@ -791,9 +907,60 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
                   },
           ),
         ],
+        if (_entityKind == DotReportEntityKind.municipalitySpots) ...[
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: widget.primaryColor.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: widget.primaryColor.withValues(alpha: 0.22),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  munName.isEmpty
+                      ? 'Select a city or municipality to include all eligible tourist spots.'
+                      : 'All eligible tourist spots in $munName will be included in this report.',
+                  style: TextStyle(
+                    color: widget.textDark,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    height: 1.35,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  munName.isEmpty
+                      ? 'Included tourist spots: —'
+                      : 'Included tourist spots: ${munSpots.length}',
+                  style: TextStyle(
+                    color: widget.textMuted,
+                    fontSize: 12,
+                    height: 1.35,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'VAR 2 counts visitor units from QR check-ins (party size / companions). '
+                  'Check-in visits and unique tourist accounts are not the same — see the preview summary.',
+                  style: TextStyle(
+                    color: widget.textMuted,
+                    fontSize: 11.5,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
         if (_entityKind == DotReportEntityKind.spot) ...[
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
+            key: ValueKey('spot_${_selectedEntity?.id ?? 'none'}_$_entityMunicipalityFilter'),
             initialValue: _selectedEntity?.id,
             isExpanded: true,
             decoration: InputDecoration(
@@ -940,7 +1107,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
           hintText: 'Search form type…',
           filterCallback: (entries, filter) {
             final q = filter.trim();
-            if (q.isEmpty) return entries;
+            if (q.isEmpty || q == _selected.title) return entries;
             return [
               for (final e in entries)
                 if (e.value.matchesSearch(q)) e,
@@ -1471,6 +1638,21 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         spotName: _selectedEntity!.name,
       );
     }
+    if (_entityKind == DotReportEntityKind.municipalitySpots) {
+      final spots = _eligibleMunicipalitySpots;
+      if (spots.isEmpty) return const [];
+      return DotReportEntityScope.filterCheckInsForSpots(
+        base,
+        spotIds: [
+          for (final s in spots)
+            if (s.spotId.trim().isNotEmpty) s.spotId,
+        ],
+        spotNames: [
+          for (final s in spots)
+            if (s.name.trim().isNotEmpty) s.name,
+        ],
+      );
+    }
     return base;
   }
 
@@ -1483,8 +1665,8 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
     if (form.category != DotFormCategory.accommodation) {
       return AeRegisterReportData.empty;
     }
-    // Spot scope → attraction only (switch to establishment for hotel data).
-    if (_entityKind == DotReportEntityKind.spot) {
+    // Attraction scopes → VAR only (switch to establishment for hotel data).
+    if (_isAttractionScope) {
       return AeRegisterReportData.empty;
     }
     try {
@@ -1515,7 +1697,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
     required DateTime start,
     required DateTime end,
   }) async {
-    if (form.reportType != DotReportType.cusMice || _entityKind == DotReportEntityKind.spot) {
+    if (form.reportType != DotReportType.cusMice || _isAttractionScope) {
       return MiceReportData.empty;
     }
     try {
@@ -1595,6 +1777,27 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
     }
   }
 
+  /// Returns false and snacks when spot / municipality / AE scope is incomplete.
+  bool _scopeReadyForExport() {
+    if (_entityKind == DotReportEntityKind.municipalitySpots) {
+      if (widget.isProvincial && _resolvedMunicipalityFilter.isEmpty) {
+        _snack('Select a city or municipality first', Colors.orange);
+        return false;
+      }
+      return true;
+    }
+    if (_entityKind != DotReportEntityKind.all && _selectedEntity == null) {
+      _snack(
+        _entityKind == DotReportEntityKind.spot
+            ? 'Select a tourist spot first'
+            : 'Select an establishment first',
+        Colors.orange,
+      );
+      return false;
+    }
+    return true;
+  }
+
   Future<void> _generateExcel() async {
     if (_start == null || _end == null) {
       _snack('Please select both start and end dates', Colors.orange);
@@ -1604,15 +1807,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       _snack('End date must be on or after start date', Colors.orange);
       return;
     }
-    if (_entityKind != DotReportEntityKind.all && _selectedEntity == null) {
-      _snack(
-        _entityKind == DotReportEntityKind.spot
-            ? 'Select a tourist spot first'
-            : 'Select an establishment first',
-        Colors.orange,
-      );
-      return;
-    }
+    if (!_scopeReadyForExport()) return;
 
     setState(() {
       _busy = true;
@@ -1681,15 +1876,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       _snack('End date must be on or after start date', Colors.orange);
       return;
     }
-    if (_entityKind != DotReportEntityKind.all && _selectedEntity == null) {
-      _snack(
-        _entityKind == DotReportEntityKind.spot
-            ? 'Select a tourist spot first'
-            : 'Select an establishment first',
-        Colors.orange,
-      );
-      return;
-    }
+    if (!_scopeReadyForExport()) return;
 
     setState(() => _busy = true);
     try {

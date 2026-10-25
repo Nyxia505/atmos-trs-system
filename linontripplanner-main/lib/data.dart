@@ -541,6 +541,10 @@ List<TourismNewsFeedItem> buildNewsFeedItemsSorted() {
 }
 
 final List<TouristSpot> allSpots = <TouristSpot>[];
+
+/// Bumped each time [allSpots] is replaced from Firestore.
+/// Recommendation work started against an older generation is discarded.
+int touristSpotCatalogGeneration = 0;
 final List<Municipality> municipalities = <Municipality>[
   const Municipality(
     name: 'Aloran',
@@ -807,6 +811,101 @@ TouristSpot? _preferSpotWithImage(TouristSpot? current, TouristSpot candidate) {
   final next = candidate.imagePath.trim().isNotEmpty;
   if (next && !cur) return candidate;
   return current;
+}
+
+/// Same records the Spots page shows: one spot per exact name, keeping the
+/// copy that has a profile image when duplicates exist.
+List<TouristSpot> canonicalTouristSpotsForDisplay() {
+  final byName = <String, TouristSpot>{};
+  for (final s in allSpots) {
+    final prev = byName[s.name];
+    if (prev == null) {
+      byName[s.name] = s;
+      continue;
+    }
+    final prevHas = prev.imagePath.trim().isNotEmpty;
+    final curHas = s.imagePath.trim().isNotEmpty;
+    if (curHas && !prevHas) {
+      byName[s.name] = s;
+    }
+  }
+  return byName.values.toList(growable: false);
+}
+
+/// The Spots-page record for [name] (exact name, then normalized name).
+TouristSpot? canonicalTouristSpotByName(String name) {
+  final want = name.trim();
+  if (want.isEmpty) return null;
+  final catalog = canonicalTouristSpotsForDisplay();
+  for (final s in catalog) {
+    if (s.name == want) return s;
+  }
+  final key = normalizeTourismNameKey(want);
+  if (key.isEmpty) return null;
+  for (final s in catalog) {
+    if (normalizeTourismNameKey(s.name) == key) return s;
+  }
+  return null;
+}
+
+TouristSpot _preferHomeProfile(TouristSpot current, TouristSpot candidate) {
+  final curImg = current.imagePath.trim().isNotEmpty;
+  final nextImg = candidate.imagePath.trim().isNotEmpty;
+  if (nextImg != curImg) return nextImg ? candidate : current;
+  final curClean = current.name.trim() == current.displayName.trim();
+  final nextClean = candidate.name.trim() == candidate.displayName.trim();
+  if (nextClean != curClean) return nextClean ? candidate : current;
+  if (candidate.description.trim().length > current.description.trim().length) {
+    return candidate;
+  }
+  return current;
+}
+
+/// Spots-page records collapsed to one card title.
+///
+/// Two Firestore docs can share a display title ("Plaza" and "Plaza – City").
+/// Home keeps the record the Spots page would treat as the profile: the one
+/// with an image, then the one whose stored name is that title.
+List<TouristSpot> authoritativeHomeTouristSpots() {
+  final byTitle = <String, TouristSpot>{};
+  for (final s in canonicalTouristSpotsForDisplay()) {
+    final title = s.displayName.trim().toLowerCase();
+    if (title.isEmpty) continue;
+    final prev = byTitle[title];
+    byTitle[title] = prev == null ? s : _preferHomeProfile(prev, s);
+  }
+  return byTitle.values.toList(growable: false);
+}
+
+/// Live Spots-page row for [spot]. Null when that document is no longer shown.
+TouristSpot? liveSpotsPageRecord(TouristSpot spot) {
+  final catalog = canonicalTouristSpotsForDisplay();
+  final id = spot.firestoreDocId;
+  if (id != null && id.isNotEmpty) {
+    for (final s in catalog) {
+      if (s.firestoreDocId == id) return s;
+    }
+  }
+  for (final s in catalog) {
+    if (s.name == spot.name) return s;
+  }
+  return null;
+}
+
+/// Live home record for [spot]. Null when it is not the authoritative profile.
+TouristSpot? liveAuthoritativeTouristSpot(TouristSpot spot) {
+  final catalog = authoritativeHomeTouristSpots();
+  final id = spot.firestoreDocId;
+  if (id != null && id.isNotEmpty) {
+    for (final s in catalog) {
+      if (s.firestoreDocId == id) return s;
+    }
+    return null;
+  }
+  for (final s in catalog) {
+    if (s.name == spot.name) return s;
+  }
+  return null;
 }
 
 /// Links banner/featured titles to Firestore spots (exact or partial name match).

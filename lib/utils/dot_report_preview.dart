@@ -341,6 +341,15 @@ DotReportPreviewTable _previewVar2({
     endDate: endDate,
   );
   final active = var2.rows.where((r) => r.grandTotal.total > 0).toList();
+  final uniqueTouristIds = <String>{};
+  var visitorUnits = 0;
+  for (final entry in expandCheckInsToVisitors(
+    filtered.where((c) => !isExcludedFromOfficialReports(c)),
+  )) {
+    visitorUnits++;
+    final uid = entry.unit.uid?.trim() ?? '';
+    if (uid.isNotEmpty) uniqueTouristIds.add(uid);
+  }
   const headers = [
     'Attraction',
     'Code',
@@ -363,12 +372,19 @@ DotReportPreviewTable _previewVar2({
       ],
   ];
   final f = var2.footerTotals;
+  final multiSpot = catalogSpots.length > 1;
   return DotReportPreviewTable(
     headers: headers,
     rows: rows,
-    summaryLine:
-        '${var2.checkInsProcessed} check-ins · ${active.length} attraction row(s) · '
-        '${var2.monthYearLabel}',
+    summaryLine: multiSpot
+        ? '${var2.checkInsProcessed} check-in visits · '
+            '$visitorUnits visitor counts · '
+            '${uniqueTouristIds.length} unique tourist accounts · '
+            '${catalogSpots.length} spots in scope · '
+            '${active.length} attraction row(s) · '
+            '${var2.monthYearLabel}'
+        : '${var2.checkInsProcessed} check-ins · ${active.length} attraction row(s) · '
+            '${var2.monthYearLabel}',
     footer: active.isEmpty
         ? null
         : [
@@ -382,6 +398,9 @@ DotReportPreviewTable _previewVar2({
           ],
     gaps: [
       if (var2.note.trim().isNotEmpty) var2.note.trim(),
+      if (multiSpot)
+        'Multi-spot scope: check-in visits ≠ unique tourists. '
+            'Grand Total is visitor counts (party size / companions), not unique people across spots.',
       'Attraction codes blank when spot has no dotAttractionCode.',
     ],
   );
@@ -598,7 +617,8 @@ DotReportPreviewTable _previewRegisterCountryMatrix({
         'foreign ${t.foreignArrivals} · overseas Filipinos ${t.overseasFilipinoArrivals} · $scopeLabel',
     gaps: [
       ...register.sourceGaps(form.code),
-      'Countries with no arrivals are hidden; section totals always shown.',
+      'Excel download is the official DAE3. FORM A workbook: by establishment, province sum, and the monthly country grid.',
+      'Countries with no arrivals stay blank on the template; section totals recalculate in Excel.',
     ],
   );
 }

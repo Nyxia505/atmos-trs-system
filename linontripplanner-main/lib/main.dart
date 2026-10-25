@@ -109,6 +109,13 @@ Future<void> main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  if (kIsWeb) {
+    try {
+      await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
+    } catch (e) {
+      debugPrint('Trip Planner Auth persistence (web) not applied: $e');
+    }
+  }
   await configureFirestoreForPlatform();
   // Paint UI first — awaiting Firestore bootstrap here caused a blank white screen on web.
   runApp(const TourismApp());
