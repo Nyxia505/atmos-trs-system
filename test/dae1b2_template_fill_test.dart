@@ -65,6 +65,11 @@ void main() {
     final daily = _sheet(aeFill.bytes, 'xl/worksheets/sheet1.xml');
     expect(daily, contains('r="F117"'));
     expect(daily, contains('January'));
+    expect(daily, contains('<v>12</v>'));
+    expect(daily, isNot(contains('r="F117" s="8"')));
+    expect(daily, contains('width="8"'));
+    final styles = _sheet(aeFill.bytes, 'xl/styles.xml');
+    expect(styles, contains('numFmtId="1"'));
     expect(_sheet(aeFill.bytes, 'xl/worksheets/sheet90.xml'), contains('PH region'));
 
     final domestic = Dae1b2TemplateFill.fill(

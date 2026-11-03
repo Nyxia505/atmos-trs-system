@@ -16,7 +16,7 @@ const String kAppStoreAppUrl =
 /// Direct Android APK download (Firebase Hosting, GitHub Releases, etc.).
 /// Leave empty to hide the APK button until a file is hosted.
 const String kAndroidApkDownloadUrl =
-    'https://github.com/Nyxia505/atmos-trs-system/releases/latest/download/atmos-trs.apk';
+    'https://github.com/Nyxia505/atmos-trs-system/releases/latest/download/atmostrs.apk';
 
 bool get kHasAndroidApkDownload => kAndroidApkDownloadUrl.trim().isNotEmpty;
 

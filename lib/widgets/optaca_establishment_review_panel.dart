@@ -3,7 +3,9 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:atmos_trs_system/config/app_theme.dart';
+import 'package:atmos_trs_system/services/ae_type_suggestion_service.dart';
 import 'package:atmos_trs_system/services/establishment_approval_service.dart';
+import 'package:atmos_trs_system/services/establishment_category_service.dart';
 import 'package:atmos_trs_system/services/firestore_auth_gate.dart';
 import 'package:atmos_trs_system/widgets/ae_register/ae_register_compliance_panel.dart';
 
@@ -161,6 +163,7 @@ class _OptacaEstablishmentReviewPanelState
       final hay = [
         e.businessName,
         e.category,
+        e.suggestedCategory,
         e.ownerName,
         e.municipality,
         e.email,
@@ -190,6 +193,12 @@ class _OptacaEstablishmentReviewPanelState
               ? () async {
                   Navigator.pop(ctx);
                   await _reject(e);
+                }
+              : null,
+          onApproveCategory: e.categoryPendingReview
+              ? () async {
+                  Navigator.pop(ctx);
+                  await _approveCategory(e);
                 }
               : null,
         );
@@ -280,6 +289,58 @@ class _OptacaEstablishmentReviewPanelState
     }
   }
 
+  Future<void> _approveCategory(EstablishmentRegistryEntry e) async {
+    final tokenOk = await FirestoreAuthGate.ensureFreshIdToken();
+    if (!tokenOk) {
+      _snack(FirestoreAuthGate.missingAuthMessage(), error: true);
+      return;
+    }
+    final name = e.suggestedCategory.trim().isNotEmpty
+        ? e.suggestedCategory.trim()
+        : e.category.trim();
+    if (name.isEmpty) {
+      _snack('Missing suggested category name.', error: true);
+      return;
+    }
+    if (!mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add to official category list?'),
+        content: Text(
+          '"$name" will be added to the shared establishment types. '
+          'This does not approve the establishment account.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.green.shade700,
+            ),
+            child: const Text('Publish category'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await EstablishmentCategoryService.approveSuggestion(
+        name: name,
+        suggestionId: e.categorySuggestionId,
+        establishmentId: e.id,
+      );
+      if (!mounted) return;
+      _snack('Added "$name" to the official category list');
+    } catch (err) {
+      if (!mounted) return;
+      _snack('Category publish failed: $err', error: true);
+    }
+  }
+
   void _snack(String msg, {bool error = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -343,6 +404,13 @@ class _OptacaEstablishmentReviewPanelState
                     primaryColor: widget.primaryColor,
                     textDark: widget.textDark,
                     textMuted: widget.textMuted,
+                  ),
+                  const SizedBox(height: 14),
+                  _AeTypeSuggestionsInbox(
+                    primaryColor: widget.primaryColor,
+                    textDark: widget.textDark,
+                    textMuted: widget.textMuted,
+                    onSnack: _snack,
                   ),
                 ],
                 const SizedBox(height: 14),
@@ -835,7 +903,10 @@ class _RegistryCardState extends State<_RegistryCard> {
                                   _meta(
                                     _categoryIcon(e.category),
                                     [
-                                      if (e.category.isNotEmpty) e.category,
+                                      if (e.category.isNotEmpty)
+                                        e.categoryPendingReview
+                                            ? '${e.category} (pending review)'
+                                            : e.category,
                                       if (location.isNotEmpty) location,
                                     ].join(' · '),
                                   ),
@@ -995,6 +1066,7 @@ class _EstablishmentDetailSheet extends StatelessWidget {
     required this.textMuted,
     this.onApprove,
     this.onReject,
+    this.onApproveCategory,
   });
 
   final EstablishmentRegistryEntry entry;
@@ -1003,6 +1075,7 @@ class _EstablishmentDetailSheet extends StatelessWidget {
   final Color textMuted;
   final Future<void> Function()? onApprove;
   final Future<void> Function()? onReject;
+  final Future<void> Function()? onApproveCategory;
 
   @override
   Widget build(BuildContext context) {
@@ -1011,7 +1084,8 @@ class _EstablishmentDetailSheet extends StatelessWidget {
         ? null
         : _formatReviewedAt(e.reviewedAt!);
     final maxH = MediaQuery.sizeOf(context).height * 0.9;
-    final hasActions = onApprove != null || onReject != null;
+    final hasActions =
+        onApprove != null || onReject != null || onApproveCategory != null;
     final checkTimes = e.checkInTime.isNotEmpty || e.checkOutTime.isNotEmpty
         ? '${e.checkInTime.isEmpty ? '—' : e.checkInTime} – '
             '${e.checkOutTime.isEmpty ? '—' : e.checkOutTime}'
@@ -1064,7 +1138,12 @@ class _EstablishmentDetailSheet extends StatelessWidget {
                       ),
                       const SizedBox(height: 14),
                       _section(Icons.storefront_outlined, 'Business', [
-                        _row('Category', e.category),
+                        _row(
+                          'Category',
+                          e.categoryPendingReview
+                              ? '${e.category.isEmpty ? e.suggestedCategory : e.category} (pending review)'
+                              : e.category,
+                        ),
                         _row('Municipality', e.municipality),
                         _row('Municipality ID', e.municipalityId),
                         _row('Barangay', e.barangay),
@@ -1149,7 +1228,10 @@ class _EstablishmentDetailSheet extends StatelessWidget {
   Widget _hero(BuildContext context) {
     final e = entry;
     final subtitle = [
-      if (e.category.isNotEmpty) e.category,
+      if (e.category.isNotEmpty)
+        e.categoryPendingReview
+            ? '${e.category} (pending review)'
+            : e.category,
       if (e.municipality.isNotEmpty) e.municipality,
     ].join(' · ');
     return Container(
@@ -1439,40 +1521,65 @@ class _EstablishmentDetailSheet extends StatelessWidget {
           ),
         ],
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (onReject != null)
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: () => onReject!(),
-                icon: const Icon(Icons.close_rounded, size: 18),
-                label: const Text('Reject'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: _kReject,
-                  side: BorderSide(color: _kReject.withValues(alpha: 0.45)),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
+          if (onApproveCategory != null) ...[
+            OutlinedButton.icon(
+              onPressed: () => onApproveCategory!(),
+              icon: const Icon(Icons.category_outlined, size: 18),
+              label: const Text('Publish category to official list'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: primaryColor,
+                side: BorderSide(color: primaryColor.withValues(alpha: 0.45)),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
                 ),
               ),
             ),
-          if (onApprove != null && onReject != null) const SizedBox(width: 10),
-          if (onApprove != null)
-            Expanded(
-              flex: 2,
-              child: FilledButton.icon(
-                onPressed: () => onApprove!(),
-                icon: const Icon(Icons.check_rounded, size: 18),
-                label: const Text('Approve establishment'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: _kApprove,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+            if (onApprove != null || onReject != null) const SizedBox(height: 10),
+          ],
+          if (onApprove != null || onReject != null)
+            Row(
+              children: [
+                if (onReject != null)
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => onReject!(),
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                      label: const Text('Reject'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _kReject,
+                        side: BorderSide(
+                          color: _kReject.withValues(alpha: 0.45),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-              ),
+                if (onApprove != null && onReject != null)
+                  const SizedBox(width: 10),
+                if (onApprove != null)
+                  Expanded(
+                    flex: 2,
+                    child: FilledButton.icon(
+                      onPressed: () => onApprove!(),
+                      icon: const Icon(Icons.check_rounded, size: 18),
+                      label: const Text('Approve establishment'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: _kApprove,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
         ],
       ),
@@ -1516,5 +1623,145 @@ class _EstablishmentDetailSheet extends StatelessWidget {
     final ampm = h24 >= 12 ? 'PM' : 'AM';
     final mm = d.minute.toString().padLeft(2, '0');
     return '${months[d.month - 1]} ${d.day}, ${d.year} · $h12:$mm $ampm';
+  }
+}
+
+/// Pending DOT accommodation-type suggestions from establishment profiles.
+class _AeTypeSuggestionsInbox extends StatelessWidget {
+  const _AeTypeSuggestionsInbox({
+    required this.primaryColor,
+    required this.textDark,
+    required this.textMuted,
+    required this.onSnack,
+  });
+
+  final Color primaryColor;
+  final Color textDark;
+  final Color textMuted;
+  final void Function(String msg, {bool error}) onSnack;
+
+  Future<void> _approve(AeTypeSuggestion s) async {
+    final tokenOk = await FirestoreAuthGate.ensureFreshIdToken();
+    if (!tokenOk) {
+      onSnack(FirestoreAuthGate.missingAuthMessage(), error: true);
+      return;
+    }
+    try {
+      await AeTypeSuggestionService.approve(
+        suggestionId: s.id,
+        name: s.name,
+        establishmentId: s.establishmentId,
+      );
+      onSnack('Approved "${s.name}" for the shared Type of Accommodation list');
+    } catch (e) {
+      onSnack('Approve failed: $e', error: true);
+    }
+  }
+
+  Future<void> _reject(AeTypeSuggestion s) async {
+    final tokenOk = await FirestoreAuthGate.ensureFreshIdToken();
+    if (!tokenOk) {
+      onSnack(FirestoreAuthGate.missingAuthMessage(), error: true);
+      return;
+    }
+    try {
+      await AeTypeSuggestionService.reject(
+        suggestionId: s.id,
+        establishmentId: s.establishmentId,
+      );
+      onSnack('Rejected "${s.name}". Establishment keeps its current type.');
+    } catch (e) {
+      onSnack('Reject failed: $e', error: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<AeTypeSuggestion>>(
+      stream: AeTypeSuggestionService.watchPending(),
+      builder: (context, snap) {
+        final items = snap.data ?? const <AeTypeSuggestion>[];
+        if (items.isEmpty) return const SizedBox.shrink();
+        return Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF7ED),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: primaryColor.withValues(alpha: 0.25)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.category_rounded, color: primaryColor, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Pending accommodation types (${items.length})',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: textDark,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Approve to add to the shared DOT Type of Accommodation list. '
+                'Reject leaves the hotel’s current classification unchanged.',
+                style: TextStyle(color: textMuted, fontSize: 12, height: 1.35),
+              ),
+              const SizedBox(height: 10),
+              for (final s in items)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Material(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    child: ListTile(
+                      dense: true,
+                      title: Text(
+                        s.name,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: textDark,
+                        ),
+                      ),
+                      subtitle: Text(
+                        s.businessName.isEmpty
+                            ? s.establishmentId
+                            : '${s.businessName} · ${s.establishmentId}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: textMuted, fontSize: 11.5),
+                      ),
+                      trailing: Wrap(
+                        spacing: 6,
+                        children: [
+                          TextButton(
+                            onPressed: () => _reject(s),
+                            style: TextButton.styleFrom(foregroundColor: _kReject),
+                            child: const Text('Reject'),
+                          ),
+                          FilledButton(
+                            onPressed: () => _approve(s),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _kApprove,
+                            ),
+                            child: const Text('Approve'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }

@@ -6,7 +6,16 @@ import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 
-/// Destination payload shown on the QR welcome screen.
+/// Kind of authorized entry QR (attraction / LGU gate). Airport & seaport are
+/// only inferred from existing spot category text — never invented records.
+enum QrEntryPointKind {
+  attraction,
+  municipality,
+  airport,
+  seaport,
+}
+
+/// Destination payload shown on the QR welcome / entry gate screens.
 class QrWelcomeDestinationContext {
   const QrWelcomeDestinationContext({
     required this.name,
@@ -16,6 +25,8 @@ class QrWelcomeDestinationContext {
     this.spotId,
     this.municipalityId,
     this.isMunicipalityScan = false,
+    this.entryKind = QrEntryPointKind.attraction,
+    this.category = '',
   });
 
   final String name;
@@ -25,6 +36,38 @@ class QrWelcomeDestinationContext {
   final String? spotId;
   final String? municipalityId;
   final bool isMunicipalityScan;
+  final QrEntryPointKind entryKind;
+  final String category;
+
+  String get entryLabel {
+    if (isMunicipalityScan) return name;
+    return name;
+  }
+
+  String get entryKindLabel => switch (entryKind) {
+        QrEntryPointKind.airport => 'Airport entry point',
+        QrEntryPointKind.seaport => 'Seaport entry point',
+        QrEntryPointKind.municipality => 'Municipality entry QR',
+        QrEntryPointKind.attraction => 'Tourist attraction entry QR',
+      };
+
+  static QrEntryPointKind kindFromCategory(
+    String? category, {
+    bool isMunicipalityScan = false,
+  }) {
+    if (isMunicipalityScan) return QrEntryPointKind.municipality;
+    final c = (category ?? '').trim().toLowerCase();
+    if (c.contains('airport') || c.contains('aerodrome')) {
+      return QrEntryPointKind.airport;
+    }
+    if (c.contains('seaport') ||
+        c.contains('sea port') ||
+        c.contains('ferry') ||
+        (c.contains('port') && !c.contains('sport'))) {
+      return QrEntryPointKind.seaport;
+    }
+    return QrEntryPointKind.attraction;
+  }
 }
 
 /// Resolves destination details from a pending QR scan.
@@ -91,12 +134,18 @@ class QrWelcomeDestinationResolver {
 
     description = await _enrichDescriptionFromFirestore(spotId, description);
 
+    final category = (seed?.category ?? featured?['category'] as String? ?? '')
+        .trim();
+    final firestoreCategory = await _categoryFromFirestore(spotId);
+    final resolvedCategory =
+        firestoreCategory.isNotEmpty ? firestoreCategory : category;
+
     final imageUrl = TouristSpotImageCatalog.displayUrl(
       preferred: seed?.imageUrl ?? featured?['image'] as String?,
       spotId: spotId,
       municipalityId: municipalityId,
       spotName: name,
-      category: seed?.category ?? featured?['category'] as String?,
+      category: resolvedCategory.isNotEmpty ? resolvedCategory : category,
     );
 
     return QrWelcomeDestinationContext(
@@ -106,6 +155,8 @@ class QrWelcomeDestinationResolver {
       imageUrl: imageUrl,
       spotId: spotId,
       municipalityId: municipalityId,
+      category: resolvedCategory,
+      entryKind: QrWelcomeDestinationContext.kindFromCategory(resolvedCategory),
     );
   }
 
@@ -140,6 +191,8 @@ class QrWelcomeDestinationResolver {
       spotId: seed?.docId,
       municipalityId: municipalityId,
       isMunicipalityScan: true,
+      category: seed?.category ?? '',
+      entryKind: QrEntryPointKind.municipality,
     );
   }
 
@@ -172,5 +225,21 @@ class QrWelcomeDestinationResolver {
       if (desc != null && desc.trim().isNotEmpty) return desc.trim();
     } catch (_) {}
     return fallback;
+  }
+
+  static Future<String> _categoryFromFirestore(String spotId) async {
+    if (spotId.isEmpty) return '';
+    try {
+      if (Firebase.apps.isEmpty) return '';
+      final doc = await FirebaseFirestore.instance
+          .collection('tourist_spots')
+          .doc(spotId)
+          .get()
+          .timeout(const Duration(seconds: 3));
+      if (!doc.exists) return '';
+      return (doc.data()?['category'] as String?)?.trim() ?? '';
+    } catch (_) {
+      return '';
+    }
   }
 }

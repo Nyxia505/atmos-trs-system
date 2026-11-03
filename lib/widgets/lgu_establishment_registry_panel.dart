@@ -125,8 +125,6 @@ class _LguEstablishmentRegistryPanelState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _buildHeader(scopeLabel),
-        const SizedBox(height: 16),
         AeRegisterCompliancePanel(
           municipalityId: mid,
           primaryColor: widget.primaryColor,
@@ -208,83 +206,6 @@ class _LguEstablishmentRegistryPanelState
               ],
             );
           },
-        ),
-      ],
-    );
-  }
-
-  Widget _buildHeader(String scopeLabel) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          children: [
-            Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    widget.primaryColor,
-                    Color.lerp(widget.primaryColor, Colors.black, 0.15)!,
-                  ],
-                ),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(Icons.apartment_rounded,
-                  color: Colors.white, size: 22),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Establishments in $scopeLabel',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                      color: widget.textDark,
-                      letterSpacing: -0.2,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    'Accommodation & tourism business inventory',
-                    style: TextStyle(fontSize: 12.5, color: widget.textMuted),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: const Color(0xFFEFF6FF),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFBFDBFE)),
-          ),
-          child: const Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(Icons.info_outline_rounded,
-                  size: 18, color: Color(0xFF2563EB)),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'View only. OPTACA approves new registrations. Active hotels '
-                  'fill a monthly DOT register (DAE-1B) that feeds the DAE forms in Analytics.',
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    height: 1.4,
-                    color: Color(0xFF1E3A8A),
-                  ),
-                ),
-              ),
-            ],
-          ),
         ),
       ],
     );

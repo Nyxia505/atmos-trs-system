@@ -1,4 +1,4 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:atmos_trs_system/utils/checkin_time.dart';
 
 /// Collapses redundant QR visit rows so LGU / Governor dashboards show real
 /// distinct visits (not double-writes or dual-collection mirrors).
@@ -68,18 +68,6 @@ class CheckInDedupe {
   }
 
   static DateTime? parseTimestamp(Map<String, dynamic> c) {
-    final t =
-        c['timestamp'] ?? c['createdAt'] ?? c['checkin_time'] ?? c['checkedInAt'];
-    if (t == null) return null;
-    if (t is Timestamp) return t.toDate();
-    if (t is DateTime) return t;
-    if (t is int) {
-      return DateTime.fromMillisecondsSinceEpoch(
-        t > 9999999999 ? t : t * 1000,
-      );
-    }
-    final s = t.toString().trim();
-    if (s.isEmpty) return null;
-    return DateTime.tryParse(s);
+    return parseCheckInTimestamp(c);
   }
 }

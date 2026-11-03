@@ -15,6 +15,7 @@ import 'package:atmos_trs_system/services/pending_establishment_registration_cac
 import 'package:atmos_trs_system/services/pending_registration_cache.dart';
 import 'package:atmos_trs_system/services/otp_service.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
+import 'package:atmos_trs_system/utils/password_sign_in_guard.dart';
 
 /// Resolves post-login navigation quickly (cache-first), then finishes setup in background.
 class LoginFlowService {
@@ -197,12 +198,20 @@ class LoginFlowService {
   }) async {
     unawaited(LguOfficeRegistryService.syncForCurrentUser());
     try {
-      var profile =
-          await UserDirectoryService.getProfileByUid(
-            uid,
-            preferServer: false,
-          ) ??
-          await UserDirectoryService.getProfileByEmail(email);
+      var profile = await UserDirectoryService.getProfileByUid(
+        uid,
+        preferServer: false,
+      );
+      if (profile == null) {
+        final byEmail = await UserDirectoryService.getProfileByEmail(email);
+        if (byEmail != null &&
+            PasswordSignInGuard.profileBelongsToAuthUser(
+              firebaseUid: uid,
+              profileUid: byEmail.uid,
+            )) {
+          profile = byEmail;
+        }
+      }
 
       if (profile != null) {
         if (profile.isGovernor ||

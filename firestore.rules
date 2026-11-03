@@ -17,6 +17,28 @@ service cloud.firestore {
       return userExists() ? get(userDocPath()).data.get('role', '') : '';
     }
 
+    function isGovernorStaff() {
+      return isSignedIn() && (
+        (userExists() && staffRole().matches('(?i)^\\s*governor\\s*$'))
+        || (request.auth.token.email != null
+            && request.auth.token.email.matches('(?i)^governor\\.atmos@misocc-demo\\.ph$'))
+      );
+    }
+
+    function governorOwnedCatalogRecord() {
+      let d = resource.data;
+      return d.get('publisherOffice', '') == 'governor'
+        || d.get('ownerOffice', '') == 'governor'
+        || d.get('publisherRole', '') == 'governor'
+        || d.get('createdBy', '') == 'Governor'
+        || d.get('createdBy', '') == 'governor'
+        || (
+          d.get('createdByUid', '') == request.auth.uid
+          && d.get('municipalityId', '') == ''
+          && isGovernorStaff()
+        );
+    }
+
     function isProvincialStaffFromUserDoc() {
       return userExists()
         && (
@@ -34,6 +56,28 @@ service cloud.firestore {
       return isSignedIn()
         && request.auth.token.email != null
         && request.auth.token.email.matches('(?i)^optaca@gmail\\.com$');
+    }
+
+    /// OPTACA / provincial tourism / Governor may publish establishment types.
+    /// LGU municipal staff cannot add to the official shared category list.
+    function isEstablishmentCategoryAdmin() {
+      return isGovernorStaff()
+        || isOptacaPortalReader()
+        || (
+          userExists()
+          && (
+            staffRole().matches('(?i)^\\s*provincial[_\\s-]?tourism\\s*$')
+            || staffRole().matches('(?i)^\\s*tourism[_\\s-]?province\\s*$')
+          )
+        )
+        || (
+          isSignedIn()
+          && request.auth.token.email != null
+          && (
+            request.auth.token.email.matches('(?i)^provincial\\.tourism@misocc-demo\\.ph$')
+            || request.auth.token.email.matches('(?i)^tourism@gmail\\.com$')
+          )
+        );
     }
 
     function isKnownStaffEmail() {
@@ -202,8 +246,13 @@ service cloud.firestore {
       allow read: if true;
       // LGU owns municipal announcements; OPTACA / provincial may manage
       // province-wide posts from the portal Events & Announcements tab.
-      allow create, update, delete: if isLguTourismFromUserDoc()
+      // Governor-owned docs: LGU may read, only Governor staff may mutate.
+      allow create: if isGovernorStaff()
+        || isLguTourismFromUserDoc()
         || provincialMayManageSpot();
+      allow update, delete: if governorOwnedCatalogRecord()
+        ? isGovernorStaff()
+        : (isLguTourismFromUserDoc() || provincialMayManageSpot());
     }
 
     match /users/{userId} {
@@ -691,7 +740,19 @@ service cloud.firestore {
 
     match /events/{docId} {
       allow read: if true;
-      allow write: if isLguStaff() || provincialMayManageSpot();
+      allow create: if isGovernorStaff()
+        || isLguStaff()
+        || provincialMayManageSpot();
+      allow update, delete: if governorOwnedCatalogRecord()
+        ? isGovernorStaff()
+        : (isLguStaff() || provincialMayManageSpot());
+    }
+
+    /// Governor-only custom event categories. Public read so saved labels stay
+    /// visible; LGU / OPTACA dropdowns do not consume this collection.
+    match /governor_event_types/{typeId} {
+      allow read: if true;
+      allow create, update, delete: if isGovernorStaff();
     }
 
     match /transportation_fees/{docId} {
@@ -713,6 +774,89 @@ service cloud.firestore {
     match /bus_locations/{docId} {
       allow read: if true;
       allow write: if isLguStaff();
+    }
+
+    /// Hotel-suggested DOT accommodation types (Profile). Pending until OPTACA publishes.
+    match /ae_type_suggestions/{suggestionId} {
+      // Owners may read their own rows (by creator or establishment id).
+      // Admins read all for the OPTACA inbox. Query must constrain one of these.
+      allow read: if isSignedIn()
+                  && (
+                    resource.data.createdByUid == request.auth.uid
+                    || resource.data.establishmentId == request.auth.uid
+                    || isEstablishmentCategoryAdmin()
+                  );
+      allow create: if isSignedIn()
+                    && request.resource.data.createdByUid == request.auth.uid
+                    && request.resource.data.establishmentId == request.auth.uid
+                    && request.resource.data.status == 'pending'
+                    && request.resource.data.name is string
+                    && request.resource.data.nameKey is string
+                    && request.resource.data.name.size() >= 2
+                    && request.resource.data.name.size() <= 40
+                    && request.resource.data.keys().hasAll([
+                      'name', 'nameKey', 'status', 'createdByUid', 'establishmentId'
+                    ]);
+      // OPTACA review, or the owner re-saving the same pending suggestion.
+      allow update: if isEstablishmentCategoryAdmin()
+                    && request.resource.data.createdByUid == resource.data.createdByUid
+                    && request.resource.data.nameKey == resource.data.nameKey
+                  || (
+                    isSignedIn()
+                    && resource.data.createdByUid == request.auth.uid
+                    && resource.data.establishmentId == request.auth.uid
+                    && request.resource.data.createdByUid == resource.data.createdByUid
+                    && request.resource.data.establishmentId == resource.data.establishmentId
+                    && request.resource.data.nameKey == resource.data.nameKey
+                    && resource.data.status == 'pending'
+                    && request.resource.data.status == 'pending'
+                  );
+      allow delete: if false;
+    }
+
+    /// Official extra DOT accommodation types (OPTACA-approved). Public read for dropdowns.
+    match /ae_types/{typeId} {
+      allow read: if true;
+      allow create, update: if isEstablishmentCategoryAdmin()
+                            && request.resource.data.name is string
+                            && request.resource.data.nameKey is string
+                            && request.resource.data.name.size() >= 2
+                            && request.resource.data.name.size() <= 40
+                            && request.resource.data.nameKey == typeId;
+      allow delete: if isEstablishmentCategoryAdmin();
+    }
+
+    /// Applicant-suggested establishment types. Pending until OPTACA publishes.
+    match /establishment_category_suggestions/{suggestionId} {
+      allow read: if isSignedIn()
+                  && (
+                    resource.data.createdByUid == request.auth.uid
+                    || isEstablishmentCategoryAdmin()
+                  );
+      allow create: if isSignedIn()
+                    && request.resource.data.createdByUid == request.auth.uid
+                    && request.resource.data.status == 'pending'
+                    && request.resource.data.name is string
+                    && request.resource.data.nameKey is string
+                    && request.resource.data.name.size() >= 2
+                    && request.resource.data.name.size() <= 40
+                    && request.resource.data.establishmentId == request.auth.uid;
+      allow update: if isEstablishmentCategoryAdmin()
+                    && request.resource.data.createdByUid == resource.data.createdByUid
+                    && request.resource.data.nameKey == resource.data.nameKey;
+      allow delete: if false;
+    }
+
+    /// Official extra establishment types (OPTACA-approved). Public read for signup.
+    match /establishment_categories/{categoryId} {
+      allow read: if true;
+      allow create, update: if isEstablishmentCategoryAdmin()
+                            && request.resource.data.name is string
+                            && request.resource.data.nameKey is string
+                            && request.resource.data.name.size() >= 2
+                            && request.resource.data.name.size() <= 40
+                            && request.resource.data.nameKey == categoryId;
+      allow delete: if isEstablishmentCategoryAdmin();
     }
 
     /// Custom tourist-spot categories created from Add QR Code.

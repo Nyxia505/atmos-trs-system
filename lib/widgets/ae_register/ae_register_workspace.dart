@@ -6,6 +6,7 @@ import 'package:atmos_trs_system/config/ae_register_schema.dart';
 import 'package:atmos_trs_system/models/ae_register.dart';
 import 'package:atmos_trs_system/models/sign_off.dart';
 import 'package:atmos_trs_system/services/ae_register_service.dart';
+import 'package:atmos_trs_system/services/ae_room_inventory_service.dart';
 import 'package:atmos_trs_system/utils/ae_register_calculator.dart';
 import 'package:atmos_trs_system/widgets/ae_register/ae_country_matrix_table.dart';
 import 'package:atmos_trs_system/widgets/ae_register/ae_dae2_summary_card.dart';
@@ -29,6 +30,8 @@ class AeRegisterWorkspace extends StatefulWidget {
     this.readOnly = false,
     this.banner,
     this.onOpenProfile,
+    this.onRoomsChanged,
+    this.roomLabels = const [],
     this.initialYear,
     this.initialMonth,
   });
@@ -38,6 +41,12 @@ class AeRegisterWorkspace extends StatefulWidget {
   final bool readOnly;
   final Widget? banner;
   final VoidCallback? onOpenProfile;
+
+  /// Called when "+ Add New Room" persists a new inventory room.
+  final ValueChanged<AeRoomInventory>? onRoomsChanged;
+
+  /// Explicit room identifiers from the establishment (optional).
+  final List<String> roomLabels;
   final int? initialYear;
   final int? initialMonth;
 
@@ -143,7 +152,12 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
   }
 
   Future<void> _add(AeRowDialogMode mode, List<AeRegisterRow> current) async {
-    final lastRate = current.isEmpty ? 0.0 : current.last.rate;
+    final lastRate = current.isEmpty
+        ? 0.0
+        : AeRegisterCalculator.sortDailyRegisterRows(
+            current,
+            sort: AeDailyRegisterSort.recentlyAdded,
+          ).first.rate;
     final rows = await AeRegisterRowDialog.show(
       context,
       mode: mode,
@@ -153,6 +167,9 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
       totalRooms: widget.profile.totalRooms,
       showCharges: _showCharges,
       lastRate: lastRate,
+      establishmentId: widget.readOnly ? '' : widget.profile.aeId,
+      roomLabels: widget.roomLabels,
+      onInventoryChanged: widget.readOnly ? null : widget.onRoomsChanged,
     );
     if (rows == null || rows.isEmpty) return;
     final conflict = _roomConflict(rows, current);
@@ -210,6 +227,8 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
       totalRooms: widget.profile.totalRooms,
       showCharges: _showCharges,
       initial: row,
+      establishmentId: widget.profile.aeId,
+      roomLabels: widget.roomLabels,
     );
     if (rows == null || rows.isEmpty) return;
     final conflict = _roomConflict(rows, current);
@@ -313,25 +332,36 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
     return _liveHash;
   }
 
-  AeMonthlyReport _virtualReport(AeMonthlyReport? r) =>
-      (r ??
-              AeMonthlyReport(
-                id: AeMonthlyReport.docIdFor(widget.profile.aeId, _year, _month),
-                aeId: widget.profile.aeId,
-                year: _year,
-                month: _month,
-              ))
-          .copyWith(
-        aeName: widget.readOnly && r != null ? r.aeName : widget.profile.aeName,
-        municipality: widget.readOnly && r != null ? r.municipality : widget.profile.municipality,
-        municipalityId: widget.readOnly && r != null ? r.municipalityId : widget.profile.municipalityId,
-        totalRooms: widget.readOnly && r != null ? r.totalRooms : widget.profile.totalRooms,
-        aeType: widget.readOnly && r != null ? r.aeType : widget.profile.aeType,
-        classificationCode: widget.readOnly && r != null ? r.classificationCode : widget.profile.classificationCode,
-      );
+  /// Submitted months keep the header snapshot (historical capacity).
+  /// Draft / missing months use the live establishment profile.
+  bool _lockProfileSnapshot(AeMonthlyReport? r) =>
+      widget.readOnly || (r != null && r.isSubmitted);
+
+  AeMonthlyReport _virtualReport(AeMonthlyReport? r) {
+    final lock = _lockProfileSnapshot(r);
+    return (r ??
+            AeMonthlyReport(
+              id: AeMonthlyReport.docIdFor(widget.profile.aeId, _year, _month),
+              aeId: widget.profile.aeId,
+              year: _year,
+              month: _month,
+            ))
+        .copyWith(
+      aeName: lock && r != null ? r.aeName : widget.profile.aeName,
+      municipality: lock && r != null ? r.municipality : widget.profile.municipality,
+      municipalityId:
+          lock && r != null ? r.municipalityId : widget.profile.municipalityId,
+      totalRooms: lock && r != null ? r.totalRooms : widget.profile.totalRooms,
+      aeType: lock && r != null ? r.aeType : widget.profile.aeType,
+      classificationCode: lock && r != null
+          ? r.classificationCode
+          : widget.profile.classificationCode,
+    );
+  }
 
   void _maybeRefreshHeader(AeMonthlyReport? r, List<AeRegisterRow> rows) {
-    if (widget.readOnly || r == null) return;
+    // Never rewrite a signed / submitted month from a later profile change.
+    if (widget.readOnly || r == null || r.isSubmitted) return;
     final p = widget.profile;
     final stale = r.totalRooms != p.totalRooms ||
         r.aeType != p.aeType ||

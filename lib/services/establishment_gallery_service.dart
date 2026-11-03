@@ -1,10 +1,10 @@
-import 'dart:convert';
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
-import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 
 import 'package:atmos_trs_system/config/supabase_upload_config.dart';
@@ -15,14 +15,21 @@ import 'package:atmos_trs_system/services/supabase_storage_upload.dart';
 
 /// Gallery photos on `accommodation_establishments.galleryUrls`.
 ///
-/// Files live in Supabase Storage (`tourist-images/establishments/{uid}/…`),
-/// same bucket as other tourist photos — not Firebase Storage.
+/// Files live in Supabase Storage under `uploads/establishments/{uid}/…`
+/// (that prefix is allowed by the existing `tourist-images` insert policy).
 class EstablishmentGalleryService {
   EstablishmentGalleryService._();
 
   static const int maxImages = 8;
   static const String fieldGalleryUrls = 'galleryUrls';
   static const String fieldCoverImageUrl = 'coverImageUrl';
+
+  static const XTypeGroup _imageTypeGroup = XTypeGroup(
+    label: 'Images',
+    extensions: <String>['jpg', 'jpeg', 'png', 'webp'],
+    mimeTypes: <String>['image/jpeg', 'image/png', 'image/webp'],
+    webWildCards: <String>['image/*'],
+  );
 
   static CollectionReference<Map<String, dynamic>> get _estCol =>
       FirebaseFirestore.instance
@@ -71,59 +78,13 @@ class EstablishmentGalleryService {
     });
   }
 
-  /// Picks one image, uploads to Supabase, appends public URL on the AE doc.
-  static Future<List<String>> pickAndUpload({
+  /// Opens a file picker, uploads PNG/JPG/WEBP, appends public URLs on the AE
+  /// doc. Returns `null` when the user cancels; otherwise the new URL list.
+  static Future<List<String>?> pickAndUpload({
     required String establishmentId,
     required List<String> currentUrls,
   }) async {
-    // #region agent log
-    Future<void> _dbg(String hypothesisId, String message, Map<String, Object?> data) async {
-      final payload = <String, Object?>{
-        'sessionId': 'b96d41',
-        'runId': 'post-fix',
-        'hypothesisId': hypothesisId,
-        'location': 'establishment_gallery_service.dart:pickAndUpload',
-        'message': message,
-        'data': data,
-        'timestamp': DateTime.now().millisecondsSinceEpoch,
-      };
-      debugPrint('[DBG-b96d41] $message $data');
-      try {
-        // Fire-and-forget so ingest never blocks picker / snackbars.
-        // ignore: unawaited_futures
-        http
-            .post(
-              Uri.parse(
-                'http://127.0.0.1:7368/ingest/51ca25ca-c2cb-4a1d-9579-1fa102df2fe9',
-              ),
-              headers: {
-                'Content-Type': 'application/json',
-                'X-Debug-Session-Id': 'b96d41',
-              },
-              body: jsonEncode(payload),
-            )
-            .timeout(const Duration(milliseconds: 800))
-            .catchError((_) => http.Response('', 500));
-      } catch (_) {}
-    }
-    // #endregion
-
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    // #region agent log
-    await _dbg('A', 'pickAndUpload entry', {
-      'kIsWeb': kIsWeb,
-      'hasUid': uid != null && uid.isNotEmpty,
-      'estIdMatchesUid':
-          uid != null && uid.isNotEmpty && establishmentId.trim() == uid,
-      'currentUrlCount': currentUrls.length,
-      'authMode': SupabaseUploadConfig.authModeLabel(),
-      'hasUploadCredentials': SupabaseUploadConfig.hasUploadCredentials,
-      'anonKeyPresent': SupabaseUploadConfig.anonKey.isNotEmpty,
-      'serviceRoleKeyPresent': SupabaseUploadConfig.serviceRoleKey.isNotEmpty,
-      'anonKeyLen': SupabaseUploadConfig.anonKey.length,
-      'serviceRoleKeyLen': SupabaseUploadConfig.serviceRoleKey.length,
-    });
-    // #endregion
     if (uid == null || uid.isEmpty) {
       throw StateError('Sign in to upload photos.');
     }
@@ -134,82 +95,55 @@ class EstablishmentGalleryService {
       throw StateError('Maximum $maxImages photos.');
     }
     if (!SupabaseUploadConfig.hasUploadCredentials) {
-      // #region agent log
-      await _dbg('A', 'blocked: missing upload credentials', {
-        'authMode': SupabaseUploadConfig.authModeLabel(),
-        'reason': 'no dart-define and empty supabase_secrets.local.dart',
-      });
-      // #endregion
       throw StateError(
-        'Supabase is not configured for uploads. '
-        'Run tools/gen_dart_defines.ps1 once, then hot restart.',
+        'Photo storage is not configured. Restart the app and try again.',
       );
     }
 
-    final picked = await ImagePicker().pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 72,
-      maxWidth: 1280,
-    );
-    // #region agent log
-    await _dbg('C', 'image picker result', {
-      'picked': picked != null,
-      'nameLen': picked?.name.length ?? 0,
-    });
-    // #endregion
-    if (picked == null) return currentUrls;
+    final remaining = maxImages - currentUrls.length;
+    final picked = await _pickImages(maxCount: remaining);
+    if (picked.isEmpty) return null;
 
-    final bytes = await picked.readAsBytes();
-    if (bytes.isEmpty) {
-      throw StateError('Could not read that image.');
+    final next = List<String>.from(currentUrls);
+    Object? lastError;
+    for (final file in picked) {
+      if (next.length >= maxImages) break;
+      try {
+        final bytes = await file.readAsBytes();
+        if (bytes.isEmpty) {
+          throw StateError('Could not read that image.');
+        }
+        if (bytes.length > SupabaseStorageUpload.maxImageBytes) {
+          throw StateError('Photo must be 8 MB or smaller.');
+        }
+        final url = await _uploadBytes(
+          uid: uid,
+          bytes: bytes,
+          fileName: file.name,
+        );
+        next.add(url);
+      } catch (e) {
+        lastError = e;
+        debugPrint('[EstGallery] upload one failed: $e');
+      }
+    }
+    if (next.length == currentUrls.length) {
+      throw StateError(
+        lastError == null
+            ? 'Could not read those photos. Use PNG or JPG.'
+            : lastError.toString().replaceFirst('Bad state: ', ''),
+      );
     }
 
-    final url = await _uploadBytes(
-      uid: uid,
-      bytes: bytes,
-      fileName: picked.name,
-    );
-    // #region agent log
-    await _dbg('D', 'upload succeeded', {
-      'urlHost': Uri.tryParse(url)?.host ?? '',
-      'urlPathPrefix':
-          (Uri.tryParse(url)?.path ?? '').split('/').take(5).join('/'),
-    });
-    // #endregion
-    final next = [...currentUrls, url];
-    // #region agent log
-    await _dbg('E', 'persist starting', {
-      'urlCount': next.length,
-      'uidLen': uid.length,
-      'via': kIsWeb ? 'rest' : 'sdk',
-    });
-    // #endregion
     try {
-      // Cached token only — force refresh was timing out and delaying saves.
-      final tokenOk =
-          await FirestoreAuthGate.ensureFreshIdToken(forceRefresh: false);
-      // #region agent log
-      await _dbg('E', 'persist auth gate', {'tokenOk': tokenOk});
-      // #endregion
-      await _persist(uid, next).timeout(const Duration(seconds: 8));
-      // #region agent log
-      await _dbg('E', 'persist succeeded', {
-        'urlCount': next.length,
-        'via': kIsWeb ? 'rest' : 'sdk',
-      });
-      // #endregion
+      await FirestoreAuthGate.ensureFreshIdToken(forceRefresh: false);
+      await _persist(uid, next).timeout(const Duration(seconds: 20));
     } catch (e) {
-      // #region agent log
-      await _dbg('E', 'persist failed', {
-        'errorType': e.runtimeType.toString(),
-        'error': e.toString().length > 180
-            ? e.toString().substring(0, 180)
-            : e.toString(),
-      });
-      // #endregion
-      throw StateError(
-        'Photo is on storage, but profile save is slow/failed. '
-        'Try again in a moment. ($e)',
+      debugPrint('[EstGallery] persist delayed: $e');
+      unawaited(
+        _persist(uid, next).catchError((Object err) {
+          debugPrint('[EstGallery] persist retry: $err');
+        }),
       );
     }
     return next;
@@ -235,29 +169,70 @@ class EstablishmentGalleryService {
     return next;
   }
 
+  static Future<List<XFile>> _pickImages({required int maxCount}) async {
+    if (maxCount <= 0) return const [];
+    try {
+      final files = await openFiles(
+        acceptedTypeGroups: const [_imageTypeGroup],
+      );
+      if (files.isEmpty) return const [];
+      return files.take(maxCount).toList(growable: false);
+    } catch (e) {
+      debugPrint('[EstGallery] file_selector: $e');
+    }
+    try {
+      if (maxCount == 1) {
+        final one = await ImagePicker().pickImage(
+          source: ImageSource.gallery,
+          imageQuality: 85,
+          maxWidth: 1600,
+        );
+        return one == null ? const [] : [one];
+      }
+      final many = await ImagePicker().pickMultiImage(
+        imageQuality: 85,
+        maxWidth: 1600,
+        limit: maxCount,
+      );
+      return many.take(maxCount).toList(growable: false);
+    } catch (e) {
+      debugPrint('[EstGallery] image_picker: $e');
+      throw StateError(
+        kIsWeb
+            ? 'Could not open the photo picker. Try another browser.'
+            : 'Could not open the photo picker. Choose a PNG or JPG file.',
+      );
+    }
+  }
+
   static Future<String> _uploadBytes({
     required String uid,
     required Uint8List bytes,
     required String fileName,
   }) async {
-    final name = fileName.toLowerCase();
-    final ext = name.endsWith('.png')
-        ? 'png'
-        : name.endsWith('.webp')
-            ? 'webp'
-            : 'jpg';
-    final contentType = ext == 'png'
-        ? 'image/png'
-        : ext == 'webp'
-            ? 'image/webp'
-            : 'image/jpeg';
-    final stamp = DateTime.now().millisecondsSinceEpoch;
-    final objectKey = 'establishments/$uid/photo_$stamp.$ext';
+    final contentType = SupabaseStorageUpload.contentTypeForImageBytes(bytes) ??
+        _contentTypeFromName(fileName);
+    if (contentType == null ||
+        !SupabaseStorageUpload.allowedImageTypes.contains(contentType)) {
+      throw StateError('Use a PNG, JPG, or WEBP photo.');
+    }
     return SupabaseStorageUpload.uploadBytes(
-      objectKey: objectKey,
+      objectKey: SupabaseStorageUpload.establishmentPhotoObjectKey(
+        uid,
+        SupabaseStorageUpload.extensionForContentType(contentType),
+      ),
       bytes: bytes,
       contentType: contentType,
     );
+  }
+
+  static String? _contentTypeFromName(String fileName) {
+    final name = fileName.toLowerCase();
+    if (name.endsWith('.png')) return 'image/png';
+    if (name.endsWith('.webp')) return 'image/webp';
+    if (name.endsWith('.gif')) return 'image/gif';
+    if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return 'image/jpeg';
+    return null;
   }
 
   static Future<void> _persist(String uid, List<String> urls) async {

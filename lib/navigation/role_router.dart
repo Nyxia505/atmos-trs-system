@@ -15,6 +15,11 @@ class RoleRouter {
     required AppUserProfile profile,
     required String firebaseUid,
   }) async {
+    if (profile.uid.isNotEmpty && profile.uid != firebaseUid) {
+      throw StateError(
+        'Refusing to attach Firestore profile ${profile.uid} to Auth $firebaseUid',
+      );
+    }
     AuthConfig.currentUserUid = firebaseUid;
 
     if (profile.isGovernor) {

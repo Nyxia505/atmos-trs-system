@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/utils/email_utils.dart';
+import 'package:atmos_trs_system/utils/login_auth_messages.dart';
 import 'package:atmos_trs_system/utils/logo_utils.dart';
 import 'package:atmos_trs_system/utils/firebase_client_blocked_message.dart';
 import 'package:atmos_trs_system/services/login_flow_service.dart';
@@ -83,10 +84,7 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  /// Signs in with email/password.
-  /// creates the Firebase Auth user if it does not exist yet (Firestore profiles do not
-  /// create Auth accounts). If the email is already registered, sign-in must succeed
-  /// or we surface a wrong-password style error.
+  /// Signs in with Firebase Auth. Does not create accounts for unknown emails.
   ///
   /// Demo governor/tourism: Settings may store a new password in SharedPreferences
   /// without updating Firebase Auth — we sync Auth from known prior passwords.
@@ -363,98 +361,56 @@ class _LoginScreenState extends State<LoginScreen> {
     } on FirebaseAuthException catch (e) {
       setState(() => _isLoading = false);
       if (!mounted) return;
-      final staffByEmail = SessionStorage.getRoleFromEmail(email);
-      final isStaffEmail = SessionStorage.isStaffRole(staffByEmail);
-      var directoryProfileKnown = false;
-      if (!isStaffEmail) {
-        try {
-          directoryProfileKnown =
-              await UserDirectoryService.getProfileByEmail(email) != null;
-        } catch (_) {
-          directoryProfileKnown = false;
-        }
+      final raw = e.message?.trim();
+      if (looksLikeGoogleFirebaseClientBlocked(raw)) {
+        debugPrintFirebaseClientBlockedHint();
+        _showLoginFailure(
+          LoginAuthFeedback(message: firebaseClientBlockedUserMessage()),
+        );
+        return;
       }
-      final errorMessage = _loginErrorMessage(
-        e,
-        directoryProfileKnown: directoryProfileKnown,
-        isStaffEmail: isStaffEmail,
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(errorMessage),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
+      _showLoginFailure(LoginAuthMessages.fromException(e));
     } catch (e) {
       setState(() => _isLoading = false);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Login error: ${e.toString()}'),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
+      _showLoginFailure(LoginAuthMessages.unknownFailure(e));
     }
   }
 
-  /// Matches [FirebaseAuthException.code] variants across Firebase / FlutterFire versions.
-  static String _normalizeAuthErrorCode(String code) {
-    return code.replaceAll(RegExp(r'^firebase_auth/', caseSensitive: false), '').trim().replaceAll('_', '-').toLowerCase();
-  }
-
-  /// Clear messages for common Firebase Auth failures (Auth is separate from Firestore data).
-  ///
-  /// [directoryProfileKnown]: optional Firestore `users` hit for this email. When Auth returns
-  /// collapsed `invalid-credential` and the directory has no tourist/staff doc, we prefer
-  /// "The email is not registered" (Fleximart-style). Staff emails skip that heuristic.
-  String _loginErrorMessage(
-    FirebaseAuthException e, {
-    bool directoryProfileKnown = false,
-    bool isStaffEmail = false,
-  }) {
-    final raw = e.message?.trim();
-    if (looksLikeGoogleFirebaseClientBlocked(raw)) {
-      debugPrintFirebaseClientBlockedHint();
-      return firebaseClientBlockedUserMessage();
+  void _showLoginFailure(LoginAuthFeedback feedback) {
+    if (feedback.clearPassword) {
+      _passwordController.clear();
+      _passwordFocusNode.requestFocus();
     }
-    final code = _normalizeAuthErrorCode(e.code);
-    if (code == 'user-disabled') {
-      return 'This account has been disabled.';
+    final message = feedback.message.trim();
+    if (message.isEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearSnackBars();
+    SnackBarAction? action;
+    switch (feedback.action) {
+      case LoginAuthAction.forgotPassword:
+        action = SnackBarAction(
+          label: 'Forgot Password',
+          textColor: Colors.white,
+          onPressed: _openForgotPassword,
+        );
+      case LoginAuthAction.signUp:
+        action = SnackBarAction(
+          label: 'Sign Up',
+          textColor: Colors.white,
+          onPressed: () => openSignupFromLogin(context),
+        );
+      case LoginAuthAction.none:
+        break;
     }
-    if (code == 'too-many-requests') {
-      return 'Too many failed attempts. Please try again later.';
-    }
-    if (code == 'network-request-failed') {
-      return 'Network error. Check your connection and try again.';
-    }
-    if (code == 'invalid-email') {
-      return 'Please enter a valid email address.';
-    }
-    if (code == 'user-not-found') {
-      return 'The email is not registered';
-    }
-    if (code == 'wrong-password' ||
-        code == 'invalid-credential' ||
-        code == 'invalid-login-credentials' ||
-        code == 'invalid-password') {
-      // Newer Firebase often collapses missing-user + bad-password into invalid-credential.
-      if (!isStaffEmail && !directoryProfileKnown) {
-        return 'The email is not registered';
-      }
-      return 'Wrong password';
-    }
-    // Native message wording (often not surfaced as Dart `code`).
-    final msgLower = raw?.toLowerCase() ?? '';
-    if (msgLower.contains('incorrect') &&
-        msgLower.contains('malformed')) {
-      if (!isStaffEmail && !directoryProfileKnown) {
-        return 'The email is not registered';
-      }
-      return 'Wrong password';
-    }
-    if (raw != null && raw.isNotEmpty) return raw;
-    return 'Login failed (${e.code}).';
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.redAccent,
+        duration: const Duration(seconds: 5),
+        action: action,
+      ),
+    );
   }
 
   /// Establishment and LGU accounts stay signed in but cannot open Trip Planner.
@@ -717,7 +673,7 @@ class _LoginScreenState extends State<LoginScreen> {
     } else {
       Navigator.pushReplacementNamed(
         context,
-        kIsWeb && _isDesktopGlass ? '/landing' : '/login',
+        kIsWeb && _isDesktopGlass ? '/landing' : '/welcome',
       );
     }
   }
@@ -797,11 +753,11 @@ class _LoginScreenState extends State<LoginScreen> {
                     FocusScope.of(context).requestFocus(_passwordFocusNode);
                   },
                   validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter your email';
+                    if (value == null || value.trim().isEmpty) {
+                      return LoginAuthMessages.emptyEmail;
                     }
                     if (!isValidEmailFormat(value)) {
-                      return 'Please enter a valid email';
+                      return LoginAuthMessages.invalidEmail;
                     }
                     return null;
                   },
@@ -843,7 +799,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   validator: (value) {
                     if (value == null || value.isEmpty) {
-                      return 'Please enter your password';
+                      return LoginAuthMessages.emptyPassword;
                     }
                     if (value.length < 6) {
                       return 'Password must be at least 6 characters';
@@ -1146,11 +1102,11 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               decoration: _inputDecoration(hint: 'Enter email address'),
               validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please enter your email';
+                if (value == null || value.trim().isEmpty) {
+                  return LoginAuthMessages.emptyEmail;
                 }
                 if (!isValidEmailFormat(value)) {
-                  return 'Please enter a valid email';
+                  return LoginAuthMessages.invalidEmail;
                 }
                 return null;
               },
@@ -1204,7 +1160,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               validator: (value) {
                 if (value == null || value.isEmpty) {
-                  return 'Please enter your password';
+                  return LoginAuthMessages.emptyPassword;
                 }
                 if (value.length < 6) {
                   return 'Password must be at least 6 characters';

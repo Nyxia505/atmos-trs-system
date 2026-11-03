@@ -83,7 +83,7 @@ class CameraQrDeepLinkService {
     final applied = await QrLaunchBootstrap.applyFromRawUrl(raw);
     if (!applied) return;
 
-    // Cold start: StartupRouteResolver picks /qr-welcome or /qr-resume.
+    // Cold start: StartupRouteResolver picks /qr-entry or /qr-resume.
     if (fromColdStart) return;
 
     await _navigateForPendingIfReady();
@@ -98,7 +98,7 @@ class CameraQrDeepLinkService {
     final role = await SessionStorage.getStoredRole();
 
     if (uid == null || uid.isEmpty || user == null) {
-      nav.pushNamedAndRemoveUntil('/login', (r) => false);
+      nav.pushNamedAndRemoveUntil('/qr-entry', (r) => false);
       return;
     }
 

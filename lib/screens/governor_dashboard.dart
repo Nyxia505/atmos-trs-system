@@ -53,6 +53,9 @@ import 'package:atmos_trs_system/features/governor/widgets/charts/governor_donut
 import 'package:atmos_trs_system/features/governor/widgets/charts/governor_age_bar_chart.dart';
 import 'package:atmos_trs_system/utils/visit_analytics.dart';
 import 'package:atmos_trs_system/widgets/visit_analytics_board.dart';
+import 'package:atmos_trs_system/services/spot_category_service.dart';
+import 'package:atmos_trs_system/utils/lgu_registered_tourists_xlsx.dart';
+import 'package:atmos_trs_system/widgets/registered_tourists_export_dialog.dart';
 
 class GovernorDashboard extends StatefulWidget {
   const GovernorDashboard({super.key});
@@ -2509,7 +2512,84 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         tourists: _tourists,
         range: _selectedTimeFilter,
         parseTime: _checkInTimestamp,
+        categoryBySpotId: _governorCategoryBySpotId(),
+        categoryBySpotName: _governorCategoryBySpotName(),
+        categoryNamesByKey: _governorCategoryNamesByKey(),
+        spotNameById: _governorSpotNameById(),
       );
+
+  Map<String, String> _governorSpotNameById() {
+    final map = <String, String>{};
+    for (final spot in _governorAllSpots) {
+      final name = (spot['name'] ?? spot['spot_name'] ?? '').toString().trim();
+      if (name.isEmpty) continue;
+      for (final key in ['id', 'spotId', 'qrValue']) {
+        final id = (spot[key] ?? '').toString().trim();
+        if (id.isNotEmpty) map[id] = name;
+      }
+    }
+    return map;
+  }
+
+  Map<String, String> _governorCategoryBySpotId() {
+    final map = <String, String>{};
+    for (final spot in _governorAllSpots) {
+      final category = (spot['category'] ??
+              spot['categoryName'] ??
+              spot['spotCategory'] ??
+              '')
+          .toString()
+          .trim();
+      if (category.isEmpty) continue;
+      for (final key in ['id', 'spotId', 'qrValue', 'qr_payload', 'qr_value']) {
+        final id = (spot[key] ?? '').toString().trim();
+        if (id.isNotEmpty) map[id] = category;
+      }
+    }
+    return map;
+  }
+
+  Map<String, String> _governorCategoryBySpotName() {
+    final map = <String, String>{};
+    for (final spot in _governorAllSpots) {
+      final category = (spot['category'] ??
+              spot['categoryName'] ??
+              spot['spotCategory'] ??
+              '')
+          .toString()
+          .trim();
+      final name = (spot['name'] ?? spot['spot_name'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
+      if (category.isEmpty || name.isEmpty) continue;
+      map[name] = category;
+    }
+    return map;
+  }
+
+  Map<String, String> _governorCategoryNamesByKey() {
+    final map = <String, String>{};
+    void add(String raw) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) return;
+      map[trimmed] = trimmed;
+      map[trimmed.toLowerCase()] = trimmed;
+      final key = SpotCategoryNames.keyOf(trimmed);
+      if (key.isNotEmpty) map[key] = trimmed;
+    }
+
+    for (final name in SpotCategoryService.builtIn) {
+      add(name);
+    }
+    for (final spot in _governorAllSpots) {
+      add(
+        (spot['category'] ?? spot['categoryName'] ?? spot['spotCategory'] ?? '')
+            .toString(),
+      );
+    }
+    return map;
+  }
 
   List<double> get _dashboardTrendValues => _visitAnalytics.arrivals;
 
@@ -2535,22 +2615,15 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   List<Map<String, dynamic>> get _dashboardCategoryStats {
     final rows = _visitAnalytics.categories;
     final total = rows.fold<int>(0, (sum, row) => sum + row.count);
-    if (total == 0) {
-      return [
-        {'name': 'Beach', 'count': 0, 'percentage': 0.0},
-        {'name': 'Falls', 'count': 0, 'percentage': 0.0},
-        {'name': 'Historical', 'count': 0, 'percentage': 0.0},
-        {'name': 'Mountain', 'count': 0, 'percentage': 0.0},
-        {'name': 'Resorts', 'count': 0, 'percentage': 0.0},
-      ];
-    }
+    if (total == 0) return const [];
     return [
       for (final row in rows)
-        {
-          'name': row.name,
-          'count': row.count,
-          'percentage': row.count / total,
-        },
+        if (row.count > 0)
+          {
+            'name': row.name.trim().isEmpty ? 'Other' : row.name.trim(),
+            'count': row.count,
+            'percentage': row.count / total,
+          },
     ];
   }
 
@@ -2989,15 +3062,55 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   Widget _buildTouristArrivalsChart({bool dense = false}) {
+    final stats = _visitAnalytics;
+    final loading = _isLoadingDetails && _checkIns.isEmpty;
+    final dateError = _checkIns.isNotEmpty &&
+            stats.unparsedCheckIns == _checkIns.length
+        ? 'Could not read visit dates from check-in records.'
+        : (!_isLoadingDetails &&
+                _checkIns.isEmpty &&
+                _errorMessage != null &&
+                _errorMessage!.toLowerCase().contains('check'))
+            ? _errorMessage
+            : null;
     return GovernorChartCard(
       dense: dense,
       title: 'Tourist Arrivals',
       icon: Icons.show_chart_rounded,
       trailing: _buildTimeFilterDropdown(dense: dense),
-      child: GovernorArrivalsAreaChart(
-        values: _dashboardTrendValues,
-        showAllBottomLabels: _selectedTimeFilter == 'This Month',
-      ),
+      child: loading
+          ? const Center(
+              child: SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(strokeWidth: 2.4),
+              ),
+            )
+          : dateError != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      dateError,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: _textMuted,
+                        fontSize: dense ? 11 : 13,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                )
+              : GovernorArrivalsAreaChart(
+                  values: stats.arrivals,
+                  labels: stats.arrivalLabels,
+                  tooltipLabels: stats.arrivalTooltips,
+                  valueNoun: 'visitors',
+                  emptyMessage: stats.arrivalPeriodLabel.isEmpty
+                      ? 'No arrivals recorded for this period'
+                      : 'No arrivals recorded for this period (${stats.arrivalPeriodLabel})',
+                  showAllBottomLabels: _selectedTimeFilter == 'This Month',
+                ),
     );
   }
 
@@ -3091,18 +3204,23 @@ class _GovernorDashboardState extends State<GovernorDashboard>
 
   Widget _buildTopCategoriesCard({bool dense = false}) {
     final stats = _dashboardCategoryStats.take(5).toList();
+    final palette = GovernorDashboardTokens.categoryPalette;
     final totalCount = stats.fold<int>(
       0,
       (a, s) => a + ((s['count'] as num?)?.toInt() ?? 0),
     );
     final segments = <GovernorDonutSegment>[
       for (var i = 0; i < stats.length; i++)
-        GovernorDonutSegment(
-          label: stats[i]['name'] as String,
-          value: ((stats[i]['count'] as num?)?.toDouble() ?? 0),
-          color: GovernorDashboardTokens.categoryPalette[
-              i % GovernorDashboardTokens.categoryPalette.length],
-        ),
+        if (((stats[i]['count'] as num?)?.toDouble() ?? 0) > 0)
+          GovernorDonutSegment(
+            label: (stats[i]['name'] ?? 'Other').toString().trim().isEmpty
+                ? 'Other'
+                : (stats[i]['name'] ?? 'Other').toString().trim(),
+            value: ((stats[i]['count'] as num?)?.toDouble() ?? 0),
+            color: palette.isEmpty
+                ? GovernorDashboardTokens.primary
+                : palette[i % palette.length],
+          ),
     ];
     return GovernorChartCard(
       dense: dense,
@@ -3701,23 +3819,71 @@ class _GovernorDashboardState extends State<GovernorDashboard>
               ],
             ),
           ),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
-              color: _kpiOrange.withOpacity(0.15),
+              color: const Color(0xFFECFDF3),
               borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: const Color(0xFF86EFAC)),
             ),
             child: const Text(
               'Privacy on',
               style: TextStyle(
-                color: Color(0xFF558B2F),
+                color: Color(0xFF15803D),
                 fontSize: 11,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w700,
               ),
             ),
           ),
+          ElevatedButton.icon(
+            onPressed: _exportRegisteredTourists,
+            icon: const Icon(Icons.download_rounded, size: 18),
+            label: const Text('Export'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF0EA5E9),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(999),
+              ),
+              elevation: 2,
+              shadowColor: const Color(0xFF0EA5E9).withValues(alpha: 0.35),
+            ),
+          ),
+            ],
+          ),
         ],
       ),
+    );
+  }
+
+  List<LguRegisteredTouristExportRow> _governorTouristExportRows() {
+    return _sortedTouristsByRegistrationDate(_tourists)
+        .map(lguRegisteredTouristExportRowFromMap)
+        .toList();
+  }
+
+  Future<void> _exportRegisteredTourists() async {
+    if (_isExporting) return;
+    final rows = _governorTouristExportRows();
+    if (!mounted) return;
+    await showRegisteredTouristsExportDialog(
+      context: context,
+      rows: rows,
+      officeLabel: "Governor's Office",
+      location: 'Misamis Occidental',
+      privacyLabel: 'Privacy-safe Governor export',
+      subtitle:
+          '${rows.length} record${rows.length == 1 ? '' : 's'} — Excel and PDF of every registered tourist in Misamis Occidental, not the search page. Names and contact details are omitted for privacy.',
+      accent: _primaryOrange,
+      cardBg: _cardBg,
+      textDark: _textDark,
+      textMuted: _textMuted,
     );
   }
 
@@ -4908,14 +5074,14 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   Widget _buildTripPlannerContent(GovernorTripPlannerSection section) {
     final title = switch (section) {
       GovernorTripPlannerSection.featured => 'Featured',
-      GovernorTripPlannerSection.events => 'Events',
+      GovernorTripPlannerSection.events => 'Events & Announcements',
       GovernorTripPlannerSection.fares => 'Fares',
     };
     final subtitle = switch (section) {
       GovernorTripPlannerSection.featured =>
         'Spots shown on the Trip Planner home banner',
       GovernorTripPlannerSection.events =>
-        'Calendar events and notices in the Trip Planner',
+        'Province-wide events and announcements',
       GovernorTripPlannerSection.fares =>
         'Bus and tricycle fares used when a tourist builds an itinerary',
     };
@@ -6427,8 +6593,8 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                       Icons.download_outlined,
                       _isExporting
                           ? 'Exporting... ${(_exportProgress * 100).toInt()}%'
-                          : 'DOT templates on Analytics',
-                      () => setState(() => _selectedIndex = _analyticsIndex),
+                          : 'Download registered tourist data as Excel or PDF',
+                      _exportRegisteredTourists,
                     ),
                     _buildSettingsTileWithSubtitle(
                       'Backup Settings',

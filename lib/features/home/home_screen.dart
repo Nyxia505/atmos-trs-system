@@ -22,6 +22,7 @@ import 'package:atmos_trs_system/screens/municipality_map_and_spots_screen.dart'
 import 'package:atmos_trs_system/features/explore/explore_screen.dart'
     show kMockSpots;
 import 'package:atmos_trs_system/models/tourist_destination_detail.dart';
+import 'package:atmos_trs_system/screens/spot_directions_route_page.dart';
 import 'package:atmos_trs_system/screens/tourist_destination_detail_screen.dart';
 import 'package:atmos_trs_system/screens/event_detail_screen.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
@@ -37,6 +38,7 @@ import 'package:atmos_trs_system/data/misamis_occidental_display_spots.dart';
 import 'package:atmos_trs_system/data/tourist_spot_image_catalog.dart';
 import 'package:atmos_trs_system/widgets/recent_reviews_section.dart';
 import 'package:atmos_trs_system/widgets/save_spot_notice.dart';
+import 'package:atmos_trs_system/widgets/event_description_text.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:atmos_trs_system/utils/visit_record_image_resolver.dart';
 import 'package:atmos_trs_system/services/tourist_activity_firestore_sync.dart';
@@ -1957,9 +1959,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Text(
                           notification.title,
                           style: TextStyle(
-                            fontWeight: notification.isRead
-                                ? FontWeight.w500
-                                : FontWeight.w600,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                            height: 1.25,
                             color: AppTheme.textPrimary,
                           ),
                         ),
@@ -1976,9 +1978,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
                   const SizedBox(height: 4),
-                  Text(
-                    notification.message,
-                    style: TextStyle(fontSize: 13, color: AppTheme.unselectedMuted),
+                  EventDescriptionText(
+                    text: notification.message,
+                    maxLines: 2,
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.3,
+                      fontWeight: FontWeight.w400,
+                      color: AppTheme.unselectedMuted,
+                    ),
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -3865,13 +3873,18 @@ class _FeaturedDestinationFullScreenPageState
     final destination = widget.destination;
     final name = destination['name']?.toString() ?? '';
     final location = destination['location']?.toString() ?? '';
-    await MapsDirectionsLauncher.open(
-      destinationLabel: MapsDirectionsLauncher.placeLabel(
-        name: name,
-        address: location,
+    if (!mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => SpotDirectionsRoutePage(
+          spotId: _spotId,
+          spotName: name,
+          municipality: location,
+          latitude: _lat,
+          longitude: _lng,
+        ),
       ),
-      destinationLatitude: _lat == 0 ? null : _lat,
-      destinationLongitude: _lng == 0 ? null : _lng,
     );
   }
 

@@ -1,13 +1,17 @@
 import 'dart:typed_data';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'catalog_targeting.dart';
 import 'data.dart';
 import 'event_datetime_format.dart';
 import 'firestore_loader.dart';
+import 'services/auth_roles.dart';
+import 'services/governor_event_types_store.dart';
 import 'services/storage_image_upload.dart';
-import 'widgets/municipality_image.dart';
+import 'widgets/catalog_image_preview.dart';
 
 String _folderSlug(String name) {
   return name
@@ -36,7 +40,9 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
   late String _eventType;
   String? _municipality;
   bool _uploadingImage = false;
+  bool _saving = false;
   Uint8List? _previewBytes;
+  late String _docId;
 
   @override
   void initState() {
@@ -53,20 +59,34 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
     _imageController = TextEditingController(
       text: widget.existing?.imagePath ?? '',
     );
+    _imageController.addListener(_refreshImagePreview);
     _dateTime = widget.existing?.dateTime ?? DateTime.now();
-    final existing = widget.existing?.eventType ?? '';
-    _eventType = kEventTypeOptions.contains(existing)
-        ? existing
-        : kEventTypeOptions.first;
-    final mun = widget.existing?.municipality.trim() ?? '';
-    _municipality = mun.isNotEmpty &&
-            municipalities.any((m) => m.name == mun)
-        ? mun
-        : null;
+    final existing = normalizeCatalogEventType(
+      widget.existing?.eventType ?? '',
+    );
+    _eventType = existing.isNotEmpty ? existing : kEventTypeOptions.first;
+    _municipality = catalogSelectionFromRecord(
+      municipality: widget.existing?.municipality ?? '',
+      audienceScope: widget.existing?.audienceScope ?? '',
+      municipalityId: widget.existing?.municipalityId ?? '',
+    );
+    _docId = widget.existing?.id ?? '';
+    _loadCustomEventTypes();
+  }
+
+  Future<void> _loadCustomEventTypes() async {
+    await loadGovernorEventTypesFromFirestore();
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  void _refreshImagePreview() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    _imageController.removeListener(_refreshImagePreview);
     _titleController.dispose();
     _venueController.dispose();
     _descriptionController.dispose();
@@ -143,15 +163,14 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
           _uploadingImage = false;
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Image uploaded to Supabase Storage.'),
-          ),
+          const SnackBar(content: Text('Image uploaded to Supabase Storage.')),
         );
       }
     } catch (e) {
       if (mounted) {
         setState(() => _uploadingImage = false);
-        final network = e.toString().contains('network-request-failed') ||
+        final network =
+            e.toString().contains('network-request-failed') ||
             e.toString().contains('SocketException') ||
             e.toString().contains('ClientException');
         ScaffoldMessenger.of(context).showSnackBar(
@@ -189,7 +208,15 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
   }
 
   Future<void> _save() async {
+    if (_saving || _uploadingImage) return;
     if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
+    if (_docId.isEmpty) {
+      _docId = FirebaseFirestore.instance
+          .collection(kEventsCollection)
+          .doc()
+          .id;
+    }
 
     // Retry pending image upload before writing Firestore (URL may still be empty).
     if (_imageController.text.trim().isEmpty &&
@@ -202,8 +229,10 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
               ? 'event'
               : _titleController.text.trim(),
         );
-        final url =
-            await uploadTourismCatalogImage(_previewBytes!, 'events/$slug');
+        final url = await uploadTourismCatalogImage(
+          _previewBytes!,
+          'events/$slug',
+        );
         if (mounted) _imageController.text = url;
       } catch (e) {
         if (mounted) {
@@ -223,20 +252,18 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
     }
 
     final ev = TourismEvent(
-      id: widget.existing?.id ?? '',
+      id: _docId,
       title: _titleController.text.trim(),
       imagePath: _imageController.text.trim(),
       venue: _venueController.text.trim(),
-      municipality: _municipality ?? '',
+      municipality: catalogMunicipalityForSelection(_municipality),
       dateTime: _dateTime,
       eventType: _eventType,
       description: _descriptionController.text.trim(),
+      audienceScope: catalogAudienceScopeForSelection(_municipality),
     );
     try {
       await upsertTourismEventToFirestore(ev);
-      try {
-        await loadEventsFromFirestore();
-      } catch (_) {}
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -247,12 +274,220 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
         );
       }
       return;
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
-    if (mounted) Navigator.pop(context);
+    if (mounted) Navigator.pop(context, true);
+  }
+
+  bool get _canAddEventTypes => AuthRoles.isGovernorPortalUser();
+
+  List<String> get _eventTypeChoices =>
+      governorEventTypeChoices(selected: _eventType);
+
+  Widget _section(String label) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Text(
+        label,
+        style: const TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w800,
+          color: Color(0xFF1F2937),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _onEventTypeChanged(String? value) async {
+    if (value == kAddEventTypeValue) {
+      final created = await _promptNewEventType();
+      if (!mounted) return;
+      if (created != null) setState(() => _eventType = created);
+      return;
+    }
+    if (value == null || value.isEmpty) return;
+    setState(() => _eventType = value);
+  }
+
+  Future<String?> _promptNewEventType() async {
+    final controller = TextEditingController();
+    final entered = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        String? error;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Add event type'),
+              content: TextField(
+                controller: controller,
+                autofocus: true,
+                textCapitalization: TextCapitalization.words,
+                decoration: InputDecoration(
+                  labelText: 'Event type',
+                  hintText: 'e.g. Cultural Festival, Sports Event',
+                  errorText: error,
+                  border: const OutlineInputBorder(),
+                ),
+                onSubmitted: (value) {
+                  final label = normalizeCatalogEventType(value);
+                  if (label.isEmpty) {
+                    setDialogState(() => error = 'Enter an event type');
+                    return;
+                  }
+                  if (eventTypeAlreadyExists(label, _eventTypeChoices)) {
+                    setDialogState(
+                      () => error = 'That event type already exists',
+                    );
+                    return;
+                  }
+                  Navigator.pop(dialogContext, label);
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    final label = normalizeCatalogEventType(controller.text);
+                    if (label.isEmpty) {
+                      setDialogState(() => error = 'Enter an event type');
+                      return;
+                    }
+                    if (eventTypeAlreadyExists(label, _eventTypeChoices)) {
+                      setDialogState(
+                        () => error = 'That event type already exists',
+                      );
+                      return;
+                    }
+                    Navigator.pop(dialogContext, label);
+                  },
+                  style: FilledButton.styleFrom(
+                    backgroundColor: kCatalogOrange,
+                  ),
+                  child: const Text('Add'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    controller.dispose();
+    final label = normalizeCatalogEventType(entered ?? '');
+    if (label.isEmpty) return null;
+    try {
+      return await addGovernorCustomEventType(label);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              e is ArgumentError
+                  ? e.message.toString()
+                  : 'Could not add type: $e',
+            ),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+      return null;
+    }
+  }
+
+  Widget _scheduleButtons() {
+    final date = OutlinedButton.icon(
+      onPressed: _pickDate,
+      icon: const Icon(Icons.calendar_today, size: 18),
+      label: Text(
+        formatEventDateWords(_dateTime),
+        overflow: TextOverflow.ellipsis,
+      ),
+      style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
+    );
+    final time = OutlinedButton.icon(
+      onPressed: _pickTime,
+      icon: const Icon(Icons.schedule, size: 18),
+      label: Text(
+        formatEventTime12(_dateTime),
+        overflow: TextOverflow.ellipsis,
+      ),
+      style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 480) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [date, const SizedBox(height: 8), time],
+          );
+        }
+        return Row(
+          children: [
+            Expanded(child: date),
+            const SizedBox(width: 12),
+            Expanded(child: time),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _posterPicker() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _section('Event Poster'),
+        GestureDetector(
+          onTap: _uploadingImage ? null : _pickImage,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: AppColors.primary.withValues(alpha: 0.35),
+              ),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(11),
+              child: _uploadingImage
+                  ? const SizedBox(
+                      height: 180,
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  : CatalogImagePreview(
+                      bytes: _previewBytes,
+                      imagePath: _imageController.text,
+                      height: 180,
+                      borderRadius: BorderRadius.zero,
+                      fallback: _buildImagePlaceholder(),
+                    ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Tap the preview to choose an image. The full poster stays visible.',
+          style: TextStyle(fontSize: 12, color: AppColors.textGrey),
+        ),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final typeItems = [
+      for (final type in _eventTypeChoices)
+        DropdownMenuItem<String>(value: type, child: Text(type)),
+      if (_canAddEventTypes)
+        const DropdownMenuItem<String>(
+          value: kAddEventTypeValue,
+          child: Text('+ Add New Event Type'),
+        ),
+    ];
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -260,184 +495,131 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
         foregroundColor: Colors.white,
         title: Text(widget.existing != null ? 'Edit event' : 'Add event'),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              TextFormField(
-                controller: _titleController,
-                decoration: const InputDecoration(labelText: 'Event title'),
-                validator: (v) => v?.trim().isEmpty ?? true ? 'Required' : null,
-              ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<String>(
-                value: _eventType,
-                decoration: const InputDecoration(
-                  labelText: 'Event type',
-                  hintText: 'What kind of event is this?',
-                ),
-                isExpanded: true,
-                items: kEventTypeOptions
-                    .map((t) => DropdownMenuItem(value: t, child: Text(t)))
-                    .toList(),
-                onChanged: (v) =>
-                    setState(() => _eventType = v ?? kEventTypeOptions.first),
-                validator: (v) =>
-                    v == null || v.isEmpty ? 'Please select a type' : null,
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Date & time',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.textDark,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Row(
+      body: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 760),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+            child: Form(
+              key: _formKey,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _pickDate,
-                      icon: const Icon(Icons.calendar_today, size: 18),
-                      label: Text(formatEventDateWords(_dateTime)),
+                  _section('Event Details'),
+                  TextFormField(
+                    controller: _titleController,
+                    decoration: catalogFieldDecoration(label: 'Event title *'),
+                    validator: (v) => v?.trim().isEmpty ?? true
+                        ? 'Enter an event title'
+                        : null,
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    value: _eventTypeChoices.contains(_eventType)
+                        ? _eventType
+                        : _eventTypeChoices.first,
+                    decoration: catalogFieldDecoration(
+                      label: 'Event type *',
+                      hint: 'What kind of event is this?',
+                    ),
+                    isExpanded: true,
+                    items: typeItems,
+                    onChanged: _onEventTypeChanged,
+                    validator: (v) =>
+                        v == null || v.isEmpty || v == kAddEventTypeValue
+                        ? 'Select a category'
+                        : null,
+                  ),
+                  const SizedBox(height: 22),
+                  _section('Schedule'),
+                  _scheduleButtons(),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Selected: ${formatEventDateTimeDisplay(_dateTime)}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: AppColors.textGrey,
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _pickTime,
-                      icon: const Icon(Icons.schedule, size: 18),
-                      label: Text(formatEventTime12(_dateTime)),
+                  const SizedBox(height: 22),
+                  _section('Location'),
+                  DropdownButtonFormField<String?>(
+                    value: _municipality,
+                    decoration: catalogFieldDecoration(
+                      label: 'Municipality *',
+                      hint: 'One LGU or the whole province',
+                    ),
+                    hint: const Text('Select municipality or province-wide'),
+                    isExpanded: true,
+                    items: catalogAudienceItems(extraValue: _municipality),
+                    onChanged: municipalities.isEmpty
+                        ? null
+                        : (v) => setState(() => _municipality = v),
+                    validator: (v) => v == null || v.trim().isEmpty
+                        ? 'Select a municipality'
+                        : null,
+                  ),
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _venueController,
+                    decoration: catalogFieldDecoration(
+                      label: 'Venue *',
+                      hint: 'Specific place (e.g. plaza, gym, church)',
+                    ),
+                    validator: (v) =>
+                        v?.trim().isEmpty ?? true ? 'Enter a venue' : null,
+                  ),
+                  const SizedBox(height: 22),
+                  _section('Description'),
+                  TextFormField(
+                    controller: _descriptionController,
+                    decoration: catalogFieldDecoration(
+                      label: 'Description',
+                      hint: 'What visitors can expect',
+                      optional: true,
+                    ),
+                    minLines: 3,
+                    maxLines: 8,
+                  ),
+                  const SizedBox(height: 22),
+                  _posterPicker(),
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _imageController,
+                    decoration: catalogFieldDecoration(
+                      label: 'Image URL',
+                      hint: 'Or paste a public image URL',
+                      optional: true,
                     ),
                   ),
+                  const SizedBox(height: 8),
                 ],
               ),
-              const SizedBox(height: 8),
-              Text(
-                'Selected: ${formatEventDateTimeDisplay(_dateTime)}',
-                style: const TextStyle(fontSize: 13, color: AppColors.textGrey),
-              ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<String?>(
-                value: _municipality,
-                decoration: const InputDecoration(
-                  labelText: 'Municipality',
-                  hintText: 'Where is this event held?',
-                ),
-                hint: const Text('Select municipality'),
-                isExpanded: true,
-                items: [
-                  const DropdownMenuItem(
-                    value: null,
-                    child: Text('Select municipality'),
-                  ),
-                  ...municipalities.map(
-                    (m) => DropdownMenuItem(value: m.name, child: Text(m.name)),
-                  ),
-                ],
-                onChanged: municipalities.isEmpty
-                    ? null
-                    : (v) => setState(() => _municipality = v),
-                validator: (v) =>
-                    v == null || v.trim().isEmpty ? 'Required' : null,
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _venueController,
-                decoration: const InputDecoration(
-                  labelText: 'Venue',
-                  hintText: 'Specific place (e.g. plaza, gym, church)',
-                ),
-                validator: (v) => v?.trim().isEmpty ?? true ? 'Required' : null,
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _descriptionController,
-                decoration: const InputDecoration(
-                  labelText: 'Description',
-                  hintText: 'What visitors can expect (optional)',
-                  alignLabelWithHint: true,
-                ),
-                minLines: 3,
-                maxLines: 8,
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Event image',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.textDark,
-                ),
-              ),
-              const SizedBox(height: 8),
-              GestureDetector(
-                onTap: _uploadingImage ? null : _pickImage,
-                child: Container(
-                  height: 160,
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: AppColors.primary.withValues(alpha: 0.3),
-                    ),
-                  ),
-                  child: _uploadingImage
-                      ? const Center(child: CircularProgressIndicator())
-                      : _previewBytes != null
-                      ? ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: Image.memory(
-                            _previewBytes!,
-                            fit: BoxFit.cover,
-                            filterQuality: FilterQuality.high,
-                          ),
-                        )
-                      : _imageController.text.isNotEmpty
-                      ? ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: buildMunicipalityImage(
-                            _imageController.text,
-                            fallback: _buildImagePlaceholder(),
-                          ),
-                        )
-                      : _buildImagePlaceholder(),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Tap to pick image from device',
-                style: TextStyle(fontSize: 12, color: AppColors.textGrey),
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _imageController,
-                decoration: const InputDecoration(
-                  labelText: 'Image URL (optional, or use picker above)',
-                  hintText: 'Firebase Storage URL or any image URL',
-                ),
-              ),
-              const SizedBox(height: 24),
-              ElevatedButton(
-                onPressed: _save,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
+        ),
+      ),
+      bottomNavigationBar: Material(
+        elevation: 8,
+        color: Colors.white,
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 12),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 760),
+              child: FilledButton(
+                onPressed: _saving ? null : _save,
+                style: FilledButton.styleFrom(
+                  backgroundColor: kCatalogOrange,
+                  minimumSize: const Size.fromHeight(48),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(12),
                   ),
                 ),
-                child: const Text(
-                  'Save',
-                  style: TextStyle(color: Colors.white),
-                ),
+                child: Text(_saving ? 'Saving…' : 'Save'),
               ),
-            ],
+            ),
           ),
         ),
       ),

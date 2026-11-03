@@ -724,6 +724,21 @@ Future<void> _showForegroundNotification(RemoteMessage message) async {
   );
 }
 
+/// Honors `users/{uid}.notificationPrefs.events` when that switch exists.
+Future<bool> _touristEventPushesEnabled() async {
+  try {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return true;
+    final snap =
+        await FirebaseFirestore.instance.collection('users').doc(uid).get();
+    final prefs = snap.data()?['notificationPrefs'];
+    if (prefs is Map && prefs['events'] == false) return false;
+  } catch (e) {
+    debugPrint('[Push] event preference check skipped: $e');
+  }
+  return true;
+}
+
 /// Registers FCM: permission, local notification plugin, topic subscription, and listeners.
 /// Call when the tourist main shell opens (not on web — use in-app notifications only there).
 Future<void> registerTouristPushNotifications() async {
@@ -736,8 +751,14 @@ Future<void> registerTouristPushNotifications() async {
     _wireFcmTokenRefreshToFirestore();
 
     final messaging = FirebaseMessaging.instance;
-    await messaging.subscribeToTopic(kGovernorAnnouncementsTopic);
-    debugPrint('[Push] subscribed to topic $kGovernorAnnouncementsTopic');
+    final eventsOn = await _touristEventPushesEnabled();
+    if (eventsOn) {
+      await messaging.subscribeToTopic(kGovernorAnnouncementsTopic);
+      debugPrint('[Push] subscribed to topic $kGovernorAnnouncementsTopic');
+    } else {
+      await messaging.unsubscribeFromTopic(kGovernorAnnouncementsTopic);
+      debugPrint('[Push] event notifications are off for this account');
+    }
 
     await _onMessageSubscription?.cancel();
     _onMessageSubscription = FirebaseMessaging.onMessage.listen((RemoteMessage message) {

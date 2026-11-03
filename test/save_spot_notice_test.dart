@@ -3,9 +3,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  setUp(SaveSpotNotice.resetForTest);
+  tearDown(SaveSpotNotice.resetForTest);
+
   testWidgets('a new save replaces the previous notice with that destination', (
     tester,
   ) async {
+    addTearDown(SaveSpotNotice.resetForTest);
     final observer = SaveSpotNoticeNavigatorObserver();
     await tester.pumpWidget(
       MaterialApp(
@@ -26,6 +30,43 @@ void main() {
     await tester.tap(find.text('Open other screen'));
     await tester.pumpAndSettle();
     expect(find.text('Jimenez Church saved!'), findsNothing);
+  });
+
+  testWidgets('the notice dismisses itself after two seconds', (tester) async {
+    addTearDown(SaveSpotNotice.resetForTest);
+    await tester.pumpWidget(
+      const MaterialApp(home: _NoticeHarness()),
+    );
+
+    await tester.tap(find.text('Save Aloran'));
+    await tester.pump();
+    expect(find.text('Aloran Viewpoint saved!'), findsOneWidget);
+    expect(find.byIcon(Icons.close), findsNothing);
+
+    final bar = tester.widget<SnackBar>(find.byType(SnackBar));
+    expect(bar.duration, SaveSpotNotice.displayDuration);
+    expect(bar.behavior, SnackBarBehavior.floating);
+    expect(bar.showCloseIcon, isFalse);
+    expect(bar.margin, isNotNull);
+
+    await tester.pump(SaveSpotNotice.displayDuration);
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Aloran Viewpoint saved!'), findsNothing);
+  });
+
+  testWidgets('rapid identical saves do not stack notices', (tester) async {
+    addTearDown(SaveSpotNotice.resetForTest);
+    await tester.pumpWidget(
+      const MaterialApp(home: _NoticeHarness()),
+    );
+
+    await tester.tap(find.text('Save Aloran'));
+    await tester.pump();
+    await tester.tap(find.text('Save Aloran'));
+    await tester.pump();
+    expect(find.text('Aloran Viewpoint saved!'), findsOneWidget);
+    await tester.pump(SaveSpotNotice.displayDuration);
+    await tester.pump(const Duration(milliseconds: 400));
   });
 }
 

@@ -1,7 +1,9 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/utils/email_utils.dart';
 import 'package:atmos_trs_system/utils/firebase_client_blocked_message.dart';
+import 'package:atmos_trs_system/utils/password_sign_in_guard.dart';
 
 /// Auth helpers: Firebase Auth session + legacy email verification (optional).
 class AuthService {
@@ -11,8 +13,51 @@ class AuthService {
 
   static User? get currentUser => _auth.currentUser;
 
-  /// Signs out (clears Firebase Auth session).
-  static Future<void> signOut() => _auth.signOut();
+  /// Signs out (clears Firebase Auth session and in-memory uid).
+  static Future<void> signOut() async {
+    AuthConfig.currentUserUid = null;
+    await _auth.signOut();
+  }
+
+  /// Explicit email/password login. Succeeds only if Firebase accepts [password]
+  /// for [email]. A restored [currentUser] is never treated as a new sign-in.
+  static Future<UserCredential> signInWithVerifiedPassword({
+    required String email,
+    required String password,
+  }) async {
+    final normalized = normalizeEmail(email);
+    if (normalized.isEmpty || password.isEmpty) {
+      throw FirebaseAuthException(
+        code: password.isEmpty ? 'wrong-password' : 'invalid-email',
+        message: password.isEmpty
+            ? 'Please enter your password.'
+            : 'Please enter a valid email address.',
+      );
+    }
+
+    final cred = await _auth.signInWithEmailAndPassword(
+      email: normalized,
+      password: password,
+    );
+    final user = cred.user;
+    if (!PasswordSignInGuard.credentialMatchesAttempt(
+      submittedEmail: normalized,
+      authenticatedEmail: user?.email,
+      authenticatedUid: user?.uid,
+    )) {
+      throw FirebaseAuthException(
+        code: 'invalid-credential',
+        message: 'Incorrect email or password. Please try again.',
+      );
+    }
+
+    // Prove this password was accepted for this attempt — not a leftover session.
+    await user!.reauthenticateWithCredential(
+      EmailAuthProvider.credential(email: normalized, password: password),
+    );
+    AuthConfig.currentUserUid = user.uid;
+    return cred;
+  }
 
   /// Deployed web app; mobile reset links continue here after Firebase's page.
   static const String _hostedWebOrigin = 'https://atmos-trs-system.web.app';

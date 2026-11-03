@@ -573,7 +573,7 @@ class _LandingPageState extends State<LandingPage> {
   }
 
   void _continueCameraQrCheckInOnWeb() {
-    Navigator.of(context).pushNamed('/qr-welcome');
+    Navigator.of(context).pushNamed('/qr-entry');
   }
 
   void _navigateToLoginForFeature({
@@ -5385,7 +5385,7 @@ class _LandingFaqAccordionState extends State<_LandingFaqAccordion> {
   static const Color _muted = Color(0xFF64748B);
   static const Color _border = Color(0xFFEEF1F5);
 
-  int? _expandedIndex = 0;
+  int? _expandedIndex;
 
   @override
   Widget build(BuildContext context) {

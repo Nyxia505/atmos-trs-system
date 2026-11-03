@@ -35,6 +35,7 @@ class AeDailyRegisterTable extends StatefulWidget {
 
 class _AeDailyRegisterTableState extends State<AeDailyRegisterTable> {
   int? _dayFilter;
+  AeDailyRegisterSort _sort = AeDailyRegisterSort.newestDate;
 
   @override
   Widget build(BuildContext context) {
@@ -44,10 +45,15 @@ class _AeDailyRegisterTableState extends State<AeDailyRegisterTable> {
       if (i.rowId.isEmpty) continue;
       issuesByRow.putIfAbsent(i.rowId, () => []).add(i.message);
     }
-    final days = {for (final r in widget.rows) r.day}.toList()..sort();
-    final visible = _dayFilter == null
+    final days = {for (final r in widget.rows) r.day}.toList()
+      ..sort((a, b) => b.compareTo(a));
+    final filtered = _dayFilter == null
         ? widget.rows
         : widget.rows.where((r) => r.day == _dayFilter).toList();
+    final visible = AeRegisterCalculator.sortDailyRegisterRows(
+      filtered,
+      sort: _sort,
+    );
 
     final cols = <(String, double, TextAlign)>[
       ('#', 44, TextAlign.center),
@@ -90,6 +96,32 @@ class _AeDailyRegisterTableState extends State<AeDailyRegisterTable> {
                 for (final d in days) DropdownMenuItem<int?>(value: d, child: Text('Day $d')),
               ],
               onChanged: (v) => setState(() => _dayFilter = v),
+            ),
+            DropdownButton<AeDailyRegisterSort>(
+              value: _sort,
+              underline: const SizedBox.shrink(),
+              items: const [
+                DropdownMenuItem(
+                  value: AeDailyRegisterSort.newestDate,
+                  child: Text('Newest date first'),
+                ),
+                DropdownMenuItem(
+                  value: AeDailyRegisterSort.oldestDate,
+                  child: Text('Oldest date first'),
+                ),
+                DropdownMenuItem(
+                  value: AeDailyRegisterSort.recentlyAdded,
+                  child: Text('Recently added'),
+                ),
+                DropdownMenuItem(
+                  value: AeDailyRegisterSort.recentlyUpdated,
+                  child: Text('Recently updated'),
+                ),
+              ],
+              onChanged: (v) {
+                if (v == null) return;
+                setState(() => _sort = v);
+              },
             ),
             if (widget.issues.isNotEmpty)
               Chip(

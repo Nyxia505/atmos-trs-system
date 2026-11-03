@@ -30,12 +30,74 @@ abstract final class AeTypeCatalog {
     'Others': 'OTH',
   };
 
+  static const String others = 'Others';
+
+  static bool isOfficial(String? type) {
+    final t = (type ?? '').trim().toLowerCase();
+    if (t.isEmpty) return false;
+    return types.keys.any((k) => k.toLowerCase() == t);
+  }
+
+  static String? officialName(String? type) {
+    final t = (type ?? '').trim().toLowerCase();
+    if (t.isEmpty) return null;
+    for (final k in types.keys) {
+      if (k.toLowerCase() == t) return k;
+    }
+    return null;
+  }
+
   static String codeFor(String? type) {
     final t = (type ?? '').trim().toLowerCase();
     for (final e in types.entries) {
       if (e.key.toLowerCase() == t) return e.value;
     }
     return t.isEmpty ? '' : 'OTH';
+  }
+
+  /// Official DOT types (except Others) + extra hotel-defined types + Others.
+  static List<String> dropdownOptions({
+    String current = '',
+    List<String> extras = const [],
+  }) {
+    final seen = <String>{};
+    final out = <String>[];
+    void add(String raw) {
+      final t = raw.trim();
+      if (t.isEmpty) return;
+      final key = t.toLowerCase();
+      if (seen.contains(key)) return;
+      seen.add(key);
+      out.add(officialName(t) ?? t);
+    }
+
+    for (final k in types.keys) {
+      if (k == others) continue;
+      add(k);
+    }
+    add(current);
+    for (final e in extras) {
+      if (officialName(e) != null) continue;
+      add(e);
+    }
+    add(others);
+    return out;
+  }
+
+  static List<String> parseExtras(dynamic raw) {
+    if (raw is! List) return const [];
+    final seen = <String>{};
+    final out = <String>[];
+    for (final e in raw) {
+      final t = e.toString().trim();
+      if (t.isEmpty) continue;
+      if (isOfficial(t)) continue;
+      final key = t.toLowerCase();
+      if (seen.contains(key)) continue;
+      seen.add(key);
+      out.add(t);
+    }
+    return out;
   }
 
   /// Best-effort DOT type from the signup category.

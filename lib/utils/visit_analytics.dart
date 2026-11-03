@@ -1,5 +1,5 @@
-import 'package:atmos_trs_system/services/governor_firestore_service.dart';
 import 'package:atmos_trs_system/services/spot_category_service.dart';
+import 'package:atmos_trs_system/utils/checkin_time.dart';
 import 'package:atmos_trs_system/utils/checkin_visitor_count.dart';
 import 'package:atmos_trs_system/utils/checkin_visitor_expansion.dart';
 
@@ -19,7 +19,15 @@ class VisitAnalyticsSnapshot {
     required this.municipalities,
     required this.spots,
     required this.arrivals,
+    this.arrivalLabels = const [],
+    this.arrivalTooltips = const [],
+    this.unparsedCheckIns = 0,
+    this.arrivalPeriodLabel = '',
   });
+
+  /// Party-headcount visitors in [arrivals] (same metric as Governor arrivals).
+  int get periodVisitorCount =>
+      arrivals.fold<int>(0, (sum, value) => sum + value.round());
 
   final int dailyAverage;
   final String peakHour;
@@ -34,6 +42,10 @@ class VisitAnalyticsSnapshot {
   final List<({String name, int count})> municipalities;
   final List<({String name, int count})> spots;
   final List<double> arrivals;
+  final List<String> arrivalLabels;
+  final List<String> arrivalTooltips;
+  final int unparsedCheckIns;
+  final String arrivalPeriodLabel;
 
   static const ageLabels = [
     '0-17',
@@ -53,9 +65,10 @@ class VisitAnalyticsSnapshot {
     Map<String, String> categoryBySpotId = const {},
     Map<String, String> categoryBySpotName = const {},
     Map<String, String> categoryNamesByKey = const {},
+    Map<String, String> spotNameById = const {},
   }) {
     final clock = now ?? DateTime.now();
-    final readTime = parseTime ?? GovernorFirestoreService.parseCheckInTime;
+    final readTime = parseTime ?? parseCheckInTimestamp;
     final profiles = _profilesByUid(tourists);
 
     var male = 0;
@@ -78,33 +91,33 @@ class VisitAnalyticsSnapshot {
       final checkIn = _withProfile(raw, profiles);
       final units = expandCheckInVisitors(checkIn);
       final weight = units.isEmpty ? checkInVisitorCount(checkIn) : units.length;
-      visitors += weight;
-
       final when = readTime(checkIn);
+      if (!_inSelectedRange(when, range, clock)) continue;
+
+      visitors += weight;
       if (when != null) {
-        days.add(DateTime(when.year, when.month, when.day));
-        hours[when.hour] = (hours[when.hour] ?? 0) + weight;
+        final wall = manilaWallClock(when);
+        days.add(DateTime(wall.year, wall.month, wall.day));
+        hours[wall.hour] = (hours[wall.hour] ?? 0) + weight;
       }
 
-      if (_inSelectedRange(when, range, clock)) {
-        final category = _categoryOf(
-          checkIn,
-          categoryBySpotId: categoryBySpotId,
-          categoryBySpotName: categoryBySpotName,
-          categoryNamesByKey: categoryNamesByKey,
-          knownNames: categories.keys,
-        );
-        final visits = checkInVisitorCount(checkIn);
-        if (visits > 0) {
-          categories[category] = (categories[category] ?? 0) + visits;
-        }
+      final category = _categoryOf(
+        checkIn,
+        categoryBySpotId: categoryBySpotId,
+        categoryBySpotName: categoryBySpotName,
+        categoryNamesByKey: categoryNamesByKey,
+        knownNames: categories.keys,
+      );
+      final visits = checkInVisitorCount(checkIn);
+      if (visits > 0) {
+        categories[category] = (categories[category] ?? 0) + visits;
       }
       final municipality = _municipalityOf(checkIn);
       if (municipality.isNotEmpty) {
         municipalities[municipality] =
             (municipalities[municipality] ?? 0) + weight;
       }
-      final spot = _spotOf(checkIn);
+      final spot = _spotOf(checkIn, spotNameById: spotNameById);
       if (spot.isNotEmpty) {
         spots[spot] = (spots[spot] ?? 0) + weight;
       }
@@ -159,6 +172,7 @@ class VisitAnalyticsSnapshot {
     }
 
     final span = _daySpan(days);
+    final trend = buildArrivalTrend(checkIns, readTime, range, clock);
     return VisitAnalyticsSnapshot(
       dailyAverage: span == 0 ? 0 : (visitors / span).round(),
       peakHour: _peakHour(hours),
@@ -180,7 +194,11 @@ class VisitAnalyticsSnapshot {
       categories: _ranked(categories),
       municipalities: _ranked(municipalities, 8),
       spots: _ranked(spots, 8),
-      arrivals: _arrivals(checkIns, readTime, range, clock),
+      arrivals: trend.values,
+      arrivalLabels: trend.labels,
+      arrivalTooltips: trend.tooltips,
+      unparsedCheckIns: trend.unparsed,
+      arrivalPeriodLabel: trend.periodLabel,
     );
   }
 }
@@ -280,17 +298,7 @@ const _unclassifiedCategory = {
 
 bool _inSelectedRange(DateTime? when, String range, DateTime now) {
   if (when == null) return false;
-  if (range == 'This Year') {
-    final diff = (now.year - when.year) * 12 + (now.month - when.month);
-    return diff >= 0 && diff < 12;
-  }
-  if (range == 'This Month') {
-    return when.year == now.year && when.month == now.month;
-  }
-  final days = range == 'This Week' ? 7 : 14;
-  final day = DateTime(when.year, when.month, when.day);
-  final diff = DateTime(now.year, now.month, now.day).difference(day).inDays;
-  return diff >= 0 && diff < days;
+  return manilaRangeForFilter(range, now).containsInstant(when);
 }
 
 String? _usableCategory(String? raw, Map<String, String> categoryNamesByKey) {
@@ -363,10 +371,26 @@ String _municipalityOf(Map<String, dynamic> checkIn) {
   return checkIn['municipalityId']?.toString().trim() ?? '';
 }
 
-String _spotOf(Map<String, dynamic> checkIn) {
-  for (final key in ['spot_name', 'spotName', 'location', 'name']) {
+String _spotOf(
+  Map<String, dynamic> checkIn, {
+  Map<String, String> spotNameById = const {},
+}) {
+  for (final key in [
+    'spot_name',
+    'spotName',
+    'location',
+    'name',
+    'touristSpotName',
+  ]) {
     final value = checkIn[key]?.toString().trim() ?? '';
     if (value.isNotEmpty) return value;
+  }
+  for (final key in ['spotId', 'spot_id', 'touristSpotId', 'location_id']) {
+    final id = checkIn[key]?.toString().trim() ?? '';
+    if (id.isEmpty) continue;
+    final named = spotNameById[id]?.trim() ?? '';
+    if (named.isNotEmpty) return named;
+    return id;
   }
   return '';
 }
@@ -406,48 +430,139 @@ List<({String name, int count})> _ranked(Map<String, int> counts, [int? limit]) 
   ];
 }
 
-List<double> _arrivals(
+class ArrivalTrend {
+  const ArrivalTrend({
+    required this.values,
+    required this.labels,
+    required this.tooltips,
+    this.unparsed = 0,
+    this.periodLabel = '',
+  });
+
+  final List<double> values;
+  final List<String> labels;
+  final List<String> tooltips;
+  final int unparsed;
+  final String periodLabel;
+}
+
+const _monthShort = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+ArrivalTrend buildArrivalTrend(
   List<Map<String, dynamic>> checkIns,
   DateTime? Function(Map<String, dynamic>) readTime,
   String range,
   DateTime now,
 ) {
+  var unparsed = 0;
+  final period = manilaRangeForFilter(range, now);
+
   if (range == 'This Year') {
     final counts = List<double>.filled(12, 0);
+    final labels = List<String>.filled(12, '');
+    final tooltips = List<String>.filled(12, '');
+    for (var i = 0; i < 12; i++) {
+      final month =
+          DateTime(period.startDate.year, period.startDate.month + i, 1);
+      labels[i] = _monthShort[month.month - 1];
+      tooltips[i] = '${_monthShort[month.month - 1]} ${month.year}';
+    }
     for (final checkIn in checkIns) {
       final when = readTime(checkIn);
-      if (when == null) continue;
-      final diff = (now.year - when.year) * 12 + (now.month - when.month);
+      if (when == null) {
+        unparsed++;
+        continue;
+      }
+      if (!period.containsInstant(when)) continue;
+      final visit = manilaCalendarDate(when);
+      final diff = (period.endDateInclusive.year - visit.year) * 12 +
+          (period.endDateInclusive.month - visit.month);
       if (diff >= 0 && diff < 12) {
         counts[11 - diff] += checkInVisitorCount(checkIn);
       }
     }
-    return counts;
+    return ArrivalTrend(
+      values: counts,
+      labels: labels,
+      tooltips: tooltips,
+      unparsed: unparsed,
+      periodLabel: period.label,
+    );
   }
 
   if (range == 'This Month') {
-    final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
+    final daysInMonth = period.endDateInclusive.day;
     final counts = List<double>.filled(daysInMonth, 0);
+    final labels = <String>[
+      for (var d = 1; d <= daysInMonth; d++) '$d',
+    ];
+    final tooltips = <String>[
+      for (var d = 1; d <= daysInMonth; d++)
+        '$d ${_monthShort[period.startDate.month - 1]} ${period.startDate.year}',
+    ];
     for (final checkIn in checkIns) {
       final when = readTime(checkIn);
-      if (when == null) continue;
-      if (when.year == now.year && when.month == now.month) {
-        counts[when.day - 1] += checkInVisitorCount(checkIn);
+      if (when == null) {
+        unparsed++;
+        continue;
+      }
+      if (!period.containsInstant(when)) continue;
+      final visit = manilaCalendarDate(when);
+      final index = visit.day - 1;
+      if (index >= 0 && index < counts.length) {
+        counts[index] += checkInVisitorCount(checkIn);
       }
     }
-    return counts;
+    return ArrivalTrend(
+      values: counts,
+      labels: labels,
+      tooltips: tooltips,
+      unparsed: unparsed,
+      periodLabel: period.label,
+    );
   }
 
-  final days = range == 'This Week' ? 7 : 14;
-  final counts = List<double>.filled(days, 0);
+  final dayCount =
+      period.endDateInclusive.difference(period.startDate).inDays + 1;
+  final counts = List<double>.filled(dayCount, 0);
+  final labels = List<String>.filled(dayCount, '');
+  final tooltips = List<String>.filled(dayCount, '');
+  for (var i = 0; i < dayCount; i++) {
+    final day = period.startDate.add(Duration(days: i));
+    labels[i] = '${day.day} ${_monthShort[day.month - 1]}';
+    tooltips[i] = manilaDayLabel(day);
+  }
   for (final checkIn in checkIns) {
     final when = readTime(checkIn);
-    if (when == null) continue;
-    final day = DateTime(when.year, when.month, when.day);
-    final diff = DateTime(now.year, now.month, now.day).difference(day).inDays;
-    if (diff >= 0 && diff < days) {
-      counts[days - 1 - diff] += checkInVisitorCount(checkIn);
+    if (when == null) {
+      unparsed++;
+      continue;
+    }
+    if (!period.containsInstant(when)) continue;
+    final visit = manilaCalendarDate(when);
+    final index = visit.difference(period.startDate).inDays;
+    if (index >= 0 && index < counts.length) {
+      counts[index] += checkInVisitorCount(checkIn);
     }
   }
-  return counts;
+  return ArrivalTrend(
+    values: counts,
+    labels: labels,
+    tooltips: tooltips,
+    unparsed: unparsed,
+    periodLabel: period.label,
+  );
 }

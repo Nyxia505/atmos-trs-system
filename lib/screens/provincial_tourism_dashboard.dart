@@ -16,9 +16,11 @@ import 'package:atmos_trs_system/services/auth_service.dart';
 import 'package:atmos_trs_system/services/governor_firestore_service.dart';
 import 'package:atmos_trs_system/services/provincial_tourism_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
+import 'package:atmos_trs_system/services/lgu_report_submission_service.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/provincial_report_builder.dart';
+import 'package:atmos_trs_system/utils/visit_analytics.dart';
 import 'package:atmos_trs_system/utils/visit_stats.dart';
 import 'package:atmos_trs_system/widgets/dot_report_export_panel.dart';
 import 'package:atmos_trs_system/widgets/optaca_accounts_panel.dart';
@@ -64,6 +66,7 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
   List<Map<String, dynamic>> _spots = [];
   List<Map<String, dynamic>> _announcements = [];
   List<Map<String, dynamic>> _campaigns = [];
+  List<LguReportSubmission> _reportSubmissions = [];
   Set<String> _ackAlertIds = {};
 
   // Insights
@@ -156,20 +159,15 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
       _profileName = profile.fullName!.trim();
     }
     _ackAlertIds = await ProvincialTourismService.loadAcknowledgedAlertIds();
-    // Show shell immediately so the page is never stuck on a blank/skeleton frame.
-    if (mounted) {
-      setState(() {
-        _isBootstrapping = false;
-        _isLoading = false;
-      });
-    }
     await _loadData();
   }
 
   Future<void> _loadData() async {
+    final hadContent =
+        _spots.isNotEmpty || _checkIns.isNotEmpty || _tourists.isNotEmpty;
     if (mounted) {
       setState(() {
-        _isLoading = true;
+        if (!hadContent) _isLoading = true;
         _errorMessage = null;
       });
     }
@@ -182,8 +180,12 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
         _spots = snap.spots;
         _announcements = snap.announcements;
         _campaigns = snap.campaigns;
+        _reportSubmissions = snap.reportSubmissions;
         _isBootstrapping = false;
         _isLoading = false;
+        _errorMessage = snap.loadWarnings.isEmpty
+            ? null
+            : snap.loadWarnings.join(' ');
       });
     } catch (e, st) {
       debugPrint('ProvincialTourism _loadData: $e\n$st');
@@ -191,20 +193,31 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
       setState(() {
         _isBootstrapping = false;
         _isLoading = false;
-        _errorMessage = 'Could not load provincial tourism data.';
+        _errorMessage = hadContent
+            ? 'Could not refresh analytics: $e'
+            : 'Could not load provincial tourism data.';
       });
     }
   }
 
-  List<Map<String, dynamic>> get _periodCheckIns {
-    final range =
-        ProvincialTourismService.rangeForFilter(_selectedTimeFilter);
-    return ProvincialTourismService.checkInsInRange(
-      _checkIns,
-      range.start,
-      range.end,
-    );
-  }
+  List<Map<String, dynamic>> get _periodCheckIns =>
+      ProvincialTourismService.checkInsForFilter(
+        _checkIns,
+        _selectedTimeFilter,
+      );
+
+  VisitAnalyticsSnapshot get _visitAnalytics => VisitAnalyticsSnapshot.build(
+        checkIns: _checkIns,
+        tourists: _tourists,
+        range: _selectedTimeFilter,
+        parseTime: GovernorFirestoreService.parseCheckInTime,
+        spotNameById: {
+          for (final spot in _spots)
+            if ((spot['id'] ?? '').toString().trim().isNotEmpty)
+              (spot['id']?.toString() ?? ''):
+                  (spot['name'] ?? spot['spot_name'] ?? '').toString(),
+        },
+      );
 
   int get _pendingEvents =>
       ProvincialTourismService.pendingEventsCount(_announcements);
@@ -214,14 +227,10 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
         return status != 'inactive' && status != 'closed';
       }).length;
 
-  int get _lgusReporting {
-    final ids = <String>{};
-    for (final c in _periodCheckIns) {
-      final id = ProvincialTourismService.municipalityIdOf(c);
-      if (id.isNotEmpty) ids.add(id);
-    }
-    return ids.length;
-  }
+  int get _lgusReporting => ProvincialTourismService.lgusReportingCount(
+        _reportSubmissions,
+        _selectedTimeFilter,
+      );
 
   List<ProvincialMunicipalityStats> get _muniStats =>
       ProvincialTourismService.municipalityPerformance(
@@ -450,6 +459,33 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
             notificationCount: (_alerts.length + _pendingEvents).clamp(0, 99),
             onNotifications: () => _go(_alertsIndex),
           ),
+          if (_errorMessage != null &&
+              (_tourists.isNotEmpty ||
+                  _spots.isNotEmpty ||
+                  _checkIns.isNotEmpty))
+            Material(
+              color: const Color(0xFFFEF3C7),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.warning_amber_rounded,
+                        color: Color(0xFFB45309)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _errorMessage!,
+                        style: GovernorDashboardTokens.body(size: 12.5),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _loadData,
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           Expanded(
             child: showSkeleton
                 ? const DashboardContentSkeleton()
@@ -725,23 +761,23 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
 
   // ─── Dashboard ───────────────────────────────────────────────
   Widget _buildDashboardTab() {
-    final period = _periodCheckIns;
-    final byDay = ProvincialTourismService.arrivalsByDay(period, days: 14);
-    final lf = ProvincialTourismService.localForeignCounts(_tourists);
-    final gender = ProvincialTourismService.genderCounts(_tourists);
-    final ages = ProvincialTourismService.ageBands(_tourists);
-    final tops = ProvincialTourismService.topDestinations(
-      checkIns: period,
-      spots: _spots,
-      limit: 5,
-    );
+    final stats = _visitAnalytics;
+    final periodVisitors = stats.periodVisitorCount;
+    final periodCheckIns = VisitStats.fromCheckIns(_periodCheckIns);
+    final residencyTotal = stats.local + stats.foreign;
+    final tops = stats.spots.take(5).toList();
     final under = _muniStats.where((m) => m.isUnderperforming).take(5).toList();
     final activity = _recentActivity();
     final muniTotal = getMisamisOccidentalMunicipalities().length;
     final ranking = _muniStats
-        .take(8)
         .map((m) => (name: m.name, count: m.arrivals))
         .toList();
+    final gender = (
+      male: stats.male,
+      female: stats.female,
+      others: stats.otherGender,
+    );
+    final ages = stats.ageSeries;
 
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
@@ -772,23 +808,25 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
           children: [
             _simpleKpi(
               title: 'Total visitors',
-              value: '${VisitStats.fromCheckIns(period).visitors}',
+              value: '$periodVisitors',
               icon: Icons.groups_rounded,
               accent: GovernorDashboardTokens.primary,
               subtitle:
-                  '${VisitStats.fromCheckIns(period).checkIns} check-ins · $_selectedTimeFilter',
+                  '${periodCheckIns.checkIns} check-ins · $_selectedTimeFilter',
             ),
             _simpleKpi(
               title: 'Active destinations',
               value: '$_activeDestinations',
               icon: Icons.place_rounded,
               accent: const Color(0xFF3B82F6),
+              subtitle: 'Approved tourist spots',
             ),
             _simpleKpi(
               title: 'LGUs reporting',
               value: '$_lgusReporting / $muniTotal',
               icon: Icons.location_city_rounded,
               accent: const Color(0xFF22C55E),
+              subtitle: 'DOT submissions · $_selectedTimeFilter',
             ),
             _simpleKpi(
               title: 'Pending events',
@@ -826,10 +864,14 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
                 SizedBox(
                   height: 200,
                   child: GovernorArrivalsAreaChart(
-                    values: byDay.map((e) => e.count.toDouble()).toList(),
-                    labels: byDay
-                        .map((e) => '${e.day.month}/${e.day.day}')
-                        .toList(),
+                    values: stats.arrivals,
+                    labels: stats.arrivalLabels,
+                    tooltipLabels: stats.arrivalTooltips,
+                    valueNoun: 'visitors',
+                    emptyMessage: stats.arrivalPeriodLabel.isEmpty
+                        ? 'No arrivals recorded for this period'
+                        : 'No arrivals recorded for this period (${stats.arrivalPeriodLabel})',
+                    showAllBottomLabels: _selectedTimeFilter == 'This Month',
                   ),
                 ),
               ],
@@ -841,23 +883,31 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
               children: [
                 Text('Local vs foreign',
                     style: GovernorDashboardTokens.sectionTitle()),
+                const SizedBox(height: 4),
+                Text(
+                  'Check-in visitors with residence data · $_selectedTimeFilter',
+                  style: GovernorDashboardTokens.body(size: 11.5),
+                ),
                 const SizedBox(height: 8),
                 SizedBox(
                   height: 200,
                   child: GovernorDonutChart(
+                    emptyMessage:
+                        'No residence counts on check-ins yet for this period',
                     segments: [
                       GovernorDonutSegment(
                         label: 'Local',
-                        value: (lf['local'] ?? 0).toDouble(),
+                        value: stats.local.toDouble(),
                         color: GovernorDashboardTokens.primary,
                       ),
                       GovernorDonutSegment(
                         label: 'Foreign',
-                        value: (lf['foreign'] ?? 0).toDouble(),
+                        value: stats.foreign.toDouble(),
                         color: const Color(0xFF3B82F6),
                       ),
                     ],
-                    centerLabel: '${_tourists.length}',
+                    centerLabel:
+                        residencyTotal > 0 ? '$residencyTotal' : null,
                   ),
                 ),
               ],
@@ -901,22 +951,14 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
                     style: GovernorDashboardTokens.sectionTitle()),
                 const SizedBox(height: 8),
                 Text(
-                  'M ${gender['male'] ?? 0} · F ${gender['female'] ?? 0} · Other ${gender['others'] ?? 0}',
+                  'M ${gender.male} · F ${gender.female} · Other ${gender.others}',
                   style: GovernorDashboardTokens.body(),
                 ),
                 const SizedBox(height: 8),
                 SizedBox(
                   height: 180,
                   child: GovernorAgeBarChart(
-                    series: [
-                      for (final a in ages)
-                        (
-                          label: a.label,
-                          male: 0,
-                          female: 0,
-                          others: a.count,
-                        ),
-                    ],
+                    series: ages,
                   ),
                 ),
               ],
@@ -1748,9 +1790,7 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
       final email = (t['email'] ?? '').toString().toLowerCase();
       return name.contains(q) || email.contains(q);
     }).toList();
-    final lf = ProvincialTourismService.localForeignCounts(_tourists);
-    final gender = ProvincialTourismService.genderCounts(_tourists);
-    final ages = ProvincialTourismService.ageBands(_tourists);
+    final visit = _visitAnalytics;
     final peak = ProvincialTourismService.peakHour(_periodCheckIns);
     final ret = ProvincialTourismService.returningVsNew(_periodCheckIns);
 
@@ -1764,10 +1804,10 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
           spacing: 12,
           runSpacing: 12,
           children: [
-            _statChip('Local', '${lf['local'] ?? 0}'),
-            _statChip('Foreign', '${lf['foreign'] ?? 0}'),
-            _statChip('Male', '${gender['male'] ?? 0}'),
-            _statChip('Female', '${gender['female'] ?? 0}'),
+            _statChip('Local', '${visit.local}'),
+            _statChip('Foreign', '${visit.foreign}'),
+            _statChip('Male', '${visit.male}'),
+            _statChip('Female', '${visit.female}'),
             _statChip('Peak hour', '${peak.toString().padLeft(2, '0')}:00'),
             _statChip('Returning', '${ret.returning}'),
             _statChip('First-time', '${ret.firstTimers}'),
@@ -1783,15 +1823,7 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
               SizedBox(
                 height: 200,
                 child: GovernorAgeBarChart(
-                  series: [
-                    for (final a in ages)
-                      (
-                        label: a.label,
-                        male: 0,
-                        female: 0,
-                        others: a.count,
-                      ),
-                  ],
+                  series: visit.ageSeries,
                 ),
               ),
             ],

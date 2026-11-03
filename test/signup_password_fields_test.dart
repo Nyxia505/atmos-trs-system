@@ -30,6 +30,7 @@ Future<void> _openLegalAndAgree(
       }
     }
   }
+  await tester.ensureVisible(find.textContaining('I have read and agree'));
   await tester.tap(find.textContaining('I have read and agree'));
   await tester.pumpAndSettle();
 }
@@ -48,7 +49,13 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     await tester.pumpWidget(
-      const MaterialApp(home: EstablishmentSignupScreen()),
+      MaterialApp(
+        theme: ThemeData(
+          useMaterial3: true,
+          splashFactory: InkRipple.splashFactory,
+        ),
+        home: const EstablishmentSignupScreen(),
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -90,7 +97,15 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(800, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
-    await tester.pumpWidget(const MaterialApp(home: SignupScreen()));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(
+          useMaterial3: true,
+          splashFactory: InkRipple.splashFactory,
+        ),
+        home: const SignupScreen(),
+      ),
+    );
     await tester.pumpAndSettle();
 
     await _openLegalAndAgree(tester, scrollToEnd: true);

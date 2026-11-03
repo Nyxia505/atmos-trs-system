@@ -12,6 +12,8 @@ TileLayer osmBasemapTileLayer() {
     urlTemplate: kOsmBasemapTileUrl,
     userAgentPackageName: kOsmUserAgentPackageName,
     maxNativeZoom: 19,
+    keepBuffer: 4,
+    panBuffer: 2,
   );
 }
 

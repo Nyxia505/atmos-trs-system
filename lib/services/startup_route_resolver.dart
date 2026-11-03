@@ -8,9 +8,9 @@ import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/module_shell_prefs.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/config/user_profile_storage.dart';
+import 'package:atmos_trs_system/navigation/guest_startup_routes.dart';
 import 'package:atmos_trs_system/navigation/role_router.dart';
 import 'package:atmos_trs_system/services/dashboard_user_service.dart';
-import 'package:atmos_trs_system/services/mobile_onboarding_storage.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/tourist_profile_hydration.dart';
@@ -24,7 +24,10 @@ class StartupRouteResolver {
 
   /// Minimal work before [runApp]: Firebase user + stored session + QR peek.
   static Future<String> resolveQuickInitialRoute() async {
-    var route = kIsWeb ? '/landing' : '/login';
+    var route = GuestStartupRoutes.unauthenticatedRoute(
+      isWeb: kIsWeb,
+      hasPendingQr: false,
+    );
 
     if (Firebase.apps.isEmpty) {
       return _applyQrWelcomeIfNeeded(route, firebaseUser: null);
@@ -60,7 +63,10 @@ class StartupRouteResolver {
 
   static Future<String> _routeForRestoredUser(User firebaseUser) async {
     AuthConfig.currentUserUid = firebaseUser.uid;
-    var route = kIsWeb ? '/landing' : '/login';
+    var route = GuestStartupRoutes.unauthenticatedRoute(
+      isWeb: kIsWeb,
+      hasPendingQr: false,
+    );
     final storedUid = await SessionStorage.getStoredUser();
     if (storedUid == firebaseUser.uid) {
       final role = await SessionStorage.getStoredRole();
@@ -128,21 +134,18 @@ class StartupRouteResolver {
     final pendingSpot = await PendingSpotCheckInStorage.peek();
     final pendingLgu = await PendingLguCheckInStorage.peek();
     if (firebaseUser == null) {
-      if (pendingSpot != null || pendingLgu != null) {
-        // Scanned spot is already stored. Go straight to tourist login.
-        return '/login';
-      }
-      if (!kIsWeb && !await MobileOnboardingStorage.isComplete()) {
-        return '/mobile-onboarding';
-      }
-      return route;
+      return GuestStartupRoutes.unauthenticatedRoute(
+        isWeb: kIsWeb,
+        hasPendingQr: pendingSpot != null || pendingLgu != null,
+      );
     }
     if (pendingSpot != null || pendingLgu != null) {
       // Logged-in tourist with a camera/App-Link pending QR → resume fill-up.
       if (route == '/dashboard' ||
           route == '/verify-otp' ||
           route == '/landing' ||
-          route == '/login') {
+          route == '/login' ||
+          route == '/qr-entry') {
         return '/qr-resume';
       }
     }
@@ -151,7 +154,10 @@ class StartupRouteResolver {
 
   /// Full Firestore-backed route; run after first frame.
   static Future<String> resolveAuthoritativeRoute() async {
-    var route = kIsWeb ? '/landing' : '/login';
+    var route = GuestStartupRoutes.unauthenticatedRoute(
+      isWeb: kIsWeb,
+      hasPendingQr: false,
+    );
 
     if (Firebase.apps.isEmpty) return route;
 
@@ -293,14 +299,35 @@ class StartupRouteResolver {
     return _applyQrWelcomeIfNeeded(route, firebaseUser: firebaseUser);
   }
 
+  /// Top-most route name on [navigatorKey], if any.
+  ///
+  /// Startup refine must use this — not the cold-start [initialRoute] — because
+  /// the tourist may already have pushed `/login` / signup on top of Landing.
+  /// [Navigator.pushReplacementNamed] replaces the **top** route, so a stale
+  /// "still on /landing" assumption will wipe Login and look like a flash.
+  static String? topRouteName(GlobalKey<NavigatorState> navigatorKey) {
+    final nav = navigatorKey.currentState;
+    if (nav == null) return null;
+    String? name;
+    // popUntil with true stops immediately without popping — inspect only.
+    nav.popUntil((route) {
+      name = route.settings.name;
+      return true;
+    });
+    return name;
+  }
+
   /// If authoritative route differs from what UI showed, replace root route.
   static Future<void> refineAndNavigateIfNeeded(
     String currentRoute, {
     required GlobalKey<NavigatorState> navigatorKey,
   }) async {
     try {
+      final visibleRoute =
+          topRouteName(navigatorKey) ?? currentRoute;
+
       // Do not kick OPTACA off Trip Planner admin while Auth/profile is refining.
-      if (currentRoute == '/trip-planner-admin' &&
+      if (visibleRoute == '/trip-planner-admin' &&
           FirebaseAuth.instance.currentUser != null &&
           await ModuleShellPrefs.getActiveShell() ==
               ModuleShellPrefs.tripPlannerAdmin) {
@@ -310,17 +337,29 @@ class StartupRouteResolver {
       final firebaseUser = FirebaseAuth.instance.currentUser;
       if (firebaseUser != null) {
         final staffFastRoute = await _resolveTrustedStaffRoute(firebaseUser);
-        if (staffFastRoute != null && staffFastRoute == currentRoute) {
+        if (staffFastRoute != null && staffFastRoute == visibleRoute) {
           return;
         }
       }
 
       var authoritative = await resolveAuthoritativeRoute();
       authoritative = await _maybeTripPlannerAdminShell(authoritative);
-      if (authoritative == currentRoute) return;
+
+      // Re-read after await — tourist may have opened Login during refine.
+      final topAfter = topRouteName(navigatorKey) ?? visibleRoute;
+      if (authoritative == topAfter) return;
+      if (GuestStartupRoutes.shouldSkipAuthoritativeReplace(
+        currentRoute: topAfter,
+        authoritative: authoritative,
+      )) {
+        debugPrint(
+          'Startup refine skipped (preserve $topAfter; authoritative=$authoritative)',
+        );
+        return;
+      }
 
       // Keep verified tourists on the dashboard if Firestore is briefly stale.
-      if (authoritative == '/verify-otp' && currentRoute == '/dashboard') {
+      if (authoritative == '/verify-otp' && topAfter == '/dashboard') {
         final uid = FirebaseAuth.instance.currentUser?.uid;
         if (uid != null &&
             await SessionStorage.isTouristEmailVerifiedCached(uid)) {
@@ -328,10 +367,19 @@ class StartupRouteResolver {
         }
       }
 
+      // Never bounce an explicit auth form to Landing/Welcome via replacement.
+      if (GuestStartupRoutes.isExplicitAuthForm(topAfter) &&
+          !GuestStartupRoutes.signedInDestinations.contains(authoritative)) {
+        debugPrint(
+          'Startup refine blocked auth-form clobber: $topAfter → $authoritative',
+        );
+        return;
+      }
+
       final nav = navigatorKey.currentState;
       if (nav == null) return;
       nav.pushReplacementNamed(authoritative);
-      debugPrint('Startup refined route: $currentRoute → $authoritative');
+      debugPrint('Startup refined route: $topAfter → $authoritative');
     } catch (e) {
       debugPrint('Startup route refine skipped: $e');
     }

@@ -52,6 +52,7 @@ class ChatbotDestinationKnowledge {
     ],
     'oroquieta_city_boulevard_and_peoples_park': [
       'oroquieta plaza',
+      'oroquieta city plaza',
       'city plaza',
       'oroquieta city',
       'peoples park',
@@ -73,11 +74,21 @@ class ChatbotDestinationKnowledge {
     String? followUpSpotId,
     void Function(String spotId)? rememberSpot,
   }) {
-    if (_isListAllQuery(normalizedInput)) {
+    final intent = _detectIntent(normalizedInput);
+    if (_isNearbyIntent(intent)) {
+      final cityReply = _cityNearbyReply(
+        normalizedInput,
+        lang,
+        intent,
+        rememberSpot,
+      );
+      if (cityReply != null) return cityReply;
+    }
+
+    if (_isListAllQuery(normalizedInput) && !_isNearbyIntent(intent)) {
       return _listAllSpots(lang);
     }
 
-    final intent = _detectIntent(normalizedInput);
     var spot = _findBestSpot(normalizedInput);
     if (spot == null &&
         followUpSpotId != null &&
@@ -86,6 +97,9 @@ class ChatbotDestinationKnowledge {
       spot = _spotById(followUpSpotId);
     }
     if (spot == null) {
+      if (_isNearbyIntent(intent)) {
+        return _whichCityPrompt(lang, intent);
+      }
       if (intent != _SpotIntent.unknown) {
         return _whichSpotPrompt(lang, intent);
       }
@@ -116,7 +130,21 @@ class ChatbotDestinationKnowledge {
       'unsa nga destination',
       'ano ang mga destination',
       'featured destination',
+      'pasyalan',
+      'tourist attraction',
+      'attractions can i visit',
+      'what tourist',
+      'what tourist attraction',
+      'mga pasyalan',
+      'lugar nga bisitahan',
     ]);
+  }
+
+  static bool _isNearbyIntent(_SpotIntent intent) {
+    return intent == _SpotIntent.nearbyRestaurants ||
+        intent == _SpotIntent.nearbyHotels ||
+        intent == _SpotIntent.nearbyCafes ||
+        intent == _SpotIntent.nearbyAttractions;
   }
 
   static String _listAllSpots(String lang) {
@@ -124,21 +152,23 @@ class ChatbotDestinationKnowledge {
         .map((d) => d['name']?.toString().trim() ?? '')
         .where((n) => n.isNotEmpty)
         .toList();
-    final bulletList = names.map((n) => '• $n').join('\n');
+    final numbered = [
+      for (var i = 0; i < names.length; i++) '**${i + 1}. ${names[i]}**',
+    ].join('\n');
     return _localized(
       lang: lang,
       en:
-          'Featured destinations in ATMOS-TRS:\n$bulletList\n\n'
-          'Open Home → Discover or Explore for photos and full details. '
-          'Ask me about opening hours, entrance fee, address, or nearby places for any spot above!',
+          'Here are featured spots you can visit in Misamis Occidental! 😊\n\n'
+          '$numbered\n\n'
+          'Ask me the entrance fee, hours, or address of any spot. Open **Home → Discover** for photos.',
       fil:
-          'Featured destinations sa ATMOS-TRS:\n$bulletList\n\n'
-          'Buksan ang Home → Discover o Explore para sa photos at full details. '
-          'Tanungin ako tungkol sa opening hours, entrance fee, address, o nearby places para sa alinmang spot!',
+          'Narito ang mga featured pasyalan sa Misamis Occidental! 😊\n\n'
+          '$numbered\n\n'
+          'Tanungin mo ako ng entrance fee, oras, o address ng kahit alin. Buksan ang **Home → Discover** para sa photos.',
       ceb:
-          'Featured destinations sa ATMOS-TRS:\n$bulletList\n\n'
-          'Ablihi ang Home → Discover o Explore para sa photos ug full details. '
-          'Pangutana ko bahin sa opening hours, entrance fee, address, o nearby places para sa bisan unsang spot!',
+          'Ania ang featured nga pasyalan sa Misamis Occidental! 😊\n\n'
+          '$numbered\n\n'
+          'Pangutana ko kung pila ang entrance, unsa ang hours, o asa dapit. Ablihi ang **Home → Discover** para sa photos.',
     );
   }
 
@@ -258,28 +288,18 @@ class ChatbotDestinationKnowledge {
       return _SpotIntent.cottageRates;
     }
     if (_containsAny(input, [
-      'address',
-      'location',
-      'asa',
-      'asa dapit',
-      'where is',
-      'where s',
-      'saan',
-      'nasaang',
-      'barangay',
-    ])) {
-      return _SpotIntent.address;
-    }
-    if (_containsAny(input, [
       'nearby restaurant',
       'restaurant',
       'kainan',
+      'kaon',
       'food',
       'eat',
       'pang eat',
       'dining',
+      'resto',
       'camp sawi',
       'nami',
+      'malapit na kainan',
     ])) {
       return _SpotIntent.nearbyRestaurants;
     }
@@ -307,14 +327,25 @@ class ChatbotDestinationKnowledge {
     }
     if (_containsAny(input, [
       'nearby attraction',
-      'attraction',
-      'attractions',
       'nearby place',
       'what else',
-      'duol',
-      'malapit',
+      'duol sa',
+      'malapit na lugar',
     ])) {
       return _SpotIntent.nearbyAttractions;
+    }
+    if (_containsAny(input, [
+      'address',
+      'location',
+      'asa dapit',
+      'asa',
+      'where is',
+      'where s',
+      'saan',
+      'nasaang',
+      'barangay',
+    ])) {
+      return _SpotIntent.address;
     }
     if (_containsAny(input, [
       'about',
@@ -323,6 +354,8 @@ class ChatbotDestinationKnowledge {
       'impormasyon',
       'details',
       'describe',
+      'virtual tour',
+      'vr tour',
     ])) {
       return _SpotIntent.overview;
     }
@@ -367,12 +400,12 @@ class ChatbotDestinationKnowledge {
     }
     return _localized(
       lang: lang,
-      en: '🕘 Opening hours — $name\n\n$hours\n\n'
-          'Open Home → Discover → $name for full details.',
-      fil: '🕘 Opening hours — $name\n\n$hours\n\n'
-          'Buksan ang Home → Discover → $name para sa full details.',
-      ceb: '🕘 Opening hours — $name\n\n$hours\n\n'
-          'Ablihi ang Home → Discover → $name para sa full details.',
+      en: '🕘 **$name** opening hours\n\n$hours\n\n'
+          'Hours can change — check the spot page on **Home → Discover** if you need the latest.',
+      fil: '🕘 Oras ng **$name**\n\n$hours\n\n'
+          'Puwedeng magbago ang oras — tingnan ang spot page sa **Home → Discover** para sa latest.',
+      ceb: '🕘 Oras sa **$name**\n\n$hours\n\n'
+          'Pwede mag-usab ang oras — tan-awa ang spot page sa **Home → Discover** kung kinahanglan nimo ang latest.',
     );
   }
 
@@ -385,15 +418,40 @@ class ChatbotDestinationKnowledge {
     if (fee.isEmpty) {
       return _missingField(name, 'entrance fee', lang);
     }
+    if (!_hasListedAmount(fee)) {
+      return _localized(
+        lang: lang,
+        en: 'I don\'t have an exact peso amount for **$name** yet.\n\n'
+            'ATMOS-TRS currently lists:\n$fee\n\n'
+            'Please check the official contact or page — I won\'t invent a price. 😊',
+        fil: 'Wala pa akong exact na peso amount para sa **$name**.\n\n'
+            'Nakasulat sa ATMOS-TRS:\n$fee\n\n'
+            'I-check ang official contact o page — hindi ako mag-iimbento ng presyo. 😊',
+        ceb: 'Wala koy exact nga peso amount para sa **$name**.\n\n'
+            'Ang naka-list sa ATMOS-TRS:\n$fee\n\n'
+            'I-check ang official contact o page — dili ko mag-imbento og presyo. 😊',
+      );
+    }
     return _localized(
       lang: lang,
-      en: '💰 Entrance fee — $name\n\n$fee\n\n'
-          'Open Home → Discover → $name for full details.',
-      fil: '💰 Entrance fee — $name\n\n$fee\n\n'
-          'Buksan ang Home → Discover → $name para sa full details.',
-      ceb: '💰 Entrance fee — $name\n\n$fee\n\n'
-          'Ablihi ang Home → Discover → $name para sa full details.',
+      en: 'The listed entrance fee for **$name**:\n\n$fee\n\n'
+          'This can change — confirm with the official page if you need the latest. 😊',
+      fil: 'Ang naka-list na entrance fee sa **$name**:\n\n$fee\n\n'
+          'Puwedeng magbago — i-check ang official page kung kailangan mo ang latest. 😊',
+      ceb: 'Ang naka-list nga entrance fee sa **$name**:\n\n$fee\n\n'
+          'Pwede mag-usab — tan-awa ang official page kung kinahanglan nimo ang latest. 😊',
     );
+  }
+
+  static bool _hasListedAmount(String fee) {
+    final lower = fee.toLowerCase();
+    if (RegExp(r'vary|check the|see .+official|contact info').hasMatch(lower)) {
+      return false;
+    }
+    return fee.contains('₱') ||
+        lower.contains('php') ||
+        lower.contains('free') ||
+        lower.contains('libre');
   }
 
   static String _cottageRates(
@@ -438,14 +496,16 @@ class ChatbotDestinationKnowledge {
     }
     return _localized(
       lang: lang,
-      en: '📍 Address — $name\n\n$location\n\n'
-          'Tip: Tap Get Directions on the destination page for Google Maps routing.',
-      fil: '📍 Address — $name\n\n$location\n\n'
-          'Tip: I-tap ang Get Directions sa destination page para sa Google Maps.',
-      ceb: '📍 Address — $name\n\n$location\n\n'
-          'Tip: I-tap ang Get Directions sa destination page para sa Google Maps.',
+      en: '**$name** is in:\n\n$location\n\n'
+          'Open **Home → Discover** and tap Get Directions for the map. 😊',
+      fil: 'Nasa **$name**:\n\n$location\n\n'
+          'Buksan ang **Home → Discover** at i-tap ang Get Directions para sa mapa. 😊',
+      ceb: 'Naa ang **$name** sa:\n\n$location\n\n'
+          'Ablihi ang **Home → Discover** ug i-tap ang Get Directions para sa mapa. 😊',
     );
   }
+
+  static const _maxNearbyShown = 6;
 
   static String _nearbyList(
     String name,
@@ -459,14 +519,14 @@ class ChatbotDestinationKnowledge {
       return _localized(
         lang: lang,
         en:
-            'No nearby ${labelEn.toLowerCase()} are listed for $name in the app yet. '
-            'Open Home → Discover → $name for updates.',
+            'No nearby ${labelEn.toLowerCase()} are listed for $name in ATMOS-TRS yet. '
+            'Open **Home → Discover → $name** for updates.',
         fil:
-            'Wala pang nearby ${labelEn.toLowerCase()} na nakalista para sa $name. '
-            'Buksan ang Home → Discover → $name.',
+            'Wala pang nearby ${labelEn.toLowerCase()} na naka-list para sa $name sa ATMOS-TRS. '
+            'Buksan ang **Home → Discover → $name**.',
         ceb:
-            'Wala pay nearby ${labelEn.toLowerCase()} nga nakalista para sa $name. '
-            'Ablihi ang Home → Discover → $name.',
+            'Wala pay nearby ${labelEn.toLowerCase()} nga naka-list para sa $name sa ATMOS-TRS. '
+            'Ablihi ang **Home → Discover → $name**.',
       );
     }
 
@@ -476,29 +536,190 @@ class ChatbotDestinationKnowledge {
       _ => null,
     };
     final note = noteKey != null ? spot[noteKey]?.toString().trim() ?? '' : '';
-    final emoji = switch (key) {
-      'nearbyRestaurants' => '🍽️',
-      'nearbyHotels' => '🏨',
-      'nearbyCafes' => '☕',
-      'nearbyAttractions' => '🏞️',
-      _ => '📍',
-    };
+    return _composeNearbyAnswer(
+      lang: lang,
+      key: key,
+      placeLabel: name,
+      items: items,
+      note: note,
+    );
+  }
 
-    final numbered = <String>[];
-    for (var i = 0; i < items.length; i++) {
-      numbered.add(_formatNearbyBlock(items[i], index: i + 1, lang: lang));
+  static String? _cityNearbyReply(
+    String input,
+    String lang,
+    _SpotIntent intent,
+    void Function(String spotId)? rememberSpot,
+  ) {
+    final city = _cityInInput(input);
+    if (city == null) return null;
+
+    final key = switch (intent) {
+      _SpotIntent.nearbyRestaurants => 'nearbyRestaurants',
+      _SpotIntent.nearbyHotels => 'nearbyHotels',
+      _SpotIntent.nearbyCafes => 'nearbyCafes',
+      _SpotIntent.nearbyAttractions => 'nearbyAttractions',
+      _ => '',
+    };
+    if (key.isEmpty) return null;
+
+    final seen = <String>{};
+    final items = <_NearbyEntry>[];
+    String? rememberId;
+    for (final spot in kFeaturedDestinations) {
+      final haystack =
+          '${spot['name'] ?? ''} ${spot['location'] ?? ''} ${spot['spotId'] ?? ''}'
+              .toLowerCase();
+      if (!haystack.contains(city.match)) continue;
+      rememberId ??= spot['spotId']?.toString();
+      for (final entry in _nearbyEntries(spot[key])) {
+        final id = entry.name.toLowerCase();
+        if (!seen.add(id)) continue;
+        items.add(entry);
+      }
     }
-    final list = numbered.join('\n\n────────────────\n\n');
+    if (items.isEmpty) return null;
+    if (rememberId != null && rememberId.isNotEmpty) {
+      rememberSpot?.call(rememberId);
+    }
+    return _composeNearbyAnswer(
+      lang: lang,
+      key: key,
+      placeLabel: city.label,
+      items: items,
+      note: '',
+    );
+  }
+
+  static String _composeNearbyAnswer({
+    required String lang,
+    required String key,
+    required String placeLabel,
+    required List<_NearbyEntry> items,
+    required String note,
+  }) {
+    final shown = items.take(_maxNearbyShown).toList();
+    final extra = items.length - shown.length;
+    final numbered = [
+      for (var i = 0; i < shown.length; i++)
+        _formatNearbyBlock(shown[i], index: i + 1, lang: lang),
+    ].join('\n\n');
     final noteBlock = note.isNotEmpty ? '$note\n\n' : '';
+    final moreLine = extra <= 0
+        ? ''
+        : _localized(
+            lang: lang,
+            en: '\n\n+$extra more in **Home → Discover**.',
+            fil: '\n\n+$extra pa sa **Home → Discover**.',
+            ceb: '\n\n+$extra pa sa **Home → Discover**.',
+          );
+    final intro = _nearbyIntro(lang, key, placeLabel);
+    final footer = _localized(
+      lang: lang,
+      en:
+          'Details above are from ATMOS-TRS. Missing numbers are left out on purpose — confirm with the place if you need the latest.',
+      fil:
+          'Galing sa ATMOS-TRS ang details sa itaas. Hindi ako mag-iimbento ng missing numbers — i-check ang establishment kung kailangan mo ang latest.',
+      ceb:
+          'Gikan sa ATMOS-TRS ang details sa ibabaw. Dili ko mag-imbento og missing numbers — tan-awa ang establishment kung kinahanglan nimo ang latest.',
+    );
+    return '$intro\n\n$noteBlock$numbered$moreLine\n\n$footer';
+  }
+
+  static String _nearbyIntro(String lang, String key, String place) {
+    return switch (key) {
+      'nearbyRestaurants' => _localized(
+          lang: lang,
+          en: 'Here are some restaurants you can check out in $place! 😊',
+          fil: 'Narito ang ilang restaurant na maaari mong puntahan sa $place! 😊',
+          ceb: 'Naa koy pipila ka restaurant nga pwede nimo tan-awon sa $place! 😊',
+        ),
+      'nearbyHotels' => _localized(
+          lang: lang,
+          en: 'Here are places to stay near $place! 😊',
+          fil: 'Narito ang ilang tuluyan malapit sa $place! 😊',
+          ceb: 'Ania ang pipila ka tulugan duol sa $place! 😊',
+        ),
+      'nearbyCafes' => _localized(
+          lang: lang,
+          en: 'Here are cafés near $place! 😊',
+          fil: 'Narito ang ilang café malapit sa $place! 😊',
+          ceb: 'Ania ang pipila ka café duol sa $place! 😊',
+        ),
+      _ => _localized(
+          lang: lang,
+          en: 'Here are nearby places around $place! 😊',
+          fil: 'Narito ang mga malapit na lugar sa $place! 😊',
+          ceb: 'Ania ang duol nga mga lugar sa $place! 😊',
+        ),
+    };
+  }
+
+  static String _whichCityPrompt(String lang, _SpotIntent intent) {
+    final topic = switch (intent) {
+      _SpotIntent.nearbyRestaurants => _localized(
+          lang: lang,
+          en: 'restaurants',
+          fil: 'mga kainan',
+          ceb: 'mga restaurant',
+        ),
+      _SpotIntent.nearbyHotels => _localized(
+          lang: lang,
+          en: 'hotels',
+          fil: 'mga hotel',
+          ceb: 'mga hotel',
+        ),
+      _SpotIntent.nearbyCafes => _localized(
+          lang: lang,
+          en: 'cafés',
+          fil: 'mga café',
+          ceb: 'mga café',
+        ),
+      _ => _localized(
+          lang: lang,
+          en: 'nearby places',
+          fil: 'malapit na lugar',
+          ceb: 'duol nga lugar',
+        ),
+    };
     return _localized(
       lang: lang,
-      en: '$emoji Nearby ${labelEn.toLowerCase()} — $name\n\n$noteBlock$list\n\n'
-          'Tip: Open Home → Discover → $name for photos and Get Directions.',
-      fil: '$emoji Nearby ${labelEn.toLowerCase()} — $name\n\n$noteBlock$list\n\n'
-          'Tip: Buksan ang Home → Discover → $name para sa photos at Get Directions.',
-      ceb: '$emoji Nearby ${labelEn.toLowerCase()} — $name\n\n$noteBlock$list\n\n'
-          'Tip: Ablihi ang Home → Discover → $name para sa photos ug Get Directions.',
+      en:
+          'Which city or spot? Try "restaurants in Oroquieta" or "AMORAP nearby $topic".',
+      fil:
+          'Aling city o spot? Halimbawa: "kainan sa Oroquieta" o "AMORAP nearby $topic".',
+      ceb:
+          'Asa nimo dapit? Pananglitan: "restaurant sa Oroquieta" o "AMORAP nearby $topic".',
     );
+  }
+
+  static ({String match, String label})? _cityInInput(String input) {
+    const cities = <String, String>{
+      'oroquieta': 'Oroquieta City',
+      'ozamiz': 'Ozamiz City',
+      'ozamis': 'Ozamiz City',
+      'tangub': 'Tangub City',
+      'jimenez': 'Jimenez',
+      'sinacaban': 'Sinacaban',
+      'baliangao': 'Baliangao',
+      'plaridel': 'Plaridel',
+      'clarin': 'Clarin',
+      'tudela': 'Tudela',
+      'aloran': 'Aloran',
+      'lopez jaena': 'Lopez Jaena',
+      'panoan': 'Panaon',
+      'panaon': 'Panaon',
+      'calamba': 'Calamba',
+      'concepcion': 'Concepcion',
+      'sapang dalaga': 'Sapang Dalaga',
+      'don victoriano': 'Don Victoriano',
+    };
+    for (final entry in cities.entries) {
+      if (input.contains(entry.key)) {
+        return (match: entry.key, label: entry.value);
+      }
+    }
+    return null;
   }
 
   static String _formatNearbyBlock(
@@ -506,65 +727,40 @@ class ChatbotDestinationKnowledge {
     required int index,
     required String lang,
   }) {
-    final typeLabel = _localized(
-      lang: lang,
-      en: 'Type',
-      fil: 'Uri',
-      ceb: 'Klase',
-    );
-    final ratingLabel = _localized(
-      lang: lang,
-      en: 'Rating',
-      fil: 'Rating',
-      ceb: 'Rating',
-    );
-    final contactLabel = _localized(
-      lang: lang,
-      en: 'Contact',
-      fil: 'Contact',
-      ceb: 'Contact',
-    );
-    final addressLabel = _localized(
-      lang: lang,
-      en: 'Address',
-      fil: 'Address',
-      ceb: 'Address',
-    );
-    final driveLabel = _localized(
-      lang: lang,
-      en: 'Drive',
-      fil: 'Byahe',
-      ceb: 'Byahe',
-    );
-    final notesLabel = _localized(
-      lang: lang,
-      en: 'Notes',
-      fil: 'Notes',
-      ceb: 'Notes',
-    );
-
-    final lines = <String>['$index. ${entry.name}'];
+    final lines = <String>['**$index. ${entry.name}**'];
     if (entry.category.isNotEmpty) {
-      lines.add('   $typeLabel: ${entry.category}');
-    }
-    if (entry.rating != null && entry.rating! > 0) {
-      lines.add('   $ratingLabel: ${entry.rating!.toStringAsFixed(1)}★');
-    }
-    if (entry.contact.isNotEmpty) {
-      lines.add('   $contactLabel: ${entry.contact}');
+      lines.add('• ${_label(lang, en: 'Type', fil: 'Uri', ceb: 'Klase')}: ${entry.category}');
     }
     if (entry.location.isNotEmpty) {
-      lines.add('   $addressLabel: ${entry.location}');
+      lines.add('• ${_label(lang, en: 'Address', fil: 'Address', ceb: 'Address')}: ${entry.location}');
+    }
+    if (entry.contact.isNotEmpty) {
+      lines.add('• ${_label(lang, en: 'Contact', fil: 'Contact', ceb: 'Contact')}: ${entry.contact}');
+    }
+    if (entry.openingHours.isNotEmpty) {
+      lines.add('• ${_label(lang, en: 'Hours', fil: 'Oras', ceb: 'Oras')}: ${entry.openingHours}');
+    }
+    if (entry.rating != null && entry.rating! > 0) {
+      lines.add('• ${_label(lang, en: 'Rating', fil: 'Rating', ceb: 'Rating')}: ${entry.rating!.toStringAsFixed(1)}★');
     }
     if (entry.driveMinutes != null) {
       lines.add(
-        '   $driveLabel: ~${entry.driveMinutes!.round()} min',
+        '• ${_label(lang, en: 'Drive', fil: 'Byahe', ceb: 'Byahe')}: ~${entry.driveMinutes!.round()} min',
       );
     }
     if (entry.description.isNotEmpty) {
-      lines.add('   $notesLabel: ${entry.description}');
+      lines.add(entry.description);
     }
     return lines.join('\n');
+  }
+
+  static String _label(
+    String lang, {
+    required String en,
+    required String fil,
+    required String ceb,
+  }) {
+    return _localized(lang: lang, en: en, fil: fil, ceb: ceb);
   }
 
   static List<_NearbyEntry> _nearbyEntries(dynamic raw) {
@@ -583,6 +779,9 @@ class ChatbotDestinationKnowledge {
                   '',
               location: e['location']?.toString().trim() ??
                   e['address']?.toString().trim() ??
+                  '',
+              openingHours: e['openingHours']?.toString().trim() ??
+                  e['hours']?.toString().trim() ??
                   '',
               driveMinutes: (e['driveMinutes'] as num?)?.toDouble(),
               description: e['description']?.toString().trim() ?? '',
@@ -614,19 +813,14 @@ class ChatbotDestinationKnowledge {
     final buffer = StringBuffer();
     buffer.writeln(_localized(
       lang: lang,
-      en: 'Here\'s what ATMOS-TRS shows for $name:',
-      fil: 'Ito ang nakalista sa ATMOS-TRS para sa $name:',
-      ceb: 'Mao ni ang nakalista sa ATMOS-TRS para sa $name:',
+      en: 'Here\'s what ATMOS-TRS shows for **$name**:',
+      fil: 'Ito ang naka-list sa ATMOS-TRS para sa **$name**:',
+      ceb: 'Mao ni ang naka-list sa ATMOS-TRS para sa **$name**:',
     ));
     buffer.writeln();
 
     if (category.isNotEmpty) {
-      buffer.writeln(_localized(
-        lang: lang,
-        en: 'Category: $category',
-        fil: 'Category: $category',
-        ceb: 'Category: $category',
-      ));
+      buffer.writeln('• ${_label(lang, en: 'Category', fil: 'Kategorya', ceb: 'Kategorya')}: $category');
       buffer.writeln();
     }
     if (description.isNotEmpty) {
@@ -643,6 +837,16 @@ class ChatbotDestinationKnowledge {
     }
     if (fee.isNotEmpty) {
       buffer.writeln('💰 $fee');
+      buffer.writeln();
+    }
+    final vr = spot['vrLink']?.toString().trim() ?? '';
+    if (vr.isNotEmpty) {
+      buffer.writeln(_localized(
+        lang: lang,
+        en: '🥽 This spot has a Virtual Tour in the app.',
+        fil: '🥽 May Virtual Tour ang spot na ito sa app.',
+        ceb: '🥽 Naa\'y Virtual Tour kining spot sa app.',
+      ));
       buffer.writeln();
     }
 
@@ -765,6 +969,7 @@ class _NearbyEntry {
     this.rating,
     this.contact = '',
     this.location = '',
+    this.openingHours = '',
     this.driveMinutes,
     this.description = '',
   });
@@ -774,6 +979,7 @@ class _NearbyEntry {
   final double? rating;
   final String contact;
   final String location;
+  final String openingHours;
   final double? driveMinutes;
   final String description;
 }

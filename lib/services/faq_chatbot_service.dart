@@ -57,33 +57,27 @@ class FaqChatbotService {
   }
 
   static const welcomeEn =
-      'Hey! 👋 I\'m Tala AI, your tourism assistant for Misamis Occidental.\n\n'
+      'Hey! 👋 I\'m **Tala AI**, your tourism assistant for Misamis Occidental.\n\n'
       'I can help with:\n'
       '• App help — register, login, QR check-in, Explore, Profile\n'
-      '• Destinations — hours, fees, address, nearby hotels\n'
+      '• Destinations — hours, fees, address, nearby places\n'
       '• Travel tips for Misamis Occidental\n\n'
-      '────\n'
-      'Next steps:\n'
       'Ask in English, Filipino, or Bisaya — even a simple "hi" works!';
 
   static const welcomeFil =
-      'Kumusta! 👋 Ako si Tala AI, ang tourism assistant mo para sa Misamis Occidental.\n\n'
+      'Kumusta! 👋 Ako si **Tala AI**, ang tourism assistant mo para sa Misamis Occidental.\n\n'
       'Matutulungan kita sa:\n'
       '• App help — register, login, QR check-in, Explore, Profile\n'
-      '• Destinations — hours, fees, address, nearby hotels\n'
+      '• Destinations — hours, fees, address, nearby places\n'
       '• Travel tips sa Misamis Occidental\n\n'
-      '────\n'
-      'Next steps:\n'
       'Magtanong sa English, Filipino, o Bisaya — kahit "hi" okay!';
 
   static const welcomeCeb =
-      'Kumusta! 👋 Ako si Tala AI, ang imong tourism assistant sa Misamis Occidental.\n\n'
+      'Kumusta! 👋 Ako si **Tala AI**, ang imong tourism assistant sa Misamis Occidental.\n\n'
       'Makatabang ko sa:\n'
       '• App help — register, login, QR check-in, Explore, Profile\n'
-      '• Destinations — hours, fees, address, nearby hotels\n'
+      '• Destinations — hours, fees, address, nearby places\n'
       '• Travel tips sa Misamis Occidental\n\n'
-      '────\n'
-      'Next steps:\n'
       'Pangutana sa English, Filipino, o Bisaya — bisan "hi" okay ra!';
 
   static List<String> get suggestedQuestions => [
@@ -280,7 +274,7 @@ class FaqChatbotService {
     return _resolveLanguage(trimmed, _scoreLanguage(trimmed));
   }
 
-  /// Picks reply language: explicit markers in the message win; otherwise
+  /// Picks reply language: explicit markers in this message win; otherwise
   /// keep the language already used in this chat session.
   AtmosLanguage _resolveLanguage(String input, LanguageScores scores) {
     if (scores.hasStrongSignal) {
@@ -297,6 +291,7 @@ class FaqChatbotService {
       return _sessionLanguage;
     }
 
+    _sessionLanguage = AtmosLanguage.en;
     return AtmosLanguage.en;
   }
 
@@ -421,6 +416,33 @@ class FaqChatbotService {
     }
 
     if (_containsAny(input, [
+      'virtual tour',
+      'vr tour',
+    ])) {
+      return _localized(
+        lang: lang,
+        en:
+            'Some spots have a Virtual Tour in ATMOS-TRS.\n\n'
+            '• Open **Home → Discover**\n'
+            '• Pick a destination with a VR badge\n'
+            '• Tap Virtual Tour to look around before you visit\n\n'
+            'Ask me about a spot — I\'ll say if a tour is listed. 😊',
+        fil:
+            'May Virtual Tour ang ilang spots sa ATMOS-TRS.\n\n'
+            '• Buksan ang **Home → Discover**\n'
+            '• Pumili ng destination na may VR badge\n'
+            '• I-tap ang Virtual Tour para mag-explore bago bumisita\n\n'
+            'Tanungin mo ako tungkol sa isang spot — sasabihin ko kung may tour. 😊',
+        ceb:
+            'Naa\'y Virtual Tour ang pipila ka spots sa ATMOS-TRS.\n\n'
+            '• Ablihi ang **Home → Discover**\n'
+            '• Pilia ang destination nga naa\'y VR badge\n'
+            '• I-tap ang Virtual Tour aron motan-aw una sa imong bisita\n\n'
+            'Pangutana ko bahin sa usa ka spot — sultihan tika kung naa\'y tour. 😊',
+      );
+    }
+
+    if (_containsAny(input, [
       'attraction',
       'destination',
       'place to visit',
@@ -439,8 +461,6 @@ class FaqChatbotService {
             '• Open Home → Discover for featured destinations\n'
             '• See opening hours, fees, and addresses\n'
             '• Browse nearby hotels & restaurants\n\n'
-            '────\n'
-            'Next steps:\n'
             'Ask me something specific like "Bless Amare entrance fee" or "AMORAP address".',
         fil:
             'May beaches, heritage sites, resorts, at municipalities ang Misamis Occidental.\n\n'
@@ -448,8 +468,6 @@ class FaqChatbotService {
             '• Buksan ang Home → Discover para sa featured destinations\n'
             '• Tingnan ang opening hours, fees, at address\n'
             '• I-browse ang nearby hotels & restaurants\n\n'
-            '────\n'
-            'Next steps:\n'
             'Tanungin ako tulad ng "Bless Amare entrance fee" o "AMORAP address".',
         ceb:
             'Naay beaches, heritage sites, resorts, ug municipalities ang Misamis Occidental.\n\n'
@@ -457,8 +475,6 @@ class FaqChatbotService {
             '• Ablihi ang Home → Discover para sa featured destinations\n'
             '• Tan-awa ang opening hours, fees, ug address\n'
             '• Browse sa nearby hotels & restaurants\n\n'
-            '────\n'
-            'Next steps:\n'
             'Pangutana ko sama sa "Bless Amare entrance fee" o "AMORAP address".',
       );
     }
@@ -663,7 +679,7 @@ class FaqChatbotService {
       'appreciate it',
       'appreciated',
     ];
-    if (_containsAny(input, phrases)) return true;
+    if (phrases.any((p) => _containsPhrase(input, p))) return true;
     if (_containsAny(compacted, [
       'thankyou',
       'thnkyou',
@@ -883,19 +899,20 @@ class FaqChatbotService {
     var filScore = 0;
     var enScore = 0;
 
-    // Strong Cebuano markers (word-level).
+    // Strong Cebuano markers (word-level). Shared particles stay light so
+    // "unsa ang mga" is not counted as Tagalog.
     const cebStrong = {
-      'unsa': 4,
-      'unsaon': 5,
+      'unsa': 5,
+      'unsaon': 6,
       'giunsa': 5,
-      'asa': 4,
+      'asa': 5,
       'kinsa': 4,
       'nimo': 4,
       'nako': 4,
       'niya': 3,
       'nila': 3,
       'tagpila': 5,
-      'pila': 3,
+      'pila': 4,
       'maayong': 5,
       'palihug': 4,
       'salamat kaayo': 5,
@@ -906,10 +923,17 @@ class FaqChatbotService {
       'kanus a': 4,
       'gikan': 3,
       'padulong': 3,
-      'lang': 2,
-      'ra': 2,
-      'ug': 2,
-      'og': 2,
+      'naa': 4,
+      'pipila': 4,
+      'tan awon': 4,
+      'tanawon': 4,
+      'duol': 4,
+      'dapit': 4,
+      'pasyalan': 4,
+      'lang': 1,
+      'ra': 1,
+      'ug': 1,
+      'og': 1,
     };
 
     // Strong Tagalog/Filipino markers (word-level).
@@ -917,16 +941,20 @@ class FaqChatbotService {
       'paano': 5,
       'bakit': 5,
       'kailan': 5,
-      'saan': 4,
+      'saan': 5,
       'sino': 4,
-      'ano': 3,
+      'ano': 4,
+      'magkano': 6,
       'magandang': 5,
+      'malapit': 4,
+      'puntahan': 4,
+      'pasyalan': 3,
       'po': 4,
       'opo': 5,
       'hindi': 4,
       'oo': 2,
-      'ng': 3,
-      'mga': 3,
+      'ng': 1,
+      'mga': 1,
       'natin': 4,
       'atin': 3,
       'nyo': 3,
@@ -936,22 +964,22 @@ class FaqChatbotService {
       'kayo': 3,
       'gusto': 2,
       'pwede': 2,
-      'mag': 3,
-      'ang': 3,
-      'ko': 2,
-      'mo': 2,
+      'mag': 2,
+      'ang': 1,
+      'ko': 1,
+      'mo': 1,
     };
 
     // English markers.
     const enStrong = {
-      'how': 3,
-      'what': 3,
-      'where': 3,
-      'when': 3,
-      'why': 3,
+      'how': 4,
+      'what': 4,
+      'where': 4,
+      'when': 4,
+      'why': 4,
       'please': 3,
       'help': 2,
-      'the': 2,
+      'the': 1,
       'can': 2,
       'you': 2,
       'your': 2,
@@ -978,14 +1006,33 @@ class FaqChatbotService {
     if (_containsPhrase(n, 'okay ra ka') || _containsPhrase(n, 'musta na')) {
       cebScore += 5;
     }
-    if (_containsPhrase(n, 'ano ang')) filScore += 4;
-    if (_containsPhrase(n, 'unsa ang')) cebScore += 4;
+    if (_containsPhrase(n, 'ano ang')) filScore += 5;
+    if (_containsPhrase(n, 'ano ang mga')) filScore += 4;
+    if (_containsPhrase(n, 'unsa ang')) cebScore += 6;
+    if (_containsPhrase(n, 'unsa ang mga')) cebScore += 5;
+    if (_containsPhrase(n, 'asa dapit')) cebScore += 6;
+    if (_containsPhrase(n, 'saan may') || _containsPhrase(n, 'saan ang')) {
+      filScore += 5;
+    }
+    if (_containsPhrase(n, 'malapit na')) filScore += 4;
     if (_containsPhrase(n, 'paano mag') || _containsPhrase(n, 'paano ako')) {
       filScore += 5;
     }
     if (_containsPhrase(n, 'unsaon pag') || _containsPhrase(n, 'unsaon ko')) {
       cebScore += 5;
     }
+    if (_containsPhrase(n, 'how much')) enScore += 6;
+    if (_containsPhrase(n, 'what are') ||
+        _containsPhrase(n, 'where is') ||
+        _containsPhrase(n, 'where are')) {
+      enScore += 4;
+    }
+    if (_containsPhrase(n, 'pila entrance') ||
+        _containsPhrase(n, 'pila ang') ||
+        _containsPhrase(n, 'tagpila')) {
+      cebScore += 5;
+    }
+    if (_containsPhrase(n, 'magkano ang')) filScore += 5;
 
     // Misamis Occidental default: kumusta/kamusta/musta is Bisaya unless "po".
     if (_containsPhrase(n, 'kumusta') ||
@@ -1063,10 +1110,24 @@ class FaqChatbotService {
     };
   }
 
-  String _limitWords(String text, {int maxWords = 150}) {
-    final words = text.split(RegExp(r'\s+'));
-    if (words.length <= maxWords) return text;
-    return '${words.take(maxWords).join(' ')}…';
+  String _limitWords(String text, {int maxWords = 420}) {
+    final pieces = RegExp(r'\S+|\s+').allMatches(text).toList();
+    var count = 0;
+    final buf = StringBuffer();
+    for (final match in pieces) {
+      final part = match.group(0)!;
+      if (part.trim().isEmpty) {
+        buf.write(part);
+        continue;
+      }
+      count++;
+      if (count > maxWords) {
+        buf.write('…');
+        break;
+      }
+      buf.write(part);
+    }
+    return buf.toString();
   }
 
   bool _containsAny(String input, List<String> terms) {

@@ -561,7 +561,7 @@ class Dae3FormATemplateFill {
 
   static String _setNumber(String xml, String ref, num value) {
     final text = value.round().toString();
-    return _replaceCell(xml, ref, (style) => '<c r="$ref"$style><v>$text</v></c>');
+    return _replaceCell(xml, ref, (style) => '<c r="$ref"$style t="n"><v>$text</v></c>');
   }
 
   static String _setText(String xml, String ref, String text) {

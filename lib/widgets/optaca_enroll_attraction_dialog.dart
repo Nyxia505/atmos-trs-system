@@ -108,6 +108,14 @@ Future<void> showOptacaEnrollAttractionDialog({
                       onPressed: () => downloadSpotQrPng(
                         municipalityId,
                         result.id!,
+                        spotName: name,
+                        municipalityDisplayName: municipality.name,
+                        qrPayload: spotQrData(
+                          municipalityId,
+                          result.id!,
+                          latitude: lat,
+                          longitude: lng,
+                        ),
                         latitude: lat,
                         longitude: lng,
                       ),
@@ -119,6 +127,12 @@ Future<void> showOptacaEnrollAttractionDialog({
                         spotId: result.id!,
                         spotName: name,
                         municipalityDisplayName: municipality.name,
+                        qrPayload: spotQrData(
+                          municipalityId,
+                          result.id!,
+                          latitude: lat,
+                          longitude: lng,
+                        ),
                         latitude: lat,
                         longitude: lng,
                       ),

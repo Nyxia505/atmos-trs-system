@@ -1,7 +1,7 @@
 /**
- * Sends topic push notifications for announcements when:
- * 1) a draft becomes published, OR
- * 2) a published announcement is edited (title/content/type changed).
+ * Sends one topic push when an LGU event is successfully published.
+ * Ordinary edits do not send again. Expired events are not pushed.
+ * A scheduled pass backfills ongoing and upcoming events that were never sent.
  *
  * Deploy: firebase deploy --only functions
  * Requires Blaze plan for Cloud Functions (or use Firebase free tier limits).
@@ -20,6 +20,10 @@ const {
   Timestamp,
 } = require('firebase-admin/firestore');
 const {getMessaging} = require('firebase-admin/messaging');
+const {
+  announcementPushCopy,
+  isTourismEvent,
+} = require('./event_push_copy');
 
 initializeApp();
 
@@ -1357,7 +1361,9 @@ async function collectInstalledAppFcmTokens(limit = 500) {
       snap = await db.collection('users').limit(limit).get();
     }
     for (const doc of snap.docs) {
-      const token = normalizeField(doc.data()?.fcmToken);
+      const data = doc.data() || {};
+      if (!touristMayReceiveEventPush(data)) continue;
+      const token = normalizeField(data.fcmToken);
       if (token) tokens.add(token);
     }
   } catch (err) {
@@ -1366,7 +1372,9 @@ async function collectInstalledAppFcmTokens(limit = 500) {
   try {
     const snap = await db.collection('tourists').limit(limit).get();
     for (const doc of snap.docs) {
-      const token = normalizeField(doc.data()?.fcmToken);
+      const data = doc.data() || {};
+      if (!touristMayReceiveEventPush(data, {allowMissingRole: true})) continue;
+      const token = normalizeField(data.fcmToken);
       if (token) tokens.add(token);
     }
   } catch (err) {
@@ -1375,12 +1383,64 @@ async function collectInstalledAppFcmTokens(limit = 500) {
   return [...tokens];
 }
 
+function touristMayReceiveEventPush(data, options = {}) {
+  const prefs = data && data.notificationPrefs;
+  if (prefs && prefs.events === false) return false;
+  const role = normalizeField(data && data.role).toLowerCase();
+  if (!role) return options.allowMissingRole !== false;
+  return role === 'tourist';
+}
+
+function announcementAlreadyPushed(data) {
+  return !!(data && data.fcmSent_published);
+}
+
+async function releaseAnnouncementFcmClaim(announcementId) {
+  const id = normalizeField(announcementId);
+  if (!id) return;
+  try {
+    await db.collection('announcements').doc(id).update({
+      fcmSent_published: FieldValue.delete(),
+      fcmSentAt: FieldValue.delete(),
+    });
+  } catch (err) {
+    console.error('[releaseAnnouncementFcmClaim]', err);
+  }
+}
+
+async function pruneInvalidFcmTokens(tokens) {
+  const unique = [...new Set((tokens || []).filter(Boolean))];
+  for (const token of unique) {
+    for (const collectionName of ['users', 'tourists']) {
+      try {
+        const snap = await db
+          .collection(collectionName)
+          .where('fcmToken', '==', token)
+          .limit(5)
+          .get();
+        for (const doc of snap.docs) {
+          await doc.ref.update({
+            fcmToken: FieldValue.delete(),
+            fcmTokenInvalidAt: FieldValue.serverTimestamp(),
+          });
+        }
+      } catch (err) {
+        console.error(`[pruneInvalidFcmTokens] ${collectionName}`, err);
+      }
+    }
+  }
+}
+
 function buildAnnouncementMessagePayload({
   title,
   body,
   type,
   announcementId,
   eventType,
+  imageUrl,
+  location,
+  eventDate,
+  notificationType,
 }) {
   const safeTitle = String(title || 'ATMOS-TRS').substring(0, 200);
   const raw = normalizeField(body);
@@ -1388,30 +1448,49 @@ function buildAnnouncementMessagePayload({
     raw.length > 200 ? `${raw.substring(0, 197)}...` : raw || 'New announcement';
   const aid = String(announcementId || '');
   const collapse = aid || 'governor_announcement';
+  const kind = String(type || eventType || 'Event');
+  const image = normalizeField(imageUrl);
+  const hasImage = image.startsWith('https://') || image.startsWith('http://');
+
+  // `type` stays the event category (`Event`, `Promo`, …). Installed APKs
+  // map that exact value and open `announcementId`. `notificationType` is
+  // additive and ignored by builds that do not read it.
+  const data = {
+    type: kind,
+    announcementId: aid,
+    eventType: String(eventType || kind),
+    title: safeTitle,
+    body: safeBody,
+    notificationType: String(notificationType || 'tourism_event'),
+    eventId: aid,
+    location: String(location || '').slice(0, 120),
+    eventDate: String(eventDate || '').slice(0, 80),
+  };
+  if (hasImage) data.imageUrl = image.slice(0, 500);
+
+  const notification = {
+    title: safeTitle,
+    body: safeBody,
+  };
+  if (hasImage) notification.imageUrl = data.imageUrl;
+
+  const androidNotification = {
+    channelId: 'atmos_announcement_heads_up',
+    sound: 'default',
+    tag: collapse,
+    priority: 'max',
+    defaultSound: true,
+  };
+  if (hasImage) androidNotification.imageUrl = data.imageUrl;
 
   return {
-    notification: {
-      title: safeTitle,
-      body: safeBody,
-    },
-    data: {
-      type: String(type || 'General'),
-      announcementId: aid,
-      eventType: String(eventType || 'published'),
-      title: safeTitle,
-      body: safeBody,
-    },
+    notification,
+    data,
     android: {
       priority: 'high',
       collapseKey: collapse,
-      ttl: 3600 * 1000,
-      notification: {
-        channelId: 'atmos_announcement_heads_up',
-        sound: 'default',
-        tag: collapse,
-        priority: 'max',
-        defaultSound: true,
-      },
+      ttl: 7 * 24 * 3600 * 1000,
+      notification: androidNotification,
     },
     apns: {
       headers: {
@@ -1425,51 +1504,69 @@ function buildAnnouncementMessagePayload({
           'content-available': 1,
         },
       },
+      ...(hasImage ? {fcmOptions: {imageUrl: data.imageUrl}} : {}),
     },
   };
 }
 
-async function sendAnnouncementTopicPush({
-  title,
-  body,
-  type,
-  announcementId,
-  eventType,
-}) {
-  const base = buildAnnouncementMessagePayload({
-    title,
-    body,
-    type,
+function pushFieldsFromCopy(copy, announcementId) {
+  return {
+    title: copy.title,
+    body: copy.body,
+    type: copy.type,
     announcementId,
-    eventType,
-  });
+    eventType: copy.type,
+    imageUrl: copy.imageUrl,
+    location: copy.location,
+    eventDate: copy.eventDate,
+    notificationType: copy.notificationType,
+  };
+}
+
+async function sendAnnouncementTopicPush(fields) {
+  const base = buildAnnouncementMessagePayload(fields);
   const messaging = getMessaging();
-  const jobs = [
-    messaging.send({
+  try {
+    await messaging.send({
       ...base,
       topic: TOPIC,
-    }),
-  ];
-
-  // Direct token fan-out: reaches installed apps even if topic subscription lagged.
-  const tokens = await collectInstalledAppFcmTokens();
-  for (let i = 0; i < tokens.length; i += 500) {
-    const chunk = tokens.slice(i, i + 500);
-    jobs.push(
-      messaging.sendEachForMulticast({
-        tokens: chunk,
-        ...base,
-      }),
-    );
+    });
+    return;
+  } catch (err) {
+    console.error('[sendAnnouncementTopicPush] topic failed, trying saved tokens', err);
   }
 
-  const results = await Promise.allSettled(jobs);
-  const failed = results.filter((r) => r.status === 'rejected');
-  if (failed.length) {
-    console.error(
-      `[sendAnnouncementTopicPush] ${failed.length}/${results.length} send(s) failed`,
-      failed[0].reason,
-    );
+  const tokens = await collectInstalledAppFcmTokens();
+  if (!tokens.length) {
+    throw new Error('topic send failed and no device tokens were available');
+  }
+  const dead = [];
+  let delivered = 0;
+  for (let i = 0; i < tokens.length; i += 500) {
+    const chunk = tokens.slice(i, i + 500);
+    const response = await messaging.sendEachForMulticast({
+      tokens: chunk,
+      ...base,
+    });
+    response.responses.forEach((res, idx) => {
+      if (res.success) {
+        delivered += 1;
+        return;
+      }
+      const code = res.error && res.error.code;
+      if (
+        code === 'messaging/registration-token-not-registered' ||
+        code === 'messaging/invalid-registration-token'
+      ) {
+        dead.push(chunk[idx]);
+      } else {
+        console.error('[sendAnnouncementTopicPush] token', code || res.error);
+      }
+    });
+  }
+  if (dead.length) await pruneInvalidFcmTokens(dead);
+  if (delivered === 0) {
+    throw new Error('event push reached no devices');
   }
 }
 
@@ -1487,17 +1584,26 @@ exports.broadcastGovernorAnnouncement = onCall(
     }
     await assertProvincialStaff(request.auth.uid);
 
-    const title = normalizeField(request.data && request.data.title);
-    const content = normalizeField(
-      request.data && (request.data.content || request.data.message),
-    );
-    const type = normalizeField(request.data && request.data.type) || 'General';
     const announcementId = normalizeField(
       request.data && request.data.announcementId,
     );
+    if (!announcementId) {
+      throw new HttpsError('invalid-argument', 'Announcement id is required.');
+    }
 
-    if (!title) {
-      throw new HttpsError('invalid-argument', 'Title is required.');
+    const snap = await db.collection('announcements').doc(announcementId).get();
+    if (!snap.exists) {
+      throw new HttpsError('not-found', 'Announcement was not saved.');
+    }
+    const data = snap.data() || {};
+    const copy = announcementPushCopy(data, new Date());
+    if (!copy.eligible) {
+      return {
+        ok: true,
+        topic: TOPIC,
+        skipped: true,
+        reason: copy.phase === 'expired' ? 'expired' : 'not_eligible',
+      };
     }
 
     const claimed = await claimAnnouncementFcmSend(announcementId, 'published');
@@ -1505,13 +1611,15 @@ exports.broadcastGovernorAnnouncement = onCall(
       return {ok: true, topic: TOPIC, skipped: true, reason: 'already_sent'};
     }
 
-    await sendAnnouncementTopicPush({
-      title,
-      body: content,
-      type,
-      announcementId,
-      eventType: 'published',
-    });
+    try {
+      await sendAnnouncementTopicPush(
+        pushFieldsFromCopy(copy, announcementId),
+      );
+    } catch (err) {
+      console.error('[broadcastGovernorAnnouncement]', err);
+      await releaseAnnouncementFcmClaim(announcementId);
+      throw new HttpsError('internal', 'Could not send the event notification.');
+    }
 
     return {ok: true, topic: TOPIC, skipped: false};
   },
@@ -1536,44 +1644,177 @@ exports.sendGovernorAnnouncementPush = onDocumentWritten(
     const beforeData = before.exists ? before.data() : null;
 
     const isNewlyPublished = !before.exists || beforeData?.published !== true;
-    const isPublishedEdit =
-      before.exists &&
-      beforeData?.published === true &&
-      (normalizeField(beforeData?.title) !== normalizeField(afterData?.title) ||
-        normalizeField(beforeData?.content || beforeData?.message) !==
-          normalizeField(afterData?.content || afterData?.message) ||
-        normalizeField(beforeData?.type) !== normalizeField(afterData?.type));
-
-    if (!isNewlyPublished && !isPublishedEdit) {
+    // Ordinary edits do not send another push. A later retry is skipped by
+    // claimAnnouncementFcmSend once this event was already announced.
+    if (!isNewlyPublished) {
       return null;
     }
 
-    const eventType = isNewlyPublished ? 'published' : 'updated';
+    const copy = announcementPushCopy(afterData, new Date());
+    if (!copy.eligible) {
+      return null;
+    }
+
     const announcementId = event.params.announcementId;
-    const claimed = await claimAnnouncementFcmSend(announcementId, eventType);
+    const claimed = await claimAnnouncementFcmSend(announcementId, 'published');
     if (!claimed) {
       console.log(
-        `[sendGovernorAnnouncementPush] skip ${announcementId} (${eventType}) — already claimed`,
+        `[sendGovernorAnnouncementPush] skip ${announcementId} — already claimed`,
       );
       return null;
     }
 
-    await sendAnnouncementTopicPush({
-      title: afterData.title,
-      body: afterData.content || afterData.message,
-      type: afterData.type,
-      announcementId,
-      eventType,
-    });
+    try {
+      await sendAnnouncementTopicPush(
+        pushFieldsFromCopy(copy, announcementId),
+      );
+    } catch (err) {
+      console.error('[sendGovernorAnnouncementPush]', err);
+      await releaseAnnouncementFcmClaim(announcementId);
+    }
     return null;
   },
 );
+
+const EVENT_PUSH_BATCH = 20;
+
+/**
+ * One push per announcement that is still upcoming or ongoing and has never
+ * been claimed. Expired, draft, and rejected posts are left alone. Safe to
+ * run on a schedule: claimAnnouncementFcmSend blocks a second send.
+ */
+async function deliverUnsentTourismEventPushes() {
+  const now = new Date();
+  const byId = new Map();
+  const collect = (snap) => {
+    for (const doc of snap.docs) byId.set(doc.id, doc);
+  };
+  try {
+    collect(
+      await db
+        .collection('announcements')
+        .where('scheduleState', 'in', ['scheduled', 'live'])
+        .limit(300)
+        .get(),
+    );
+  } catch (err) {
+    console.error('[event-push] schedule query', err);
+  }
+  try {
+    collect(
+      await db
+        .collection('announcements')
+        .where('published', '==', true)
+        .limit(300)
+        .get(),
+    );
+  } catch (err) {
+    console.error('[event-push] published query', err);
+  }
+
+  const candidates = [];
+  for (const doc of byId.values()) {
+    const data = doc.data() || {};
+    if (announcementAlreadyPushed(data)) continue;
+    if (!isTourismEvent(data)) continue;
+    const copy = announcementPushCopy(data, now);
+    if (!copy.eligible) continue;
+    candidates.push({id: doc.id, copy});
+  }
+  candidates.sort((a, b) => {
+    const rank = (copy) => (copy.phase === 'ongoing' ? 0 : 1);
+    const ra = rank(a.copy);
+    const rb = rank(b.copy);
+    if (ra !== rb) return ra - rb;
+    const ta = a.copy.phase === 'ongoing'
+      ? (a.copy.endMs ?? Number.MAX_SAFE_INTEGER)
+      : (a.copy.startMs ?? Number.MAX_SAFE_INTEGER);
+    const tb = b.copy.phase === 'ongoing'
+      ? (b.copy.endMs ?? Number.MAX_SAFE_INTEGER)
+      : (b.copy.startMs ?? Number.MAX_SAFE_INTEGER);
+    return ta - tb;
+  });
+
+  let sent = 0;
+  for (const item of candidates.slice(0, EVENT_PUSH_BATCH)) {
+    const claimed = await claimAnnouncementFcmSend(item.id, 'published');
+    if (!claimed) continue;
+    try {
+      await sendAnnouncementTopicPush(pushFieldsFromCopy(item.copy, item.id));
+      sent += 1;
+      console.log(`[event-push] sent ${item.id} (${item.copy.phase})`);
+    } catch (err) {
+      console.error(`[event-push] send failed ${item.id}`, err);
+      await releaseAnnouncementFcmClaim(item.id);
+    }
+  }
+  if (candidates.length) {
+    console.log(
+      `[event-push] eligible ${candidates.length}, sent ${sent}`,
+    );
+  }
+  return {eligible: candidates.length, sent};
+}
 
 /**
  * Publishes scheduled announcements when their Asia/Manila window opens and
  * expires them when it closes. Client feeds also hide posts outside the window,
  * so a late tick does not leave an expired post visible.
  */
+async function syncAnnouncementWindows() {
+  const now = new Date();
+  const snap = await db
+    .collection('announcements')
+    .where('scheduleState', 'in', ['scheduled', 'live'])
+    .limit(300)
+    .get();
+  if (snap.empty) return;
+
+  let batch = db.batch();
+  let ops = 0;
+  const commit = async () => {
+    if (ops === 0) return;
+    await batch.commit();
+    batch = db.batch();
+    ops = 0;
+  };
+
+  for (const doc of snap.docs) {
+    const data = doc.data() || {};
+    const start = data.startsAt && data.startsAt.toDate
+      ? data.startsAt.toDate()
+      : null;
+    const end = data.endsAt && data.endsAt.toDate
+      ? data.endsAt.toDate()
+      : null;
+    if (!start) continue;
+    const open = now >= start && (!end || now < end);
+    const expired = end ? now >= end : false;
+    const state = normalizeField(data.scheduleState);
+
+    if (state === 'scheduled' && open) {
+      batch.update(doc.ref, {
+        published: true,
+        scheduleState: 'live',
+        publishedAt: FieldValue.serverTimestamp(),
+      });
+      ops += 1;
+    } else if ((state === 'live' || state === 'scheduled') && expired) {
+      batch.update(doc.ref, {
+        published: false,
+        scheduleState: 'expired',
+      });
+      ops += 1;
+    }
+    if (ops >= 400) await commit();
+  }
+  await commit();
+}
+
+// Cloud Scheduler cannot be enabled while the Firebase billing account is
+// closed. The job stays in source and is published when
+// ENABLE_ANNOUNCEMENT_SCHEDULE=true (functions/.env) and billing is open.
+if (process.env.ENABLE_ANNOUNCEMENT_SCHEDULE === 'true') {
 exports.syncAnnouncementSchedule = onSchedule(
   {
     schedule: 'every 5 minutes',
@@ -1582,54 +1823,25 @@ exports.syncAnnouncementSchedule = onSchedule(
     timeoutSeconds: 120,
   },
   async () => {
-    const now = new Date();
-    const snap = await db
-      .collection('announcements')
-      .where('scheduleState', 'in', ['scheduled', 'live'])
-      .limit(300)
-      .get();
-    if (snap.empty) return null;
-
-    let batch = db.batch();
-    let ops = 0;
-    const commit = async () => {
-      if (ops === 0) return;
-      await batch.commit();
-      batch = db.batch();
-      ops = 0;
-    };
-
-    for (const doc of snap.docs) {
-      const data = doc.data() || {};
-      const start = data.startsAt && data.startsAt.toDate
-        ? data.startsAt.toDate()
-        : null;
-      const end = data.endsAt && data.endsAt.toDate
-        ? data.endsAt.toDate()
-        : null;
-      if (!start) continue;
-      const open = now >= start && (!end || now < end);
-      const expired = end ? now >= end : false;
-      const state = normalizeField(data.scheduleState);
-
-      if (state === 'scheduled' && open) {
-        batch.update(doc.ref, {
-          published: true,
-          scheduleState: 'live',
-          publishedAt: FieldValue.serverTimestamp(),
-        });
-        ops += 1;
-      } else if ((state === 'live' || state === 'scheduled') && expired) {
-        batch.update(doc.ref, {
-          published: false,
-          scheduleState: 'expired',
-        });
-        ops += 1;
-      }
-      if (ops >= 400) await commit();
+    await syncAnnouncementWindows();
+    try {
+      await deliverUnsentTourismEventPushes();
+    } catch (err) {
+      console.error('[event-push] backfill', err);
     }
-    await commit();
     return null;
+  },
+);
+}
+
+exports.backfillTourismEventNotifications = onCall(
+  {region: 'asia-southeast1'},
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Must be signed in.');
+    }
+    await assertProvincialStaff(request.auth.uid);
+    return deliverUnsentTourismEventPushes();
   },
 );
 

@@ -112,7 +112,7 @@ class _FaqChatBody extends StatefulWidget {
   State<_FaqChatBody> createState() => _FaqChatBodyState();
 }
 
-class _FaqChatBodyState extends State<_FaqChatBody> {
+class _FaqChatBodyState extends State<_FaqChatBody> with WidgetsBindingObserver {
   final _chatbot = FaqChatbotService.instance;
   final _store = FaqChatStore.instance;
   final _inputController = TextEditingController();
@@ -127,8 +127,14 @@ class _FaqChatBodyState extends State<_FaqChatBody> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _store.addListener(_onStoreChanged);
+    _focusNode.addListener(_onFocusChanged);
     unawaited(_initializeChat());
+  }
+
+  void _onFocusChanged() {
+    if (_focusNode.hasFocus) _scrollToBottom(force: true);
   }
 
   Future<void> _initializeChat() async {
@@ -146,8 +152,15 @@ class _FaqChatBodyState extends State<_FaqChatBody> {
   }
 
   @override
+  void didChangeMetrics() {
+    if (_focusNode.hasFocus) _scrollToBottom(force: true);
+  }
+
+  @override
   void dispose() {
     _requestSerial++;
+    WidgetsBinding.instance.removeObserver(this);
+    _focusNode.removeListener(_onFocusChanged);
     _store.removeListener(_onStoreChanged);
     _inputController.dispose();
     _scrollController.dispose();
@@ -155,11 +168,11 @@ class _FaqChatBodyState extends State<_FaqChatBody> {
     super.dispose();
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({bool force = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scrollController.hasClients) return;
       final position = _scrollController.position;
-      if (position.maxScrollExtent - position.pixels > 140) return;
+      if (!force && position.maxScrollExtent - position.pixels > 180) return;
       _scrollController.animateTo(
         position.maxScrollExtent,
         duration: const Duration(milliseconds: 220),
@@ -180,7 +193,7 @@ class _FaqChatBodyState extends State<_FaqChatBody> {
       setState(() {
         _errorText = null;
         _failedText = null;
-        _isTyping = slow;
+        _isTyping = true;
       });
     }
 
@@ -192,16 +205,25 @@ class _FaqChatBodyState extends State<_FaqChatBody> {
         sender: 'user',
         language: userLang,
       );
-      _scrollToBottom();
+      _scrollToBottom(force: true);
 
-      final reply = await _chatbot.answer(text);
+      if (!slow) {
+        await Future<void>.delayed(const Duration(milliseconds: 90));
+      }
       if (!mounted || requestId != _requestSerial) return;
 
-      await _store.appendMessage(
-        text: reply,
-        sender: 'ai',
-        language: _languageCode(_chatbot.sessionLanguage),
-      );
+      var reply = await _chatbot.answer(text);
+      if (!mounted || requestId != _requestSerial) return;
+      if (reply.trim().isEmpty) {
+        reply = _failureCopy();
+        failed = true;
+      } else {
+        await _store.appendMessage(
+          text: reply,
+          sender: 'ai',
+          language: _languageCode(_chatbot.sessionLanguage),
+        );
+      }
     } catch (_) {
       failed = true;
       _failedText = text;
@@ -212,7 +234,7 @@ class _FaqChatBodyState extends State<_FaqChatBody> {
           _isTyping = false;
           _errorText = failed ? _failureCopy() : null;
         });
-        _scrollToBottom();
+        _scrollToBottom(force: true);
       }
     }
   }
@@ -376,18 +398,23 @@ class _FaqChatBodyState extends State<_FaqChatBody> {
 
   @override
   Widget build(BuildContext context) {
-    final content = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (!widget.fullScreen) _buildHeader(),
-        Expanded(child: _buildChat()),
-      ],
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    final content = Padding(
+      padding: EdgeInsets.only(bottom: widget.fullScreen ? 0 : keyboard),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (!widget.fullScreen) _buildHeader(),
+          Expanded(child: _buildChat()),
+        ],
+      ),
     );
 
     if (!widget.fullScreen) return content;
 
     return Scaffold(
       backgroundColor: AppTheme.pageBackground,
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(
         backgroundColor: AppTheme.cardBackground,
         elevation: 0,
@@ -569,7 +596,9 @@ class _FaqChatBodyState extends State<_FaqChatBody> {
               }
               return ListView.builder(
                 controller: _scrollController,
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
                 itemCount: messages.length + (_isTyping ? 1 : 0),
                 itemBuilder: (context, index) {
                   if (_isTyping && index == messages.length) {
@@ -588,7 +617,8 @@ class _FaqChatBodyState extends State<_FaqChatBody> {
           ),
         ),
         if (_errorText != null) _buildErrorBanner(),
-        _buildSuggestionChips(),
+        if (MediaQuery.viewInsetsOf(context).bottom == 0)
+          _buildSuggestionChips(),
         _buildInputBar(),
       ],
     );
@@ -632,10 +662,10 @@ class _FaqChatBodyState extends State<_FaqChatBody> {
 
   Widget _buildSuggestionChips() {
     return SizedBox(
-      height: 44,
+      height: 48,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
         itemCount: FaqChatbotService.suggestedQuestions.length,
         separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
@@ -675,7 +705,7 @@ class _FaqChatBodyState extends State<_FaqChatBody> {
                 textInputAction: TextInputAction.send,
                 onSubmitted: (_) => _sendMessage(),
                 decoration: InputDecoration(
-                  hintText: '',
+                  hintText: 'Message Tala AI',
                   filled: true,
                   fillColor: AppTheme.cardBackground,
                   hintStyle: TextStyle(color: AppTheme.unselectedMuted),
@@ -881,43 +911,57 @@ class _ChatBubble extends StatelessWidget {
             const SizedBox(width: 8),
           ],
           Flexible(
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onLongPress: onLongPress,
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: Radius.circular(isUser ? 16 : 4),
-                  bottomRight: Radius.circular(isUser ? 4 : 16),
-                ),
-                child: Ink(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: isUser
-                        ? accent
-                        : AppTheme.cardBackground,
-                    borderRadius: BorderRadius.only(
-                      topLeft: const Radius.circular(16),
-                      topRight: const Radius.circular(16),
-                      bottomLeft: Radius.circular(isUser ? 16 : 4),
-                      bottomRight: Radius.circular(isUser ? 4 : 16),
-                    ),
-                    border: isUser
-                        ? null
-                        : Border.all(color: AppTheme.border),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.sizeOf(context).width * 0.78,
+              ),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onLongPress: onLongPress,
+                  borderRadius: BorderRadius.only(
+                    topLeft: const Radius.circular(16),
+                    topRight: const Radius.circular(16),
+                    bottomLeft: Radius.circular(isUser ? 16 : 4),
+                    bottomRight: Radius.circular(isUser ? 4 : 16),
                   ),
-                  child: isUser
-                      ? Text(
-                          message.message,
-                          style: AtmosBrandTypography.meaningTagline(
-                            color: Colors.white,
-                            fontSize: 14,
-                            height: 1.45,
-                            letterSpacing: 0.15,
-                          ),
-                        )
-                      : _FaqBotMessageText(text: message.message),
+                  child: Ink(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      color: isUser
+                          ? accent
+                          : Color.alphaBlend(
+                              accent.withValues(alpha: 0.08),
+                              AppTheme.cardBackground,
+                            ),
+                      borderRadius: BorderRadius.only(
+                        topLeft: const Radius.circular(16),
+                        topRight: const Radius.circular(16),
+                        bottomLeft: Radius.circular(isUser ? 16 : 4),
+                        bottomRight: Radius.circular(isUser ? 4 : 16),
+                      ),
+                      border: isUser
+                          ? null
+                          : Border.all(
+                              color: accent.withValues(alpha: 0.18),
+                            ),
+                    ),
+                    child: isUser
+                        ? Text(
+                            message.message,
+                            softWrap: true,
+                            style: AtmosBrandTypography.meaningTagline(
+                              color: Colors.white,
+                              fontSize: 14,
+                              height: 1.45,
+                              letterSpacing: 0.15,
+                            ),
+                          )
+                        : _FaqBotMessageText(text: message.message),
+                  ),
                 ),
               ),
             ),
@@ -934,12 +978,15 @@ class _FaqBotMessageText extends StatelessWidget {
 
   final String text;
 
+  static final _numbered = RegExp(r'^(\d+)\.\s+(.*)$');
+  static final _bold = RegExp(r'\*\*(.+?)\*\*');
+
   @override
   Widget build(BuildContext context) {
     final style = TextStyle(
       color: AppTheme.textPrimary,
       fontSize: 14,
-      height: 1.5,
+      height: 1.45,
       fontWeight: FontWeight.w500,
       letterSpacing: 0.1,
     );
@@ -947,21 +994,14 @@ class _FaqBotMessageText extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        for (var i = 0; i < lines.length; i++)
-          if (lines[i].trim().isEmpty)
+        for (final line in lines)
+          if (line.trim().isEmpty)
+            const SizedBox(height: 10)
+          else if (line.trim().startsWith('────'))
             const SizedBox(height: 8)
-          else if (lines[i].trim().startsWith('────'))
+          else if (_isBulletLine(line))
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Divider(
-                height: 1,
-                thickness: 1,
-                color: AppTheme.border,
-              ),
-            )
-          else if (_isBulletLine(lines[i]))
-            Padding(
-              padding: const EdgeInsets.only(left: 4, bottom: 2),
+              padding: const EdgeInsets.only(left: 2, bottom: 4),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -970,38 +1010,53 @@ class _FaqBotMessageText extends StatelessWidget {
                     style: style.copyWith(fontWeight: FontWeight.w700),
                   ),
                   Expanded(
-                    child: Text(
-                      _bulletBody(lines[i]),
-                      style: style,
+                    child: Text.rich(
+                      TextSpan(children: _spans(_bulletBody(line), style)),
+                      softWrap: true,
                     ),
                   ),
                 ],
               ),
             )
+          else if (_numbered.hasMatch(line.trim()) ||
+              _numbered.hasMatch(_stripBold(line.trim())))
+            Padding(
+              padding: const EdgeInsets.only(top: 2, bottom: 4),
+              child: Text.rich(
+                TextSpan(
+                  children: _spans(
+                    line.trim(),
+                    style.copyWith(fontWeight: FontWeight.w700, fontSize: 14.5),
+                  ),
+                ),
+                softWrap: true,
+              ),
+            )
           else
             Padding(
-              padding: EdgeInsets.only(
-                bottom: _isSectionHeader(lines[i]) ? 2 : 0,
-              ),
-              child: Text(
-                lines[i],
-                style: style.copyWith(
-                  fontWeight: (_isHotelTitleLine(lines[i]) ||
-                          _isSectionHeader(lines[i]))
-                      ? FontWeight.w700
-                      : FontWeight.w500,
-                  fontSize: _isHotelTitleLine(lines[i]) ? 14.5 : 14,
-                  color: AppTheme.textPrimary,
+              padding: EdgeInsets.only(bottom: _isSectionHeader(line) ? 4 : 2),
+              child: Text.rich(
+                TextSpan(
+                  children: _spans(
+                    line,
+                    style.copyWith(
+                      fontWeight: _isSectionHeader(line)
+                          ? FontWeight.w700
+                          : FontWeight.w500,
+                    ),
+                  ),
                 ),
+                softWrap: true,
               ),
             ),
       ],
     );
   }
 
+  String _stripBold(String line) => line.replaceAll('**', '');
+
   bool _isBulletLine(String line) {
     final t = line.trimLeft();
-    // Numbered steps stay as title lines (1. 2. 3.) — only bullet markers here.
     return t.startsWith('• ') || t.startsWith('- ') || t.startsWith('* ');
   }
 
@@ -1015,24 +1070,34 @@ class _FaqBotMessageText extends StatelessWidget {
   }
 
   bool _isSectionHeader(String line) {
-    final t = line.trim();
-    if (t.isEmpty || t.length > 42) return false;
+    final t = _stripBold(line.trim());
+    if (t.isEmpty || t.length > 48) return false;
     if (_isBulletLine(t)) return false;
     return t.endsWith(':');
   }
 
-  bool _isHotelTitleLine(String line) {
-    final t = line.trim();
-    if (t.isEmpty) return false;
-    // "1. Hotel Name" or header lines with emoji title.
-    if (RegExp(r'^\d+\.\s+\S').hasMatch(t)) return true;
-    if (t.startsWith('🏨') ||
-        t.startsWith('🍽️') ||
-        t.startsWith('☕') ||
-        t.startsWith('🏞️')) {
-      return true;
+  List<InlineSpan> _spans(String line, TextStyle style) {
+    final spans = <InlineSpan>[];
+    var cursor = 0;
+    for (final match in _bold.allMatches(line)) {
+      if (match.start > cursor) {
+        spans.add(TextSpan(text: line.substring(cursor, match.start), style: style));
+      }
+      spans.add(
+        TextSpan(
+          text: match.group(1),
+          style: style.copyWith(fontWeight: FontWeight.w800),
+        ),
+      );
+      cursor = match.end;
     }
-    return false;
+    if (cursor < line.length) {
+      spans.add(TextSpan(text: line.substring(cursor), style: style));
+    }
+    if (spans.isEmpty) {
+      spans.add(TextSpan(text: line.replaceAll('**', ''), style: style));
+    }
+    return spans;
   }
 }
 

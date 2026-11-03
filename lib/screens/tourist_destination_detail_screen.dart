@@ -11,10 +11,10 @@ import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
 import 'package:atmos_trs_system/services/spot_review_service.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart';
 import 'package:atmos_trs_system/widgets/save_spot_notice.dart';
+import 'package:atmos_trs_system/screens/spot_directions_route_page.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:atmos_trs_system/widgets/write_spot_review_sheet.dart';
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:atmos_trs_system/utils/maps_directions_launcher.dart';
 
 /// Polished destination details — opens from Home Dashboard featured / all places.
@@ -46,6 +46,7 @@ class _TouristDestinationDetailScreenState
   final PageController _galleryController = PageController();
   int _galleryIndex = 0;
   bool _isSaved = false;
+  bool _saveBusy = false;
   SpotReview? _userReview;
   SpotReview? _justSubmitted;
   bool _canReview = false;
@@ -93,13 +94,19 @@ class _TouristDestinationDetailScreenState
 
   Future<void> _loadReviewEligibility() async {
     if (d.spotId.isEmpty) return;
-    final checkedIn = await SpotReviewService.hasCheckedInAtSpot(d.spotId);
-    final userReview = await SpotReviewService.getUserReview(d.spotId);
-    if (!mounted) return;
-    setState(() {
-      _canReview = checkedIn;
-      _userReview = userReview;
-    });
+    try {
+      final checkedIn = await SpotReviewService.hasCheckedInAtSpot(d.spotId)
+          .timeout(const Duration(seconds: 4), onTimeout: () => false);
+      final userReview = await SpotReviewService.getUserReview(d.spotId)
+          .timeout(const Duration(seconds: 4));
+      if (!mounted) return;
+      setState(() {
+        _canReview = checkedIn;
+        _userReview = userReview;
+      });
+    } catch (_) {
+      if (!mounted) return;
+    }
   }
 
   /// Eligibility loads async (visit sync); a tap before it finishes — or after
@@ -176,50 +183,53 @@ class _TouristDestinationDetailScreenState
   }
 
   Future<void> _toggleSave() async {
-    if (d.spotId.isEmpty) return;
+    if (d.spotId.isEmpty || _saveBusy) return;
+    _saveBusy = true;
+    if (mounted) setState(() {});
     final name = d.name.trim().isEmpty ? 'This destination' : d.name.trim();
-    final future = UserActivityService.toggleSaveSpot(d.spotId);
-    final saved = UserActivityService.isSpotSavedSync(d.spotId);
-    if (!mounted) return;
-    SaveSpotNotice.show(
-      context,
-      saved ? '$name saved!' : '$name removed from saved',
-    );
-    final result = await future;
-    if (!mounted || result == saved) return;
-    if (UserActivityService.isSpotSavedSync(d.spotId) == saved) return;
-    SaveSpotNotice.show(
-      context,
-      'Could not update $name. Try again.',
-      error: true,
-    );
-  }
-
-  Future<void> _openDirections() async {
-    await MapsDirectionsLauncher.open(
-      destinationLabel: MapsDirectionsLauncher.placeLabel(
-        name: d.name,
-        address: d.address,
-        municipality: d.municipality,
-      ),
-      destinationLatitude: d.hasCoordinates ? d.latitude : null,
-      destinationLongitude: d.hasCoordinates ? d.longitude : null,
-    );
-  }
-
-  Future<void> _shareDestination() async {
-    final buffer = StringBuffer()
-      ..writeln(d.name)
-      ..writeln(d.municipality)
-      ..writeln()
-      ..writeln(d.shortDescription);
-    if (d.hasCoordinates) {
-      buffer.writeln(
-        'https://www.google.com/maps?q=${d.latitude},${d.longitude}',
+    final wasSaved = UserActivityService.isSpotSavedSync(d.spotId);
+    try {
+      final nowSaved = await UserActivityService.toggleSaveSpot(d.spotId);
+      if (!mounted) return;
+      if (nowSaved == wasSaved) {
+        SaveSpotNotice.show(
+          context,
+          'Could not update $name. Try again.',
+          error: true,
+        );
+        return;
+      }
+      SaveSpotNotice.show(
+        context,
+        nowSaved ? '$name saved!' : 'Removed from saved places',
       );
+    } catch (_) {
+      if (!mounted) return;
+      SaveSpotNotice.show(
+        context,
+        'Could not update $name. Try again.',
+        error: true,
+      );
+    } finally {
+      _saveBusy = false;
+      if (mounted) setState(() {});
     }
-    buffer.writeln('\nShared via ATMOS-TRS');
-    await Share.share(buffer.toString(), subject: d.name);
+  }
+
+  void _openDirections() {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => SpotDirectionsRoutePage(
+          spotId: d.spotId,
+          spotName: d.name,
+          municipality: d.municipality,
+          latitude: d.latitude,
+          longitude: d.longitude,
+          firestoreSpot: widget.firestoreSpot,
+        ),
+      ),
+    );
   }
 
   Future<void> _startVrTour() async {
@@ -655,22 +665,35 @@ class _TouristDestinationDetailScreenState
   }
 
   Widget _buildQuickActions(Color accent) {
-    final actions = <({String label, IconData icon, VoidCallback? onTap})>[
+    final actions = <({
+      String label,
+      IconData icon,
+      VoidCallback? onTap,
+      bool highlighted,
+    })>[
       (
         label: 'Get Directions',
         icon: Icons.near_me_rounded,
         onTap: _openDirections,
+        highlighted: false,
       ),
-      (label: 'Save', icon: Icons.favorite_rounded, onTap: _toggleSave),
-      (label: 'Share', icon: Icons.ios_share_rounded, onTap: _shareDestination),
+      (
+        label: _isSaved ? 'Saved' : 'Save',
+        icon: _isSaved
+            ? Icons.bookmark_rounded
+            : Icons.bookmark_border_rounded,
+        onTap: _saveBusy ? null : _toggleSave,
+        highlighted: _isSaved,
+      ),
     ];
 
     return Wrap(
       spacing: 10,
       runSpacing: 10,
       children: actions.map((a) {
+        final filled = a.highlighted;
         return Material(
-          color: AppTheme.cardBackground,
+          color: filled ? accent : AppTheme.cardBackground,
           borderRadius: BorderRadius.circular(16),
           child: InkWell(
             onTap: a.onTap,
@@ -679,7 +702,10 @@ class _TouristDestinationDetailScreenState
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: accent.withValues(alpha: 0.5), width: 1.5),
+                border: Border.all(
+                  color: accent.withValues(alpha: filled ? 0.0 : 0.5),
+                  width: 1.5,
+                ),
                 boxShadow: [
                   BoxShadow(
                     color: accent.withValues(alpha: 0.10),
@@ -691,12 +717,18 @@ class _TouristDestinationDetailScreenState
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(a.icon, size: 18, color: accent),
+                  Icon(
+                    a.icon,
+                    size: 18,
+                    color: filled ? Colors.white : accent,
+                  ),
                   const SizedBox(width: 8),
                   Text(
                     a.label,
                     style: TextStyle(
-                      color: a.onTap == null ? _textMuted : _textDark,
+                      color: a.onTap == null
+                          ? _textMuted
+                          : (filled ? Colors.white : _textDark),
                       fontWeight: FontWeight.w600,
                       fontSize: 13,
                     ),
