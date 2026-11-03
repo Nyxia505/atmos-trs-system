@@ -559,7 +559,8 @@ class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
             strokeWidth: TripRouteStyle.walkingDotWidth(
               compact: widget.compact,
             ).toDouble(),
-            isDotted: true,
+            // flutter_map 7+: dotted strokes use StrokePattern (isDotted removed).
+            pattern: const StrokePattern.dotted(),
             strokeCap: StrokeCap.round,
             strokeJoin: StrokeJoin.round,
           ),
