@@ -135,16 +135,44 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final barBg = AppTheme.cardBackground;
-    final barFg = ThemeData.estimateBrightnessForColor(barBg) == Brightness.dark
-        ? Colors.white
-        : _textDark;
     return Scaffold(
       backgroundColor: AppTheme.scaffoldBackground,
       appBar: AppBar(
-        title: const Text('Laag with Friends'),
-        backgroundColor: barBg,
-        foregroundColor: barFg,
+        backgroundColor: AppTheme.cardBackground,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        automaticallyImplyLeading: false,
+        leadingWidth: 80,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 12),
+          child: Center(
+            child: FilledButton(
+              onPressed: () => Navigator.of(context).maybePop(),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTheme.primary,
+                foregroundColor: AppTheme.onPrimary,
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                minimumSize: const Size(0, 36),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              child: const Text(
+                'Back',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+        ),
+        title: Text(
+          'Laag with Friends',
+          style: TextStyle(
+            color: AppTheme.textPrimary,
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       ),
       body: StreamBuilder<List<TouristGroup>>(
         stream: _inviteStream,

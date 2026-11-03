@@ -8,6 +8,7 @@ import 'auth_role_claims.dart'
     show persistLongTermStaffRoleClaims, refreshAuthRoleClaims;
 import 'auth_roles.dart';
 import '../firestore_loader.dart';
+import '../trip_plan_host_bridge.dart';
 import 'tourism_session.dart';
 
 /// True when the signed-in user should use the admin dashboard (no network).
@@ -15,9 +16,26 @@ bool isKnownAdminEmail(String email) =>
     AdminAccountsService.emailMatchesDefaultAdmin(email);
 
 bool isLikelyAdminSession() {
-  final email = FirebaseAuth.instance.currentUser?.email ?? '';
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return false;
+  final email = user.email ?? '';
   if (isKnownAdminEmail(email)) return true;
+  // Host ATMOS already authorized this embed (OPTACA / provincial / LGU).
+  if (TripPlanHostBridge.isHostCatalogAdmin?.call() == true) return true;
+  // OPTACA demo emails before users/{uid} is cached.
+  if (AuthRoles.isOptacaDestinationViewer()) return true;
   return AuthRoles.canAccessAdminDashboard();
+}
+
+Future<String?> _claimRoleRaw() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return null;
+  try {
+    final result = await user.getIdTokenResult();
+    final raw = result.claims?['role'];
+    if (raw is String && raw.trim().isNotEmpty) return raw;
+  } catch (_) {}
+  return null;
 }
 
 /// After sign-in: JWT role first, then Firestore — avoids sending tourists to admin UI.
@@ -30,11 +48,14 @@ Future<bool> resolveOpenAdminDashboardAfterLogin() async {
 
   try {
     await refreshAuthRoleClaims();
+    final claimRole = await _claimRoleRaw();
+    if (AuthRoles.isAtmosStaffAdminRole(claimRole)) return true;
+
     final role = await AuthRoles.currentRoleAsync();
     if (role == AppRole.admin || role == AppRole.municipalManager) {
       return true;
     }
-    if (role == AppRole.tourist || role == AppRole.user) {
+    if (role == AppRole.tourist) {
       return false;
     }
   } catch (e) {

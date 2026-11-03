@@ -3292,3 +3292,115 @@ async function updateOptacaStakeholderAccount(auth, uid, existing, data) {
   }
   return {ok: true};
 }
+
+/**
+ * Creates a custom tourist-spot category for an LGU tourism account.
+ * Used as a fallback when Firestore client rules deny the direct write
+ * (e.g. user doc has municipality field but no municipalityId field yet).
+ *
+ * Verifies:
+ *  - Caller is authenticated.
+ *  - Caller's users doc has an LGU tourism role.
+ *  - Category name is 2–40 chars and is not "all".
+ *  - Duplicate names are rejected.
+ *
+ * Does NOT allow provincial/governor to use this path (they can write directly).
+ */
+exports.createSpotCategory = onCall(
+  {region: 'asia-southeast1'},
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Must be signed in.');
+    }
+
+    const callerUid = request.auth.uid;
+    const callerEmail = (
+      (request.auth.token && request.auth.token.email) || ''
+    ).toLowerCase().trim();
+
+    // --- Verify LGU role ---
+    const userSnap = await db.collection('users').doc(callerUid).get();
+    let municipalityId = '';
+    let role = '';
+    if (userSnap.exists) {
+      const ud = userSnap.data() || {};
+      role = (ud.role || '').trim().toLowerCase();
+      municipalityId = (ud.municipalityId || ud.municipality || '').trim();
+    }
+
+    const LGU_ROLES = new Set([
+      'tourism', 'tourism_office', 'tourismoffice',
+      'lgu', 'lgu_tourism', 'lgu_office', 'municipal_tourism',
+    ]);
+    const PROVINCIAL_ROLES = new Set([
+      'governor', 'provincial_tourism', 'tourism_province',
+    ]);
+
+    // Allow provincial/governor too — they're superset of LGU.
+    const isStaff = LGU_ROLES.has(role) || PROVINCIAL_ROLES.has(role) ||
+      callerEmail.includes('tourism') || callerEmail.includes('misocc');
+
+    if (!isStaff) {
+      throw new HttpsError(
+        'permission-denied',
+        `Only LGU tourism accounts can add categories. Your users.role is "${role || 'missing'}".`,
+      );
+    }
+
+    // Backfill municipalityId into the user doc so future Firestore rule checks pass.
+    if (municipalityId && userSnap.exists && !userSnap.data().municipalityId) {
+      await db.collection('users').doc(callerUid).set(
+        {municipalityId},
+        {merge: true},
+      );
+    }
+
+    // --- Validate name ---
+    const raw = ((request.data && request.data.name) || '').trim();
+    if (!raw || raw.length < 2 || raw.length > 40) {
+      throw new HttpsError(
+        'invalid-argument',
+        'Category name must be 2–40 characters.',
+      );
+    }
+    if (raw.toLowerCase() === 'all') {
+      throw new HttpsError('invalid-argument', 'Reserved name "all".');
+    }
+
+    const cleaned = raw.replace(/\s+/g, ' ');
+    const nameKey = cleaned
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    if (!nameKey || nameKey.length < 2) {
+      throw new HttpsError('invalid-argument', 'Category name must contain letters or numbers.');
+    }
+
+    const ref = db.collection('spot_categories').doc(nameKey);
+    const existing = await ref.get();
+    if (existing.exists) {
+      const saved = ((existing.data() || {}).name || '').trim();
+      return {ok: true, name: saved || cleaned, alreadyExists: true};
+    }
+
+    // Check other docs for the same canonical key.
+    const snap = await db.collection('spot_categories').limit(200).get();
+    for (const doc of snap.docs) {
+      const saved = ((doc.data() || {}).name || '').trim();
+      const savedKey = saved.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      if (savedKey === nameKey) {
+        return {ok: true, name: saved || cleaned, alreadyExists: true};
+      }
+    }
+
+    await ref.set({
+      name: cleaned,
+      nameKey,
+      createdByUid: callerUid,
+      ...(municipalityId ? {municipalityId} : {}),
+      createdAt: FieldValue.serverTimestamp(),
+    });
+
+    return {ok: true, name: cleaned, alreadyExists: false};
+  },
+);

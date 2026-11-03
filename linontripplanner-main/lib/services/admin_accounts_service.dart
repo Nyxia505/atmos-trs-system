@@ -104,12 +104,21 @@ class AdminAccountsService {
     // Write users/{uid} first (rules: maySelfGrantAdminRole) so staff claims can sync.
     final userRef =
         FirebaseFirestore.instance.collection(kUsersCollection).doc(uid);
+    String? existingRole;
+    try {
+      final existing = await userRef.get();
+      existingRole = existing.data()?['role']?.toString();
+    } catch (_) {}
+    // Keep governor / OPTACA / LGU roles. Rewriting them to `admin` sends
+    // the next ATMOS login into the tourist app.
+    final keepAtmosRole = AuthRoles.isAtmosStaffAdminRole(existingRole) &&
+        (existingRole ?? '').trim().toLowerCase() != 'admin';
     await userRef.set(
       {
         'email': account.email.isNotEmpty ? account.email : email,
         'emailLower': emailLower,
-        'role': AppRole.admin.firestoreValue,
-        'rolePermanent': true,
+        if (!keepAtmosRole) 'role': AppRole.admin.firestoreValue,
+        if (!keepAtmosRole) 'rolePermanent': true,
         'firebaseUid': uid,
         'fullName': auth.displayName?.trim().isNotEmpty == true
             ? auth.displayName!.trim()

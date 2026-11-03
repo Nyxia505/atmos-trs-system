@@ -334,6 +334,9 @@ class ReportDataset {
   /// without pretending the numbers are complete.
   final String? warning;
 
+  /// OPTACA Form Type title (`EVT 1 — …`). Null keeps the ReportKind title.
+  final String? titleOverride;
+
   const ReportDataset({
     required this.kind,
     required this.generatedAt,
@@ -344,12 +347,42 @@ class ReportDataset {
     required this.tables,
     this.filterSummary = const [],
     this.warning,
+    this.titleOverride,
   });
 
   /// Includes the LGU scope, so a single-municipality download is never
   /// mistaken for the province-wide one.
-  String get title => reportTitleFor(kind, filters.effectiveMunicipality);
+  String get title {
+    final named = titleOverride?.trim();
+    if (named == null || named.isEmpty) {
+      return reportTitleFor(kind, filters.effectiveMunicipality);
+    }
+    final mun = filters.effectiveMunicipality;
+    if (mun == null || mun.isEmpty) return named;
+    return '$named — $mun';
+  }
 
   /// True when no detail row survived the filters — the "no results" case.
   bool get hasNoRows => tables.every((t) => t.isEmpty);
+
+  ReportDataset withTables(
+    List<ReportTable> nextTables, {
+    List<(String, String)> extraFilters = const [],
+    String? titleOverride,
+    List<ReportMetric>? metrics,
+    String? warning,
+  }) {
+    return ReportDataset(
+      kind: kind,
+      generatedAt: generatedAt,
+      filters: filters,
+      periodLabel: periodLabel,
+      metrics: metrics ?? this.metrics,
+      charts: charts,
+      tables: nextTables,
+      filterSummary: [...filterSummary, ...extraFilters],
+      warning: warning ?? this.warning,
+      titleOverride: titleOverride ?? this.titleOverride,
+    );
+  }
 }

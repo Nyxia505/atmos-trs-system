@@ -4,7 +4,7 @@ import '../../data.dart';
 import '../../services/reports/report_format.dart';
 import '../../services/reports/report_models.dart';
 import '../../services/reports/reports_service.dart';
-import '../tourism_plan_ui.dart';
+import '../../theme/tourism_app_theme.dart';
 
 /// Filter row above the analytics section.
 ///
@@ -108,7 +108,7 @@ class _ReportFilterBarState extends State<ReportFilterBar> {
 
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: TourismPlanUi.planCardDecoration(),
+      decoration: OptacaAdminTheme.cardDecoration,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -408,13 +408,13 @@ class _ReportFilterBarState extends State<ReportFilterBar> {
         padding: const EdgeInsets.symmetric(horizontal: 14),
         decoration: BoxDecoration(
           color: selected
-              ? AppColors.primary.withValues(alpha: 0.1)
-              : AppColors.insetSurface,
+              ? OptacaAdminTheme.lightOrange
+              : OptacaAdminTheme.card,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
             color: selected
-                ? AppColors.primary
-                : Colors.black.withValues(alpha: 0.08),
+                ? OptacaAdminTheme.primary
+                : OptacaAdminTheme.border,
             width: selected ? 1.6 : 1,
           ),
         ),
@@ -465,9 +465,9 @@ class _ReportFilterBarState extends State<ReportFilterBar> {
   }
 
   BoxDecoration _inputDecoration() => BoxDecoration(
-    color: AppColors.insetSurface,
+    color: OptacaAdminTheme.card,
     borderRadius: BorderRadius.circular(12),
-    border: Border.all(color: Colors.black.withValues(alpha: 0.08)),
+    border: Border.all(color: OptacaAdminTheme.border),
   );
 
   Widget _field({required String label, required Widget child}) {

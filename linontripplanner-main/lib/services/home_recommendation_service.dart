@@ -70,15 +70,6 @@ class HomeRecommendationService {
     int featuredLimit = 8,
     int recommendedLimit = 12,
   }) async {
-    final catalog = List<TouristSpot>.from(allSpots);
-    if (catalog.isEmpty) {
-      _featured = const [];
-      _recommended = const [];
-      _cacheKey = '';
-      revision.value++;
-      return;
-    }
-
     final history = SpotInteractionHistoryStore.instance;
     final trip = TripPreferencesStore.instance;
     final interestWeights = await trip.loadInterestWeights();
@@ -87,6 +78,22 @@ class HomeRecommendationService {
     final lastBudget = await trip.loadLastBudgetTier();
     final routeCtx = await trip.loadRouteContext();
     final ratedTypes = await trip.loadRatedSpotTypeCounts();
+
+    final generation = touristSpotCatalogGeneration;
+    final catalog = authoritativeHomeTouristSpots();
+    if (catalog.isEmpty) {
+      _featured = const [];
+      _recommended = const [];
+      _cacheKey = '';
+      revision.value++;
+      if (kDebugMode) {
+        debugPrint(
+          'HomeRecommended ${DateTime.now().toIso8601String()} '
+          'source=tourist_spots gen=$generation count=0 (catalog empty)',
+        );
+      }
+      return;
+    }
 
     final interests = <String>{
       ...?profile?.interestTags,
@@ -98,7 +105,12 @@ class HomeRecommendationService {
     };
 
     final key = [
-      catalog.length,
+      catalog
+          .map(
+            (s) =>
+                '${s.firestoreDocId}|${s.name}|${s.location}|${s.imagePath}|${s.description}|${s.category}|${s.updatedAtMs}',
+          )
+          .join(';'),
       profile?.pastDestinations.join(','),
       interests.join(','),
       history.revision.value,
@@ -227,8 +239,26 @@ class HomeRecommendationService {
         if (out.length >= recommendedLimit) break;
       }
     }
+    if (generation != touristSpotCatalogGeneration) {
+      if (kDebugMode) {
+        debugPrint(
+          'HomeRecommended ${DateTime.now().toIso8601String()} '
+          'ignored stale recompute gen=$generation '
+          'now=$touristSpotCatalogGeneration',
+        );
+      }
+      return;
+    }
     _recommended = out;
     _cacheKey = key;
+    if (kDebugMode) {
+      debugPrint(
+        'HomeRecommended ${DateTime.now().toIso8601String()} '
+        'source=tourist_spots gen=$generation '
+        'catalog=${catalog.length} shown=${out.length} '
+        'ids=${out.map((e) => e.spot.firestoreDocId).join(',')}',
+      );
+    }
 
     if (kDebugMode && _featured.isNotEmpty) {
       final f = _featured.first;

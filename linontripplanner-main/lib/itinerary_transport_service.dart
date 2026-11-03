@@ -95,7 +95,7 @@ TripRouteFareSegment? _segmentFromDijkstra(Municipality from, Municipality to) {
   if (fare == null) return null;
 
   final hub = transportEndpointFor(to);
-  if (!_isBusHubEndpoint(hub.kind)) return null;
+  if (hub == null || !_isBusHubEndpoint(hub.kind)) return null;
 
   return TripRouteFareSegment(
     from: from,
@@ -136,7 +136,7 @@ TripRouteFareSegment? resolveItineraryLegSegment({
   final matrixFare = estimatedFarePhp(from.name, to.name);
   if (matrixFare != null) {
     final hub = transportEndpointFor(to);
-    if (_isBusHubEndpoint(hub.kind)) {
+    if (hub != null && _isBusHubEndpoint(hub.kind)) {
       return TripRouteFareSegment(
         from: from,
         to: to,
@@ -161,6 +161,7 @@ List<String> _hubSpotDocIdsForItinerary(List<TouristSpot> spots) {
     final muni = municipalityForItinerarySpot(spot);
     if (muni == null) continue;
     final hub = transportEndpointFor(muni);
+    if (hub == null) continue;
     final endpointSlug = municipalitySlug(hub.name);
     final spotSlug = _spotSlugForLookup(spot);
     for (final direction in HubSpotLegDirection.values) {
@@ -195,6 +196,7 @@ List<TripHubSpotFareSegment> _hubSpotSegmentsForSpot({
   if (muni == null) return const [];
 
   final hub = transportEndpointFor(muni);
+  if (hub == null) return const [];
   final endpointSlug = municipalitySlug(hub.name);
   final spotSlug = _spotSlugForLookup(spot);
   final segments = <TripHubSpotFareSegment>[];

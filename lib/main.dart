@@ -28,6 +28,7 @@ import 'package:atmos_trs_system/firebase_options.dart';
 import 'package:atmos_trs_system/utils/firebase_client_blocked_message.dart';
 import 'package:atmos_trs_system/navigation/auth_navigation.dart';
 import 'package:atmos_trs_system/navigation/root_navigator.dart';
+import 'package:atmos_trs_system/navigation/tripplan_entry_screen.dart';
 import 'package:atmos_trs_system/widgets/save_spot_notice.dart';
 import 'package:atmos_trs_system/services/password_reset_service.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
@@ -37,6 +38,7 @@ import 'package:atmos_trs_system/services/startup_route_resolver.dart';
 import 'package:atmos_trs_system/screens/qr_scan_welcome_screen.dart';
 import 'package:atmos_trs_system/screens/qr_pending_resume_screen.dart';
 import 'package:atmos_trs_system/screens/mobile_onboarding_screen.dart';
+import 'package:trip_plan/widgets/optaca_flutter_error_shell.dart';
 
 export 'package:atmos_trs_system/navigation/root_navigator.dart' show rootNavigatorKey;
 
@@ -45,6 +47,7 @@ const String _passwordResetRoute = '/forgot-password';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  installVisibleFlutterErrorHandlers();
 
   // Chrome / web must use the Web app from Firebase (appId contains ":web:").
   // Do not rely on a single generic switch for web — forces correct SDK options.
@@ -219,6 +222,9 @@ class _MyAppState extends State<MyApp> {
           '/tourism-dashboard': (context) => const LguDashboard(),
           '/provincial-tourism-dashboard': (context) =>
               const ProvincialTourismDashboard(),
+          /// OPTACA / catalog-admin Trip Planner portal (survives browser refresh).
+          '/trip-planner-admin': (context) =>
+              const TripPlanEntryScreen(adminDashboard: true),
             },
             onGenerateRoute: (settings) {
               final WidgetBuilder? builder = switch (settings.name) {

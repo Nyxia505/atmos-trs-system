@@ -36,6 +36,45 @@ String formatEventDateTimeDisplay(DateTime d) {
   return '${formatEventDateWords(d)} · ${formatEventTime12(d)}';
 }
 
+DateTime _calendarDay(DateTime d) => DateTime(d.year, d.month, d.day);
+
+int inclusiveCalendarDayCount(DateTime start, DateTime end) {
+  var a = _calendarDay(start);
+  var b = _calendarDay(end);
+  if (b.isBefore(a)) {
+    final swap = a;
+    a = b;
+    b = swap;
+  }
+  return b.difference(a).inDays + 1;
+}
+
+/// Compact range: November 5–10, 2026 or November 28 – December 3, 2026.
+String formatEventDateRangeCompact(DateTime start, DateTime end) {
+  var a = _calendarDay(start);
+  var b = _calendarDay(end);
+  if (b.isBefore(a)) {
+    final swap = a;
+    a = b;
+    b = swap;
+  }
+  if (a == b) return formatEventDateWords(a);
+  if (a.year == b.year && a.month == b.month) {
+    return '${_monthNames[a.month - 1]} ${a.day}–${b.day}, ${a.year}';
+  }
+  if (a.year == b.year) {
+    return '${_monthNames[a.month - 1]} ${a.day} – ${_monthNames[b.month - 1]} ${b.day}, ${a.year}';
+  }
+  return '${formatEventDateWords(a)} – ${formatEventDateWords(b)}';
+}
+
+/// Form field label: October 30, 2026 or November 5–10, 2026 (6 days).
+String formatEventDateRangeField(DateTime start, DateTime end) {
+  final days = inclusiveCalendarDayCount(start, end);
+  if (days <= 1) return formatEventDateWords(start);
+  return '${formatEventDateRangeCompact(start, end)} ($days days)';
+}
+
 /// Push notification body: municipality · venue, date · time, description.
 String buildEventPushNotificationBody({
   required String municipality,

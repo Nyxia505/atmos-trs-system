@@ -8,24 +8,36 @@ import 'package:image_picker/image_picker.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'data.dart';
 import 'event_datetime_format.dart';
+import 'event_schedule.dart';
 import 'firestore_loader.dart';
 import 'municipality_bus_terminals.dart';
+import 'services/admin_live_collections.dart';
 import 'services/admin_session_bootstrap.dart';
 import 'services/auth_roles.dart';
+import 'municipality_performance.dart';
+import 'trip_planner_analytics_tab.dart';
+import 'services/public_firestore_read.dart';
 import 'services/reports/report_check_ins.dart';
 import 'services/storage_image_upload.dart';
 import 'services/spot_ratings_store.dart';
+import 'services/bus_location_store.dart';
 import 'services/tourism_session.dart' show tourismCatalogRevision;
 import 'admin_announcements_tab.dart';
 import 'admin_event_form_page.dart';
+import 'admin_bus_locations_tab.dart';
 import 'admin_matrix_fares_tab.dart';
 import 'admin_reports_tab.dart';
 import 'tourist_registry_tab.dart';
 import 'trip_planner_utils.dart';
 import 'auth/auth_navigation.dart';
 import 'theme/tourism_app_theme.dart';
+import 'trip_plan_host_bridge.dart';
+import 'utils/spot_coordinates.dart';
+import 'widgets/admin_bulk_selection_bar.dart';
 import 'widgets/admin_high_rating_spots_map.dart';
+import 'widgets/admin_spot_location_picker.dart';
 import 'widgets/municipality_image.dart';
+import 'widgets/optaca_portal_ui.dart';
 import 'widgets/responsive_layout.dart';
 import 'widgets/tourism_events_calendar.dart';
 import 'widgets/tourism_plan_ui.dart';
@@ -39,23 +51,43 @@ final RouteObserver<PageRoute<dynamic>> tourismAdminRouteObserver =
 const Color _kPortalIconBlue = Color(0xFF42A5F5);
 const Color _kTrendGreen = Color(0xFF66BB6A);
 
-/// Sidebar + header titles (same order as governor tab indices).
+/// Sidebar titles. Indices match [_buildGovernorTabBody].
 const _kGovernorNavItems = [
-  (icon: Icons.dashboard_rounded, label: 'Dashboard'),
-  (icon: Icons.insights_outlined, label: 'Analytics'),
-  (icon: Icons.star_outline_rounded, label: 'Featured'),
+  (icon: Icons.dashboard_rounded, label: 'Overview Dashboard'),
+  (icon: Icons.people_outline_rounded, label: 'Tourist Monitoring'),
   (icon: Icons.place_outlined, label: 'Tourist Spots'),
-  (icon: Icons.location_city_outlined, label: 'Municipalities'),
-  (icon: Icons.campaign_outlined, label: 'Announcements'),
-  (icon: Icons.event_outlined, label: 'Events'),
-  (icon: Icons.people_outline_rounded, label: 'Tourists'),
-  (icon: Icons.fact_check_outlined, label: 'Check-ins'),
-  (icon: Icons.view_in_ar, label: 'VR Tour'),
-  (icon: Icons.assessment_outlined, label: 'Reports'),
+  (icon: Icons.star_outline_rounded, label: 'Featured Destinations'),
+  (icon: Icons.view_in_ar_outlined, label: 'Virtual Tours'),
+  (icon: Icons.location_city_outlined, label: 'Municipality Performance'),
+  (icon: Icons.route_outlined, label: 'Trip Planner Analytics'),
   (icon: Icons.grid_on_outlined, label: 'Matrix Fares'),
-  (icon: Icons.qr_code_scanner_rounded, label: 'Spots & QR Code'),
+  (icon: Icons.campaign_outlined, label: 'Events & Announcements'),
+  (icon: Icons.storefront_outlined, label: 'Establishments'),
+  (icon: Icons.insights_outlined, label: 'Tourism Insights'),
+  (icon: Icons.assessment_outlined, label: 'DOT Reports'),
+  (icon: Icons.warning_amber_rounded, label: 'Alerts & Quality'),
   (icon: Icons.settings_outlined, label: 'Settings'),
 ];
+
+const _kNavSections = <({String? title, List<int> indices})>[
+  (title: null, indices: [0]),
+  (title: 'Visitors', indices: [1, 5, 6]),
+  (title: 'Places', indices: [2, 3, 4, 8, 9]),
+  (title: 'Reports', indices: [7, 10, 11, 12]),
+  (title: 'System', indices: [13]),
+];
+
+String _portalPageTitle(int selected) {
+  if (selected >= 0 && selected < _kGovernorNavItems.length) {
+    return _kGovernorNavItems[selected].label;
+  }
+  return switch (selected) {
+    14 => 'Bus stops',
+    15 => 'Spots & QR',
+    16 => 'QR check-in history',
+    _ => 'OPTACA Portal',
+  };
+}
 
 String _slug(String name) {
   return name
@@ -78,43 +110,56 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   /// Tab changes use this notifier so the heavy content area rebuilds without
   /// rebuilding the entire scaffold (smoother on web).
   final ValueNotifier<int> _tabIndex = ValueNotifier<int>(0);
+  /// Null follows screen width (compact on tablet). User toggle pins the choice.
+  bool? _navCollapsed;
 
   void _onGovernorDataChanged() => setState(() {});
 
   Widget _buildGovernorTabBody(int index) {
     switch (index) {
       case 0:
-        return _OverviewTab();
+        return _OverviewTab(onOpen: (index) => _tabIndex.value = index);
       case 1:
-        return _AnalyticsTab(onChanged: _onGovernorDataChanged);
+        return _TouristMonitoringHost(
+          onOpenCheckIns: () => _tabIndex.value = 16,
+        );
       case 2:
-        return AdminFeaturedSpotsTab(onChanged: _onGovernorDataChanged);
-      case 3:
         return _SpotsListTab(onChanged: _onGovernorDataChanged);
+      case 3:
+        return AdminFeaturedSpotsTab(onChanged: _onGovernorDataChanged);
       case 4:
-        return _MunicipalitiesListTab(onChanged: _onGovernorDataChanged);
-      case 5:
-        return AdminAnnouncementsTab(onChanged: _onGovernorDataChanged);
-      case 6:
-        return _EventsListTab(onChanged: _onGovernorDataChanged);
-      case 7:
-        return const TouristRegistryTab();
-      case 8:
-        return const _AdminCheckInsTab();
-      case 9:
         return const _AdminVrTourTab();
-      case 10:
-        return AdminReportsTab(
-          onOpenMatrixFares: () => _tabIndex.value = 11,
-        );
-      case 11:
+      case 5:
+        return _MunicipalitiesListTab(onChanged: _onGovernorDataChanged);
+      case 6:
+        return const TripPlannerAnalyticsTab();
+      case 7:
         return const AdminMatrixFaresTab();
-      case 12:
-        return _AdminSpotsQrTab(
-          onOpenSpotsTab: () => _tabIndex.value = 3,
+      case 8:
+        return _EventsAndAnnouncementsHost(onChanged: _onGovernorDataChanged);
+      case 9:
+        return const _PortalEstablishmentsTab();
+      case 10:
+        return _AnalyticsTab(onChanged: _onGovernorDataChanged);
+      case 11:
+        return AdminReportsTab(
+          onOpenMatrixFares: () => _tabIndex.value = 7,
         );
+      case 12:
+        return const _AlertsQualityTab();
       case 13:
-        return _AdminSettingsTab();
+        return _AdminSettingsTab(
+          onOpenBusStops: () => _tabIndex.value = 14,
+          onOpenSpotsQr: () => _tabIndex.value = 15,
+        );
+      case 14:
+        return const AdminBusLocationsTab();
+      case 15:
+        return _AdminSpotsQrTab(
+          onOpenSpotsTab: () => _tabIndex.value = 2,
+        );
+      case 16:
+        return const _AdminCheckInsTab();
       default:
         return const SizedBox.shrink();
     }
@@ -123,7 +168,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   @override
   void initState() {
     super.initState();
+    TripPlanHostBridge.openMatrixFaresTab = () => _tabIndex.value = 7;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      BusLocationStore.instance.ensureListening();
+      if (mounted) {
+        precacheImage(
+          const ResizeImage(
+            AssetImage(_OverviewHeroBanner._hostAsset),
+            width: 1400,
+          ),
+          context,
+        );
+      }
       prefetchAdminDashboardCatalogs().then((_) {
         if (mounted) setState(() {});
       });
@@ -132,20 +188,53 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   @override
   void dispose() {
+    if (TripPlanHostBridge.openMatrixFaresTab != null) {
+      TripPlanHostBridge.openMatrixFaresTab = null;
+    }
     _tabIndex.dispose();
     super.dispose();
   }
 
-  Widget _buildGovernorMainColumn(int selected) {
+  Future<void> _openAddTouristSpotModal() async {
+    if (!AuthRoles.canEditTouristSpotCatalog()) return;
+    await showAdminSpotFormDialog(context);
+    await loadTouristSpotsFromFirestore();
+    tourismCatalogRevision.value++;
+    if (mounted) setState(() {});
+  }
+
+  Widget _buildGovernorMainColumn(int selected, {required bool useDrawer}) {
+    final canEditSpots =
+        selected == 2 && AuthRoles.canEditTouristSpotCatalog();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (selected != 0) _GovernorPageHeader(title: _kGovernorNavItems[selected].label),
+        if (!useDrawer)
+        _GovernorPageHeader(
+          title: _portalPageTitle(selected),
+          actions: canEditSpots
+              ? [
+                  FilledButton.icon(
+                    onPressed: _openAddTouristSpotModal,
+                    icon: const Icon(Icons.add, size: 20),
+                    label: const Text('Add tourist spot'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: OptacaAdminTheme.primary,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
+                    ),
+                  ),
+                ]
+              : null,
+        ),
         Expanded(
           child: RepaintBoundary(
             child: ColoredBox(
-              color: AppColors.planPageBg,
-              child: _DeferredGovernorTabContent(
+              color: OptacaAdminTheme.background,
+              child: _KeepAliveGovernorTabs(
                 index: selected,
                 builder: _buildGovernorTabBody,
               ),
@@ -158,13 +247,24 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
+    return AdminLiveScope(
+      child: Theme(
+      data: OptacaAdminTheme.theme(Theme.of(context)),
+      child: LayoutBuilder(
       builder: (context, constraints) {
         final useDrawer = constraints.maxWidth < TourismBreakpoints.adminDrawer;
+        final autoCompact = constraints.maxWidth < TourismBreakpoints.wide;
+        final navCollapsed = !useDrawer && (_navCollapsed ?? autoCompact);
         return ValueListenableBuilder<int>(
           valueListenable: _tabIndex,
           builder: (context, selected, _) {
             void selectTab(int index) {
+              if (index == selected) {
+                if (useDrawer && Scaffold.maybeOf(context)?.isDrawerOpen == true) {
+                  Navigator.pop(context);
+                }
+                return;
+              }
               _tabIndex.value = index;
               if (useDrawer && Scaffold.maybeOf(context)?.isDrawerOpen == true) {
                 Navigator.pop(context);
@@ -176,49 +276,55 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               onSelect: selectTab,
               onLogout: () => performTourismLogout(context),
               fullWidth: useDrawer,
+              collapsed: navCollapsed,
+              onToggleCollapse: useDrawer
+                  ? null
+                  : () => setState(() => _navCollapsed = !navCollapsed),
             );
 
             if (useDrawer) {
               return Scaffold(
-                backgroundColor: AppColors.planPageBg,
+                backgroundColor: OptacaAdminTheme.background,
                 drawer: Drawer(
                   width: (constraints.maxWidth * 0.86).clamp(260.0, 320.0),
                   child: sidebar,
                 ),
                 appBar: AppBar(
-                  backgroundColor: AppColors.primary,
+                  backgroundColor: OptacaAdminTheme.primary,
                   foregroundColor: Colors.white,
                   elevation: 0,
                   title: Text(
-                    _kGovernorNavItems[selected].label,
+                    _portalPageTitle(selected),
                     style: TourismAppTheme.adminAppBar.titleTextStyle,
                   ),
                 ),
-                body: _buildGovernorMainColumn(selected),
+                body: _buildGovernorMainColumn(selected, useDrawer: true),
               );
             }
 
             return Scaffold(
-              backgroundColor: AppColors.planPageBg,
+              backgroundColor: OptacaAdminTheme.background,
               body: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   RepaintBoundary(child: sidebar),
-                  Expanded(child: _buildGovernorMainColumn(selected)),
+                  Expanded(child: _buildGovernorMainColumn(selected, useDrawer: false)),
                 ],
               ),
             );
           },
         );
       },
+      ),
+    ),
     );
   }
 }
 
-/// Paints a trivial first frame after a tab tap so the sidebar/header update
-/// immediately; the heavy tab subtree is built on the next frame (smoother on web).
-class _DeferredGovernorTabContent extends StatefulWidget {
-  const _DeferredGovernorTabContent({
+/// Keeps visited modules mounted so tab switches do not flash a blank frame
+/// or re-subscribe to Firestore. Inactive tabs skip rebuilds until selected.
+class _KeepAliveGovernorTabs extends StatefulWidget {
+  const _KeepAliveGovernorTabs({
     required this.index,
     required this.builder,
   });
@@ -227,46 +333,84 @@ class _DeferredGovernorTabContent extends StatefulWidget {
   final Widget Function(int index) builder;
 
   @override
-  State<_DeferredGovernorTabContent> createState() =>
-      _DeferredGovernorTabContentState();
+  State<_KeepAliveGovernorTabs> createState() => _KeepAliveGovernorTabsState();
 }
 
-class _DeferredGovernorTabContentState extends State<_DeferredGovernorTabContent> {
-  bool _showHeavy = false;
+class _KeepAliveGovernorTabsState extends State<_KeepAliveGovernorTabs> {
+  late final Set<int> _visited = {widget.index};
+  final Set<int> _firstPaint = {};
 
   @override
-  void initState() {
-    super.initState();
-    _scheduleHeavyAfterFirstFrame();
-  }
-
-  @override
-  void didUpdateWidget(covariant _DeferredGovernorTabContent oldWidget) {
+  void didUpdateWidget(covariant _KeepAliveGovernorTabs oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.index != widget.index) {
-      _showHeavy = false;
-      _scheduleHeavyAfterFirstFrame();
+    if (!_visited.contains(widget.index)) {
+      _visited.add(widget.index);
+      _firstPaint.add(widget.index);
+      final target = widget.index;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (!_firstPaint.contains(target)) return;
+        setState(() => _firstPaint.remove(target));
+      });
     }
-  }
-
-  void _scheduleHeavyAfterFirstFrame() {
-    final targetIndex = widget.index;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      if (widget.index != targetIndex) return;
-      setState(() => _showHeavy = true);
-    });
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!_showHeavy) {
-      return const ColoredBox(
-        color: AppColors.planPageBg,
-        child: SizedBox.expand(),
-      );
+    final idx = widget.index;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        for (final i in _visited)
+          _HoldInactiveChild(
+            active: i == idx,
+            child: i == idx
+                ? KeyedSubtree(
+                    key: ValueKey('optaca-tab-$i'),
+                    child: widget.builder(i),
+                  )
+                : const SizedBox.shrink(),
+          ),
+        if (_firstPaint.contains(idx))
+          const ColoredBox(
+            color: OptacaAdminTheme.background,
+            child: Center(
+              child: CircularProgressIndicator(color: AppColors.primary),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _HoldInactiveChild extends StatefulWidget {
+  const _HoldInactiveChild({
+    required this.active,
+    required this.child,
+  });
+
+  final bool active;
+  final Widget child;
+
+  @override
+  State<_HoldInactiveChild> createState() => _HoldInactiveChildState();
+}
+
+class _HoldInactiveChildState extends State<_HoldInactiveChild> {
+  Widget? _held;
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.active || _held == null) {
+      _held = widget.child;
     }
-    return widget.builder(widget.index);
+    return TickerMode(
+      enabled: widget.active,
+      child: Offstage(
+        offstage: !widget.active,
+        child: _held!,
+      ),
+    );
   }
 }
 
@@ -275,248 +419,920 @@ class _GovernorSidebar extends StatelessWidget {
   final ValueChanged<int> onSelect;
   final VoidCallback onLogout;
   final bool fullWidth;
+  final bool collapsed;
+  final VoidCallback? onToggleCollapse;
 
   const _GovernorSidebar({
     required this.selectedIndex,
     required this.onSelect,
     required this.onLogout,
     this.fullWidth = false,
+    this.collapsed = false,
+    this.onToggleCollapse,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      width: fullWidth ? double.infinity : (collapsed ? 84 : 276),
       decoration: const BoxDecoration(
-        gradient: TourismPlanUi.primaryGradient,
+        gradient: OptacaAdminTheme.sidebarGradient,
       ),
       child: SafeArea(
-        child: SizedBox(
-          width: fullWidth ? double.infinity : 280,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: EdgeInsets.fromLTRB(collapsed ? 10 : 16, 18, collapsed ? 10 : 12, 8),
+              child: collapsed
+                  ? Column(
+                      children: [
+                        Tooltip(
+                          message: 'OPTACA Portal',
+                          child: _optacaSealLogo(),
+                        ),
+                        if (onToggleCollapse != null)
+                          IconButton(
+                            tooltip: 'Expand menu',
+                            onPressed: onToggleCollapse,
+                            icon: Icon(
+                              Icons.keyboard_double_arrow_right_rounded,
+                              color: Colors.white.withValues(alpha: 0.85),
+                            ),
+                          ),
+                      ],
+                    )
+                  : Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        _optacaSealLogo(),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'OPTACA',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.white,
+                                  letterSpacing: 0.6,
+                                  height: 1.05,
+                                ),
+                              ),
+                              SizedBox(height: 3),
+                              Text(
+                                'Provincial Tourism Office',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  color: Color(0xFFFFD7B0),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (onToggleCollapse != null)
+                          IconButton(
+                            tooltip: 'Collapse menu',
+                            onPressed: onToggleCollapse,
+                            icon: Icon(
+                              Icons.keyboard_double_arrow_left_rounded,
+                              color: Colors.white.withValues(alpha: 0.85),
+                            ),
+                          ),
+                      ],
+                    ),
+            ),
+            if (!collapsed)
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 16, 20),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    IconButton(
-                      icon: const Icon(
-                        Icons.arrow_back_ios_new_rounded,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                      onPressed: onLogout,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                        minWidth: 36,
-                        minHeight: 36,
-                      ),
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                  ),
+                  child: const Text(
+                    'Misamis Occidental',
+                    style: TextStyle(
+                      color: Color(0xFFFFE4C8),
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
                     ),
-                    Expanded(
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.2),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.public_rounded,
-                              color: Colors.white,
-                              size: 28,
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'ATMOS TRS',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white,
-                                    height: 1.1,
-                                  ),
-                                ),
-                                Text(
-                                  'OPTACA Portal',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.white.withValues(alpha: 0.92),
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          _GovernorSidebarAvatar(),
-                        ],
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
-              Expanded(
-                child: ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  itemCount: _kGovernorNavItems.length,
-                  itemBuilder: (context, index) {
-                    final item = _kGovernorNavItems[index];
-                    final selected = selectedIndex == index;
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: () => onSelect(index),
-                          borderRadius: BorderRadius.circular(14),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 12,
-                            ),
-                            decoration: BoxDecoration(
-                              color: selected
-                                  ? Colors.white
-                                  : Colors.transparent,
-                              borderRadius: BorderRadius.circular(14),
-                              boxShadow: selected
-                                  ? [
-                                      BoxShadow(
-                                        color: Colors.black.withValues(
-                                          alpha: 0.12,
-                                        ),
-                                        blurRadius: 12,
-                                        offset: const Offset(0, 4),
-                                      ),
-                                    ]
-                                  : null,
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  item.icon,
-                                  size: 22,
-                                  color: selected
-                                      ? AppColors.primary
-                                      : Colors.white,
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Text(
-                                    item.label,
-                                    style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: selected
-                                          ? FontWeight.w700
-                                          : FontWeight.w500,
-                                      color: selected
-                                          ? AppColors.primary
-                                          : Colors.white,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
+            Expanded(child: _navList()),
+            if (!collapsed)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.verified_outlined, color: Color(0xFFFFD7B0), size: 18),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'OPTACA Admin',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12.5,
                           ),
                         ),
                       ),
-                    );
-                  },
+                    ],
+                  ),
                 ),
               ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                child: OutlinedButton(
-                  onPressed: onLogout,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    side: const BorderSide(color: Colors.white, width: 1.5),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(24),
+            Padding(
+              padding: EdgeInsets.fromLTRB(collapsed ? 10 : 16, 4, collapsed ? 10 : 16, 16),
+              child: collapsed
+                  ? Tooltip(
+                      message: 'Logout',
+                      child: IconButton(
+                        onPressed: onLogout,
+                        icon: const Icon(Icons.logout_rounded, color: Colors.white),
+                      ),
+                    )
+                  : FilledButton.icon(
+                      onPressed: onLogout,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: OptacaAdminTheme.primary,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        minimumSize: const Size.fromHeight(46),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      icon: const Icon(Icons.logout_rounded, size: 18),
+                      label: const Text(
+                        'Logout',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
                     ),
-                  ),
-                  child: const Text(
-                    'Logout',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ),
-            ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static const _kTourismSealAsset =
+      'assets/images/misamis_occidental_tourism_seal_sidebar.png';
+
+  Widget _optacaSealLogo() {
+    return SizedBox(
+      width: 44,
+      height: 44,
+      child: ClipOval(
+        child: Image.asset(
+          _kTourismSealAsset,
+          package: 'trip_plan',
+          width: 44,
+          height: 44,
+          fit: BoxFit.contain,
+          alignment: Alignment.center,
+          filterQuality: FilterQuality.high,
+          isAntiAlias: true,
+          gaplessPlayback: true,
+          errorBuilder: (context, error, stackTrace) => const Icon(
+            Icons.shield_outlined,
+            color: Colors.white,
+            size: 26,
           ),
         ),
       ),
     );
   }
-}
 
-class _GovernorSidebarAvatar extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 44,
-      height: 44,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: Colors.white,
-        border: Border.all(color: Colors.white, width: 2),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.15),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
+  Widget _navList() {
+    return ListView(
+      padding: EdgeInsets.fromLTRB(collapsed ? 8 : 12, 4, collapsed ? 8 : 12, 12),
+      children: [
+        for (final section in _kNavSections) ...[
+          if (!collapsed && section.title != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 16, 12, 8),
+              child: Text(
+                section.title!.toUpperCase(),
+                style: TextStyle(
+                  color: const Color(0xFFFFD7B0).withValues(alpha: 0.85),
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.4,
+                ),
+              ),
+            )
+          else if (collapsed && section.title != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 10, 8, 6),
+              child: Divider(color: Colors.white.withValues(alpha: 0.22), height: 1),
+            ),
+          for (final index in section.indices) _navTile(index),
         ],
-      ),
-      alignment: Alignment.center,
-      child: const Text(
-        'G',
-        style: TextStyle(
-          fontSize: 18,
-          fontWeight: FontWeight.bold,
-          color: Color(0xFF9E9E9E),
+      ],
+    );
+  }
+
+  Widget _navTile(int index) {
+    final item = _kGovernorNavItems[index];
+    final selected = selectedIndex == index;
+    final tile = Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => onSelect(index),
+          borderRadius: BorderRadius.circular(12),
+          hoverColor: selected
+              ? Colors.white.withValues(alpha: 0.08)
+              : Colors.white.withValues(alpha: 0.08),
+          splashColor: Colors.white.withValues(alpha: 0.2),
+          highlightColor: Colors.white.withValues(alpha: 0.08),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            padding: EdgeInsets.symmetric(
+              horizontal: collapsed ? 0 : 12,
+              vertical: collapsed ? 11 : 12,
+            ),
+            decoration: BoxDecoration(
+              color: selected
+                  ? OptacaAdminTheme.primary
+                  : Colors.white.withValues(alpha: 0.0),
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: selected
+                  ? [
+                      BoxShadow(
+                        color: OptacaAdminTheme.primary.withValues(alpha: 0.35),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Row(
+              mainAxisAlignment: collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
+              children: [
+                Icon(
+                  item.icon,
+                  size: 21,
+                  color: selected ? Colors.white : const Color(0xFFFFE4C8),
+                ),
+                if (!collapsed) ...[
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      item.label,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        height: 1.2,
+                        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                        color: selected ? Colors.white : Colors.white.withValues(alpha: 0.88),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
         ),
       ),
     );
+    if (!collapsed) return tile;
+    return Tooltip(message: item.label, waitDuration: const Duration(milliseconds: 250), child: tile);
   }
 }
 
 class _GovernorPageHeader extends StatelessWidget {
   final String title;
+  final List<Widget>? actions;
 
-  const _GovernorPageHeader({required this.title});
+  const _GovernorPageHeader({
+    required this.title,
+    this.actions,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      decoration: const BoxDecoration(
-        color: AppColors.primary,
-        borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
-      ),
-      padding: const EdgeInsets.fromLTRB(28, 18, 28, 22),
-      child: Text(
-        title,
-        style: const TextStyle(
-          fontSize: 22,
-          fontWeight: FontWeight.bold,
-          color: Colors.white,
+    return Material(
+      color: OptacaAdminTheme.card,
+      elevation: 0,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(28, 14, 28, 12),
+        decoration: BoxDecoration(
+          color: OptacaAdminTheme.card,
+          border: const Border(bottom: BorderSide(color: OptacaAdminTheme.border)),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF2A1810).withValues(alpha: 0.04),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final stacked = constraints.maxWidth < 640;
+            final titleBlock = Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 36,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 8),
+                  decoration: BoxDecoration(
+                    color: OptacaAdminTheme.primary,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w800,
+                    color: OptacaAdminTheme.text,
+                    letterSpacing: -0.4,
+                    height: 1.1,
+                  ),
+                ),
+              ],
+            );
+            if (actions == null || actions!.isEmpty) return titleBlock;
+            if (stacked) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  titleBlock,
+                  const SizedBox(height: 12),
+                  Wrap(spacing: 8, runSpacing: 8, children: actions!),
+                ],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: titleBlock),
+                const SizedBox(width: 12),
+                ...actions!,
+              ],
+            );
+          },
         ),
       ),
+    );
+  }
+}
+
+class _TouristMonitoringHost extends StatelessWidget {
+  const _TouristMonitoringHost({required this.onOpenCheckIns});
+
+  final VoidCallback onOpenCheckIns;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerRight,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: FilledButton.tonalIcon(
+              onPressed: onOpenCheckIns,
+              icon: const Icon(Icons.fact_check_outlined, size: 18),
+              label: const Text('QR check-in history'),
+              style: FilledButton.styleFrom(
+                backgroundColor: OptacaAdminTheme.lightOrange,
+                foregroundColor: OptacaAdminTheme.darkOrange,
+              ),
+            ),
+          ),
+        ),
+        const Expanded(child: TouristRegistryTab()),
+      ],
+    );
+  }
+}
+
+/// Shows the existing announcements page or the existing events page.
+/// Only one is mounted, so the two lists do not share a scroll controller.
+class _EventsAndAnnouncementsHost extends StatefulWidget {
+  const _EventsAndAnnouncementsHost({required this.onChanged});
+
+  final VoidCallback onChanged;
+
+  @override
+  State<_EventsAndAnnouncementsHost> createState() =>
+      _EventsAndAnnouncementsHostState();
+}
+
+class _EventsAndAnnouncementsHostState extends State<_EventsAndAnnouncementsHost> {
+  int _page = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child: Container(
+            padding: const EdgeInsets.all(6),
+            decoration: OptacaAdminTheme.cardDecoration,
+            child: SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<int>(
+                showSelectedIcon: false,
+                segments: const [
+                  ButtonSegment(
+                    value: 0,
+                    icon: Icon(Icons.campaign_outlined, size: 18),
+                    label: Text('Announcements'),
+                  ),
+                  ButtonSegment(
+                    value: 1,
+                    icon: Icon(Icons.event_outlined, size: 18),
+                    label: Text('Events'),
+                  ),
+                ],
+                selected: {_page},
+                onSelectionChanged: (next) {
+                  setState(() => _page = next.first);
+                },
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              TickerMode(
+                enabled: _page == 0,
+                child: Offstage(
+                  offstage: _page != 0,
+                  child: AdminAnnouncementsTab(onChanged: widget.onChanged),
+                ),
+              ),
+              TickerMode(
+                enabled: _page == 1,
+                child: Offstage(
+                  offstage: _page != 1,
+                  child: _EventsListTab(onChanged: widget.onChanged),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PortalEstablishmentsTab extends StatefulWidget {
+  const _PortalEstablishmentsTab();
+
+  @override
+  State<_PortalEstablishmentsTab> createState() =>
+      _PortalEstablishmentsTabState();
+}
+
+class _PortalEstablishmentsTabState extends State<_PortalEstablishmentsTab> {
+  late Future<PublicFirestoreDocs> _load =
+      fetchPublicFirestoreCollection('accommodation_establishments');
+  final TextEditingController _search = TextEditingController();
+
+  void _reload() {
+    setState(() {
+      _load = fetchPublicFirestoreCollection('accommodation_establishments');
+    });
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<PublicFirestoreDocs>(
+      future: _load,
+      builder: (context, snap) {
+        if (snap.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snap.hasError) {
+          return OptacaLoadError(
+            title: 'Could not load establishments',
+            message: '${snap.error}',
+            onRetry: _reload,
+          );
+        }
+        final docs = snap.data?.docs ?? const <PublicFirestoreDoc>[];
+        if (docs.isEmpty) {
+          return const OptacaEmptyState(
+            icon: Icons.storefront_outlined,
+            title: 'No establishments yet',
+            message: 'No establishment records are available to this account.',
+          );
+        }
+        final q = _search.text.trim().toLowerCase();
+        final filtered = [
+          for (final doc in docs)
+            if (q.isEmpty ||
+                (doc.data()['name'] ?? doc.data()['establishmentName'] ?? '')
+                    .toString()
+                    .toLowerCase()
+                    .contains(q) ||
+                (doc.data()['municipality'] ?? doc.data()['location'] ?? '')
+                    .toString()
+                    .toLowerCase()
+                    .contains(q))
+              doc,
+        ];
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+              child: TextField(
+                controller: _search,
+                onChanged: (_) => setState(() {}),
+                decoration: OptacaPortalUi.searchDecoration(
+                  hint: 'Search establishments',
+                ),
+              ),
+            ),
+            Expanded(
+              child: filtered.isEmpty
+                  ? const OptacaEmptyState(
+                      icon: Icons.search_off_outlined,
+                      title: 'No matching establishments',
+                      message: 'Try another name or municipality.',
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(20),
+                      itemCount: filtered.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        final data = filtered[index].data();
+                        final name = (data['name'] ??
+                                data['establishmentName'] ??
+                                'Establishment')
+                            .toString();
+                        final place = (data['municipality'] ??
+                                data['location'] ??
+                                '')
+                            .toString();
+                        final category =
+                            (data['category'] ?? data['type'] ?? '').toString();
+                        return OptacaPortalCard(
+                          padding: EdgeInsets.zero,
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                            leading: Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                color: OptacaAdminTheme.lightOrange,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Icon(
+                                Icons.storefront_outlined,
+                                color: OptacaAdminTheme.primary,
+                              ),
+                            ),
+                            title: Text(
+                              name,
+                              style: const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            subtitle: Text(
+                              [place, category]
+                                  .where((s) => s.isNotEmpty)
+                                  .join(' · '),
+                              style: const TextStyle(
+                                color: OptacaAdminTheme.textMuted,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _AlertsQualityTab extends StatelessWidget {
+  const _AlertsQualityTab();
+
+  @override
+  Widget build(BuildContext context) {
+    final host = TripPlanHostBridge.alertsQualityPanel;
+    if (host != null) return host(context);
+
+    // Standalone Trip Planner fallback (ATMOS host not wired).
+    final missingImage = <String>[];
+    final missingCoordinates = <String>[];
+    final missingMunicipality = <String>[];
+    final missingQr = <String>[];
+    for (final spot in allSpots) {
+      if (spot.imagePath.trim().isEmpty) missingImage.add(spot.displayName);
+      if (spot.latitude == null || spot.longitude == null) {
+        missingCoordinates.add(spot.displayName);
+      }
+      if (spot.location.trim().isEmpty) {
+        missingMunicipality.add(spot.displayName);
+      }
+      // Trip Planner TouristSpot model has no qr fields — flag via Firestore id when empty name/location already covered.
+    }
+    final groups = [
+      (title: 'Missing image', icon: Icons.image_not_supported_outlined, names: missingImage),
+      (title: 'Missing coordinates', icon: Icons.wrong_location_outlined, names: missingCoordinates),
+      (title: 'Missing municipality', icon: Icons.location_off_outlined, names: missingMunicipality),
+      (title: 'Missing QR (open from ATMOS for full QR audit)', icon: Icons.qr_code_2_outlined, names: missingQr),
+    ];
+    final total = missingImage.length +
+        missingCoordinates.length +
+        missingMunicipality.length;
+    if (total == 0) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: Text(
+            'No basic catalog gaps in loaded spots.\n'
+            'Open this portal from ATMOS for the full QR + quality audit.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.textGrey, height: 1.4),
+          ),
+        ),
+      );
+    }
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        Text(
+          '$total item${total == 1 ? '' : 's'} to review',
+          style: const TextStyle(
+            color: AppColors.textGrey,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 12),
+        for (final group in groups)
+          if (group.names.isNotEmpty) ...[
+            Material(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              clipBehavior: Clip.antiAlias,
+              child: ExpansionTile(
+                leading: Icon(group.icon, color: const Color(0xFFC2410C)),
+                title: Text(
+                  group.title,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                subtitle: Text(
+                  '${group.names.length} spot${group.names.length == 1 ? '' : 's'}',
+                ),
+                children: [
+                  for (final name in group.names)
+                    ListTile(
+                      dense: true,
+                      tileColor: Colors.white,
+                      title: Text(name),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
+      ],
     );
   }
 }
 
 // ─── Overview ───────────────────────────────────────────────────────────
 
-class _OverviewTab extends StatelessWidget {
-  const _OverviewTab();
+class _OverviewHeroBanner extends StatelessWidget {
+  const _OverviewHeroBanner({required this.now});
+
+  final DateTime now;
+
+  static const _hostAsset =
+      'linontripplanner-main/assets/images/capitolni.jpg';
+  static const _packageAsset = 'assets/images/capitolni.jpg';
+  static const _orange = Color(0xFFFF8A1F);
+
+  static (List<double>, List<Color>) _fade(double width) {
+    final start = width < 560
+        ? 0.42
+        : width < 900
+            ? 0.36
+            : 0.34;
+    return (
+      <double>[
+        0.0,
+        start,
+        start + 0.06,
+        start + 0.12,
+        start + 0.18,
+        start + 0.26,
+        start + 0.34,
+        1.0,
+      ],
+      const <Color>[
+        _orange,
+        _orange,
+        Color(0xF2FF8A1F),
+        Color(0xB8FF8A1F),
+        Color(0x73FF7900),
+        Color(0x2EE66D00),
+        Color(0x0AE66D00),
+        Color(0x00E66D00),
+      ],
+    );
+  }
+
+  Widget _capitolPhoto({int? cacheWidth}) {
+    const align = Alignment(0, 0.08);
+    return Image.asset(
+      _hostAsset,
+      fit: BoxFit.cover,
+      alignment: align,
+      cacheWidth: cacheWidth,
+      filterQuality: FilterQuality.medium,
+      gaplessPlayback: true,
+      excludeFromSemantics: true,
+      errorBuilder: (context, error, stackTrace) {
+        debugPrint('Overview capitol host asset failed: $error');
+        return Image.asset(
+          _packageAsset,
+          package: 'trip_plan',
+          fit: BoxFit.cover,
+          alignment: align,
+          cacheWidth: cacheWidth,
+          filterQuality: FilterQuality.medium,
+          gaplessPlayback: true,
+          excludeFromSemantics: true,
+          errorBuilder: (context, error, stackTrace) {
+            debugPrint('Overview capitol package asset failed: $error');
+            return const SizedBox.expand();
+          },
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: OptacaAdminTheme.primary.withValues(alpha: 0.28),
+            blurRadius: 24,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(22),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            final textMax = width < 560
+                ? width * 0.92
+                : width < 900
+                    ? width * 0.60
+                    : width * 0.50;
+            final fade = _fade(width);
+            final imageWidth = width < 560
+                ? width * 0.58
+                : width < 900
+                    ? width * 0.60
+                    : width * 0.64;
+            final minHeight = width < 560
+                ? 152.0
+                : width < 900
+                    ? 176.0
+                    : 200.0;
+            return SizedBox(
+              height: minHeight,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  const Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: OptacaAdminTheme.heroGradient,
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                    width: imageWidth,
+                    child: RepaintBoundary(
+                      child: _capitolPhoto(cacheWidth: 1400),
+                    ),
+                  ),
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.centerLeft,
+                          end: Alignment.centerRight,
+                          stops: fade.$1,
+                          colors: fade.$2,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 22, 24, 22),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: textMax),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Provincial Tourism Dashboard',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 26,
+                                fontWeight: FontWeight.w800,
+                                height: 1.15,
+                                letterSpacing: -0.4,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              '${_monthLabels[now.month - 1]} ${now.day}, ${now.year}',
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.9),
+                                fontSize: 13.5,
+                                height: 1.35,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _OverviewTab extends StatefulWidget {
+  const _OverviewTab({required this.onOpen});
+
+  final ValueChanged<int> onOpen;
+
+  @override
+  State<_OverviewTab> createState() => _OverviewTabState();
+}
+
+class _OverviewTabState extends State<_OverviewTab> {
+  ValueChanged<int> get onOpen => widget.onOpen;
 
   DateTime? _qrCheckInDateTime(Map<String, dynamic> raw) {
     dynamic read(Map<String, dynamic> d, String key) => d[key];
@@ -597,10 +1413,21 @@ class _OverviewTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('qr_checkins').snapshots(),
-      builder: (context, snap) {
-        final docs = snap.data?.docs ?? const [];
+    return AdminLiveDataBuilder(
+      builder: (context, live) {
+        if ((live.touristsError != null || live.checkInsError != null) &&
+            live.touristsReady &&
+            live.checkInsReady &&
+            live.tourists.isEmpty &&
+            live.checkIns.isEmpty) {
+          return OptacaLoadError(
+            title: 'Dashboard data could not be loaded',
+            message: '${live.touristsError ?? live.checkInsError}',
+            onRetry: live.retry,
+          );
+        }
+        final registryCount = live.tourists.length;
+        final docs = live.checkIns;
         final now = DateTime.now();
         final todayIds = <String>{};
         for (final doc in docs) {
@@ -613,24 +1440,47 @@ class _OverviewTab extends StatelessWidget {
           final id = _qrIdentity(data);
           if (id.isNotEmpty) todayIds.add(id);
         }
-        final totalTourists = users.length;
+        final seededTourists = users
+            .where((user) => AppRole.fromString(user.role) == AppRole.tourist)
+            .length;
+        final totalTourists = registryCount > 0
+            ? registryCount
+            : (seededTourists > 0 ? seededTourists : users.length);
         final touristsToday = todayIds.length;
         final totalCheckins = docs.length;
         final activeSpots = allSpots.length;
         final monthlyVisits = _visitsPerMonthFromCheckIns(docs);
 
+        final nowDay = DateTime(now.year, now.month, now.day);
+        final upcomingEvents = tourismEvents
+            .where(
+              (event) => eventExpandedCalendarDays(event)
+                  .any((day) => !day.isBefore(nowDay)),
+            )
+            .length;
+
+        final waiting = !live.touristsReady || !live.checkInsReady;
         return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 36),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          _OverviewHeroBanner(now: now),
+          const SizedBox(height: 18),
+          const OptacaSectionHeader(
+            title: 'Key figures',
+          ),
+          const SizedBox(height: 10),
+          if (waiting)
+            const OptacaKpiSkeletonRow()
+          else
           LayoutBuilder(
             builder: (context, c) {
               final w = c.maxWidth;
-              final cols = w >= 1100 ? 4 : (w >= 700 ? 2 : 1);
+              final cols = w >= 1200 ? 5 : (w >= 700 ? 2 : 1);
               final children = [
                 _PortalStatCard(
-                  title: 'Total Tourists',
+                  title: 'Registered Tourists',
                   value: totalTourists,
                   icon: Icons.groups_2_outlined,
                   iconBg: AppColors.primary.withValues(alpha: 0.12),
@@ -652,39 +1502,67 @@ class _OverviewTab extends StatelessWidget {
                   iconColor: AppColors.primary,
                 ),
                 _PortalStatCard(
-                  title: 'Active Spots',
+                  title: 'Active Tourist Spots',
                   value: activeSpots,
                   icon: Icons.location_on_outlined,
                   iconBg: AppColors.primary.withValues(alpha: 0.12),
                   iconColor: AppColors.primary,
                 ),
+                _PortalStatCard(
+                  title: 'Upcoming Events',
+                  value: upcomingEvents,
+                  icon: Icons.event_outlined,
+                  iconBg: _kTrendGreen.withValues(alpha: 0.15),
+                  iconColor: _kTrendGreen,
+                ),
               ];
-              if (cols == 4) {
+              if (cols >= 5) {
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    for (var i = 0; i < 4; i++) ...[
-                      if (i > 0) const SizedBox(width: 16),
+                    for (var i = 0; i < children.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 12),
                       Expanded(child: children[i]),
                     ],
                   ],
                 );
               }
-              return Wrap(
-                spacing: 16,
-                runSpacing: 16,
-                children: children
-                    .map(
-                      (ch) => SizedBox(
-                        width: cols == 2 ? (w - 20 - 16) / 2 : w,
-                        child: ch,
+              if (cols == 2) {
+                return Column(
+                  children: [
+                    for (var i = 0; i < children.length; i += 2) ...[
+                      if (i > 0) const SizedBox(height: 16),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(child: children[i]),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: i + 1 < children.length
+                                ? children[i + 1]
+                                : const SizedBox.shrink(),
+                          ),
+                        ],
                       ),
-                    )
-                    .toList(),
+                    ],
+                  ],
+                );
+              }
+              return Column(
+                children: [
+                  for (var i = 0; i < children.length; i++) ...[
+                    if (i > 0) const SizedBox(height: 16),
+                    children[i],
+                  ],
+                ],
               );
             },
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
+          const OptacaSectionHeader(
+            title: 'Arrivals and categories',
+          ),
+          const SizedBox(height: 10),
           LayoutBuilder(
             builder: (context, c) {
               final wide = c.maxWidth >= 900;
@@ -706,60 +1584,69 @@ class _OverviewTab extends StatelessWidget {
               );
             },
           ),
-          const SizedBox(height: 28),
-          Text(
-            'High rating spots',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: AppColors.textDark,
-            ),
+          const SizedBox(height: 20),
+          const OptacaSectionHeader(
+            title: 'High rating spots',
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           _HighRatingSpotsCard(),
-          const SizedBox(height: 24),
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.08),
-                  blurRadius: 20,
-                  offset: const Offset(0, 6),
-                ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+          const SizedBox(height: 20),
+          const OptacaSectionHeader(
+            title: 'Jump to a workspace',
+          ),
+          const SizedBox(height: 10),
+          LayoutBuilder(
+            builder: (context, c) {
+              final cols = c.maxWidth >= 1100
+                  ? 5
+                  : c.maxWidth >= 720
+                      ? 2
+                      : 1;
+              final actions = const [
+                (index: 1, icon: Icons.people_outline_rounded, label: 'Tourist Monitoring'),
+                (index: 5, icon: Icons.location_city_outlined, label: 'Municipality Performance'),
+                (index: 6, icon: Icons.route_outlined, label: 'Trip Planner Analytics'),
+                (index: 11, icon: Icons.assessment_outlined, label: 'DOT Reports'),
+                (index: 12, icon: Icons.warning_amber_rounded, label: 'Alerts & Quality'),
+              ];
+              if (cols == 1) {
+                return Column(
                   children: [
-                    Icon(Icons.info_outline, color: AppColors.primary, size: 22),
-                    const SizedBox(width: 8),
-                    const Text(
-                      'Quick actions',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textDark,
+                    for (var i = 0; i < actions.length; i++) ...[
+                      if (i > 0) const SizedBox(height: 10),
+                      OptacaQuickLink(
+                        icon: actions[i].icon,
+                        label: actions[i].label,
+                        onTap: () => onOpen(actions[i].index),
                       ),
+                    ],
+                  ],
+                );
+              }
+              return Column(
+                children: [
+                  for (var i = 0; i < actions.length; i += cols) ...[
+                    if (i > 0) const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        for (var j = 0; j < cols; j++) ...[
+                          if (j > 0) const SizedBox(width: 10),
+                          Expanded(
+                            child: i + j < actions.length
+                                ? OptacaQuickLink(
+                                    icon: actions[i + j].icon,
+                                    label: actions[i + j].label,
+                                    onTap: () => onOpen(actions[i + j].index),
+                                  )
+                                : const SizedBox.shrink(),
+                          ),
+                        ],
+                      ],
                     ),
                   ],
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'Use the sidebar to manage Featured spots, Tourist spots, Municipalities, Announcements, Events, and Tourists. '
-                  'Tourist spots use Location to link to a municipality name.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: AppColors.textGrey,
-                    height: 1.5,
-                  ),
-                ),
-              ],
-            ),
+                ],
+              );
+            },
           ),
         ],
       ),
@@ -789,83 +1676,63 @@ class _PortalStatCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: TourismPlanUi.planCardDecoration(),
+      clipBehavior: Clip.antiAlias,
+      decoration: OptacaAdminTheme.cardDecoration,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: iconBg,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(icon, color: iconColor, size: 22),
-              ),
-              const Spacer(),
-              Icon(
-                Icons.show_chart_rounded,
-                size: 18,
-                color: _kTrendGreen.withValues(alpha: 0.85),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Text(
-            '$value',
-            style: const TextStyle(
-              fontSize: 28,
-              fontWeight: FontWeight.bold,
-              color: AppColors.textDark,
-              height: 1,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textGrey,
-            ),
-          ),
-          if (subtitle != null) ...[
-            const SizedBox(height: 6),
-            Text(
-              subtitle!,
-              style: TextStyle(
-                fontSize: 11,
-                color: _kTrendGreen.withValues(alpha: 0.95),
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: _kTrendGreen.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
+          Container(height: 4, color: iconColor),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 16, 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(
-                  Icons.trending_up_rounded,
-                  size: 14,
-                  color: _kTrendGreen.withValues(alpha: 0.9),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: OptacaAdminTheme.textMuted,
+                        ),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.all(9),
+                      decoration: BoxDecoration(
+                        color: iconBg,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(icon, color: iconColor, size: 20),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 4),
+                const SizedBox(height: 10),
                 Text(
-                  'Trend',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: _kTrendGreen.withValues(alpha: 0.95),
+                  OptacaAdminTheme.formatCount(value),
+                  style: const TextStyle(
+                    fontSize: 30,
+                    fontWeight: FontWeight.w800,
+                    color: OptacaAdminTheme.text,
+                    height: 1,
+                    letterSpacing: -0.6,
                   ),
                 ),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    subtitle!,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: OptacaAdminTheme.textMuted,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -891,12 +1758,12 @@ class _TouristArrivalsCard extends StatelessWidget {
         trailing: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
-            color: AppColors.planPageBg,
+            color: OptacaAdminTheme.background,
             borderRadius: BorderRadius.circular(20),
             border: Border.all(color: const Color(0xFFE0E0E0)),
           ),
           child: const Text(
-            'This Month',
+            'By month',
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
@@ -922,12 +1789,12 @@ class _TouristArrivalsCard extends StatelessWidget {
       trailing: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: AppColors.planPageBg,
+          color: OptacaAdminTheme.background,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: const Color(0xFFE0E0E0)),
         ),
         child: const Text(
-          'This Month',
+          'By month',
           style: TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.w600,
@@ -1035,27 +1902,36 @@ Widget _chartShell({
   Widget? trailing,
 }) {
   return Container(
-    padding: const EdgeInsets.all(20),
-    decoration: TourismPlanUi.planCardDecoration(),
+    padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+    decoration: OptacaAdminTheme.cardDecoration,
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
+            Container(
+              width: 8,
+              height: 22,
+              decoration: BoxDecoration(
+                color: OptacaAdminTheme.primary,
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+            const SizedBox(width: 10),
             Expanded(
               child: Text(
                 title,
                 style: const TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textDark,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  color: OptacaAdminTheme.text,
                 ),
               ),
             ),
             if (trailing != null) trailing,
           ],
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
         child,
       ],
     ),
@@ -1114,9 +1990,9 @@ class _TopCategoriesDonutCard extends StatelessWidget {
           style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600),
         ),
       ),
-      child: Row(
-        children: [
-          SizedBox(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final pie = SizedBox(
             height: 180,
             width: 180,
             child: PieChart(
@@ -1140,50 +2016,65 @@ class _TopCategoriesDonutCard extends StatelessWidget {
                 }),
               ),
             ),
-          ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (var i = 0; i < top.length; i++)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 10,
-                          height: 10,
-                          decoration: BoxDecoration(
-                            color: colors[i % colors.length],
-                            shape: BoxShape.circle,
-                          ),
+          );
+          final legend = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var i = 0; i < top.length; i++)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: colors[i % colors.length],
+                          shape: BoxShape.circle,
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            top[i].key,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: AppColors.textDark,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        Text(
-                          '${(top[i].value / total * 100).toStringAsFixed(0)}%',
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          top[i].key,
                           style: const TextStyle(
                             fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.textGrey,
+                            color: AppColors.textDark,
                           ),
+                          overflow: TextOverflow.ellipsis,
                         ),
-                      ],
-                    ),
+                      ),
+                      Text(
+                        '${(top[i].value / total * 100).toStringAsFixed(0)}%',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textGrey,
+                        ),
+                      ),
+                    ],
                   ),
+                ),
+            ],
+          );
+          if (constraints.maxWidth < 420) {
+            return Column(
+              children: [
+                pie,
+                const SizedBox(height: 12),
+                legend,
               ],
-            ),
-          ),
-        ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              pie,
+              const SizedBox(width: 12),
+              Expanded(child: legend),
+            ],
+          );
+        },
       ),
     );
   }
@@ -1193,13 +2084,6 @@ class _TopCategoriesDonutCard extends StatelessWidget {
 
 // QR check-in parsing lives in services/reports/report_check_ins.dart so the
 // dashboard tabs and the Reports page agree on how records are read.
-
-DateTime? _checkInDateTime(Map<String, dynamic> raw) => checkInDateTime(raw);
-
-/// Visits per municipality from QR check-ins.
-Map<String, int> _visitsPerMunicipalityFromCheckIns(
-  Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
-) => visitsPerMunicipalityFromCheckIns(docs);
 
 /// Month labels for Jan–Dec.
 const List<String> _monthLabels = [
@@ -1222,15 +2106,35 @@ List<int> _visitsPerMonthFromCheckIns(
   Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
 ) => visitsPerMonthFromCheckIns(docs);
 
-/// Visits per day in the current calendar month (index 0 = day 1).
-List<int> _visitsPerDayThisMonth(
-  Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+Map<String, int> _visitsPerMunicipalityFromRecords(
+  List<CheckInRecord> records,
 ) {
+  final map = <String, int>{for (final m in municipalities) m.name: 0};
+  for (final record in records) {
+    final name = record.municipalityName;
+    if (name.isEmpty) continue;
+    map[name] = (map[name] ?? 0) + 1;
+  }
+  return map;
+}
+
+List<int> _visitsPerMonthFromRecords(List<CheckInRecord> records) {
+  final monthly = List<int>.filled(12, 0);
+  for (final record in records) {
+    final at = record.at;
+    if (at == null) continue;
+    final m = at.month;
+    if (m >= 1 && m <= 12) monthly[m - 1]++;
+  }
+  return monthly;
+}
+
+List<int> _visitsPerDayThisMonthFromRecords(List<CheckInRecord> records) {
   final now = DateTime.now();
   final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
   final daily = List<int>.filled(daysInMonth, 0);
-  for (final doc in docs) {
-    final at = _checkInDateTime(doc.data());
+  for (final record in records) {
+    final at = record.at;
     if (at == null) continue;
     if (at.year == now.year && at.month == now.month) {
       daily[at.day - 1]++;
@@ -1430,14 +2334,27 @@ class _AnalyticsTabState extends State<_AnalyticsTab> {
         .map((e) => FlSpot(e.key.toDouble(), e.value.toDouble()))
         .toList();
 
+    if (spots.isEmpty) {
+      return const SizedBox(
+        height: 260,
+        child: Center(
+          child: Text(
+            'No arrivals in this period',
+            style: TextStyle(color: AppColors.textGrey),
+          ),
+        ),
+      );
+    }
+    final chartMaxX = maxX < 1 ? 1.0 : maxX;
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: SizedBox(
         height: 260,
+        child: RepaintBoundary(
         child: LineChart(
           LineChartData(
             minX: 0,
-            maxX: maxX,
+            maxX: chartMaxX,
             minY: 0,
             maxY: maxY,
             clipData: const FlClipData.none(),
@@ -1504,17 +2421,28 @@ class _AnalyticsTabState extends State<_AnalyticsTab> {
           ),
           duration: const Duration(milliseconds: 250),
         ),
+        ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('qr_checkins').snapshots(),
-      builder: (context, snap) {
-        final docs = snap.data?.docs ?? const [];
-        final visits = _visitsPerMunicipalityFromCheckIns(docs);
+    return AdminLiveDataBuilder(
+      builder: (context, live) {
+        if (live.checkInsError != null &&
+            live.checkInsReady &&
+            live.checkIns.isEmpty) {
+          return OptacaLoadError(
+            title: 'Arrivals could not be loaded',
+            message: '${live.checkInsError}',
+            onRetry: live.retry,
+          );
+        }
+        final docs = live.checkIns;
+        final records =
+            live.checkInsReady ? live.checkInRecords : const <CheckInRecord>[];
+        final visits = _visitsPerMunicipalityFromRecords(records);
         final sortedMunis = List<String>.from(municipalities.map((m) => m.name))
           ..sort((a, b) {
             final byVisits =
@@ -1527,11 +2455,11 @@ class _AnalyticsTabState extends State<_AnalyticsTab> {
         final List<String> xLabels;
         final double maxX;
         if (_period == _AnalyticsPeriod.thisYear) {
-          series = _visitsPerMonthFromCheckIns(docs);
+          series = _visitsPerMonthFromRecords(records);
           xLabels = _monthLabels;
           maxX = 11;
         } else {
-          series = _visitsPerDayThisMonth(docs);
+          series = _visitsPerDayThisMonthFromRecords(records);
           xLabels = List.generate(
             series.length,
             (i) => '${i + 1}',
@@ -1578,7 +2506,7 @@ class _AnalyticsTabState extends State<_AnalyticsTab> {
           ),
           const SizedBox(height: 24),
           const Text(
-            'Municipalities & cities – tap to manage tourist spots',
+            'Municipalities & cities',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w600,
@@ -1586,7 +2514,7 @@ class _AnalyticsTabState extends State<_AnalyticsTab> {
             ),
           ),
           const SizedBox(height: 12),
-          if (snap.connectionState == ConnectionState.waiting && docs.isEmpty)
+          if (!live.checkInsReady && docs.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 24),
               child: Center(
@@ -1878,39 +2806,12 @@ class _HighRatingSpotsCard extends StatelessWidget {
         .toList();
 
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.07),
-            blurRadius: 18,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
+      decoration: OptacaAdminTheme.cardDecoration,
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Row(
-              children: [
-                Icon(Icons.map, color: AppColors.primary, size: 22),
-                const SizedBox(width: 8),
-                const Text(
-                  'High rating spots',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.textDark,
-                  ),
-                ),
-              ],
-            ),
-          ),
           if (sortedByRating.isEmpty)
             const Padding(
               padding: EdgeInsets.all(24),
@@ -1936,16 +2837,6 @@ class _HighRatingSpotsCard extends StatelessWidget {
             )
           else
             SizedBox(height: 280, child: _buildMap(context, spotsWithLocation)),
-          if (spotsWithLocation.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: Text(
-                '${spotsWithLocation.length} spot(s) with location · sorted by rating high to low',
-                style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -1958,33 +2849,30 @@ class _HighRatingSpotsCard extends StatelessWidget {
 
 // ─── Featured list ──────────────────────────────────────────────────────
 
-/// Featured spots shown on the Trip Planner home banner.
 class AdminFeaturedSpotsTab extends StatefulWidget {
   final VoidCallback onChanged;
 
   const AdminFeaturedSpotsTab({super.key, required this.onChanged});
 
   @override
-  State<AdminFeaturedSpotsTab> createState() => _AdminFeaturedSpotsTabState();
+  State<AdminFeaturedSpotsTab> createState() => _FeaturedListTabState();
 }
 
-class _AdminFeaturedSpotsTabState extends State<AdminFeaturedSpotsTab> {
+class _FeaturedListTabState extends State<AdminFeaturedSpotsTab> {
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
     _loading = featuredSpots.isEmpty;
-    _refresh(silent: true);
+    _refresh(silent: featuredSpots.isNotEmpty);
   }
 
   Future<void> _refresh({bool silent = false}) async {
-    if (!silent && featuredSpots.isEmpty && mounted) {
-      setState(() => _loading = true);
-    }
+    if (!silent && mounted) setState(() => _loading = true);
     try {
       await loadFeaturedSpotsFromFirestore().timeout(
-        const Duration(seconds: 8),
+        const Duration(seconds: 25),
       );
     } catch (e, st) {
       debugPrint('Featured spots load: $e\n$st');
@@ -1995,9 +2883,12 @@ class _AdminFeaturedSpotsTabState extends State<AdminFeaturedSpotsTab> {
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        RefreshIndicator(
+    if (_loading) {
+      return const Center(
+        child: CircularProgressIndicator(color: AppColors.primary),
+      );
+    }
+    return RefreshIndicator(
       color: AppColors.primary,
       onRefresh: _refresh,
       child: Stack(
@@ -2008,28 +2899,27 @@ class _AdminFeaturedSpotsTabState extends State<AdminFeaturedSpotsTab> {
           itemCount: featuredSpots.length,
           itemBuilder: (context, index) {
             final spot = featuredSpots[index];
-            return Card(
-              margin: const EdgeInsets.only(bottom: 10),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: ListTile(
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: OptacaPortalCard(
+                padding: EdgeInsets.zero,
+                child: ListTile(
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 16,
                   vertical: 8,
                 ),
-                leading: SizedBox(
-                  width: 52,
-                  height: 52,
-                  child: ClipOval(
-                    clipBehavior: Clip.antiAlias,
+                leading: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: SizedBox(
+                    width: 64,
+                    height: 64,
                     child: buildFeaturedSpotListAvatar(
                       spot,
                       fallback: ColoredBox(
-                        color: AppColors.primary.withValues(alpha: 0.2),
+                        color: OptacaAdminTheme.lightOrange,
                         child: const Icon(
                           Icons.star_rounded,
-                          color: AppColors.primary,
+                          color: OptacaAdminTheme.primary,
                           size: 28,
                         ),
                       ),
@@ -2039,15 +2929,15 @@ class _AdminFeaturedSpotsTabState extends State<AdminFeaturedSpotsTab> {
                 title: Text(
                   spot.name,
                   style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textDark,
+                    fontWeight: FontWeight.w700,
+                    color: OptacaAdminTheme.text,
                   ),
                 ),
                 subtitle: Text(
                   '${spot.priceRange} · ${spot.rating}★',
                   style: const TextStyle(
                     fontSize: 13,
-                    color: AppColors.textGrey,
+                    color: OptacaAdminTheme.textMuted,
                   ),
                 ),
                 trailing: Row(
@@ -2056,14 +2946,10 @@ class _AdminFeaturedSpotsTabState extends State<AdminFeaturedSpotsTab> {
                     IconButton(
                       icon: const Icon(Icons.edit_outlined, size: 22),
                       onPressed: () async {
-                        await Navigator.push(
+                        await showAdminFeaturedFormDialog(
                           context,
-                          MaterialPageRoute(
-                            builder: (_) => AdminFeaturedFormPage(
-                              existing: spot,
-                              index: index,
-                            ),
-                          ),
+                          existing: spot,
+                          index: index,
                         );
                         await _refresh();
                         widget.onChanged();
@@ -2088,16 +2974,15 @@ class _AdminFeaturedSpotsTabState extends State<AdminFeaturedSpotsTab> {
                   ],
                 ),
               ),
+              ),
             );
           },
         ),
         if (featuredSpots.isEmpty)
-          const Center(
-            child: Text(
-              'No featured spots.\nTap + to add, or pull down to refresh.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: AppColors.textGrey, fontSize: 15),
-            ),
+          const OptacaEmptyState(
+            icon: Icons.star_outline_rounded,
+            title: 'No featured spots',
+            message: 'Tap + to add, or pull down to refresh.',
           ),
         Positioned(
           right: 16,
@@ -2106,12 +2991,7 @@ class _AdminFeaturedSpotsTabState extends State<AdminFeaturedSpotsTab> {
             heroTag: 'featuredFab',
             backgroundColor: AppColors.primary,
             onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const AdminFeaturedFormPage(),
-                ),
-              );
+              await showAdminFeaturedFormDialog(context);
               await _refresh();
               widget.onChanged();
             },
@@ -2120,15 +3000,6 @@ class _AdminFeaturedSpotsTabState extends State<AdminFeaturedSpotsTab> {
         ),
       ],
     ),
-        ),
-        if (_loading)
-          const Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: LinearProgressIndicator(minHeight: 3),
-          ),
-      ],
     );
   }
 }
@@ -2164,7 +3035,9 @@ class _SpotsListTabState extends State<_SpotsListTab> {
   }
 
   void _onCatalogRevision() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    if (!optacaTabIsActive(context)) return;
+    setState(() {});
   }
 
   Future<void> _refresh({bool silent = false}) async {
@@ -2195,13 +3068,14 @@ class _SpotsListTabState extends State<_SpotsListTab> {
         child: CircularProgressIndicator(color: AppColors.primary),
       );
     }
+    final canEdit = AuthRoles.canEditTouristSpotCatalog();
     return RefreshIndicator(
       color: AppColors.primary,
       onRefresh: () => _refresh(),
       child: Stack(
       children: [
         ListView.builder(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+          padding: EdgeInsets.fromLTRB(16, 16, 16, canEdit ? 80 : 24),
           physics: const AlwaysScrollableScrollPhysics(),
           itemCount: allSpots.length + 1,
           itemBuilder: (context, index) {
@@ -2213,7 +3087,8 @@ class _SpotsListTabState extends State<_SpotsListTab> {
                   children: [
                     Text(
                       '${allSpots.length} tourist spot'
-                      '${allSpots.length == 1 ? '' : 's'} from Firestore',
+                      '${allSpots.length == 1 ? '' : 's'}'
+                      '${canEdit ? '' : ' · View only'}',
                       style: const TextStyle(
                         color: AppColors.textGrey,
                         fontSize: 13,
@@ -2230,6 +3105,7 @@ class _SpotsListTabState extends State<_SpotsListTab> {
                         ),
                       ),
                     ],
+                    if (canEdit) ...[
                     const SizedBox(height: 8),
                     OutlinedButton.icon(
                   onPressed: () async {
@@ -2266,6 +3142,7 @@ class _SpotsListTabState extends State<_SpotsListTab> {
                     'Delete no-picture & duplicates in Firebase',
                   ),
                 ),
+                    ],
                   ],
                 ),
               );
@@ -2274,26 +3151,43 @@ class _SpotsListTabState extends State<_SpotsListTab> {
             return Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: Material(
-                color: const Color(0xFFFFF4EB),
-                borderRadius: BorderRadius.circular(22),
+                color: OptacaAdminTheme.card,
+                borderRadius: BorderRadius.circular(16),
                 clipBehavior: Clip.antiAlias,
-                child: Padding(
+                child: InkWell(
+                  onTap: canEdit
+                      ? () async {
+                          final listIndex = index - 1;
+                          await _openSpotFormModal(
+                            context,
+                            existing: spot,
+                            index: listIndex,
+                          );
+                          await _refresh();
+                          widget.onChanged();
+                        }
+                      : null,
+                  hoverColor: OptacaAdminTheme.primary.withValues(alpha: 0.04),
+                  child: Ink(
+                    decoration: OptacaAdminTheme.cardDecoration,
+                    child: Padding(
                   padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      SizedBox(
-                        width: 52,
-                        height: 52,
-                        child: ClipOval(
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: SizedBox(
+                          width: 64,
+                          height: 64,
                           child: buildTouristSpotProfileImage(
                             spot,
                             fallback: Container(
-                              color: AppColors.primary.withValues(alpha: 0.18),
+                              color: OptacaAdminTheme.lightOrange,
                               alignment: Alignment.center,
                               child: Icon(
                                 spot.isHotel ? Icons.hotel : Icons.place,
-                                color: AppColors.primary,
+                                color: OptacaAdminTheme.primary,
                                 size: 26,
                               ),
                             ),
@@ -2336,19 +3230,16 @@ class _SpotsListTabState extends State<_SpotsListTab> {
                         onPressed: () =>
                             _showSpotRatingsSheet(context, spot, widget.onChanged),
                       ),
+                      if (canEdit) ...[
                       IconButton(
                         icon: const Icon(Icons.edit_outlined, size: 22),
                         tooltip: 'Edit',
                         onPressed: () async {
                           final listIndex = index - 1;
-                          await Navigator.push(
+                          await _openSpotFormModal(
                             context,
-                            MaterialPageRoute(
-                              builder: (_) => AdminSpotFormPage(
-                                existing: spot,
-                                index: listIndex,
-                              ),
-                            ),
+                            existing: spot,
+                            index: listIndex,
                           );
                           await _refresh();
                           widget.onChanged();
@@ -2363,37 +3254,67 @@ class _SpotsListTabState extends State<_SpotsListTab> {
                         tooltip: 'Delete',
                         onPressed: () {
                           _confirmDelete(context, spot.name, () {
-                            allSpots.removeAt(index - 1);
-                            widget.onChanged();
+                            () async {
+                              final listIndex = index - 1;
+                              try {
+                                await deleteTouristSpotFromFirestore(spot);
+                                if (listIndex >= 0 &&
+                                    listIndex < allSpots.length) {
+                                  allSpots.removeAt(listIndex);
+                                }
+                                tourismCatalogRevision.value++;
+                                widget.onChanged();
+                                if (mounted) {
+                                  await _refresh(silent: true);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Deleted "${spot.name}"'),
+                                      backgroundColor: Colors.green,
+                                    ),
+                                  );
+                                }
+                              } catch (e) {
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Delete failed: $e'),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
+                                }
+                              }
+                            }();
                           });
                         },
                       ),
+                      ],
                     ],
                   ),
                 ),
+              ),
+            ),
               ),
             );
           },
         ),
         if (allSpots.isEmpty)
-          const Center(
-            child: Text(
-              'No tourist spots.\nTap + to add, or pull down to refresh.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: AppColors.textGrey, fontSize: 15),
-            ),
+          OptacaEmptyState(
+            icon: Icons.place_outlined,
+            title: 'No tourist spots',
+            message: canEdit
+                ? 'Tap + to add, or pull down to refresh.'
+                : 'LGUs manage destinations from their municipal dashboards.',
           ),
+        if (canEdit)
         Positioned(
           right: 16,
           bottom: 16,
           child: FloatingActionButton(
             heroTag: 'spotsFab',
             backgroundColor: AppColors.primary,
+            tooltip: 'Add tourist spot',
             onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const AdminSpotFormPage()),
-              );
+              await _openSpotFormModal(context);
               await _refresh();
               widget.onChanged();
             },
@@ -2402,6 +3323,18 @@ class _SpotsListTabState extends State<_SpotsListTab> {
         ),
       ],
     ),
+    );
+  }
+
+  Future<void> _openSpotFormModal(
+    BuildContext context, {
+    TouristSpot? existing,
+    int? index,
+  }) {
+    return showAdminSpotFormDialog(
+      context,
+      existing: existing,
+      index: index,
     );
   }
 }
@@ -2417,106 +3350,238 @@ class _MunicipalitiesListTab extends StatefulWidget {
   State<_MunicipalitiesListTab> createState() => _MunicipalitiesListTabState();
 }
 
-class _MunicipalitiesListTabState extends State<_MunicipalitiesListTab>
-    with RouteAware {
-  bool _routeCovered = false;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    tourismAdminRouteObserver.unsubscribe(this);
-    final route = ModalRoute.of(context);
-    if (route is PageRoute<dynamic>) {
-      tourismAdminRouteObserver.subscribe(this, route);
-    }
-  }
+class _MunicipalitiesListTabState extends State<_MunicipalitiesListTab> {
+  final TextEditingController _search = TextEditingController();
+  String? _compareLeft;
+  String? _compareRight;
 
   @override
   void dispose() {
-    tourismAdminRouteObserver.unsubscribe(this);
+    _search.dispose();
     super.dispose();
   }
 
-  @override
-  void didPushNext() {
-    setState(() => _routeCovered = true);
-  }
-
-  @override
-  void didPopNext() {
-    setState(() => _routeCovered = false);
-  }
-
   static String _touristCountLine(int n) {
-    if (n == 1) return '1 tourist';
-    return '$n tourists';
+    if (n == 1) return '1 arrival';
+    return '$n arrivals';
+  }
+
+  void _openPerformance(Municipality municipality) {
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => MunicipalityPerformancePage(
+          municipality: municipality,
+          onChanged: widget.onChanged,
+          onManageSpots: () {
+            Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => _AdminMunicipalitySpotsScreen(
+                  municipality: municipality,
+                  onChanged: widget.onChanged,
+                ),
+              ),
+            );
+          },
+          onEditSpot: (spot) async {
+            final index = allSpots.indexOf(spot);
+            await showAdminSpotFormDialog(
+              context,
+              existing: spot,
+              index: index >= 0 ? index : null,
+            );
+            widget.onChanged();
+          },
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_routeCovered) {
-      return const ColoredBox(
-        color: AppColors.planPageBg,
-        child: SizedBox.expand(),
-      );
-    }
-
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection(kTouristCollection)
-          .snapshots(),
-      builder: (context, touristSnap) {
-        final counts = touristSnap.hasData
-            ? touristCountsPerMunicipalityFromTouristDocs(
-                touristSnap.data!.docs,
-              )
-            : <String, int>{
-                for (final m in sortedMunicipalities) m.name: 0,
-              };
+    return AdminLiveDataBuilder(
+      builder: (context, live) {
+        if (live.checkInsError != null &&
+            live.checkInsReady &&
+            live.checkIns.isEmpty) {
+          return OptacaLoadError(
+            title: 'Arrivals could not be loaded',
+            message: '${live.checkInsError}',
+            onRetry: live.retry,
+          );
+        }
+        final arrivals = live.checkInsReady
+            ? recordedArrivalsFromRecords(live.checkInRecords)
+            : const <RecordedArrival>[];
+        final counts = live.checkInsReady
+            ? arrivalCountsByMunicipality(arrivals)
+            : const <String, int>{};
+        final query = _search.text.trim().toLowerCase();
+        final visible = municipalities.where((municipality) {
+          if (query.isEmpty) return true;
+          return municipality.name.toLowerCase().contains(query) ||
+              municipality.shortName.toLowerCase().contains(query);
+        }).toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
+        final ranks = rankMunicipalities(counts);
+        final names = municipalities.map((municipality) => municipality.name).toList()..sort();
+        List<RecordedArrival> forName(String? name) => [
+              for (final arrival in arrivals)
+                if (arrival.municipalityName == name) arrival,
+            ];
 
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
           child: Stack(
             clipBehavior: Clip.none,
             children: [
-              if (sortedMunicipalities.isNotEmpty)
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    const maxContent = 1180.0;
-                    final w = constraints.maxWidth;
-                    final contentW = w > maxContent ? maxContent : w;
-                    final cols = w >= 1000 ? 3 : (w >= 640 ? 2 : 1);
-                    final rowExtent = cols == 1 ? 102.0 : 108.0;
-                    return Align(
-                      alignment: Alignment.topCenter,
-                      child: SizedBox(
-                        width: contentW,
-                        child: GridView.builder(
-                          padding: const EdgeInsets.only(bottom: 80),
-                          gridDelegate:
-                              SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: cols,
-                            mainAxisSpacing: 12,
-                            crossAxisSpacing: 12,
-                            mainAxisExtent: rowExtent,
-                          ),
-                          itemCount: sortedMunicipalities.length,
-                          itemBuilder: (context, index) {
-                            final m = sortedMunicipalities[index];
-                            final realIndex = municipalities.indexOf(m);
-                            final n = counts[m.name] ?? 0;
-                            return _AdminMunicipalityGridCard(
-                              municipality: m,
-                              realIndex: realIndex,
-                              touristLabel: _touristCountLine(n),
-                              onChanged: widget.onChanged,
-                            );
-                          },
+              Column(
+                children: [
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final button = FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppColors.primary,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                         ),
+                        onPressed: !live.checkInsReady || live.checkInsError != null
+                            ? null
+                            : () {
+                                showDialog<void>(
+                                  context: context,
+                                  builder: (dialogContext) => Dialog(
+                                    child: ConstrainedBox(
+                                      constraints: const BoxConstraints(
+                                        maxWidth: 520,
+                                        maxHeight: 640,
+                                      ),
+                                      child: SingleChildScrollView(
+                                        padding: const EdgeInsets.all(8),
+                                        child: MunicipalityRankingList(
+                                          ranks: ranks,
+                                          onOpen: (municipality) {
+                                            Navigator.pop(dialogContext);
+                                            _openPerformance(municipality);
+                                          },
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                        icon: const Icon(Icons.leaderboard_outlined, size: 18),
+                        label: const Text('Arrival ranking'),
+                      );
+                      final search = TextField(
+                        controller: _search,
+                        onChanged: (_) => setState(() {}),
+                        decoration: OptacaPortalUi.searchDecoration(
+                          hint: 'Search municipalities',
+                        ),
+                      );
+                      if (constraints.maxWidth < 560) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            search,
+                            const SizedBox(height: 8),
+                            button,
+                          ],
+                        );
+                      }
+                      return Row(
+                        children: [
+                          Expanded(child: search),
+                          const SizedBox(width: 8),
+                          button,
+                        ],
+                      );
+                    },
+                  ),
+                  if (live.checkInsError != null)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: Text(
+                        'Recorded arrivals could not be loaded. Counts are not shown.',
+                        style: TextStyle(color: AppColors.textGrey),
                       ),
-                    );
-                  },
-                ),
+                    )
+                  else if (!live.checkInsReady)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: LinearProgressIndicator(minHeight: 2),
+                    ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView(
+                      padding: const EdgeInsets.only(bottom: 80),
+                      children: [
+                        MunicipalityComparisonPanel(
+                          left: _compareLeft,
+                          right: _compareRight,
+                          choices: names,
+                          leftArrivals: counts[_compareLeft] ?? 0,
+                          rightArrivals: counts[_compareRight] ?? 0,
+                          leftMonthly: monthlyArrivalCounts(forName(_compareLeft)),
+                          rightMonthly: monthlyArrivalCounts(forName(_compareRight)),
+                          leftGrowth: _compareLeft == null
+                              ? null
+                              : recordedArrivalGrowthLabel(forName(_compareLeft), null),
+                          rightGrowth: _compareRight == null
+                              ? null
+                              : recordedArrivalGrowthLabel(forName(_compareRight), null),
+                          onLeft: (value) => setState(() => _compareLeft = value),
+                          onRight: (value) => setState(() => _compareRight = value),
+                        ),
+                        const SizedBox(height: 12),
+                        if (visible.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Text(
+                              'No municipalities match these filters.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: AppColors.textGrey),
+                            ),
+                          )
+                        else
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              final cols = constraints.maxWidth >= 720 ? 2 : 1;
+                              return GridView.builder(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: cols,
+                                  mainAxisSpacing: 12,
+                                  crossAxisSpacing: 12,
+                                  mainAxisExtent: cols == 1 ? 102 : 108,
+                                ),
+                                itemCount: visible.length,
+                                itemBuilder: (context, index) {
+                                  final municipality = visible[index];
+                                  final realIndex = municipalities.indexOf(municipality);
+                                  final count = counts[municipality.name];
+                                  return _AdminMunicipalityGridCard(
+                                    municipality: municipality,
+                                    realIndex: realIndex,
+                                    touristLabel: !live.checkInsReady ||
+                                            live.checkInsError != null
+                                        ? '— arrivals'
+                                        : _touristCountLine(count ?? 0),
+                                    onChanged: widget.onChanged,
+                                    onOpen: () => _openPerformance(municipality),
+                                  );
+                                },
+                              );
+                            },
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
               if (municipalities.isEmpty)
                 const Center(
                   child: Text(
@@ -2614,7 +3679,7 @@ class _AdminMunicipalitySpotsScreenState extends State<_AdminMunicipalitySpotsSc
   Widget build(BuildContext context) {
     if (_loading) {
       return Scaffold(
-        backgroundColor: AppColors.planPageBg,
+        backgroundColor: OptacaAdminTheme.background,
         appBar: AppBar(
           backgroundColor: AppColors.primary,
           foregroundColor: Colors.white,
@@ -2628,7 +3693,7 @@ class _AdminMunicipalitySpotsScreenState extends State<_AdminMunicipalitySpotsSc
     final spots = _spotsInMunicipality();
 
     return Scaffold(
-      backgroundColor: AppColors.planPageBg,
+      backgroundColor: OptacaAdminTheme.background,
       appBar: AppBar(
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
@@ -2753,14 +3818,10 @@ class _AdminMunicipalitySpotsScreenState extends State<_AdminMunicipalitySpotsSc
                           tooltip: 'Edit',
                           onPressed: () async {
                             final listIndex = allSpots.indexOf(spot);
-                            await Navigator.push<void>(
+                            await showAdminSpotFormDialog(
                               context,
-                              MaterialPageRoute<void>(
-                                builder: (_) => AdminSpotFormPage(
-                                  existing: spot,
-                                  index: listIndex >= 0 ? listIndex : null,
-                                ),
-                              ),
+                              existing: spot,
+                              index: listIndex >= 0 ? listIndex : null,
                             );
                             if (context.mounted) setState(() {});
                             widget.onChanged();
@@ -2824,13 +3885,9 @@ class _AdminMunicipalitySpotsScreenState extends State<_AdminMunicipalitySpotsSc
               heroTag: 'muniSpotsFab_${widget.municipality.name}',
               backgroundColor: AppColors.primary,
               onPressed: () async {
-                await Navigator.push<void>(
+                await showAdminSpotFormDialog(
                   context,
-                  MaterialPageRoute<void>(
-                    builder: (_) => AdminSpotFormPage(
-                      initialLocation: widget.municipality.name,
-                    ),
-                  ),
+                  initialLocation: widget.municipality.name,
                 );
                 if (context.mounted) setState(() {});
                 widget.onChanged();
@@ -2849,26 +3906,15 @@ class _AdminMunicipalityGridCard extends StatelessWidget {
   final int realIndex;
   final String touristLabel;
   final VoidCallback onChanged;
+  final VoidCallback onOpen;
 
   const _AdminMunicipalityGridCard({
     required this.municipality,
     required this.realIndex,
     required this.touristLabel,
     required this.onChanged,
+    required this.onOpen,
   });
-
-  Future<void> _openSpotsForMunicipality(BuildContext context) async {
-    await Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (_) => _AdminMunicipalitySpotsScreen(
-          municipality: municipality,
-          onChanged: onChanged,
-        ),
-      ),
-    );
-    onChanged();
-  }
 
   Future<void> _openEdit(BuildContext context) async {
     await Navigator.push<void>(
@@ -2888,18 +3934,7 @@ class _AdminMunicipalityGridCard extends StatelessWidget {
     final isCity = municipality.divisionLabel == 'City';
 
     return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE6E2DA)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
+      decoration: OptacaAdminTheme.cardDecoration,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(14),
         child: Material(
@@ -2912,7 +3947,7 @@ class _AdminMunicipalityGridCard extends StatelessWidget {
                   message:
                       'Tap to view tourist spots in this ${isCity ? 'city' : 'municipality'}',
                   child: InkWell(
-                    onTap: () => _openSpotsForMunicipality(context),
+                    onTap: onOpen,
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
                       child: Row(
@@ -3070,7 +4105,7 @@ class _AppUsersManagementScreenState extends State<AppUsersManagementScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.planPageBg,
+      backgroundColor: OptacaAdminTheme.background,
       appBar: AppBar(
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
@@ -3200,6 +4235,9 @@ class _EventsListTab extends StatefulWidget {
 
 class _EventsListTabState extends State<_EventsListTab> {
   bool _loading = true;
+  Object? _error;
+  final Set<String> _selectedIds = {};
+  bool _deleting = false;
 
   @override
   void initState() {
@@ -3224,10 +4262,78 @@ class _EventsListTabState extends State<_EventsListTab> {
     try {
       await loadEventsFromFirestore().timeout(const Duration(seconds: 30));
       debugPrint('Admin Events tab: ${tourismEvents.length} events loaded');
+      if (mounted) _error = null;
     } catch (e, st) {
       debugPrint('Events load: $e\n$st');
+      if (mounted) _error = e;
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        _pruneSelection();
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  List<TourismEvent> get _selectableEvents => [
+        for (final event in tourismEvents)
+          if (!isAnnouncementBackedEventId(event.id)) event,
+      ];
+
+  void _pruneSelection() {
+    final visible = {for (final event in _selectableEvents) event.id};
+    _selectedIds.removeWhere((id) => !visible.contains(id));
+  }
+
+  void _toggleSelect(TourismEvent event) {
+    if (_deleting || isAnnouncementBackedEventId(event.id)) return;
+    setState(() {
+      if (!_selectedIds.add(event.id)) _selectedIds.remove(event.id);
+    });
+  }
+
+  void _selectAllVisible() {
+    if (_deleting) return;
+    setState(() {
+      _selectedIds
+        ..clear()
+        ..addAll(_selectableEvents.map((e) => e.id));
+    });
+  }
+
+  Future<void> _deleteSelected() async {
+    if (_deleting || _selectedIds.isEmpty) return;
+    final count = _selectedIds.length;
+    final confirmed = await confirmAdminBulkDelete(
+      context,
+      count: count,
+      nounSingular: 'event',
+      nounPlural: 'events',
+    );
+    if (!confirmed || !mounted) return;
+    final ids = Set<String>.from(_selectedIds);
+    setState(() => _deleting = true);
+    try {
+      final result = await deleteTourismEventsByIds(ids);
+      if (!mounted) return;
+      setState(() {
+        _selectedIds.removeAll(result.deletedIds);
+        _deleting = false;
+      });
+      widget.onChanged();
+      final deletedCount = result.deletedIds.length;
+      final message = result.hasFailures
+          ? '$deletedCount events deleted. ${result.failedIds.length} could not be deleted.'
+          : '$deletedCount events deleted successfully.';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _deleting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to delete events: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
     }
   }
 
@@ -3238,6 +4344,22 @@ class _EventsListTabState extends State<_EventsListTab> {
         child: CircularProgressIndicator(color: AppColors.primary),
       );
     }
+    if (_error != null && tourismEvents.isEmpty) {
+      return OptacaLoadError(
+        title: 'Events could not be loaded',
+        message: '$_error',
+        onRetry: _load,
+      );
+    }
+    final selectable = _selectableEvents;
+    final selectedCount = _selectedIds.length;
+    final allSelected =
+        selectable.isNotEmpty && selectedCount == selectable.length;
+    final selectAllTristate = selectedCount == 0
+        ? false
+        : allSelected
+            ? true
+            : null;
     return RefreshIndicator(
       color: AppColors.primary,
       onRefresh: _load,
@@ -3269,12 +4391,7 @@ class _EventsListTabState extends State<_EventsListTab> {
                   e,
                   accentColor: AppColors.primary,
                   onEdit: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => AdminEventFormPage(existing: e),
-                      ),
-                    );
+                    await openAdminEventForm(context, existing: e);
                     await _load();
                     widget.onChanged();
                   },
@@ -3291,22 +4408,42 @@ class _EventsListTabState extends State<_EventsListTab> {
                 ),
               ),
               const SizedBox(height: 16),
-              TourismPlanUi.sectionTitleBar(title: 'All events'),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: TourismPlanUi.sectionTitleBar(title: 'All events'),
+                  ),
+                  Flexible(
+                    child: AdminBulkSelectionBar(
+                      selectedCount: selectedCount,
+                      totalVisible: selectable.length,
+                      nounPlural: 'events',
+                      onSelectAllVisible: _selectAllVisible,
+                      onClear: () => setState(_selectedIds.clear),
+                      onDelete: _deleteSelected,
+                      deleting: _deleting,
+                      selectAllChecked: allSelected,
+                      selectAllTristate: selectAllTristate,
+                      alignEnd: true,
+                      compact: true,
+                    ),
+                  ),
+                ],
+              ),
               const SizedBox(height: 10),
               TourismEventTitlesList(
                 events: tourismEvents,
                 accentColor: AppColors.primary,
+                selectedIds: _selectedIds,
+                selectableIds: {for (final event in selectable) event.id},
+                onToggleSelect: _toggleSelect,
                 onEventTap: (e) => openTourismEventDetail(
                   context,
                   e,
                   accentColor: AppColors.primary,
                   onEdit: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => AdminEventFormPage(existing: e),
-                      ),
-                    );
+                    await openAdminEventForm(context, existing: e);
                     await _load();
                     widget.onChanged();
                   },
@@ -3328,10 +4465,7 @@ class _EventsListTabState extends State<_EventsListTab> {
               heroTag: 'eventsFab',
               backgroundColor: AppColors.primary,
               onPressed: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const AdminEventFormPage()),
-                );
+                await openAdminEventForm(context);
                 await _load();
                 widget.onChanged();
               },
@@ -3349,19 +4483,24 @@ void _confirmDelete(BuildContext context, String name, VoidCallback onConfirm) {
     context: context,
     builder: (ctx) => AlertDialog(
       title: const Text('Delete'),
-      content: Text('Remove "$name"?'),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      content: Text('Remove "$name"? This action cannot be undone.'),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx),
           child: const Text('Cancel'),
         ),
-        TextButton(
+        FilledButton(
           onPressed: () {
             Navigator.pop(ctx);
             onConfirm();
           },
-          child: Text('Delete', style: TextStyle(color: Colors.red.shade400)),
+          style: FilledButton.styleFrom(
+            backgroundColor: Colors.red.shade500,
+            foregroundColor: Colors.white,
+          ),
+          child: const Text('Delete'),
         ),
       ],
     ),
@@ -3607,6 +4746,29 @@ void _showAddRatingDialog(
 
 // ─── Featured form page ──────────────────────────────────────────────────
 
+Future<void> showAdminFeaturedFormDialog(
+  BuildContext context, {
+  FeaturedSpot? existing,
+  int? index,
+}) async {
+  if (!context.mounted) return;
+  final size = MediaQuery.sizeOf(context);
+  await showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: size.width < 640 ? size.width : 560,
+        height: size.height * 0.9,
+        child: AdminFeaturedFormPage(existing: existing, index: index),
+      ),
+    ),
+  );
+}
+
 class AdminFeaturedFormPage extends StatefulWidget {
   final FeaturedSpot? existing;
   final int? index;
@@ -3718,6 +4880,7 @@ class _AdminFeaturedFormPageState extends State<AdminFeaturedFormPage> {
               else
                 DropdownButtonFormField<String>(
                   value: _selectedSpotName,
+                  isExpanded: true,
                   decoration: const InputDecoration(
                     labelText: 'Registered spot',
                     hintText: 'Choose a tourist spot',
@@ -3726,7 +4889,11 @@ class _AdminFeaturedFormPageState extends State<AdminFeaturedFormPage> {
                       .map(
                         (s) => DropdownMenuItem(
                           value: s.name,
-                          child: Text(s.name, overflow: TextOverflow.ellipsis),
+                          child: Text(
+                            s.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       )
                       .toList(),
@@ -3831,6 +4998,34 @@ class _AdminFeaturedFormPageState extends State<AdminFeaturedFormPage> {
 
 // ─── Spot form page ─────────────────────────────────────────────────────
 
+Future<void> showAdminSpotFormDialog(
+  BuildContext context, {
+  TouristSpot? existing,
+  int? index,
+  String? initialLocation,
+}) async {
+  if (!context.mounted) return;
+  final size = MediaQuery.sizeOf(context);
+  await showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: size.width < 640 ? size.width : 560,
+        height: size.height * 0.9,
+        child: AdminSpotFormPage(
+          existing: existing,
+          index: index,
+          initialLocation: initialLocation,
+        ),
+      ),
+    ),
+  );
+}
+
 class AdminSpotFormPage extends StatefulWidget {
   final TouristSpot? existing;
   final int? index;
@@ -3866,12 +5061,29 @@ class _AdminSpotFormPageState extends State<AdminSpotFormPage> {
     'Food',
   ];
   late String _type;
+  double? _latitude;
+  double? _longitude;
   bool _uploadingImage = false;
+  bool _saving = false;
+  String? _saveError;
   Uint8List? _previewBytes;
 
   @override
   void initState() {
     super.initState();
+    if (!AuthRoles.canEditTouristSpotCatalog()) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'You do not have permission to edit tourist spots.',
+            ),
+          ),
+        );
+        Navigator.of(context).maybePop();
+      });
+    }
     _nameController = TextEditingController(text: widget.existing?.name ?? '');
     _locationController = TextEditingController(
       text: widget.existing?.location ??
@@ -3899,6 +5111,8 @@ class _AdminSpotFormPageState extends State<AdminSpotFormPage> {
     _imageController = TextEditingController(
       text: widget.existing?.imagePath ?? '',
     );
+    _latitude = widget.existing?.latitude;
+    _longitude = widget.existing?.longitude;
     final existingType = widget.existing?.type ?? 'spot';
     _type = existingType == 'spot'
         ? 'Nature'
@@ -3977,7 +5191,19 @@ class _AdminSpotFormPageState extends State<AdminSpotFormPage> {
   }
 
   Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (_saving) return;
+    if (!_formKey.currentState!.validate()) {
+      setState(() {
+        _saveError = 'Please fill required fields (name and municipality).';
+      });
+      return;
+    }
+    if (!isValidSpotCoordinate(_latitude, _longitude)) {
+      setState(() {
+        _saveError = 'Set a map location before saving.';
+      });
+      return;
+    }
     final name = _nameController.text.trim();
     final walkingRaw = _walkingMinutesController.text.trim();
     final walkingMinutes = walkingRaw.isEmpty
@@ -3999,8 +5225,8 @@ class _AdminSpotFormPageState extends State<AdminSpotFormPage> {
       rating: widget.existing?.rating ?? 0.0,
       description: _descriptionController.text.trim(),
       type: _type,
-      latitude: widget.existing?.latitude,
-      longitude: widget.existing?.longitude,
+      latitude: _latitude,
+      longitude: _longitude,
       walkingDistanceMinutes: walkingMinutes,
       entranceFee: entranceFee,
       foodAndDrinksPrice: foodAndDrinks,
@@ -4011,25 +5237,50 @@ class _AdminSpotFormPageState extends State<AdminSpotFormPage> {
       ratingCount: widget.existing?.ratingCount ?? 0,
       updatedAtMs: widget.existing?.updatedAtMs ?? 0,
     );
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
     try {
       await upsertTouristSpotToFirestore(spot, oldName: widget.existing?.name);
-      await loadTouristSpotsFromFirestore();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Save failed: $e'),
-            backgroundColor: Colors.orange,
-          ),
-        );
+      try {
+        await loadTouristSpotsFromFirestore();
+        tourismCatalogRevision.value++;
+      } catch (e) {
+        debugPrint('reload after spot save (non-fatal): $e');
       }
-      return;
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      debugPrint('AdminSpotFormPage save failed: $e');
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _saveError = 'Save failed: $e';
+        });
+      }
     }
-    if (mounted) Navigator.pop(context);
+  }
+
+  Future<void> _openLocationPicker() async {
+    final picked = await showAdminSpotLocationPicker(
+      context,
+      latitude: _latitude,
+      longitude: _longitude,
+      municipalityName: _locationController.text.trim(),
+    );
+    if (!mounted || picked == null) return;
+    setState(() {
+      _latitude = picked.latitude;
+      _longitude = picked.longitude;
+      if (_saveError == 'Set a map location before saving.') {
+        _saveError = null;
+      }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    final hasMapLocation = isValidSpotCoordinate(_latitude, _longitude);
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -4084,6 +5335,7 @@ class _AdminSpotFormPageState extends State<AdminSpotFormPage> {
                   hintText: 'Select a municipality',
                 ),
                 hint: const Text('Select a municipality'),
+                isExpanded: true,
                 items: [
                   const DropdownMenuItem(
                     value: null,
@@ -4100,6 +5352,53 @@ class _AdminSpotFormPageState extends State<AdminSpotFormPage> {
                     ? 'Please select a municipality'
                     : null,
               ),
+              const SizedBox(height: 16),
+              const Text(
+                'Location',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.textDark,
+                ),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: _openLocationPicker,
+                icon: const Icon(Icons.location_on),
+                label: const Text('Set Location on Map'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.primary,
+                  side: const BorderSide(color: AppColors.primary),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (hasMapLocation) ...[
+                Text(
+                  'Latitude: ${_latitude!.toStringAsFixed(4)}',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textDark,
+                  ),
+                ),
+                Text(
+                  'Longitude: ${_longitude!.toStringAsFixed(4)}',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textDark,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                AdminSpotLocationPreview(
+                  key: ValueKey('$_latitude,$_longitude'),
+                  latitude: _latitude!,
+                  longitude: _longitude!,
+                ),
+              ] else
+                Text(
+                  'No map location set yet.',
+                  style: TextStyle(fontSize: 12, color: AppColors.textGrey),
+                ),
               const SizedBox(height: 16),
               TextFormField(
                 controller: _descriptionController,
@@ -4207,28 +5506,42 @@ class _AdminSpotFormPageState extends State<AdminSpotFormPage> {
                 'Tap to pick image from device',
                 style: TextStyle(fontSize: 12, color: AppColors.textGrey),
               ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _imageController,
-                decoration: const InputDecoration(
-                  labelText: 'Image URL (optional, or use picker above)',
-                  hintText: 'Firebase Storage URL or any image URL',
+              if (_saveError != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _saveError!,
+                  style: TextStyle(
+                    color: Colors.red.shade700,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-              ),
+              ],
               const SizedBox(height: 24),
               ElevatedButton(
-                onPressed: () => _save(),
+                onPressed: _saving ? null : _save,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
+                  disabledBackgroundColor:
+                      AppColors.primary.withValues(alpha: 0.5),
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10),
                   ),
                 ),
-                child: const Text(
-                  'Save',
-                  style: TextStyle(color: Colors.white),
-                ),
+                child: _saving
+                    ? const SizedBox(
+                        height: 22,
+                        width: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text(
+                        'Save',
+                        style: TextStyle(color: Colors.white),
+                      ),
               ),
             ],
           ),
@@ -4257,6 +5570,7 @@ class _AdminMunicipalityFormPageState extends State<AdminMunicipalityFormPage> {
   String? _imagePath;
   bool _uploadingImage = false;
   Uint8List? _previewBytes;
+  bool _saving = false;
 
   @override
   void initState() {
@@ -4345,7 +5659,10 @@ class _AdminMunicipalityFormPageState extends State<AdminMunicipalityFormPage> {
   }
 
   Future<void> _save() async {
+    if (_saving) return;
     if (!_formKey.currentState!.validate()) return;
+    _saving = true;
+    if (mounted) setState(() {});
     final name = _nameController.text.trim();
     final m = Municipality(
       name: name,
@@ -4353,26 +5670,26 @@ class _AdminMunicipalityFormPageState extends State<AdminMunicipalityFormPage> {
       imagePath: _imagePath ?? '',
       description: '',
       spots: const [],
-      busTerminal: widget.existing?.busTerminal ??
-          defaultBusTerminalFor(
-            Municipality(
-              name: name,
-              shortName: name,
-              imagePath: '',
-              description: '',
-              spots: const [],
-            ),
-          ),
+      busTerminal: defaultBusTerminalFor(
+        Municipality(
+          name: name,
+          shortName: name,
+          imagePath: '',
+          description: '',
+          spots: const [],
+        ),
+      ),
     );
     if (widget.index != null) {
       municipalities[widget.index!] = m;
-    } else {
+    } else if (!municipalities.any((existing) => existing.name == name)) {
       municipalities.add(m);
     }
     try {
       await upsertMunicipalityToFirestore(m, oldName: widget.existing?.name);
     } catch (e) {
       if (mounted) {
+        setState(() => _saving = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Saved locally but Firestore failed: $e'),
@@ -4380,6 +5697,7 @@ class _AdminMunicipalityFormPageState extends State<AdminMunicipalityFormPage> {
           ),
         );
       }
+      return;
     }
     if (mounted) Navigator.pop(context);
   }
@@ -4460,17 +5778,19 @@ class _AdminMunicipalityFormPageState extends State<AdminMunicipalityFormPage> {
               ),
               const SizedBox(height: 24),
               ElevatedButton(
-                onPressed: () => _save(),
+                onPressed: _saving ? null : _save,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
+                  disabledBackgroundColor:
+                      AppColors.primary.withValues(alpha: 0.5),
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10),
                   ),
                 ),
-                child: const Text(
-                  'Save',
-                  style: TextStyle(color: Colors.white),
+                child: Text(
+                  _saving ? 'Saving...' : 'Save',
+                  style: const TextStyle(color: Colors.white),
                 ),
               ),
             ],
@@ -4498,10 +5818,16 @@ class _AdminUserFormPageState extends State<AdminUserFormPage> {
   late TextEditingController _nameController;
   late TextEditingController _emailController;
   String _role = 'user';
+  late final String _docId;
+  bool _saving = false;
 
   @override
   void initState() {
     super.initState();
+    final existingId = widget.existing?.id.trim() ?? '';
+    _docId = existingId.isNotEmpty
+        ? existingId
+        : FirebaseFirestore.instance.collection(kUsersCollection).doc().id;
     _nameController = TextEditingController(text: widget.existing?.name ?? '');
     _emailController = TextEditingController(
       text: widget.existing?.email ?? '',
@@ -4517,9 +5843,12 @@ class _AdminUserFormPageState extends State<AdminUserFormPage> {
   }
 
   Future<void> _save() async {
+    if (_saving) return;
     if (!_formKey.currentState!.validate()) return;
+    _saving = true;
+    if (mounted) setState(() {});
     final user = AppUser(
-      id: widget.existing?.id ?? '',
+      id: _docId,
       name: _nameController.text.trim(),
       email: _emailController.text.trim(),
       role: _role,
@@ -4532,6 +5861,7 @@ class _AdminUserFormPageState extends State<AdminUserFormPage> {
       if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) {
+        setState(() => _saving = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to save user: $e'),
@@ -4595,17 +5925,19 @@ class _AdminUserFormPageState extends State<AdminUserFormPage> {
               ),
               const SizedBox(height: 24),
               ElevatedButton(
-                onPressed: () => _save(),
+                onPressed: _saving ? null : _save,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
+                  disabledBackgroundColor:
+                      AppColors.primary.withValues(alpha: 0.5),
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10),
                   ),
                 ),
-                child: const Text(
-                  'Save',
-                  style: TextStyle(color: Colors.white),
+                child: Text(
+                  _saving ? 'Saving...' : 'Save',
+                  style: const TextStyle(color: Colors.white),
                 ),
               ),
             ],
@@ -4618,12 +5950,14 @@ class _AdminUserFormPageState extends State<AdminUserFormPage> {
 
 // ─── Check-ins, VR Tour, Reports, Spots & QR, Settings ─────────────────
 
-class _AdminCheckInsTab extends StatelessWidget {
+class _AdminCheckInsTab extends StatefulWidget {
   const _AdminCheckInsTab();
-  static const List<String> _checkInCollectionCandidates = [
-    // Confirmed Firestore collection for QR check-ins.
-    'qr_checkins',
-  ];
+
+  @override
+  State<_AdminCheckInsTab> createState() => _AdminCheckInsTabState();
+}
+
+class _AdminCheckInsTabState extends State<_AdminCheckInsTab> {
 
   String _pickString(Map<String, dynamic> data, List<String> keys) {
     for (final key in keys) {
@@ -4682,47 +6016,26 @@ class _AdminCheckInsTab extends StatelessWidget {
     return formatEventDateTimeDisplay(dt);
   }
 
-  Future<String> _resolveCheckInCollection() async {
-    final db = FirebaseFirestore.instance;
-    for (final name in _checkInCollectionCandidates) {
-      try {
-        final sample = await db.collection(name).limit(1).get();
-        if (sample.docs.isNotEmpty) return name;
-      } catch (_) {
-        // Ignore and try next candidate.
-      }
-    }
-    return _checkInCollectionCandidates.last;
-  }
-
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<String>(
-      future: _resolveCheckInCollection(),
-      builder: (context, sourceSnap) {
-        if (!sourceSnap.hasData) {
+    return AdminLiveDataBuilder(
+      builder: (context, live) {
+        if (live.checkInsError != null &&
+            live.checkInsReady &&
+            live.checkIns.isEmpty) {
+          return OptacaLoadError(
+            title: 'Could not load check-ins',
+            message: '${live.checkInsError}',
+            onRetry: live.retry,
+          );
+        }
+        if (!live.checkInsReady) {
           return const Center(child: CircularProgressIndicator());
         }
-        final collectionName = sourceSnap.data!;
-        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance
-              .collection(collectionName)
-              .limit(300)
-              .snapshots(),
-          builder: (context, snap) {
-            if (snap.hasError) {
-              return _portalEmptyState(
-                icon: Icons.error_outline_rounded,
-                title: 'Could not load check-ins',
-                subtitle: '${snap.error}',
-              );
-            }
-            if (!snap.hasData) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            final docs = List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(
-              snap.data!.docs,
-            )..sort((a, b) {
+        const collectionName = kQrCheckInsCollection;
+        final docs = List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(
+          live.checkIns,
+        )..sort((a, b) {
                 final ta = _pickDateTime(a.data()) ??
                     DateTime.fromMillisecondsSinceEpoch(0);
                 final tb = _pickDateTime(b.data()) ??
@@ -4833,92 +6146,376 @@ class _AdminCheckInsTab extends StatelessWidget {
             );
           },
             );
-          },
-        );
       },
     );
   }
 }
 
-class _AdminVrTourTab extends StatelessWidget {
-  const _AdminVrTourTab();
+class _VrTourThumb extends StatelessWidget {
+  const _VrTourThumb({required this.path});
+
+  final String path;
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _portalSectionTitle('Virtual experiences'),
-          const SizedBox(height: 12),
-          _portalListCard(
-            child: Padding(
-              padding: const EdgeInsets.all(22),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+    final fallback = Container(
+      color: AppColors.primary.withValues(alpha: 0.12),
+      child: const Icon(Icons.vrpano_rounded, color: AppColors.primary),
+    );
+    if (path.isEmpty) return fallback;
+    if (path.startsWith('assets/')) {
+      return Image.asset(
+        path,
+        fit: BoxFit.cover,
+        cacheWidth: 112,
+        cacheHeight: 112,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (context, error, stackTrace) => fallback,
+      );
+    }
+    return Image.network(
+      path,
+      fit: BoxFit.cover,
+      cacheWidth: 112,
+      cacheHeight: 112,
+      filterQuality: FilterQuality.medium,
+      errorBuilder: (context, error, stackTrace) => fallback,
+      loadingBuilder: (context, child, progress) {
+        if (progress == null) return child;
+        return fallback;
+      },
+    );
+  }
+}
+
+class _AdminVrTourTab extends StatefulWidget {
+  const _AdminVrTourTab();
+
+  @override
+  State<_AdminVrTourTab> createState() => _AdminVrTourTabState();
+}
+
+class _AdminVrTourTabState extends State<_AdminVrTourTab> {
+  final _search = TextEditingController();
+  String _municipality = 'All';
+  Stream<QuerySnapshot<Map<String, dynamic>>> _spots =
+      FirebaseFirestore.instance.collection('tourist_spots').snapshots();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  static String _vrLinkOf(Map<String, dynamic> d) {
+    for (final key in const ['vr_link', 'vrLink', 'vrTourUrl', 'vrUrl', 'vr_url']) {
+      final v = d[key]?.toString().trim() ?? '';
+      if (v.isNotEmpty) return v;
+    }
+    return '';
+  }
+
+  static String _muniOf(Map<String, dynamic> d) {
+    final name = d['municipality']?.toString().trim() ?? '';
+    if (name.isNotEmpty) return name;
+    return d['municipalityId']?.toString().trim() ?? 'Unassigned';
+  }
+
+  static String _imageOf(Map<String, dynamic> d) {
+    for (final key in const ['image_url', 'imageUrl', 'image', 'thumbnail']) {
+      final v = d[key]?.toString().trim() ?? '';
+      if (v.isNotEmpty) return v;
+    }
+    return '';
+  }
+
+  /// Fallback Clear Pano catalog when ATMOS host bridge is not wired.
+  static List<Map<String, dynamic>> _fallbackKnownVr() => const [
+        {
+          'id': 'oroquieta_city_boulevard_and_peoples_park',
+          'name': 'Oroquieta City Boulevard And People\u2019s Park',
+          'municipality': 'Oroquieta City',
+          'municipalityId': 'oroquieta',
+          'vr_link': 'https://tours.clearpano.com/aCxkEqVT',
+          'image_url': 'assets/images/oroquieta City plaza.jpeg',
+        },
+        {
+          'id': 'oroquieta_kenjelo_farm_resort',
+          'name': 'Kenjelo Farm and Recreation Resort',
+          'municipality': 'Oroquieta City',
+          'municipalityId': 'oroquieta',
+          'vr_link': 'https://tours.clearpano.com/Rpj4vYOF',
+          'image_url': 'assets/images/Kenjelo.jpg',
+        },
+        {
+          'id': 'jimenez_st_john_the_baptist_church',
+          'name': 'Jimenez Church (St John The Baptist)',
+          'municipality': 'Jimenez',
+          'municipalityId': 'jimenez',
+          'vr_link': 'https://tours.clearpano.com/Yx3FCtm9',
+          'image_url': 'assets/images/Jimenez.png',
+        },
+        {
+          'id': 'clarin_suman_capital',
+          'name': 'Clarin Suman Capital',
+          'municipality': 'Clarin',
+          'municipalityId': 'clarin',
+          'vr_link': 'https://tours.clearpano.com/GmFjcb6k',
+          'image_url': 'assets/images/Clarin.png',
+        },
+        {
+          'id': 'ozamiz_cotta_fort_shrine',
+          'name': 'Cotta Fort & Shrine',
+          'municipality': 'Ozamis City',
+          'municipalityId': 'ozamiz',
+          'vr_link': 'https://tours.clearpano.com/rDNLii_q',
+          'image_url': 'assets/images/Cotta Fort & Shrine.jpg',
+        },
+      ];
+
+  static List<Map<String, dynamic>> _mergeVrSpots(
+    List<Map<String, dynamic>> firestoreSpots,
+  ) {
+    final merger = TripPlanHostBridge.mergeKnownVrDestinations;
+    if (merger != null) return merger(firestoreSpots);
+
+    final byId = {
+      for (final s in firestoreSpots)
+        if ((s['id']?.toString() ?? '').isNotEmpty) s['id'].toString(): s,
+    };
+    final out = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    for (final known in _fallbackKnownVr()) {
+      final id = known['id']!.toString();
+      final existing = byId[id];
+      if (existing != null) {
+        final merged = Map<String, dynamic>.from(existing);
+        if (_vrLinkOf(merged).isEmpty) {
+          merged['vr_link'] = known['vr_link'];
+          merged['hasVR'] = true;
+        }
+        out.add(merged);
+      } else {
+        out.add(Map<String, dynamic>.from(known));
+      }
+      seen.add(id);
+    }
+    for (final s in firestoreSpots) {
+      final id = s['id']?.toString() ?? '';
+      if (seen.contains(id)) continue;
+      if (_vrLinkOf(s).isEmpty) continue;
+      out.add(s);
+      if (id.isNotEmpty) seen.add(id);
+    }
+    out.sort(
+      (a, b) => (a['name']?.toString() ?? '')
+          .toLowerCase()
+          .compareTo((b['name']?.toString() ?? '').toLowerCase()),
+    );
+    return out;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canEdit = AuthRoles.canEditVirtualTourLinks();
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _spots,
+      builder: (context, snap) {
+        if (snap.hasError) {
+          return OptacaLoadError(
+            title: 'Could not load virtual tours',
+            message: '${snap.error}',
+            onRetry: () => setState(() {
+              _spots = FirebaseFirestore.instance
+                  .collection('tourist_spots')
+                  .snapshots();
+            }),
+          );
+        }
+        if (!snap.hasData) {
+          return const Center(child: CircularProgressIndicator(color: AppColors.primary));
+        }
+
+        final firestoreSpots = snap.data!.docs
+            .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
+            .toList();
+        final withVr = _mergeVrSpots(firestoreSpots);
+
+        final munis = <String>{
+          'All',
+          ...withVr.map(_muniOf).where((m) => m.isNotEmpty),
+        }.toList()
+          ..sort((a, b) {
+            if (a == 'All') return -1;
+            if (b == 'All') return 1;
+            return a.compareTo(b);
+          });
+
+        final q = _search.text.trim().toLowerCase();
+        final filtered = withVr.where((d) {
+          final name = (d['name']?.toString() ?? '').toLowerCase();
+          final muni = _muniOf(d);
+          if (q.isNotEmpty && !name.contains(q) && !muni.toLowerCase().contains(q)) {
+            return false;
+          }
+          if (_municipality != 'All' && muni != _municipality) return false;
+          return true;
+        }).toList();
+
+        final counts = <String, int>{};
+        for (final d in withVr) {
+          final m = _muniOf(d);
+          counts[m] = (counts[m] ?? 0) + 1;
+        }
+
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+          children: [
+            Align(
+              alignment: Alignment.centerRight,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0EA5E9).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(99),
+                ),
+                child: Text(
+                  canEdit ? 'LGU-managed' : 'View Only',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF0284C7),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _search,
+              onChanged: (_) => setState(() {}),
+              decoration: OptacaPortalUi.searchDecoration(
+                hint: 'Search virtual tours',
+              ),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              initialValue: munis.contains(_municipality) ? _municipality : 'All',
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: 'Municipality',
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              items: [
+                for (final m in munis)
+                  DropdownMenuItem(
+                    value: m,
+                    child: Text(
+                      m == 'All' ? 'All' : '$m (${counts[m] ?? 0})',
+                    ),
+                  ),
+              ],
+              onChanged: (v) => setState(() => _municipality = v ?? 'All'),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              '${filtered.length} virtual tour${filtered.length == 1 ? '' : 's'}',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textGrey,
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (withVr.isEmpty)
+              _portalListCard(
+                child: const Padding(
+                  padding: EdgeInsets.all(28),
+                  child: Column(
                     children: [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Icon(
-                          Icons.view_in_ar,
-                          color: AppColors.primary,
-                          size: 32,
+                      Icon(Icons.vrpano_outlined, size: 40, color: AppColors.textGrey),
+                      SizedBox(height: 12),
+                      Text(
+                        'No virtual tours yet',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                          color: AppColors.textDark,
                         ),
                       ),
-                      const SizedBox(width: 16),
-                      const Expanded(
-                        child: Text(
-                          '360° & VR tours',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textDark,
-                          ),
-                        ),
+                      SizedBox(height: 6),
+                      Text(
+                        'When an LGU links a 360° tour to a destination, it appears here automatically.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: AppColors.textGrey, height: 1.4),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Publish immersive tours for key destinations. Link panorama or VR content from '
-                    'Firebase Storage or an external provider when your content pipeline is ready.',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: AppColors.textGrey,
-                      height: 1.45,
+                ),
+              )
+            else if (filtered.isEmpty)
+              _portalListCard(
+                child: const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'No tours match this filter.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AppColors.textGrey),
+                  ),
+                ),
+              )
+            else
+              for (final d in filtered) ...[
+                _portalListCard(
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+                    leading: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: SizedBox(
+                        width: 56,
+                        height: 56,
+                        child: _VrTourThumb(path: _imageOf(d)),
+                      ),
+                    ),
+                    title: Text(
+                      d['name']?.toString() ?? 'Destination',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    subtitle: Text(
+                      '${_muniOf(d)} · 360° tour linked',
+                      style: const TextStyle(fontSize: 12.5, color: AppColors.textGrey),
+                    ),
+                    trailing: FilledButton.tonal(
+                      onPressed: () async {
+                        final preview = TripPlanHostBridge.openVrPreview;
+                        if (preview == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Open this portal from ATMOS to preview the virtual tour.',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+                        await preview(
+                          context,
+                          spotId: d['id']?.toString() ?? '',
+                          spotName: d['name']?.toString() ?? 'VR Tour',
+                          vrLink: _vrLinkOf(d),
+                          imageUrl: _imageOf(d),
+                        );
+                      },
+                      child: const Text('Preview'),
                     ),
                   ),
-                  const SizedBox(height: 20),
-                  OutlinedButton.icon(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'VR tour editor will connect to your media library.',
-                          ),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.add_rounded),
-                    label: const Text('Add VR experience'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.primary,
-                      side: const BorderSide(color: AppColors.primary),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
+                ),
+                const SizedBox(height: 8),
+              ],
+          ],
+        );
+      },
     );
   }
 }
@@ -4933,11 +6530,24 @@ class _AdminSpotsQrTab extends StatefulWidget {
 }
 
 class _AdminSpotsQrTabState extends State<_AdminSpotsQrTab> {
-  static const String _kQrMunicipalitiesAll = 'QR municipalities';
   static const String _kAllMunicipalities = 'All municipalities';
 
   String _selectedMunicipalityForSpots = _kAllMunicipalities;
   String _selectedSpot = 'All tourist spots';
+  Stream<QuerySnapshot<Map<String, dynamic>>> _spots =
+      FirebaseFirestore.instance
+          .collection(kTouristSpotsCollection)
+          .orderBy('name')
+          .snapshots();
+
+  void _retrySpots() {
+    setState(() {
+      _spots = FirebaseFirestore.instance
+          .collection(kTouristSpotsCollection)
+          .orderBy('name')
+          .snapshots();
+    });
+  }
 
   String _slug(String value) {
     return value
@@ -5071,15 +6681,6 @@ class _AdminSpotsQrTabState extends State<_AdminSpotsQrTab> {
                           color: AppColors.textDark,
                         ),
                       ),
-                      const SizedBox(height: 6),
-                      Text(
-                        _kQrMunicipalitiesAll,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: AppColors.textGrey.withValues(alpha: 0.95),
-                          height: 1.35,
-                        ),
-                      ),
                       const SizedBox(height: 12),
                       LayoutBuilder(
                         builder: (context, constraints) {
@@ -5179,11 +6780,15 @@ class _AdminSpotsQrTabState extends State<_AdminSpotsQrTab> {
                           const SizedBox(width: 12),
                           Expanded(
                             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                              stream: FirebaseFirestore.instance
-                                  .collection(kTouristSpotsCollection)
-                                  .orderBy('name')
-                                  .snapshots(),
+                              stream: _spots,
                               builder: (context, spotSnap) {
+                                if (spotSnap.hasError) {
+                                  return OptacaLoadError(
+                                    title: 'Could not load spots',
+                                    message: '${spotSnap.error}',
+                                    onRetry: _retrySpots,
+                                  );
+                                }
                                 final spotDocs =
                                     spotSnap.data?.docs ??
                                     <
@@ -5410,6 +7015,14 @@ class _AdminSpotsQrTabState extends State<_AdminSpotsQrTab> {
 }
 
 class _AdminSettingsTab extends StatefulWidget {
+  const _AdminSettingsTab({
+    this.onOpenBusStops,
+    this.onOpenSpotsQr,
+  });
+
+  final VoidCallback? onOpenBusStops;
+  final VoidCallback? onOpenSpotsQr;
+
   @override
   State<_AdminSettingsTab> createState() => _AdminSettingsTabState();
 }
@@ -5491,6 +7104,55 @@ class _AdminSettingsTabState extends State<_AdminSettingsTab> {
               const Divider(height: 1),
               ListTile(
                 leading: Icon(
+                  Icons.directions_bus_outlined,
+                  color: AppColors.primary.withValues(alpha: 0.9),
+                ),
+                title: const Text('Bus stops'),
+                subtitle: const Text(
+                  'Existing bus stop records',
+                  style: TextStyle(fontSize: 13),
+                ),
+                trailing: const Icon(
+                  Icons.chevron_right,
+                  color: AppColors.textGrey,
+                ),
+                onTap: widget.onOpenBusStops,
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: Icon(
+                  Icons.qr_code_scanner_rounded,
+                  color: AppColors.primary.withValues(alpha: 0.9),
+                ),
+                title: const Text('Spots & QR Code'),
+                trailing: const Icon(
+                  Icons.chevron_right,
+                  color: AppColors.textGrey,
+                ),
+                onTap: widget.onOpenSpotsQr,
+              ),
+              if (TripPlanHostBridge.openDebugDataHub != null) ...[
+                const Divider(height: 1),
+                ListTile(
+                  leading: Icon(
+                    Icons.analytics_outlined,
+                    color: AppColors.primary.withValues(alpha: 0.9),
+                  ),
+                  title: const Text('Debug data hub'),
+                  subtitle: const Text(
+                    'Charts, seed all LGUs, full purge — same as the Governor dashboard',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  trailing: const Icon(
+                    Icons.chevron_right,
+                    color: AppColors.textGrey,
+                  ),
+                  onTap: () => TripPlanHostBridge.openDebugDataHub!(context),
+                ),
+              ],
+              const Divider(height: 1),
+              ListTile(
+                leading: Icon(
                   Icons.people_outline_rounded,
                   color: AppColors.primary.withValues(alpha: 0.9),
                 ),
@@ -5534,17 +7196,7 @@ Widget _portalSectionTitle(String text) {
 
 Widget _portalListCard({required Widget child}) {
   return Container(
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(20),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.07),
-          blurRadius: 18,
-          offset: const Offset(0, 6),
-        ),
-      ],
-    ),
+    decoration: OptacaAdminTheme.cardDecoration,
     clipBehavior: Clip.antiAlias,
     child: child,
   );

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'algorithms/on_device_trip_planner.dart';
 import 'data.dart';
+import 'event_schedule.dart';
 import 'trip_planner_utils.dart';
 import 'trip_preferences_store.dart';
 
@@ -140,15 +141,18 @@ class TripRecommendationEngine {
     }
 
     return tourismEvents.where((event) {
-      if (event.dateTime.isBefore(start) || event.dateTime.isAfter(end)) {
+      if (!eventOverlapsLocalDateRange(event, start, end)) {
         return false;
       }
-      final munNorm = normalizeMunicipalityName(event.municipality);
+      final locationNorms = [
+        for (final name in event.locationNames) normalizeMunicipalityName(name),
+      ];
       final venueNorm = normalizeMunicipalityName(event.venue);
       final onRoute = routeNames.any(
         (alias) =>
             alias.isNotEmpty &&
-            (munNorm.contains(alias) || venueNorm.contains(alias)),
+            (locationNorms.any((munNorm) => munNorm.contains(alias)) ||
+                venueNorm.contains(alias)),
       );
       if (!onRoute && venueNorm.isNotEmpty) {
         final hint = matchMunicipalityByLocalityHint(event.venue);

@@ -1,4 +1,6 @@
 import 'package:atmos_trs_system/config/vr_tour_config.dart';
+import 'package:atmos_trs_system/data/tourist_spot_image_catalog.dart'
+    show MisamisOccidentalImages;
 
 /// Featured destinations on Home Discover — single source for UI and chatbot.
 const List<Map<String, dynamic>> kFeaturedDestinations = [
@@ -333,6 +335,7 @@ const List<Map<String, dynamic>> kFeaturedDestinations = [
     'rating': 4.9,
     'category': 'Historical',
     'spotId': 'jimenez_st_john_the_baptist_church',
+    'vrLink': kJimenezChurchVrUrl,
     'location': 'Barangay Poblacion, Jimenez, Misamis Occidental',
     'openingHours':
         'Typically daily 6:00 AM – 5:00 PM for prayer (standard parish schedule; hours may vary)',
@@ -828,6 +831,184 @@ const List<Map<String, dynamic>> kFeaturedDestinations = [
       {
         'name': 'Sungan Mountain Resort',
         'image': 'assets/municipalities/sinacaban/nearby/hotels/sungan_mountain.webp',
+      },
+    ],
+    'nearbyCafes': [],
+  },
+  {
+    'name': 'Clarin Suman Capital',
+    'description':
+        'Suman Capital of Misamis Occidental — traditional rice cakes and vibrant town fiesta culture',
+    'detail':
+        'Clarin is proudly known as the Suman Capital of Misamis Occidental. '
+        'Visit the Poblacion public market where vendors offer freshly made suman — '
+        'sticky rice cakes wrapped in banana leaves — in many local varieties. '
+        'The municipality is also celebrated for its colorful town fiesta and warm Bisaya hospitality. '
+        'Explore the 360° virtual tour to experience the sights and culture of Clarin.',
+    'image': 'assets/images/Clarin.png',
+    'rating': 4.7,
+    'category': 'Historical',
+    'spotId': 'clarin_suman_capital',
+    'vrLink': kClarinSumanVrUrl,
+    'location': 'Clarin, Misamis Occidental',
+    'openingHours': 'Public market: typically open daily, early morning',
+    'entranceFee': 'Free',
+    'latitude': 8.1981,
+    'longitude': 123.8697,
+    'nearbyRestaurants': [],
+    'nearbyHotels': [],
+    'nearbyAttractions': [
+      {
+        'name': 'Clarin Public Market',
+        'image': 'assets/images/Clarin.png',
+        'category': 'Market',
+        'location': 'Clarin, Misamis Occidental',
+        'distanceKm': 0.1,
+        'description': 'The home of freshly made suman — iconic sticky rice delicacy.',
+      },
+    ],
+    'nearbyCafes': [],
+  },
+  {
+    'name': 'Kenjelo Farm and Recreation Resort',
+    'description':
+        'Farm and recreation resort in Oroquieta City — lush gardens, pools, and nature activities',
+    'detail':
+        'Kenjelo Farm and Recreation Resort Corp is a nature-themed recreation destination in '
+        'Oroquieta City, Misamis Occidental. Set amid lush greenery, it offers large swimming pools, '
+        'picnic areas, farm experiences, and event facilities — a popular getaway for families, groups, '
+        'and events just a short drive from the city center. '
+        'Visit the 360° virtual tour to explore the resort grounds before you go.',
+    'image': MisamisOccidentalImages.kenjeloFarm,
+    'rating': 4.7,
+    'category': 'Nature',
+    'spotId': 'oroquieta_kenjelo_farm_resort',
+    'vrLink': kKenjeloFarmVrUrl,
+    'location': 'Oroquieta City, Misamis Occidental',
+    'openingHours': 'Daily — contact resort for current schedule',
+    'entranceFee': 'Contact resort for rates',
+    'latitude': 8.4900,
+    'longitude': 123.7980,
+    'nearbyRestaurants': [
+      {
+        'name': "Mon's Grill",
+        'image': 'assets/municipalities/oroquieta/nearby/restaurants/mons_grill.webp',
+        'category': 'Grill',
+        'location': 'Langcangan, Oroquieta City',
+        'distanceKm': 1.5,
+      },
+      {
+        'name': 'Better Brews',
+        'contact': '09754094858',
+        'image': 'assets/municipalities/oroquieta/nearby/restaurants/better_brews.webp',
+        'category': 'Restaurant & Café',
+        'location': 'Barrientos St, Oroquieta City',
+        'distanceKm': 2.5,
+      },
+      {
+        'name': 'Cucina Luciano',
+        'image': 'assets/municipalities/oroquieta/nearby/restaurants/cucina_luciano.webp',
+        'category': 'Filipino',
+        'location': 'Oroquieta City',
+        'distanceKm': 2.8,
+      },
+    ],
+    'nearbyHotels': [
+      {
+        'name': 'Agricio Farm and Resort',
+        'contact': '09681511640',
+        'image':
+            'assets/municipalities/oroquieta/nearby/hotels/agricio_farm_and_resort.webp',
+        'category': 'Resort',
+        'location': 'Oroquieta City',
+        'distanceKm': 1.2,
+        'description': 'Farm resort with swimming pool and free parking.',
+      },
+      {
+        'name': 'Almar Suites',
+        'contact': '09171695551',
+        'image': 'assets/municipalities/oroquieta/nearby/hotels/almar_suites.webp',
+        'category': 'Hotel',
+        'location': 'Oroquieta City',
+        'distanceKm': 2.5,
+        'description': 'Comfortable suites near Oroquieta City center.',
+      },
+    ],
+    'nearbyAttractions': [
+      {
+        'name': 'Ambak-Ambak Falls',
+        'image':
+            'assets/municipalities/oroquieta/nearby/attractions/ambak_ambak_falls.jpeg',
+        'category': 'Falls',
+        'location': 'Oroquieta City',
+        'distanceKm': 3.0,
+        'description': 'Local waterfall — short trek and nature scenery near Oroquieta.',
+      },
+      {
+        'name': 'Oroquieta City Plaza',
+        'image': 'assets/images/oroquieta City plaza.jpeg',
+        'category': 'Park',
+        'location': 'Oroquieta City',
+        'distanceKm': 3.5,
+        'description': 'Public plaza with Iligan Bay views and a seaside promenade.',
+      },
+      {
+        'name': 'Sibucal Hot Springs',
+        'image':
+            'assets/municipalities/oroquieta/nearby/attractions/sibucal_hot_springs.webp',
+        'category': 'Hot springs',
+        'location': 'Sibucal, Oroquieta City',
+        'distanceKm': 4.0,
+        'description': 'Natural hot springs — relaxing soak after a day at the resort.',
+      },
+    ],
+    'nearbyCafes': [
+      {
+        'name': "Bella's Cafe",
+        'image': 'assets/municipalities/oroquieta/nearby/cafes/bellas_cafe.webp',
+        'category': 'Café',
+        'location': '112 Barrientos St, Oroquieta City',
+        'distanceKm': 2.5,
+      },
+      {
+        'name': 'A+ Coffee Corner',
+        'contact': '09614816835',
+        'image':
+            'assets/municipalities/oroquieta/nearby/cafes/a_plus_coffee_corner.webp',
+        'category': 'Coffee shop',
+        'location': '79 Dr Jose Rizal St, Oroquieta City',
+        'distanceKm': 2.8,
+      },
+    ],
+  },
+  {
+    'name': 'Cotta Fort & Shrine',
+    'description':
+        'Historic Spanish fort and shrine on the Ozamiz waterfront — 360° virtual tour',
+    'detail':
+        'Cotta Fort & Shrine is a historic Spanish-era fortification on the Ozamiz City waterfront, '
+        'near the port and Cotta Beach. The stone walls, shrine, and bay views make it one of the '
+        'city\'s best-known landmarks. '
+        'Open the 360° virtual tour to walk the fort before you visit.',
+    'image': 'assets/images/Cotta Fort & Shrine.jpg',
+    'rating': 4.7,
+    'category': 'Historical',
+    'spotId': 'ozamiz_cotta_fort_shrine',
+    'vrLink': kCottaFortVrUrl,
+    'location': 'Cotta, Ozamiz City, Misamis Occidental',
+    'openingHours': 'Daily — open grounds; hours may vary for the shrine',
+    'entranceFee': 'Free',
+    'latitude': 8.1456,
+    'longitude': 123.8425,
+    'nearbyRestaurants': [],
+    'nearbyHotels': [],
+    'nearbyAttractions': [
+      {
+        'name': 'Cotta Beach',
+        'image': 'assets/images/Cotta Beach.jpg',
+        'category': 'Beach',
+        'location': 'Cotta, Ozamiz City',
+        'distanceKm': 0.3,
       },
     ],
     'nearbyCafes': [],

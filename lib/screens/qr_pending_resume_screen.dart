@@ -6,7 +6,6 @@ import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 /// After a QR scan and tourist sign-in: destination choices, not an automatic check-in.
 class QrPendingResumeScreen extends StatefulWidget {
@@ -49,36 +48,11 @@ class _QrPendingResumeScreenState extends State<QrPendingResumeScreen> {
 
   Future<void> _openItinerary() async {
     if (kHasTripPlannerApkDownload) {
-      final uri = Uri.tryParse(kTripPlannerApkDownloadUrl);
-      if (uri != null) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      }
-      return;
+      final opened = await openTripPlannerApkDownload();
+      if (opened) return;
     }
     if (!mounted) return;
-    final openHere = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Trip Planner app'),
-        content: const Text(
-          'The Trip Planner APK download link is not configured yet. '
-          'You can open Trip Planner in this site with your tourist account.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Not now'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Open here'),
-          ),
-        ],
-      ),
-    );
-    if (openHere == true && mounted) {
-      await LandingIntentNavigation.openPlanner(context);
-    }
+    await LandingIntentNavigation.openPlanner(context);
   }
 
   Future<void> _checkIn() async {
@@ -137,7 +111,7 @@ class _QrPendingResumeScreenState extends State<QrPendingResumeScreen> {
                   title: 'Trip Planner',
                   subtitle: kHasTripPlannerApkDownload
                       ? 'Download the Trip Planner app'
-                      : 'APK link must be configured — open it here instead',
+                      : 'Open the Trip Planner module',
                   onTap: _openItinerary,
                 ),
                 const SizedBox(height: 12),

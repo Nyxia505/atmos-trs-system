@@ -164,6 +164,18 @@ class _TripPlanResultPageState extends State<TripPlanResultPage> {
     return start;
   }
 
+  void _applyOrderedDays(List<List<TouristSpot>> days) {
+    final next = [for (final day in days) ...day];
+    final same = next.length == _itinerarySpots.length &&
+        [
+          for (var i = 0; i < next.length; i++)
+            next[i].name == _itinerarySpots[i].name,
+        ].every((sameName) => sameName);
+    if (same) return;
+    setState(() => _itinerarySpots = next);
+    _refreshAfterItineraryEdit();
+  }
+
   void _refreshAfterItineraryEdit() {
     setState(() {
       _itineraryMunicipalities =
@@ -334,8 +346,7 @@ class _TripPlanResultPageState extends State<TripPlanResultPage> {
                 _buildViewRoutesButton(context),
                 const SizedBox(height: 24),
                 _buildItinerarySectionHeader(),
-                _buildItineraryEditHint(),
-                const SizedBox(height: 4),
+                const SizedBox(height: 10),
                 ...List.generate(_days, (index) {
                   final dayNumber = index + 1;
                   final daySpots = _spotsForDay(index);
@@ -478,32 +489,6 @@ class _TripPlanResultPageState extends State<TripPlanResultPage> {
       title: 'Daily itinerary',
       trailing:
           '${_itinerarySpots.length} spot${_itinerarySpots.length == 1 ? '' : 's'}',
-    );
-  }
-
-  Widget _buildItineraryEditHint() {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        children: [
-          Icon(
-            Icons.edit_outlined,
-            size: 16,
-            color: AppColors.primary.withValues(alpha: 0.9),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              'Remove stops with × or add spots from along your route.',
-              style: TextStyle(
-                fontSize: 12.5,
-                color: AppColors.textGrey.withValues(alpha: 0.95),
-                height: 1.3,
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -707,6 +692,10 @@ class _TripPlanResultPageState extends State<TripPlanResultPage> {
                 start: widget.start,
                 end: widget.end,
                 spots: _itinerarySpots,
+                spotDays: [
+                  for (var d = 0; d < _days; d++) _spotsForDay(d),
+                ],
+                onOrderSaved: _applyOrderedDays,
                 budget: widget.budget,
                 exactBudgetSpotNames: widget.exactBudgetSpotNames,
                 routeFareBreakdown: _effectiveItineraryTransportFare,

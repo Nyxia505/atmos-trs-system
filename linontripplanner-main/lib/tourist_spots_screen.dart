@@ -104,13 +104,6 @@ class _TouristSpotsScreenState extends State<TouristSpotsScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                child: TourismPlanUi.sectionTitleBar(
-                  title: 'Explore spots',
-                  trailing: '${filtered.length}',
-                ),
-              ),
               Expanded(
                 child: _loading && filtered.isEmpty
                     ? const Center(
@@ -123,7 +116,7 @@ class _TouristSpotsScreenState extends State<TouristSpotsScreen> {
                     : filtered.isEmpty
                         ? const TourismEmptyState(
                             icon: Icons.place_outlined,
-                            message: 'No tourist spots loaded yet.',
+                            message: 'No tourist spots yet.',
                           )
                         : ListView.builder(
                             padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
@@ -154,7 +147,6 @@ class _TouristSpotsScreenState extends State<TouristSpotsScreen> {
                                   ),
                                 ),
                                 title: spot.displayName,
-                                subtitle: spot.description,
                                 meta:
                                     '${spot.location.isNotEmpty ? spot.location : 'Misamis Occidental'} - ${spot.priceRange} - ${spot.rating.toStringAsFixed(1)}',
                                 onTap: () => Navigator.push(

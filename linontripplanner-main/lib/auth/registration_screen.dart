@@ -313,16 +313,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
               color: AppColors.textDark,
             ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            "Let's start with your name. This will be used for your tourist ID.",
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 13,
-              color: AuthDesign.secondaryText.withValues(alpha: 0.95),
-              height: 1.35,
-            ),
-          ),
           const SizedBox(height: 18),
           const Align(
             alignment: Alignment.centerLeft,
@@ -440,16 +430,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
               color: AppColors.textDark,
             ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            'Optional: add children traveling with you. Party size for LGU reports = 1 (you) + each child listed.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 12,
-              color: AuthDesign.secondaryText,
-              height: 1.35,
-            ),
-          ),
           const SizedBox(height: 10),
           Text(
             'Reported party size: 1 (1 adult + ${_children.length} children)',
@@ -525,16 +505,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
               fontSize: 18,
               fontWeight: FontWeight.bold,
               color: AppColors.textDark,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Tell us more about yourself. This helps us personalize your experience.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 12,
-              color: AuthDesign.secondaryText,
-              height: 1.35,
             ),
           ),
           const SizedBox(height: 14),
@@ -637,16 +607,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
               fontSize: 20,
               fontWeight: FontWeight.bold,
               color: AppColors.textDark,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Please indicate the last 3 tourist destinations you have visited.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 13,
-              color: AuthDesign.secondaryText,
-              height: 1.35,
             ),
           ),
           const SizedBox(height: 16),

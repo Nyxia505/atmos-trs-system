@@ -79,17 +79,17 @@ abstract final class AtmosBrandTypography {
     );
   }
 
-  /// Landing header app mark (`ATMOS-TRS`): Quicksand — rounded geometric sans.
+  /// Landing header app mark (`ATMOS–TRS`): Montserrat ExtraBold.
   static TextStyle landingAppMark({
     required Color color,
-    double fontSize = 34,
-    double letterSpacing = 1.4,
-    double height = 1.05,
+    double fontSize = 22,
+    double letterSpacing = -0.5,
+    double height = 1.0,
   }) {
-    return GoogleFonts.quicksand(
+    return GoogleFonts.montserrat(
       color: color,
       fontSize: fontSize,
-      fontWeight: FontWeight.w700,
+      fontWeight: FontWeight.w800,
       letterSpacing: letterSpacing,
       height: height,
     );

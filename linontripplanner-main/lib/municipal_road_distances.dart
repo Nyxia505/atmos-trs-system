@@ -7,6 +7,8 @@ import 'services/auth_role_claims.dart'
     show ensurePermanentStaffRoleForCatalogWrite;
 import 'services/public_firestore_read.dart';
 import 'tourist_plan/tourist_travel_estimates.dart' show travelMinutesForKm;
+import 'road_route_direction.dart';
+export 'road_route_direction.dart';
 import 'trip_planner_utils.dart' show normalizeMunicipalityName;
 
 /// Firestore collection holding one document per directed municipality pair.
@@ -201,15 +203,6 @@ const List<(int, int)> _kRoadLinks = [
   (2, 6), // Bonifacio – Don Victoriano Chiongbian
   (6, 5), // Don Victoriano Chiongbian – Concepcion
 ];
-
-/// Which way around the provincial road loop a trip goes.
-enum RoadRouteDirection {
-  /// Along the coast (Oroquieta, Calamba, Baliangao).
-  coastal,
-
-  /// Through the highlands (Tangub, Bonifacio, Don Victoriano).
-  highland,
-}
 
 /// Link closed to force [direction]: the coastal route never uses Tangub –
 /// Bonifacio, the highland route never uses Calamba – Baliangao.
@@ -408,6 +401,8 @@ List<int>? _pathFor(
       forced = _roadPathIndices(from, to, direction: direction);
     }
     if (forced != null) return forced;
+    // A chosen coastal or highland route must not fall back to the other way.
+    return null;
   }
   return _roadPathIndices(from, to);
 }
@@ -490,6 +485,21 @@ List<RoadRouteOption> roadRouteOptionsBetween(
     return const [];
   }
   return options;
+}
+
+/// True when [fromNameOrLocation] and [toNameOrLocation] are the same town,
+/// or a road path connects them. With [direction], the other way around the
+/// provincial loop does not count as a connection.
+bool hasRoadPathBetween(
+  String fromNameOrLocation,
+  String toNameOrLocation, {
+  RoadRouteDirection? direction,
+}) {
+  final a = roadTableIndexFor(fromNameOrLocation);
+  final b = roadTableIndexFor(toNameOrLocation);
+  if (a == null || b == null) return false;
+  if (a == b) return true;
+  return _pathFor(a, b, direction) != null;
 }
 
 /// Names of the towns strictly between [fromNameOrLocation] and

@@ -4,10 +4,12 @@ import 'package:latlong2/latlong.dart' as ll;
 
 import 'data.dart';
 import 'municipality_coordinates.dart' show misamisOccidentalCenter;
+import 'services/bus_location_store.dart';
 import 'services/tourism_session.dart';
 import 'spot_detail_screen.dart';
 import 'widgets/bus_terminal_map_markers.dart';
 import 'widgets/google_map_pin_icons.dart';
+import 'widgets/osm_map_glyph.dart';
 import 'widgets/osm_map_tiles.dart';
 
 class MappingScreen extends StatefulWidget {
@@ -31,12 +33,15 @@ class _MappingScreenState extends State<MappingScreen> {
   void initState() {
     super.initState();
     tourismCatalogRevision.addListener(_onCatalogRevision);
+    BusLocationStore.instance.revision.addListener(_onCatalogRevision);
+    BusLocationStore.instance.ensureListening();
     _loadMarkers();
   }
 
   @override
   void dispose() {
     tourismCatalogRevision.removeListener(_onCatalogRevision);
+    BusLocationStore.instance.revision.removeListener(_onCatalogRevision);
     super.dispose();
   }
 
@@ -47,6 +52,7 @@ class _MappingScreenState extends State<MappingScreen> {
   Future<void> _loadMarkers() async {
     setState(() => _loadingMarkers = true);
     await bootstrapAppFirestoreOnce();
+    await BusLocationStore.instance.ensureLoaded();
     if (!mounted) return;
 
     final markers = <Marker>[
@@ -74,13 +80,10 @@ class _MappingScreenState extends State<MappingScreen> {
               message: spot.location.isEmpty
                   ? spot.name
                   : '${spot.name}\n${spot.location}',
-              child: Icon(
-                Icons.location_on,
+              child: OsmMapGlyph(
+                icon: Icons.location_on,
                 color: GoogleMapPinIcons.touristSpotColor,
                 size: 36,
-                shadows: const [
-                  Shadow(blurRadius: 4, color: Colors.black38),
-                ],
               ),
             ),
           ),
@@ -158,7 +161,7 @@ class _MappingScreenState extends State<MappingScreen> {
                     ],
                   ),
                   child: const Text(
-                    'No mapped spots yet. Add latitude/longitude to your Firestore `tourist_spots` documents to show markers.',
+                    'No mapped spots yet.',
                     style: TextStyle(
                       color: AppColors.textGrey,
                       fontSize: 13,

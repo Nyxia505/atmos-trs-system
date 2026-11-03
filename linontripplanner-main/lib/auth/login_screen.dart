@@ -236,17 +236,6 @@ class _LoginScreenState extends State<LoginScreen> {
                           return null;
                         },
                       ),
-                      const SizedBox(height: 10),
-                      Text(
-                        'Do not save this password in your browser on shared or public computers.',
-                        style: TextStyle(
-                          color: AuthDesign.secondaryText.withValues(
-                            alpha: 0.9,
-                          ),
-                          fontSize: 12,
-                          height: 1.3,
-                        ),
-                      ),
                       const SizedBox(height: 22),
                       AuthPrimaryButton(
                         label: _busy ? 'Signing in…' : 'Sign In',

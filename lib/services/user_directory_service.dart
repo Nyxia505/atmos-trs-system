@@ -59,7 +59,7 @@ class AppUserProfile {
   /// Municipal LGU tourism office dashboard.
   bool get isTourismOffice =>
       !isProvincialTourism &&
-      (roleRaw == 'tourism_office' || roleRaw == 'tourism');
+      UserDirectoryService.canonicalStaffRole(roleRaw) == 'tourism';
 
   bool get isTourist => roleRaw == 'tourist';
 
@@ -243,6 +243,9 @@ class UserDirectoryService {
     if (auth == null) return false;
     final email = auth.email?.trim() ?? '';
     if (email.isNotEmpty && isProvincialStaffEmail(email)) return true;
+    // Trip Planner OPTACA portal reads the same provincial snapshot.
+    // The account stays role "admin"; this only unlocks the existing loader.
+    if (email.toLowerCase() == 'optaca@gmail.com') return true;
     final storedRole = await SessionStorage.getStoredRole();
     if (SessionStorage.isStaffRole(storedRole)) {
       return true;
@@ -257,13 +260,34 @@ class UserDirectoryService {
     return false;
   }
 
-  static bool _isAllowedStaffRoleRaw(String role) {
-    return role == 'governor' ||
-        role == 'tourism' ||
-        role == 'tourism_office' ||
-        role == 'provincial_tourism' ||
-        role == 'tourism_province';
+  /// Maps stored role text onto governor, provincial_tourism, or tourism.
+  /// Returns null for tourists and unknown roles.
+  static String? canonicalStaffRole(String raw) {
+    final role = raw
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[\s-]+'), '_');
+    if (role.isEmpty) return null;
+    if (role == 'governor') return 'governor';
+    if (role == 'provincial_tourism' || role == 'tourism_province') {
+      return 'provincial_tourism';
+    }
+    const lgu = {
+      'tourism',
+      'tourism_office',
+      'tourismoffice',
+      'lgu',
+      'lgu_tourism',
+      'lgu_office',
+      'municipal_tourism',
+    };
+    if (lgu.contains(role)) return 'tourism';
+    return null;
   }
+
+  // ignore: unused_element
+  static bool _isAllowedStaffRoleRaw(String role) =>
+      canonicalStaffRole(role) != null;
 
   /// Creates/updates `users/{uid}` for Governor or tourism staff (required for Firestore rules).
   static Future<bool> ensureStaffUserDoc({
@@ -274,8 +298,8 @@ class UserDirectoryService {
     String? municipalityId,
   }) async {
     if (!_ready || uid.isEmpty) return false;
-    final role = roleRaw.trim().toLowerCase();
-    if (!_isAllowedStaffRoleRaw(role)) {
+    final role = canonicalStaffRole(roleRaw);
+    if (role == null) {
       return false;
     }
     final mun = (municipalityId ?? '').trim();

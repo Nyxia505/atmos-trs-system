@@ -96,6 +96,7 @@ Widget buildTouristSpotProfileImage(
   final stored = spot.imagePath.trim();
   // Fast path: Firestore `image_url` is already on the model — no FutureBuilder.
   if (stored.startsWith('http://') || stored.startsWith('https://')) {
+    if (isUndecodableTourismImage(stored)) return fallback;
     return _httpNetworkImage(
       stored,
       fallback: fallback,
@@ -159,7 +160,7 @@ Future<String?> _resolveMunicipalityImageUrl(Municipality municipality) {
     final stored = municipality.imagePath.trim();
     if (stored.isNotEmpty &&
         SupabaseConfig.isSupabaseStorageUrl(stored) &&
-        !stored.toLowerCase().contains('oroquieta_city_plaza')) {
+        !isUndecodableTourismImage(stored)) {
       return stored;
     }
 
@@ -444,8 +445,15 @@ Widget _httpNetworkImage(
   required int memCacheHeight,
 }) {
   // Skip known-corrupt Storage objects (web decoder throws EncodingError).
-  if (url.toLowerCase().contains('oroquieta_city_plaza.jpeg') ||
-      url.toLowerCase().contains('oroquieta_city_plaza.jpg')) {
+  String decoded = url.toLowerCase();
+  try {
+    decoded = Uri.decodeComponent(url).toLowerCase();
+  } catch (_) {}
+  if (decoded.contains('oroquieta_city_plaza.jpeg') ||
+      decoded.contains('oroquieta_city_plaza.jpg') ||
+      decoded.contains('oroquieta city plaza.jpeg') ||
+      decoded.contains('oroquieta city plaza.jpg') ||
+      decoded.contains('images/calamba.jpg')) {
     return fallback;
   }
 

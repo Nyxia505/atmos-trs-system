@@ -124,14 +124,17 @@ List<TransportationFee> buildTransportationFeesFromFareMatrix() {
       final toCanonical = canonicalMunicipalityNameFromMatrixKey(toKey);
       final toEndpoint = transportEndpointFor(toMunicipality);
 
-      final straightKm = haversineDistanceKm(
-        fromEndpoint.latitude,
-        fromEndpoint.longitude,
-        toEndpoint.latitude,
-        toEndpoint.longitude,
-      );
+      final straightKm = fromEndpoint != null && toEndpoint != null
+          ? haversineDistanceKm(
+              fromEndpoint.latitude,
+              fromEndpoint.longitude,
+              toEndpoint.latitude,
+              toEndpoint.longitude,
+            )
+          : null;
       final roadKm = roadDistanceKmBetween(fromCanonical, toCanonical);
-      final estimatedKm = roadKm ?? (straightKm * 1.25 * 10).round() / 10;
+      final estimatedKm =
+          roadKm ?? (straightKm == null ? 0 : (straightKm * 1.25 * 10).round() / 10);
 
       fees.add(
         TransportationFee(
@@ -141,8 +144,8 @@ List<TransportationFee> buildTransportationFeesFromFareMatrix() {
           fromMunicipalitySlug: municipalitySlug(fromCanonical),
           toMunicipalitySlug: municipalitySlug(toCanonical),
           fare: fare,
-          endpointType: toEndpoint.kind,
-          endpointName: toEndpoint.name,
+          endpointType: toEndpoint?.kind ?? 'stop',
+          endpointName: toEndpoint?.name ?? 'No bus stop saved',
           routeType: routeTypeForEstimatedDistanceKm(estimatedKm),
           estimatedDistance: estimatedKm,
         ),

@@ -81,11 +81,9 @@ class _EventsScreenState extends State<EventsScreen> {
                           if (tourismEvents.isEmpty) ...[
                             const SizedBox(height: 12),
                             Text(
-                              'No events posted yet. The calendar stays available — '
-                              'new events will appear on their dates.',
+                              'No events yet.',
                               style: TextStyle(
                                 fontSize: 13,
-                                height: 1.35,
                                 color: AppColors.textGrey.withValues(alpha: 0.95),
                               ),
                             ),

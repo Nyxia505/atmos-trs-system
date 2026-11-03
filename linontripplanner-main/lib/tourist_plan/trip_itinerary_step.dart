@@ -30,29 +30,6 @@ class TripItineraryStep extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Assign days',
-                  style: TextStyle(
-                    fontFamily: AppFonts.holidayCalling,
-                    fontSize: 26,
-                    color: accent,
-                    height: 1.1,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Build your own plan: "Add nearest" picks the closest unvisited spot, '
-                  'or choose any with "Add another spot". "End day here" makes the last '
-                  'spot the start of the next day; new days are added until every spot is planned. '
-                  'Each day holds up to ${TripWizardController.absoluteMaxSpotsPerDay} spots. '
-                  'A spot used on one day will not show on other days.',
-                  style: TextStyle(
-                    fontSize: 13.5,
-                    height: 1.4,
-                    color: AppColors.textGrey.withValues(alpha: 0.95),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
                   '${wizard.tripDays} day${wizard.tripDays == 1 ? '' : 's'}'
                   '${wizard.arrivalDate != null && wizard.departureDate != null ? ' - ${_fmtDate(wizard.arrivalDate!)} - ${_fmtDate(wizard.departureDate!)}' : ''}',
                   style: TextStyle(
@@ -79,18 +56,6 @@ class TripItineraryStep extends StatelessWidget {
                       ),
                     ),
                 ],
-                if (wizard.algorithmInsight != null) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    wizard.algorithmInsight!,
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      height: 1.35,
-                      fontWeight: FontWeight.w600,
-                      color: accent,
-                    ),
-                  ),
-                ],
                 if (wizard.routeSpotPool.isNotEmpty) ...[
                   const SizedBox(height: 6),
                   Builder(
@@ -99,10 +64,8 @@ class TripItineraryStep extends StatelessWidget {
                       final left = wizard.unvisitedSpotCount;
                       return Text(
                         left == 0
-                            ? 'All $total route spots are planned.'
-                            : '${total - left} of $total route spots planned - '
-                                  '$left left. Each day starts where the previous '
-                                  'day ended.',
+                            ? 'All $total spots planned.'
+                            : '${total - left} of $total planned.',
                         style: TextStyle(
                           fontSize: 12.5,
                           height: 1.35,
@@ -111,6 +74,18 @@ class TripItineraryStep extends StatelessWidget {
                         ),
                       );
                     },
+                  ),
+                ],
+                if (wizard.dayCapacityWarning != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    wizard.dayCapacityWarning!,
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.35,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.orange.shade900,
+                    ),
                   ),
                 ],
                 if (wizard.unassignedSpots.isNotEmpty) ...[
@@ -144,11 +119,6 @@ class TripItineraryStep extends StatelessWidget {
                             height: 1.35,
                             color: AppColors.textGrey.withValues(alpha: 0.95),
                           ),
-                        ),
-                        const SizedBox(height: 4),
-                        const Text(
-                          'Use Add Spot on a day, or tap Suggest plan.',
-                          style: TextStyle(fontSize: 12, height: 1.3),
                         ),
                       ],
                     ),
@@ -361,7 +331,7 @@ class _DaySection extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
               child: Text(
                 'This day is full (maximum ${TripWizardController.absoluteMaxSpotsPerDay} spots). '
-                'Choose its last spot with "End day here" to continue on the next day.',
+                '${dayIndex < wizard.tripDays - 1 ? 'Use "End day here" so the next day starts from its last spot.' : 'Spots that do not fit stay unassigned. Add travel days to place them.'}',
                 style: TextStyle(
                   fontSize: 12,
                   color: AppColors.textGrey.withValues(alpha: 0.95),
@@ -596,20 +566,11 @@ class _EmptyDay extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           const Text(
-            'No spots added yet',
+            'No spots yet',
             style: TextStyle(
               fontWeight: FontWeight.w800,
               fontSize: 16,
               color: AppColors.textDark,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Pick attractions along your route for this day.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 13,
-              color: AppColors.textGrey.withValues(alpha: 0.95),
             ),
           ),
           const SizedBox(height: 14),
@@ -1215,15 +1176,12 @@ class _TripSummaryCard extends StatelessWidget {
           ),
           _row('Entrances', formatFarePhp(wizard.entranceFeesTotal)),
           _row('Food (est.)', formatFarePhp(wizard.foodEstimatePhp)),
-          if (wizard.needsAccommodation)
-            _row(
-              'Lodging (est.)',
-              formatFarePhp(wizard.accommodationEstimatePhp),
-            ),
           const Divider(height: 20),
           _row(
             'Estimated overall',
-            formatFarePhp(wizard.estimatedTotalPhp),
+            formatFarePhp(
+              wizard.estimatedTotalPhp - wizard.accommodationEstimatePhp,
+            ),
             bold: true,
           ),
           _row('Your budget', formatFarePhp(wizard.budgetPhp.round())),

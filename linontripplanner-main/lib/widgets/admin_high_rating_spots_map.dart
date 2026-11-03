@@ -99,21 +99,23 @@ class _OsmHighRatingSpotsMapState extends State<_OsmHighRatingSpotsMap> {
 
   @override
   Widget build(BuildContext context) {
-    return FlutterMap(
-      mapController: _controller,
-      options: MapOptions(
-        initialCenter: const ll.LatLng(8.2, 123.7),
-        initialZoom: widget.spots.isEmpty ? 8 : 9,
-        minZoom: 7,
-        maxZoom: 18,
-        backgroundColor: const Color(0xFFE8EEF2),
-        onMapReady: _fitBounds,
+    return RepaintBoundary(
+      child: FlutterMap(
+        mapController: _controller,
+        options: MapOptions(
+          initialCenter: const ll.LatLng(8.2, 123.7),
+          initialZoom: widget.spots.isEmpty ? 8 : 9,
+          minZoom: 7,
+          maxZoom: 18,
+          backgroundColor: const Color(0xFFE8EEF2),
+          onMapReady: _fitBounds,
+        ),
+        children: [
+          osmBasemapTileLayer(),
+          MarkerLayer(markers: _buildMarkers()),
+          osmMapAttribution(),
+        ],
       ),
-      children: [
-        osmBasemapTileLayer(),
-        MarkerLayer(markers: _buildMarkers()),
-        osmMapAttribution(),
-      ],
     );
   }
 }

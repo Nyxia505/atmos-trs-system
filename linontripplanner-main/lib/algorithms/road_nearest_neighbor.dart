@@ -227,8 +227,39 @@ Future<double?> roadMetersBetween({
   return meters;
 }
 
+final Map<String, List<List<double?>>> _osrmMatrixCache = {};
+final Map<String, Future<List<List<double?>>?>> _osrmMatrixInFlight = {};
+
+String _osrmMatrixKey(List<LatLng> points) => points
+    .map((p) => '${p.latitude.toStringAsFixed(5)},${p.longitude.toStringAsFixed(5)}')
+    .join('|');
+
 Future<List<List<double?>>?> _osrmDistanceMatrix(List<LatLng> points) async {
   if (points.length < 2) return null;
+  final key = _osrmMatrixKey(points);
+  final cached = _osrmMatrixCache[key];
+  if (cached != null) return cached;
+  final pending = _osrmMatrixInFlight[key];
+  if (pending != null) return pending;
+  final future = _fetchOsrmDistanceMatrix(points);
+  _osrmMatrixInFlight[key] = future;
+  try {
+    final matrix = await future;
+    if (matrix != null) {
+      if (_osrmMatrixCache.length >= 24) {
+        _osrmMatrixCache.remove(_osrmMatrixCache.keys.first);
+      }
+      _osrmMatrixCache[key] = matrix;
+    }
+    return matrix;
+  } finally {
+    if (identical(_osrmMatrixInFlight[key], future)) {
+      _osrmMatrixInFlight.remove(key);
+    }
+  }
+}
+
+Future<List<List<double?>>?> _fetchOsrmDistanceMatrix(List<LatLng> points) async {
   final coords = points.map((p) => '${p.longitude},${p.latitude}').join(';');
   final uri = Uri.parse(
     'https://router.project-osrm.org/table/v1/driving/$coords?annotations=distance',

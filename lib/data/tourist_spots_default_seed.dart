@@ -72,6 +72,7 @@ const List<DefaultTouristSpotSeed> kDefaultTouristSpotSeeds = [
         '18th-century stone fort (1755) and Cotta Shrine overlooking Panguil Bay in Barangay Baybay Triunfo. Free admission; typically open daily 8:00 AM–5:00 PM. Dress modestly at the active shrine.',
     rating: 4.8,
     imageUrl: "assets/images/Cotta Fort & Shrine.jpg",
+    vrLink: kCottaFortVrUrl,
   ),
   DefaultTouristSpotSeed(
     docId: 'ozamiz_immaculate_conception_cathedral',
@@ -240,6 +241,7 @@ const List<DefaultTouristSpotSeed> kDefaultTouristSpotSeeds = [
         'Church of St. John the Baptist (Jimenez Church) in Barangay Poblacion. National Cultural Treasure (2001) with 19th-century painted wooden ceilings and coral stone facade. Free admission; typically open daily 6:00 AM–5:00 PM for prayer.',
     rating: 4.4,
     imageUrl: 'assets/images/Jimenez.png',
+    vrLink: kJimenezChurchVrUrl,
   ),
   DefaultTouristSpotSeed(
     docId: 'lopez_jaena_beachfront',

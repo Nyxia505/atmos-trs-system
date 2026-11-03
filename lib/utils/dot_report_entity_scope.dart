@@ -9,8 +9,24 @@ enum DotReportEntityKind {
   /// One tourist attraction / spot (VAR family).
   spot,
 
+  /// All eligible tourist spots in one city/municipality (VAR family).
+  municipalitySpots,
+
   /// One accommodation establishment (DAE family).
   establishment,
+
+  /// OPTACA Events & Announcements summary (not a VAR/DAE workbook).
+  eventsAnnouncements,
+
+  /// OPTACA Matrix Fares summary (not a VAR/DAE workbook).
+  matrixFares,
+}
+
+extension DotReportEntityKindX on DotReportEntityKind {
+  /// Trip-planner summaries hosted in the Fill-forms-for dropdown.
+  bool get isPortalSummary =>
+      this == DotReportEntityKind.eventsAnnouncements ||
+      this == DotReportEntityKind.matrixFares;
 }
 
 /// Selectable spot or establishment for form fill / download.
@@ -78,6 +94,54 @@ abstract final class DotReportEntityScope {
     ];
   }
 
+  /// Keeps check-ins that match any of [spotIds] / [spotNames] (case-insensitive).
+  /// Deduplicates by check-in `id` when present so merged fetches cannot double-count.
+  static List<Map<String, dynamic>> filterCheckInsForSpots(
+    List<Map<String, dynamic>> checkIns, {
+    required Iterable<String> spotIds,
+    required Iterable<String> spotNames,
+  }) {
+    final ids = {
+      for (final id in spotIds)
+        if (id.trim().isNotEmpty) id.trim().toLowerCase(),
+    };
+    final names = {
+      for (final n in spotNames)
+        if (n.trim().isNotEmpty) n.trim().toLowerCase(),
+    };
+    if (ids.isEmpty && names.isEmpty) return const [];
+
+    final out = <Map<String, dynamic>>[];
+    final seenIds = <String>{};
+    for (final c in checkIns) {
+      final cid = (c['id'] ?? '').toString().trim();
+      if (cid.isNotEmpty && !seenIds.add(cid)) continue;
+
+      final spotId = (c['spotId'] ??
+              c['spot_id'] ??
+              c['attractionId'] ??
+              '')
+          .toString()
+          .trim()
+          .toLowerCase();
+      if (spotId.isNotEmpty && ids.contains(spotId)) {
+        out.add(c);
+        continue;
+      }
+      final spotName = (c['spot_name'] ??
+              c['spotName'] ??
+              c['attractionName'] ??
+              '')
+          .toString()
+          .trim()
+          .toLowerCase();
+      if (spotName.isNotEmpty && names.contains(spotName)) {
+        out.add(c);
+      }
+    }
+    return out;
+  }
+
   static String _displayName(String municipalityId) {
     final id = normalizeMunicipalityId(municipalityId);
     for (final m in getMisamisOccidentalMunicipalities()) {
@@ -114,22 +178,43 @@ abstract final class DotReportEntityScope {
     return false;
   }
 
-  static String slugFor({
-    required String baseSlug,
-    required DotReportEntityKind kind,
-    String? entityId,
-  }) {
-    final base = baseSlug.trim().isEmpty ? 'scope' : baseSlug.trim();
-    if (kind == DotReportEntityKind.all ||
-        entityId == null ||
-        entityId.trim().isEmpty) {
-      return base;
-    }
-    final safe = entityId
+  static String _safeSlugPart(String value) {
+    return value
         .trim()
         .toLowerCase()
         .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
         .replaceAll(RegExp(r'^_|_$'), '');
+  }
+
+  static String slugFor({
+    required String baseSlug,
+    required DotReportEntityKind kind,
+    String? entityId,
+    String? municipalityId,
+  }) {
+    final base = baseSlug.trim().isEmpty ? 'scope' : baseSlug.trim();
+    if (kind == DotReportEntityKind.municipalitySpots) {
+      final mun = _safeSlugPart(municipalityId ?? '');
+      if (mun.isEmpty) return '${base}_mun_spots';
+      return '${base}_mun_spots_$mun';
+    }
+    if (kind == DotReportEntityKind.eventsAnnouncements) {
+      final mun = _safeSlugPart(municipalityId ?? '');
+      return mun.isEmpty ? '${base}_events' : '${base}_events_$mun';
+    }
+    if (kind == DotReportEntityKind.matrixFares) {
+      final mun = _safeSlugPart(municipalityId ?? '');
+      return mun.isEmpty
+          ? '${base}_matrix_fares'
+          : '${base}_matrix_fares_$mun';
+    }
+    if (kind == DotReportEntityKind.all ||
+        kind.isPortalSummary ||
+        entityId == null ||
+        entityId.trim().isEmpty) {
+      return base;
+    }
+    final safe = _safeSlugPart(entityId);
     final prefix = kind == DotReportEntityKind.spot ? 'spot' : 'ae';
     return '${base}_${prefix}_$safe';
   }
@@ -138,10 +223,35 @@ abstract final class DotReportEntityScope {
     required String baseLabel,
     required DotReportEntityKind kind,
     DotReportEntityOption? entity,
+    String? municipalityName,
   }) {
-    if (kind == DotReportEntityKind.all || entity == null) return baseLabel;
+    if (kind == DotReportEntityKind.municipalitySpots) {
+      final mun = (municipalityName ?? '').trim();
+      if (mun.isEmpty) return 'All tourist spots · $baseLabel';
+      return 'All tourist spots: $mun · $baseLabel';
+    }
+    if (kind == DotReportEntityKind.eventsAnnouncements) {
+      final mun = (municipalityName ?? '').trim();
+      if (mun.isEmpty) return 'Events & Announcements · $baseLabel';
+      return 'Events & Announcements · $mun · $baseLabel';
+    }
+    if (kind == DotReportEntityKind.matrixFares) {
+      final mun = (municipalityName ?? '').trim();
+      if (mun.isEmpty) return 'Matrix Fares · $baseLabel';
+      return 'Matrix Fares · $mun · $baseLabel';
+    }
+    if (kind == DotReportEntityKind.all ||
+        kind.isPortalSummary ||
+        entity == null) {
+      return baseLabel;
+    }
     final kindLabel =
         kind == DotReportEntityKind.spot ? 'Spot' : 'Establishment';
     return '$kindLabel: ${entity.name} · $baseLabel';
+  }
+
+  /// Display name for a Misamis Occidental municipality id.
+  static String municipalityDisplayName(String municipalityId) {
+    return _displayName(municipalityId);
   }
 }

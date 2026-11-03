@@ -190,6 +190,10 @@ bool _isPlaceholder(String v) {
 }
 
 /// Builds a printable PDF from the same preview table used in Analytics.
+///
+/// [additionalTables] is for multi-section OPTACA summaries (Events,
+/// Announcements, Matrix Fares). Official VAR / DAE exports leave it empty
+/// so their page layout is unchanged.
 Future<Uint8List> buildDotReportPdfBytes({
   required DotFormCatalogEntry form,
   required DotReportPreviewTable preview,
@@ -197,9 +201,12 @@ Future<Uint8List> buildDotReportPdfBytes({
   required DateTime startDate,
   required DateTime endDate,
   DotPdfPaperSize paperSize = DotPdfPaperSize.a4,
+  List<DotReportPreviewTable> additionalTables = const [],
   List<DotPdfSignOff> signOffs = const [],
   List<String> unsignedLabels = const [],
   List<DotPdfSignatory> signatories = const [],
+  bool landscape = false,
+  bool? paginateTables,
 }) async {
   final fonts = await _loadFonts();
   final logo = await _loadLogo();
@@ -216,49 +223,36 @@ Future<Uint8List> buildDotReportPdfBytes({
 
   final generatedAt = DateTime.now();
   final periodLine = '${_fmtDate(startDate)} – ${_fmtDate(endDate)}';
-
-  final colCount = preview.headers.length;
-  final allRows = [
-    ...preview.rows,
-    if (preview.footer != null) preview.footer!,
-  ];
-  final numericCols = <int>{};
-  final emptyCols = <int>{};
-  for (var c = 0; c < colCount; c++) {
-    var hasValue = false;
-    var allNumeric = true;
-    for (final r in allRows) {
-      final v = c < r.length ? r[c] : '';
-      if (_isPlaceholder(v)) continue;
-      hasValue = true;
-      if (!_numericCell.hasMatch(v.trim())) {
-        allNumeric = false;
-        break;
-      }
-    }
-    if (!hasValue) {
-      emptyCols.add(c);
-    } else if (allNumeric && c > 0) {
-      numericCols.add(c);
-    }
-  }
-
-  // Portrait pages are narrower than the old landscape layout, so wide
-  // forms use a smaller type size and tighter cell padding.
-  final bodySize = colCount > 14
-      ? 6.0
-      : colCount > 10
-          ? 6.5
-          : colCount > 7
-              ? 7.5
-              : 8.5;
-  final headSize = bodySize + 0.3;
-  final cellPadH = colCount > 10 ? 2.0 : 4.0;
+  final sections = [preview, ...additionalTables];
+  final showSectionTitles = additionalTables.isNotEmpty;
+  // Portal summaries must split inside MultiPage. VAR / DAE keep the original
+  // Column-of-Tables layout when [paginateTables] is left unset.
+  final splitTables = paginateTables ?? showSectionTitles;
 
   String headerLines(String text) {
     final parts = text.trim().split(RegExp(r'\s+'));
     if (parts.length <= 1 || text.trim().length <= 8) return text;
     return parts.join('\n');
+  }
+
+  /// Portal tables wrap headers onto two lines so 7-column event / fare
+  /// headers stay readable without stacking every word.
+  String headerLinesSoft(String text) {
+    final value = text.trim();
+    if (value.length <= 16) return value;
+    final slash = value.indexOf(' / ');
+    if (slash > 0) {
+      return '${value.substring(0, slash)}\n${value.substring(slash + 3)}';
+    }
+    final amp = value.indexOf(' & ');
+    if (amp > 0) {
+      return '${value.substring(0, amp)}\n${value.substring(amp + 3)}';
+    }
+    final parts = value.split(RegExp(r'\s+'));
+    if (parts.length <= 2) return parts.join('\n');
+    if (parts.length == 3) return '${parts[0]} ${parts[1]}\n${parts[2]}';
+    final mid = (parts.length / 2).ceil();
+    return '${parts.take(mid).join(' ')}\n${parts.skip(mid).join(' ')}';
   }
 
   int longestWord(String text) {
@@ -269,50 +263,179 @@ Future<Uint8List> buildDotReportPdfBytes({
     return longest;
   }
 
-  pw.Widget cell(
-    String text, {
-    required int col,
-    bool header = false,
-    bool bold = false,
-    PdfColor? color,
-  }) {
-    final alignCenter =
-        header || numericCols.contains(col) || emptyCols.contains(col);
-    final shown = header ? headerLines(text) : text;
-    return pw.Padding(
-      padding: pw.EdgeInsets.symmetric(
-        horizontal: cellPadH,
-        vertical: header ? 6 : 3,
-      ),
-      child: pw.Text(
-        t(shown),
-        textAlign: alignCenter ? pw.TextAlign.center : pw.TextAlign.left,
-        style: pw.TextStyle(
-          fontSize: header ? headSize : bodySize,
-          fontWeight:
-              header || bold ? pw.FontWeight.bold : pw.FontWeight.normal,
-          color: color ?? _kInk,
+  pw.Widget buildTable(DotReportPreviewTable table) {
+    final colCount = table.headers.length;
+    if (colCount == 0) return pw.SizedBox();
+    final allRows = [
+      ...table.rows,
+      if (table.footer != null) table.footer!,
+    ];
+    final numericCols = <int>{};
+    final emptyCols = <int>{};
+    for (var c = 0; c < colCount; c++) {
+      var hasValue = false;
+      var allNumeric = true;
+      for (final r in allRows) {
+        final v = c < r.length ? r[c] : '';
+        if (_isPlaceholder(v)) continue;
+        hasValue = true;
+        if (!_numericCell.hasMatch(v.trim())) {
+          allNumeric = false;
+          break;
+        }
+      }
+      if (!hasValue) {
+        emptyCols.add(c);
+      } else if (allNumeric && c > 0) {
+        numericCols.add(c);
+      }
+    }
+
+    // Portrait pages are narrower than the old landscape layout, so wide
+    // forms use a smaller type size and tighter cell padding.
+    final bodySize = colCount > 14
+        ? 6.0
+        : colCount > 10
+            ? 6.5
+            : colCount > 7
+                ? 7.5
+                : 8.5;
+    final headSize = bodySize + 0.3;
+    final cellPadH = colCount > 10 ? 2.0 : 4.0;
+
+    pw.Widget cell(
+      String text, {
+      required int col,
+      bool header = false,
+      bool bold = false,
+      PdfColor? color,
+    }) {
+      final alignCenter =
+          header || numericCols.contains(col) || emptyCols.contains(col);
+      final shown = header
+          ? (splitTables ? headerLinesSoft(text) : headerLines(text))
+          : text;
+      return pw.Padding(
+        padding: pw.EdgeInsets.symmetric(
+          horizontal: cellPadH,
+          vertical: header ? 6 : 3,
         ),
-      ),
-    );
-  }
+        child: pw.Text(
+          t(shown),
+          textAlign: alignCenter ? pw.TextAlign.center : pw.TextAlign.left,
+          style: pw.TextStyle(
+            fontSize: header ? headSize : bodySize,
+            fontWeight:
+                header || bold ? pw.FontWeight.bold : pw.FontWeight.normal,
+            color: color ?? _kInk,
+          ),
+        ),
+      );
+    }
 
-  List<String> padRow(List<String> r) => [
-        for (var c = 0; c < colCount; c++) c < r.length ? r[c] : '',
-      ];
+    List<String> padRow(List<String> r) => [
+          for (var c = 0; c < colCount; c++) c < r.length ? r[c] : '',
+        ];
 
-  final columnWidths = <int, pw.TableColumnWidth>{
-    for (var c = 0; c < colCount; c++)
-      c: pw.FlexColumnWidth(
-        c == 0
-            ? 2.6
-            : numericCols.contains(c) || emptyCols.contains(c)
-                ? (longestWord(preview.headers[c]) >= 8 ? 1.7 : 1.15)
-                : 1.7,
-      ),
-  };
+    double flexFor(int c) {
+      final h = table.headers[c].toLowerCase();
+      if (h.contains('destination') ||
+          h.contains('announcement') ||
+          h.contains('details')) {
+        return 2.8;
+      }
+      if (h == 'event' || h.contains('starting')) return 2.2;
+      if (h.contains('municipality') || h.contains('venue')) return 2.1;
+      if (h.contains('transportation') || h.contains('date')) return 1.6;
+      if (h.contains('estimated') || h.contains('travel time')) return 1.5;
+      if (c == 0) return 2.6;
+      if (numericCols.contains(c) || emptyCols.contains(c)) {
+        return longestWord(table.headers[c]) >= 8 ? 1.7 : 1.15;
+      }
+      return 1.7;
+    }
 
-  pw.Widget buildTable() {
+    final columnWidths = <int, pw.TableColumnWidth>{
+      for (var c = 0; c < colCount; c++)
+        c: pw.FlexColumnWidth(
+          splitTables
+              ? flexFor(c)
+              : (c == 0
+                  ? 2.6
+                  : numericCols.contains(c) || emptyCols.contains(c)
+                      ? (longestWord(table.headers[c]) >= 8 ? 1.7 : 1.15)
+                      : 1.7),
+        ),
+    };
+
+    if (table.rows.isEmpty) {
+      return pw.Container(
+        width: double.infinity,
+        padding: const pw.EdgeInsets.all(12),
+        decoration: pw.BoxDecoration(
+          color: _kZebra,
+          borderRadius: pw.BorderRadius.circular(6),
+          border: pw.Border.all(color: _kBorder, width: 0.6),
+        ),
+        child: pw.Text(
+          t('No data rows for this range.'),
+          style: pw.TextStyle(fontSize: 9, color: _kMuted),
+        ),
+      );
+    }
+
+    // One Table (not a Column of Tables) so MultiPage can split rows and
+    // repeat the orange header. TableHelper uses verticalAlignment.full,
+    // which overflows 7-column fare rows off the page.
+    if (splitTables) {
+      return pw.Table(
+        tableWidth: pw.TableWidth.max,
+        defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
+        columnWidths: columnWidths,
+        border: pw.TableBorder(
+          horizontalInside: pw.BorderSide(color: _kBorder, width: 0.5),
+          bottom: pw.BorderSide(color: _kBorder, width: 0.5),
+          verticalInside: const pw.BorderSide(color: PdfColors.white, width: 0.9),
+        ),
+        children: [
+          pw.TableRow(
+            repeat: true,
+            decoration: pw.BoxDecoration(color: _kAccent),
+            children: [
+              for (var c = 0; c < colCount; c++)
+                cell(
+                  table.headers[c],
+                  col: c,
+                  header: true,
+                  color: PdfColors.white,
+                ),
+            ],
+          ),
+          for (var i = 0; i < table.rows.length; i++)
+            pw.TableRow(
+              decoration: i.isOdd ? pw.BoxDecoration(color: _kZebra) : null,
+              children: [
+                for (final (c, v) in padRow(table.rows[i]).indexed)
+                  cell(v, col: c),
+              ],
+            ),
+          if (table.footer != null)
+            pw.TableRow(
+              decoration: pw.BoxDecoration(
+                color: _kAccentSoft,
+                border: pw.Border(
+                  top: pw.BorderSide(color: _kAccentLine, width: 1),
+                ),
+              ),
+              children: [
+                for (final (c, v) in padRow(table.footer!).indexed)
+                  cell(v, col: c, bold: true),
+              ],
+            ),
+        ],
+      );
+    }
+
     return pw.Column(
       children: [
         pw.Table(
@@ -327,7 +450,7 @@ Future<Uint8List> buildDotReportPdfBytes({
               children: [
                 for (var c = 0; c < colCount; c++)
                   cell(
-                    preview.headers[c],
+                    table.headers[c],
                     col: c,
                     header: true,
                     color: PdfColors.white,
@@ -344,15 +467,15 @@ Future<Uint8List> buildDotReportPdfBytes({
           defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
           columnWidths: columnWidths,
           children: [
-            for (var i = 0; i < preview.rows.length; i++)
+            for (var i = 0; i < table.rows.length; i++)
               pw.TableRow(
                 decoration: i.isOdd ? pw.BoxDecoration(color: _kZebra) : null,
                 children: [
-                  for (final (c, v) in padRow(preview.rows[i]).indexed)
+                  for (final (c, v) in padRow(table.rows[i]).indexed)
                     cell(v, col: c),
                 ],
               ),
-            if (preview.footer != null)
+            if (table.footer != null)
               pw.TableRow(
                 decoration: pw.BoxDecoration(
                   color: _kAccentSoft,
@@ -361,13 +484,28 @@ Future<Uint8List> buildDotReportPdfBytes({
                   ),
                 ),
                 children: [
-                  for (final (c, v) in padRow(preview.footer!).indexed)
+                  for (final (c, v) in padRow(table.footer!).indexed)
                     cell(v, col: c, bold: true),
                 ],
               ),
           ],
         ),
       ],
+    );
+  }
+
+  pw.Widget sectionHeading(String title) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(bottom: 8),
+      child: pw.Text(
+        t(title.toUpperCase()),
+        style: pw.TextStyle(
+          fontSize: 9,
+          color: _kMuted,
+          fontWeight: pw.FontWeight.bold,
+          letterSpacing: 0.6,
+        ),
+      ),
     );
   }
 
@@ -522,7 +660,9 @@ Future<Uint8List> buildDotReportPdfBytes({
 
   doc.addPage(
     pw.MultiPage(
-      pageFormat: paperSize.pageFormat,
+      pageFormat: landscape
+          ? paperSize.pageFormat.landscape
+          : paperSize.pageFormat,
       margin: const pw.EdgeInsets.fromLTRB(30, 26, 30, 22),
       header: (context) =>
           context.pageNumber == 1 ? firstPageHeader() : continuationHeader(),
@@ -555,7 +695,7 @@ Future<Uint8List> buildDotReportPdfBytes({
         ),
       ),
       build: (context) => [
-        if (preview.rows.isEmpty)
+        if (!showSectionTitles && preview.rows.isEmpty)
           pw.Container(
             padding: const pw.EdgeInsets.all(16),
             decoration: pw.BoxDecoration(
@@ -569,9 +709,18 @@ Future<Uint8List> buildDotReportPdfBytes({
               ),
               style: pw.TextStyle(fontSize: 10, color: _kMuted),
             ),
-          )
-        else
-          buildTable(),
+          ),
+        if (showSectionTitles || preview.rows.isNotEmpty) ...[
+          for (var i = 0; i < sections.length; i++) ...[
+            if (i > 0 && splitTables)
+              pw.NewPage()
+            else if (i > 0)
+              pw.SizedBox(height: 16),
+            if (showSectionTitles && sections[i].title.trim().isNotEmpty)
+              sectionHeading(sections[i].title),
+            buildTable(sections[i]),
+          ],
+        ],
         if (preview.gaps.isNotEmpty) ...[
           pw.SizedBox(height: 16),
           pw.Container(

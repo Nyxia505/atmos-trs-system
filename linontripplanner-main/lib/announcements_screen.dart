@@ -154,7 +154,7 @@ class _AnnouncementsScreenState extends State<AnnouncementsScreen> {
                         Padding(
                           padding: EdgeInsets.symmetric(horizontal: 32),
                           child: Text(
-                            'No announcements yet.\nOfficial notices from the province will appear here.',
+                            'No announcements yet.',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: 15,

@@ -21,15 +21,18 @@ class LguEventsPanel extends StatefulWidget {
     this.primaryColor = const Color(0xFFEA580C),
     /// 0 = Province Live, 1 = My posts, 2 = Calendar
     this.initialTabIndex = 2,
-    /// When false, parent shell already shows the page title (avoid duplicate chrome).
-    this.showChrome = true,
-  });
+  /// When false, parent shell already shows the page title (avoid duplicate chrome).
+  this.showChrome = true,
+  /// Province viewers can open the same feed and calendar without posting.
+  this.readOnly = false,
+});
 
   final String? municipalityId;
   final String? municipalityName;
   final Color primaryColor;
   final int initialTabIndex;
   final bool showChrome;
+  final bool readOnly;
 
   @override
   State<LguEventsPanel> createState() => _LguEventsPanelState();
@@ -53,6 +56,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     return DateTime(now.year, now.month, now.day);
   }();
   String _liveFilter = 'all';
+  String _calendarViewMode = 'month';
   final Set<String> _expandedPosts = {};
   final Map<String, int> _photoIndex = {};
   final Set<String> _publishingIds = {};
@@ -1222,6 +1226,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
           builder: (context, constraints) {
             final stacked = constraints.maxWidth < 720;
             final tabs = _segmentedTabs();
+            if (widget.readOnly) return tabs;
             final create = FilledButton.icon(
               onPressed: () => _showEventDialog(),
               icon: const Icon(Icons.add_rounded, size: 18),
@@ -1405,7 +1410,10 @@ class _LguEventsPanelState extends State<LguEventsPanel>
           _emptyFeed('No posts from your LGU yet.', index),
         ]);
       }
-      return _postList(mine);
+      return _scrollBody([
+        _eventCardGrid(mine),
+        const SizedBox(height: 24),
+      ]);
     }
     final filtered = _filteredProvince();
     if (filtered.isEmpty) {
@@ -1501,11 +1509,14 @@ class _LguEventsPanelState extends State<LguEventsPanel>
         : posts
             .where((event) => LguEventService.occursOnDay(event, selected))
             .toList();
+
     final calendar = LguEventsCalendar(
       month: _calendarMonth,
       events: posts,
       accent: widget.primaryColor,
       selectedDay: selected,
+      viewMode: _calendarViewMode,
+      onViewModeChanged: (mode) => setState(() => _calendarViewMode = mode),
       onMonthChanged: (month) => setState(() {
         _calendarMonth = DateTime(month.year, month.month);
         final day = _selectedCalendarDay;
@@ -1516,87 +1527,550 @@ class _LguEventsPanelState extends State<LguEventsPanel>
         }
       }),
       onDaySelected: (day) => setState(() => _selectedCalendarDay = day),
+      onEventTap: _openEventDetails,
     );
 
+    // ── Events & Announcements header ─────────────────────────────────────
+    final sectionHeader = Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Events & Announcements',
+                style: TextStyle(
+                  color: Color(0xFF1F2937),
+                  fontWeight: FontWeight.w800,
+                  fontSize: 20,
+                  letterSpacing: -0.2,
+                ),
+              ),
+              if (selected != null) ...[
+                const SizedBox(height: 2),
+                Text(
+                  '${_weekdayName(selected)}, ${_longDate(selected)}'
+                  ' · ${hits.length} event${hits.length == 1 ? '' : 's'}',
+                  style: TextStyle(
+                    color: widget.primaryColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        OutlinedButton.icon(
+          onPressed: () => _tabController.animateTo(0),
+          icon: const Icon(Icons.arrow_forward_rounded, size: 14),
+          label: const Text('View all events'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: widget.primaryColor,
+            side: BorderSide(color: widget.primaryColor.withValues(alpha: 0.5)),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
+          ),
+        ),
+      ],
+    );
+
+    return _scrollBody([
+      calendar,
+      const SizedBox(height: 24),
+      sectionHeader,
+      const SizedBox(height: 14),
+      if (selected == null)
+        _softPanel(
+          child: Padding(
+            padding:
+                const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
+            child: Text(
+              'Select a date to see its events and announcements.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppTheme.unselectedMuted, height: 1.35),
+            ),
+          ),
+        )
+      else if (hits.isEmpty)
+        _softPanel(
+          child: Padding(
+            padding:
+                const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
+            child: Text(
+              'Nothing scheduled on this date.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppTheme.unselectedMuted),
+            ),
+          ),
+        )
+      else
+        for (var i = 0; i < hits.length; i++) ...[
+          if (i > 0) const SizedBox(height: 12),
+          _buildHorizontalEventCard(hits[i]),
+        ],
+      const SizedBox(height: 24),
+    ]);
+  }
+
+  // ── horizontal event card (calendar Events & Announcements section) ─────────
+
+  Widget _buildHorizontalEventCard(Map<String, dynamic> event) {
+    final photos = _photoSources(event);
+    final status = LguEventService.displayStatus(event);
+    final statusColor = _statusColor(status);
+    final type = LguEventService.normalizeType(event['type']?.toString());
+    final typeColor = _typeColor(type);
+    final title = event['title']?.toString().trim();
+    final content = event['content']?.toString().trim() ?? '';
+    final isOwn = _isOwnEvent(event);
+    final pending = event[_kPendingKey] == true;
+    final place = event['location']?.toString().trim().isNotEmpty == true
+        ? event['location']!.toString().trim()
+        : LguEventService.sourceMunicipalityLabel(event);
+    final canManage =
+        isOwn && !widget.readOnly && event['catalogSource'] != 'events';
+    final startDt = LguEventService.eventStart(event);
+    final isAllDay = LguEventService.isAllDay(event);
+
+    // Gradient placeholder when no photo
+    Widget placeholder({double? width}) => Container(
+          width: width,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                widget.primaryColor.withValues(alpha: 0.14),
+                const Color(0xFFFFF7ED),
+              ],
+            ),
+          ),
+          child: Icon(Icons.image_outlined,
+              color: widget.primaryColor.withValues(alpha: 0.45), size: 34),
+        );
+
+    Widget details() => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                _metaChip(type, typeColor),
+                _metaChip(
+                  pending ? 'Publishing…' : status,
+                  pending ? widget.primaryColor : statusColor,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              (title == null || title.isEmpty) ? 'Untitled' : title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFF1F2937),
+                fontWeight: FontWeight.w800,
+                fontSize: 17,
+                height: 1.25,
+                letterSpacing: -0.2,
+              ),
+            ),
+            if (startDt != null) ...[
+              const SizedBox(height: 6),
+              _infoRow(Icons.calendar_today_rounded, _longDate(startDt)),
+              if (!isAllDay) ...[
+                const SizedBox(height: 3),
+                _infoRow(Icons.schedule_rounded, _timeLabel(event)),
+              ],
+            ],
+            if (place.isNotEmpty) ...[
+              const SizedBox(height: 3),
+              _infoRow(Icons.place_rounded, place, expand: true),
+            ],
+            if (content.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                content,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    color: Color(0xFF374151), fontSize: 13, height: 1.45),
+              ),
+            ],
+          ],
+        );
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x08000000),
+              blurRadius: 12,
+              offset: Offset(0, 2)),
+        ],
+      ),
+      padding: const EdgeInsets.all(14),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 560;
+          if (wide) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: SizedBox(
+                    width: 200,
+                    height: 130,
+                    child: photos.isEmpty
+                        ? placeholder(width: 200)
+                        : _cardPhoto(photos.first, 200, 130),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(child: details()),
+                if (canManage) ...[
+                  const SizedBox(width: 4),
+                  _threeDotMenu(event, pending),
+                ],
+              ],
+            );
+          } else {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: SizedBox(
+                    height: 160,
+                    child: photos.isEmpty
+                        ? placeholder()
+                        : _cardPhoto(photos.first, double.infinity, 160),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: details()),
+                    if (canManage) _threeDotMenu(event, pending),
+                  ],
+                ),
+              ],
+            );
+          }
+        },
+      ),
+    );
+  }
+
+  Widget _infoRow(IconData icon, String text, {bool expand = false}) {
+    final label = Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+          color: AppTheme.unselectedMuted,
+          fontSize: 12.5,
+          fontWeight: FontWeight.w600),
+    );
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 13, color: AppTheme.unselectedMuted),
+        const SizedBox(width: 5),
+        expand ? Expanded(child: label) : Flexible(child: label),
+      ],
+    );
+  }
+
+  Widget _cardPhoto(Object source, double w, double h) {
+    if (source is Uint8List) {
+      return Image.memory(source,
+          fit: BoxFit.cover,
+          width: w,
+          height: h,
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.medium);
+    }
+    final url = source.toString();
+    if (url.startsWith('data:image')) {
+      final cached = _decodedPhotoCache[url];
+      if (cached != null) {
+        return Image.memory(cached,
+            fit: BoxFit.cover, width: w, height: h, gaplessPlayback: true);
+      }
+      final comma = url.indexOf(',');
+      if (comma >= 0) {
+        try {
+          final bytes = base64Decode(url.substring(comma + 1));
+          _decodedPhotoCache[url] = bytes;
+          return Image.memory(bytes,
+              fit: BoxFit.cover, width: w, height: h, gaplessPlayback: true);
+        } catch (_) {}
+      }
+    }
+    return SpotImage(imageUrl: url, fit: BoxFit.cover, width: w, height: h);
+  }
+
+  String _timeLabel(Map<String, dynamic> event) {
+    if (LguEventService.isAllDay(event)) return 'All day';
+    final start = LguEventService.eventStart(event);
+    final end = LguEventService.eventEnd(event);
+    if (start == null) return '';
+    String fmt(DateTime dt) {
+      final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+      final m = dt.minute.toString().padLeft(2, '0');
+      final ap = dt.hour >= 12 ? 'PM' : 'AM';
+      return '$h:$m $ap';
+    }
+    return end == null ? fmt(start) : '${fmt(start)} - ${fmt(end)}';
+  }
+
+  String _weekdayName(DateTime day) {
+    const names = [
+      'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+      'Friday', 'Saturday', 'Sunday',
+    ];
+    return names[day.weekday - 1];
+  }
+
+  Widget _threeDotMenu(Map<String, dynamic> event, bool pending) {
+    return PopupMenuButton<String>(
+      icon: Icon(Icons.more_vert_rounded,
+          color: AppTheme.unselectedMuted, size: 20),
+      tooltip: 'More options',
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      onSelected: (value) {
+        if (value == 'edit' && !pending) _showEventDialog(existing: event);
+        if (value == 'delete' && !pending) _deleteEvent(event);
+      },
+      itemBuilder: (_) => [
+        const PopupMenuItem(
+          value: 'edit',
+          child: Row(children: [
+            Icon(Icons.edit_outlined, size: 16),
+            SizedBox(width: 8),
+            Text('Edit'),
+          ]),
+        ),
+        const PopupMenuItem(
+          value: 'delete',
+          child: Row(children: [
+            Icon(Icons.delete_outline, size: 16, color: Color(0xFFDC2626)),
+            SizedBox(width: 8),
+            Text('Delete',
+                style: TextStyle(color: Color(0xFFDC2626))),
+          ]),
+        ),
+      ],
+    );
+  }
+
+  Widget _eventCardGrid(List<Map<String, dynamic>> hits) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final wide = constraints.maxWidth >= 1040;
-        final body = wide
-            ? Row(
+        final width = constraints.maxWidth.isFinite ? constraints.maxWidth : 960.0;
+        final columns = width >= 1080 ? 3 : (width >= 680 ? 2 : 1);
+        const gap = 16.0;
+        return Column(
+          children: [
+            for (var i = 0; i < hits.length; i += columns) ...[
+              if (i > 0) const SizedBox(height: gap),
+              Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(flex: 3, child: calendar),
-                  const SizedBox(width: 16),
-                  Expanded(flex: 2, child: _calendarDayDetail(selected, hits)),
+                  for (var column = 0; column < columns; column++) ...[
+                    if (column > 0) const SizedBox(width: gap),
+                    Expanded(
+                      child: i + column < hits.length
+                          ? _buildGridCard(hits[i + column])
+                          : const SizedBox.shrink(),
+                    ),
+                  ],
                 ],
-              )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  calendar,
-                  const SizedBox(height: 16),
-                  _calendarDayDetail(selected, hits),
-                ],
-              );
-        return _scrollBody([body, const SizedBox(height: 24)]);
+              ),
+            ],
+          ],
+        );
       },
     );
   }
 
-  Widget _calendarDayDetail(
-    DateTime? selected,
-    List<Map<String, dynamic>> hits,
-  ) {
-    if (selected == null) {
-      return _softPanel(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 12),
+  void _openEventDetails(Map<String, dynamic> event) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: SingleChildScrollView(
+              child: _buildPreviewCard(event, forceExpanded: true),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildGridCard(Map<String, dynamic> event) {
+    final status = LguEventService.displayStatus(event);
+    final statusColor = _statusColor(status);
+    final type = LguEventService.normalizeType(event['type']?.toString());
+    final typeColor = _typeColor(type);
+    final title = event['title']?.toString().trim();
+    final content = event['content']?.toString().trim() ?? '';
+    final isOwn = _isOwnEvent(event);
+    final pending = event[_kPendingKey] == true;
+    final place = event['location']?.toString().trim().isNotEmpty == true
+        ? event['location'].toString().trim()
+        : LguEventService.sourceMunicipalityLabel(event);
+    final photos = _photoSources(event);
+    final canManage = isOwn && !widget.readOnly && event['catalogSource'] != 'events';
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AppTheme.cardBackground,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppTheme.border),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(18),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => _openEventDetails(event),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Icon(Icons.touch_app_rounded, color: widget.primaryColor, size: 28),
-              const SizedBox(height: 10),
-              Text(
-                'Select a date',
-                style: TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16,
-                ),
+              SizedBox(
+                height: 168,
+                width: double.infinity,
+                child: photos.isEmpty
+                    ? DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              widget.primaryColor.withValues(alpha: 0.16),
+                              const Color(0xFFFFF7ED),
+                            ],
+                          ),
+                        ),
+                        child: Icon(
+                          Icons.image_outlined,
+                          color: widget.primaryColor.withValues(alpha: 0.7),
+                        ),
+                      )
+                    : _gridPhoto(photos.first),
               ),
-              const SizedBox(height: 4),
-              Text(
-                'Events and announcements for that day show here.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: AppTheme.unselectedMuted, height: 1.35),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        _metaChip(type, typeColor),
+                        _metaChip(
+                          pending ? 'Publishing…' : status,
+                          pending ? widget.primaryColor : statusColor,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 40,
+                      child: Text(
+                        (title == null || title.isEmpty) ? 'Untitled' : title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                          height: 1.25,
+                          letterSpacing: -0.2,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    SizedBox(
+                      height: 34,
+                      child: Text(
+                        '${_scheduleLine(event)} · $place',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: AppTheme.unselectedMuted,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                          height: 1.3,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 55,
+                      child: Text(
+                        content,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 13,
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        onPressed: () => _openEventDetails(event),
+                        style: TextButton.styleFrom(
+                          foregroundColor: widget.primaryColor,
+                          padding: EdgeInsets.zero,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        child: const Text(
+                          'Read More',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ),
+                    if (canManage) ...[
+                      const SizedBox(height: 4),
+                      _previewActions(event, pending),
+                    ],
+                  ],
+                ),
               ),
             ],
           ),
         ),
-      );
-    }
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _selectedDayHeader(selected, hits.length),
-        const SizedBox(height: 12),
-        if (hits.isEmpty)
-          _softPanel(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 12),
-              child: Text(
-                'Nothing scheduled on this date.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: AppTheme.unselectedMuted),
-              ),
-            ),
-          )
-        else
-          for (var i = 0; i < hits.length; i++) ...[
-            if (i > 0) const SizedBox(height: 12),
-            _buildPreviewCard(hits[i]),
-          ],
-      ],
+      ),
     );
   }
 
@@ -1627,6 +2101,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     return parts.join(' · ');
   }
 
+  // ignore: unused_element
   Widget _selectedDayHeader(DateTime day, int count) {
     final events = count == 0
         ? 0
@@ -1696,7 +2171,10 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     return photos;
   }
 
-  Widget _buildPreviewCard(Map<String, dynamic> event) {
+  Widget _buildPreviewCard(
+    Map<String, dynamic> event, {
+    bool forceExpanded = false,
+  }) {
     final id = event['id']?.toString() ?? '';
     final status = LguEventService.displayStatus(event);
     final statusColor = _statusColor(status);
@@ -1709,7 +2187,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     final place = event['location']?.toString().trim().isNotEmpty == true
         ? event['location'].toString().trim()
         : LguEventService.sourceMunicipalityLabel(event);
-    final expanded = _expandedPosts.contains(id);
+    final expanded = forceExpanded || _expandedPosts.contains(id);
     final long = content.length > 180;
 
     final photos = _photoSources(event);
@@ -1792,7 +2270,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                       height: 1.45,
                     ),
                   ),
-                  if (long)
+                  if (long && !forceExpanded)
                     TextButton(
                       onPressed: () => setState(() {
                         if (expanded) {
@@ -1809,7 +2287,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                       child: Text(expanded ? 'Show less' : 'Read more'),
                     ),
                 ],
-                if (isOwn) ...[
+                if (isOwn && !widget.readOnly && event['catalogSource'] != 'events') ...[
                   const SizedBox(height: 12),
                   _previewActions(event, pending),
                 ],
@@ -1905,6 +2383,24 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     );
   }
 
+  Widget _gridPhoto(Object source) {
+    if (source is Uint8List) {
+      return Image.memory(
+        source,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: 168,
+        gaplessPlayback: true,
+      );
+    }
+    return SpotImage(
+      imageUrl: source.toString(),
+      fit: BoxFit.cover,
+      width: double.infinity,
+      height: 168,
+    );
+  }
+
   Widget _photoImage(Object source) {
     if (source is Uint8List) return _memoryPhoto(source);
     final url = source.toString();
@@ -1929,33 +2425,61 @@ class _LguEventsPanelState extends State<LguEventsPanel>
   }
 
   Widget _previewActions(Map<String, dynamic> event, bool pending) {
-    return Row(
-      children: [
-        Expanded(
-          child: _dayAction(
-            icon: Icons.edit_outlined,
-            label: 'Edit',
-            onPressed: pending ? null : () => _showEventDialog(existing: event),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _dayAction(
-            icon: Icons.event_repeat_outlined,
-            label: 'Reschedule',
-            onPressed: pending ? null : () => _showEventDialog(existing: event),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _dayAction(
-            icon: Icons.delete_outline,
-            label: 'Delete',
-            danger: true,
-            onPressed: pending ? null : () => _deleteEvent(event),
-          ),
-        ),
-      ],
+    Widget button({
+      required IconData icon,
+      required String label,
+      bool danger = false,
+      required VoidCallback? onPressed,
+    }) {
+      return _dayAction(
+        icon: icon,
+        label: label,
+        danger: danger,
+        onPressed: onPressed,
+      );
+    }
+
+    final edit = button(
+      icon: Icons.edit_outlined,
+      label: 'Edit',
+      onPressed: pending ? null : () => _showEventDialog(existing: event),
+    );
+    final reschedule = button(
+      icon: Icons.event_repeat_outlined,
+      label: 'Reschedule',
+      onPressed: pending ? null : () => _showEventDialog(existing: event),
+    );
+    final delete = button(
+      icon: Icons.delete_outline,
+      label: 'Delete',
+      danger: true,
+      onPressed: pending ? null : () => _deleteEvent(event),
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 460) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              edit,
+              const SizedBox(height: 8),
+              reschedule,
+              const SizedBox(height: 8),
+              delete,
+            ],
+          );
+        }
+        return Row(
+          children: [
+            Expanded(child: edit),
+            const SizedBox(width: 8),
+            Expanded(child: reschedule),
+            const SizedBox(width: 8),
+            Expanded(child: delete),
+          ],
+        );
+      },
     );
   }
 

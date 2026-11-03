@@ -9,8 +9,12 @@ import 'data.dart';
 import 'event_datetime_format.dart';
 import 'firestore_loader.dart';
 import 'services/storage_image_upload.dart';
+import 'event_schedule.dart';
 import 'services/tourism_session.dart';
+import 'widgets/admin_bulk_selection_bar.dart';
 import 'widgets/municipality_image.dart';
+import 'widgets/optaca_portal_ui.dart';
+import 'widgets/tourism_plan_ui.dart';
 
 String _announcementImageFolderSlug(String title) {
   return title
@@ -30,18 +34,23 @@ void _confirmAnnouncementDelete(
     builder: (ctx) => AlertDialog(
       title: const Text('Delete'),
       content: Text('Remove announcement "$title"?'),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx),
           child: const Text('Cancel'),
         ),
-        TextButton(
+        FilledButton(
           onPressed: () {
             Navigator.pop(ctx);
             onConfirm();
           },
-          child: Text('Delete', style: TextStyle(color: Colors.red.shade400)),
+          style: FilledButton.styleFrom(
+            backgroundColor: Colors.red.shade500,
+            foregroundColor: Colors.white,
+          ),
+          child: const Text('Delete'),
         ),
       ],
     ),
@@ -58,18 +67,23 @@ void _confirmEventDelete(
     builder: (ctx) => AlertDialog(
       title: const Text('Delete'),
       content: Text('Remove event "$title"?'),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(ctx),
           child: const Text('Cancel'),
         ),
-        TextButton(
+        FilledButton(
           onPressed: () {
             Navigator.pop(ctx);
             onConfirm();
           },
-          child: Text('Delete', style: TextStyle(color: Colors.red.shade400)),
+          style: FilledButton.styleFrom(
+            backgroundColor: Colors.red.shade500,
+            foregroundColor: Colors.white,
+          ),
+          child: const Text('Delete'),
         ),
       ],
     ),
@@ -88,39 +102,159 @@ class AdminAnnouncementsTab extends StatefulWidget {
 
 class _AdminAnnouncementsTabState extends State<AdminAnnouncementsTab> {
   bool _loading = true;
+  Object? _error;
+  final Set<String> _selectedIds = {};
+  bool _deleting = false;
 
   @override
   void initState() {
     super.initState();
     _loading = buildNewsFeedItemsSorted().isEmpty;
-    _load(silent: true);
+    _load(silent: !_loading);
   }
 
   Future<void> _load({bool silent = false}) async {
-    if (!silent && buildNewsFeedItemsSorted().isEmpty && mounted) {
-      setState(() => _loading = true);
-    }
+    if (!silent && mounted) setState(() => _loading = true);
     try {
-      await Future.wait([
-        loadEventsFromFirestore().timeout(const Duration(seconds: 8)),
-        loadAnnouncementsFromFirestore().timeout(const Duration(seconds: 8)),
-      ]);
+      await loadAdminGovernorCatalogsFromFirestore().timeout(
+        const Duration(seconds: 30),
+      );
+      if (mounted) _error = null;
     } catch (e, st) {
       debugPrint('Announcements feed load: $e\n$st');
+      if (mounted) _error = e;
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        final visible = {for (final a in tourismAnnouncements) a.id};
+        _selectedIds.removeWhere((id) => !visible.contains(id));
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  void _toggleAnnouncement(String id) {
+    if (_deleting) return;
+    setState(() {
+      if (!_selectedIds.add(id)) _selectedIds.remove(id);
+    });
+  }
+
+  void _selectAllAnnouncements() {
+    if (_deleting) return;
+    setState(() {
+      _selectedIds
+        ..clear()
+        ..addAll(tourismAnnouncements.map((a) => a.id));
+    });
+  }
+
+  Future<void> _deleteSelectedAnnouncements() async {
+    if (_deleting || _selectedIds.isEmpty) return;
+    final count = _selectedIds.length;
+    final confirmed = await confirmAdminBulkDelete(
+      context,
+      count: count,
+      nounSingular: 'announcement',
+      nounPlural: 'announcements',
+    );
+    if (!confirmed || !mounted) return;
+    final ids = Set<String>.from(_selectedIds);
+    setState(() => _deleting = true);
+    try {
+      final result = await deleteTourismAnnouncementsByIds(ids);
+      if (!mounted) return;
+      setState(() {
+        _selectedIds.removeAll(result.deletedIds);
+        _deleting = false;
+      });
+      widget.onChanged();
+      final deletedCount = result.deletedIds.length;
+      final message = result.hasFailures
+          ? '$deletedCount announcements deleted. ${result.failedIds.length} could not be deleted.'
+          : '$deletedCount announcements deleted successfully.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _deleting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to delete announcements: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null && buildNewsFeedItemsSorted().isEmpty) {
+      return OptacaLoadError(
+        title: 'Announcements could not be loaded',
+        message: '$_error',
+        onRetry: _load,
+      );
+    }
     final feed = buildNewsFeedItemsSorted();
+    final announcementCount = tourismAnnouncements.length;
+    final selectedCount = _selectedIds.length;
+    final allSelected =
+        announcementCount > 0 && selectedCount == announcementCount;
+    final selectAllTristate = selectedCount == 0
+        ? false
+        : allSelected
+            ? true
+            : null;
     return Stack(
       children: [
-        Stack(
-      children: [
-        if (feed.isNotEmpty)
-          ListView.builder(
+        Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: TourismPlanUi.sectionTitleBar(
+                      title: 'All announcements',
+                    ),
+                  ),
+                  Flexible(
+                    child: AdminBulkSelectionBar(
+                      selectedCount: selectedCount,
+                      totalVisible: announcementCount,
+                      nounPlural: 'announcements',
+                      onSelectAllVisible: _selectAllAnnouncements,
+                      onClear: () => setState(_selectedIds.clear),
+                      onDelete: _deleteSelectedAnnouncements,
+                      deleting: _deleting,
+                      selectAllChecked: allSelected,
+                      selectAllTristate: selectAllTristate,
+                      alignEnd: true,
+                      compact: true,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: feed.isEmpty
+                  ? const Center(
+                      child: Text(
+                        'No announcements or events yet.\n'
+                        'Tap + for news or the calendar button for an event.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: AppColors.textGrey,
+                          fontSize: 15,
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 140),
             itemCount: feed.length,
             itemBuilder: (context, index) {
@@ -128,16 +262,25 @@ class _AdminAnnouncementsTabState extends State<AdminAnnouncementsTab> {
               switch (item) {
                 case TourismNewsFeedAnnouncement(:final announcement):
                   final a = announcement;
+                  final selected = _selectedIds.contains(a.id);
                   return Card(
                     margin: const EdgeInsets.only(bottom: 10),
+                    color: selected
+                        ? AppColors.primary.withValues(alpha: 0.06)
+                        : null,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Checkbox(
+                          value: selected,
+                          onChanged: (_) => _toggleAnnouncement(a.id),
+                        ),
+                        Expanded(
+                          child: ListTile(
+                      contentPadding: const EdgeInsets.fromLTRB(0, 8, 8, 8),
                       leading: ClipRRect(
                         borderRadius: BorderRadius.circular(8),
                         child: SizedBox(
@@ -194,13 +337,9 @@ class _AdminAnnouncementsTabState extends State<AdminAnnouncementsTab> {
                             IconButton(
                               icon: const Icon(Icons.edit_outlined, size: 22),
                               onPressed: () async {
-                                await Navigator.push(
+                                await openAdminAnnouncementForm(
                                   context,
-                                  MaterialPageRoute<void>(
-                                    builder: (_) =>
-                                        AdminAnnouncementFormPage(
-                                            existing: a),
-                                  ),
+                                  existing: a,
                                 );
                                 await _load();
                                 widget.onChanged();
@@ -225,6 +364,9 @@ class _AdminAnnouncementsTabState extends State<AdminAnnouncementsTab> {
                           ],
                         ),
                       ),
+                    ),
+                        ),
+                      ],
                     ),
                   );
                 case TourismNewsFeedEvent(:final event):
@@ -303,8 +445,9 @@ class _AdminAnnouncementsTabState extends State<AdminAnnouncementsTab> {
                       subtitle: Text(
                         [
                           e.eventType,
-                          formatEventDateTimeDisplay(e.dateTime),
-                          if (e.municipality.isNotEmpty) e.municipality,
+                          formatEventScheduleSubtitle(e),
+                          if (formatEventListLocationLine(e).isNotEmpty)
+                            formatEventListLocationLine(e),
                           e.venue,
                           if (e.description.isNotEmpty)
                             e.description.length > 100
@@ -325,13 +468,7 @@ class _AdminAnnouncementsTabState extends State<AdminAnnouncementsTab> {
                             IconButton(
                               icon: const Icon(Icons.edit_outlined, size: 22),
                               onPressed: () async {
-                                await Navigator.push<void>(
-                                  context,
-                                  MaterialPageRoute<void>(
-                                    builder: (_) =>
-                                        AdminEventFormPage(existing: e),
-                                  ),
-                                );
+                                await openAdminEventForm(context, existing: e);
                                 await _load();
                                 widget.onChanged();
                               },
@@ -358,15 +495,9 @@ class _AdminAnnouncementsTabState extends State<AdminAnnouncementsTab> {
               }
             },
           ),
-        if (feed.isEmpty)
-          const Center(
-            child: Text(
-              'No announcements or events yet.\n'
-              'Tap + for news or the calendar button for an event.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: AppColors.textGrey, fontSize: 15),
             ),
-          ),
+          ],
+        ),
         Positioned(
           right: 16,
           bottom: 16,
@@ -380,12 +511,7 @@ class _AdminAnnouncementsTabState extends State<AdminAnnouncementsTab> {
                 foregroundColor: Colors.white,
                 tooltip: 'Add event',
                 onPressed: () async {
-                  await Navigator.push<void>(
-                    context,
-                    MaterialPageRoute<void>(
-                      builder: (_) => const AdminEventFormPage(),
-                    ),
-                  );
+                  await openAdminEventForm(context);
                   await _load();
                   widget.onChanged();
                 },
@@ -396,12 +522,7 @@ class _AdminAnnouncementsTabState extends State<AdminAnnouncementsTab> {
                 heroTag: 'announcementsFab',
                 backgroundColor: AppColors.primary,
                 onPressed: () async {
-                  await Navigator.push<void>(
-                    context,
-                    MaterialPageRoute<void>(
-                      builder: (_) => const AdminAnnouncementFormPage(),
-                    ),
-                  );
+                  await openAdminAnnouncementForm(context);
                   await _load();
                   widget.onChanged();
                 },
@@ -410,15 +531,6 @@ class _AdminAnnouncementsTabState extends State<AdminAnnouncementsTab> {
             ],
           ),
         ),
-      ],
-        ),
-        if (_loading)
-          const Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: LinearProgressIndicator(minHeight: 3),
-          ),
       ],
     );
   }
@@ -442,10 +554,14 @@ class _AdminAnnouncementFormPageState extends State<AdminAnnouncementFormPage> {
   late DateTime _publishedAt;
   bool _uploadingImage = false;
   Uint8List? _previewBytes;
+  late final String _docId;
+  bool _saving = false;
 
   @override
   void initState() {
     super.initState();
+    final existingId = widget.existing?.id.trim() ?? '';
+    _docId = existingId.isNotEmpty ? existingId : newTourismAnnouncementDocId();
     _titleController = TextEditingController(
       text: widget.existing?.title ?? '',
     );
@@ -574,9 +690,12 @@ class _AdminAnnouncementFormPageState extends State<AdminAnnouncementFormPage> {
   }
 
   Future<void> _save() async {
+    if (_saving) return;
     if (!_formKey.currentState!.validate()) return;
+    _saving = true;
+    if (mounted) setState(() {});
     final ann = TourismAnnouncement(
-      id: widget.existing?.id ?? '',
+      id: _docId,
       title: _titleController.text.trim(),
       body: _bodyController.text.trim(),
       imagePath: _imageController.text.trim(),
@@ -587,6 +706,7 @@ class _AdminAnnouncementFormPageState extends State<AdminAnnouncementFormPage> {
       await loadAnnouncementsFromFirestore();
     } catch (e) {
       if (mounted) {
+        setState(() => _saving = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to save: $e'),
@@ -596,7 +716,7 @@ class _AdminAnnouncementFormPageState extends State<AdminAnnouncementFormPage> {
       }
       return;
     }
-    if (mounted) Navigator.pop(context);
+    if (mounted) Navigator.pop(context, true);
   }
 
   @override
@@ -703,12 +823,28 @@ class _AdminAnnouncementFormPageState extends State<AdminAnnouncementFormPage> {
               ),
               const SizedBox(height: 24),
               FilledButton(
-                onPressed: _save,
+                onPressed: _saving ? null : _save,
                 style: FilledButton.styleFrom(
                   backgroundColor: AppColors.primary,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
-                child: const Text('Save announcement'),
+                child: _saving
+                    ? const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            height: 18,
+                            width: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: Colors.white,
+                            ),
+                          ),
+                          SizedBox(width: 10),
+                          Text('Saving...'),
+                        ],
+                      )
+                    : const Text('Save announcement'),
               ),
             ],
           ),
@@ -716,4 +852,21 @@ class _AdminAnnouncementFormPageState extends State<AdminAnnouncementFormPage> {
       ),
     );
   }
+}
+
+Future<bool> openAdminAnnouncementForm(
+  BuildContext context, {
+  TourismAnnouncement? existing,
+}) async {
+  final saved = await Navigator.of(context).push<bool>(
+    MaterialPageRoute(
+      builder: (_) => AdminAnnouncementFormPage(existing: existing),
+    ),
+  );
+  if (saved == true && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Announcement saved successfully!')),
+    );
+  }
+  return saved == true;
 }

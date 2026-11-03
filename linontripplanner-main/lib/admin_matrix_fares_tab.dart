@@ -285,14 +285,6 @@ class _AdminMatrixFaresTabState extends State<AdminMatrixFaresTab> {
                 onChanged: _onSearchChanged,
               ),
             ),
-            const SizedBox(height: 16),
-            Text(
-              'Add, edit, or delete fares. Changes save to Firestore (admin/staff only).',
-              style: TextStyle(
-                fontSize: 12,
-                color: AppColors.textGrey.withValues(alpha: 0.9),
-              ),
-            ),
             const SizedBox(height: 12),
             _sectionHeader(
               title: 'Transportation fees (between municipalities)',
@@ -727,8 +719,9 @@ class _AdminMatrixFaresTabState extends State<AdminMatrixFaresTab> {
             void syncEndpointDefault() {
               final toMuni = _municipalityByName(toName);
               if (toMuni != null && endpointCtrl.text.trim().isEmpty) {
-                endpointCtrl.text = transportEndpointFor(toMuni).name;
-                endpointType = transportEndpointFor(toMuni).kind;
+                final hub = transportEndpointFor(toMuni);
+                endpointCtrl.text = hub?.name ?? '';
+                endpointType = hub?.kind ?? 'terminal';
               }
             }
 
@@ -937,7 +930,7 @@ class _AdminMatrixFaresTabState extends State<AdminMatrixFaresTab> {
           builder: (ctx, setDialog) {
             final muni = _municipalityByName(muniName);
             if (muni != null && hubCtrl.text.trim().isEmpty) {
-              hubCtrl.text = transportEndpointFor(muni).name;
+              hubCtrl.text = transportEndpointFor(muni)?.name ?? '';
             }
             spots = _spotsForMunicipality(muniName);
             if (selectedSpot != null &&
@@ -1087,6 +1080,16 @@ class _AdminMatrixFaresTabState extends State<AdminMatrixFaresTab> {
                       return;
                     }
                     final hub = transportEndpointFor(muni);
+                    if (hub == null) {
+                      ScaffoldMessenger.of(ctx).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'No bus stop is saved for this municipality.',
+                          ),
+                        ),
+                      );
+                      return;
+                    }
                     final endpointSlug = municipalitySlug(hub.name);
                     final spotSlug = touristSpotProfileStorageSlug(spot.name);
                     final id = hubSpotTransportFeeDocId(

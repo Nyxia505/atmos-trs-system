@@ -201,7 +201,13 @@ class SessionStorage {
         roleStr == 'tourism_province') {
       return UserRole.provincialTourism;
     }
-    if (roleStr == 'tourism') return UserRole.tourism;
+    if (roleStr == 'tourism' ||
+        roleStr == 'tourism_office' ||
+        roleStr == 'lgu_tourism' ||
+        roleStr == 'tourism office' ||
+        roleStr == 'lgu tourism') {
+      return UserRole.tourism;
+    }
     if (roleStr == 'tourismEstablishment' ||
         roleStr == 'tourism_establishment' ||
         roleStr == 'establishment') {
@@ -274,6 +280,8 @@ class SessionStorage {
     await prefs.remove(_keyUserRole);
     await prefs.remove(_keyUserEmail);
     await prefs.remove(_keyMunicipalityId);
+    // Drop module shell so refresh after logout does not reopen Trip Planner admin.
+    await prefs.remove('atmos_active_module_shell');
   }
 
   /// Returns the dashboard route based on role

@@ -174,6 +174,7 @@ HubSpotTransportFee? hubSpotFeeFromMatrixForSpot(
   }
   if (muni == null) return null;
   final hub = defaultBusTerminalFor(muni) ?? transportEndpointFor(muni);
+  if (hub == null) return null;
   return hubSpotFeeFromMatrixRow(
     row: row,
     muni: muni,

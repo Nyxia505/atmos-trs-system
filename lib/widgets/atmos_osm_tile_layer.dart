@@ -5,11 +5,9 @@ import 'package:flutter_map/flutter_map.dart';
 const String kAtmosOsmPrimaryTemplate =
     'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
-/// Carto Voyager fallback (subdomains required).
+/// Esri World Street Map fallback (no API key; Carto Voyager watermarks).
 const String kAtmosOsmFallbackTemplate =
-    'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png';
-
-const List<String> kAtmosOsmTileSubdomains = ['a', 'b', 'c', 'd'];
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
 
 /// Primary template alias for screens that set [TileLayer.urlTemplate] directly.
 const String kAtmosOsmTileTemplate = kAtmosOsmPrimaryTemplate;
@@ -38,7 +36,6 @@ class _AtmosOsmTileLayerState extends State<AtmosOsmTileLayer> {
       urlTemplate: _useFallback
           ? kAtmosOsmFallbackTemplate
           : kAtmosOsmPrimaryTemplate,
-      subdomains: _useFallback ? kAtmosOsmTileSubdomains : const [],
       userAgentPackageName: 'com.atmos.trs',
       maxNativeZoom: 19,
       retinaMode: widget.retinaMode,

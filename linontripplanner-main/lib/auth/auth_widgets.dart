@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../data.dart';
+import '../widgets/trip_plan_app_icon.dart';
 
 /// Visual tokens aligned with TripPlan auth UI (orange + cream).
 abstract class AuthDesign {
@@ -81,6 +82,7 @@ class AuthLoginPhotoBackground extends StatelessWidget {
         Positioned.fill(
           child: Image.asset(
             AuthDesign.loginBackgroundAsset,
+            package: 'trip_plan',
             fit: BoxFit.cover,
             alignment: Alignment.center,
           ),
@@ -154,16 +156,13 @@ class AuthLoginBrandHeader extends StatelessWidget {
       ),
       child: Column(
         children: [
-          Image.asset(
-            'assets/images/tripplan.png',
+          const TripPlanAppIcon(
             width: 120,
             height: 120,
-            fit: BoxFit.contain,
-            filterQuality: FilterQuality.high,
           ),
           const SizedBox(height: 8),
           const Text(
-            'TripPlan',
+            'Trip Plan',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontFamily: AppFonts.holidayCalling,
@@ -175,14 +174,13 @@ class AuthLoginBrandHeader extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            'Misamis Occidental Tourism Trip Planner',
+            'Misamis Occidental',
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontFamily: AppFonts.holidayCalling,
               color: Colors.white.withValues(alpha: 0.95),
-              fontSize: 23,
-              fontWeight: FontWeight.w400,
-              height: 1.15,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              height: 1.2,
             ),
           ),
         ],

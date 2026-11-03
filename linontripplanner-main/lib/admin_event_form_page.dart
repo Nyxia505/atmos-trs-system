@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'data.dart';
-import 'event_datetime_format.dart';
+import 'event_schedule.dart';
 import 'firestore_loader.dart';
 import 'services/storage_image_upload.dart';
+import 'widgets/event_date_schedule_picker.dart';
+import 'widgets/event_location_multi_select.dart';
 import 'widgets/municipality_image.dart';
 
 String _folderSlug(String name) {
@@ -34,13 +36,20 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
   late TextEditingController _imageController;
   late DateTime _dateTime;
   late String _eventType;
-  String? _municipality;
+  late Set<String> _selectedLocations;
+  late DateTime _rangeStart;
+  late DateTime _rangeEnd;
   bool _uploadingImage = false;
   Uint8List? _previewBytes;
+  late final String _docId;
+  bool _saving = false;
+  String? _saveError;
 
   @override
   void initState() {
     super.initState();
+    final existingId = widget.existing?.id.trim() ?? '';
+    _docId = existingId.isNotEmpty ? existingId : newTourismEventDocId();
     _titleController = TextEditingController(
       text: widget.existing?.title ?? '',
     );
@@ -58,11 +67,27 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
     _eventType = kEventTypeOptions.contains(existing)
         ? existing
         : kEventTypeOptions.first;
-    final mun = widget.existing?.municipality.trim() ?? '';
-    _municipality = mun.isNotEmpty &&
-            municipalities.any((m) => m.name == mun)
-        ? mun
-        : null;
+    _selectedLocations = {
+      for (final name in widget.existing?.locationNames ?? const <String>[])
+        if (name.trim().isNotEmpty) name.trim(),
+    };
+    if (_selectedLocations.isEmpty) {
+      _selectedLocations = {
+        for (final name in splitEventLocationNames(
+          widget.existing?.municipality ?? '',
+        ))
+          name,
+      };
+    }
+    final existingDays = widget.existing == null
+        ? <DateTime>[eventCalendarDay(_dateTime)]
+        : eventExpandedCalendarDays(widget.existing!);
+    _rangeStart = existingDays.isEmpty
+        ? eventCalendarDay(_dateTime)
+        : eventCalendarDay(existingDays.first);
+    _rangeEnd = existingDays.isEmpty
+        ? eventCalendarDay(_dateTime)
+        : eventCalendarDay(existingDays.last);
   }
 
   @override
@@ -72,50 +97,6 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
     _descriptionController.dispose();
     _imageController.dispose();
     super.dispose();
-  }
-
-  Future<void> _pickDate() async {
-    final d = await showDatePicker(
-      context: context,
-      initialDate: _dateTime,
-      firstDate: DateTime(2020),
-      lastDate: DateTime(2100),
-    );
-    if (d != null) {
-      setState(() {
-        _dateTime = DateTime(
-          d.year,
-          d.month,
-          d.day,
-          _dateTime.hour,
-          _dateTime.minute,
-        );
-      });
-    }
-  }
-
-  Future<void> _pickTime() async {
-    final t = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.fromDateTime(_dateTime),
-      builder: (context, child) {
-        return MediaQuery(
-          data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
-          child: child ?? const SizedBox.shrink(),
-        );
-      },
-    );
-    if (t != null) {
-      setState(() {
-        _dateTime = DateTime(
-          _dateTime.year,
-          _dateTime.month,
-          _dateTime.day,
-          t.hour,
-          t.minute,
-        );
-      });
-    }
   }
 
   Future<void> _pickImage() async {
@@ -151,9 +132,16 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
     } catch (e) {
       if (mounted) {
         setState(() => _uploadingImage = false);
+        final network = e.toString().contains('network-request-failed') ||
+            e.toString().contains('SocketException') ||
+            e.toString().contains('ClientException');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Supabase upload failed: $e'),
+            content: Text(
+              network
+                  ? 'Image upload timed out. Check your connection, then tap the image to retry — or Save without an image.'
+                  : 'Image upload failed: $e',
+            ),
             backgroundColor: Colors.red,
           ),
         );
@@ -182,32 +170,97 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
   }
 
   Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) return;
-    final ev = TourismEvent(
-      id: widget.existing?.id ?? '',
-      title: _titleController.text.trim(),
-      imagePath: _imageController.text.trim(),
-      venue: _venueController.text.trim(),
-      municipality: _municipality ?? '',
-      dateTime: _dateTime,
-      eventType: _eventType,
-      description: _descriptionController.text.trim(),
-    );
+    if (_saving) return;
+    if (!_formKey.currentState!.validate()) {
+      setState(() {
+        _saveError = 'Please fill required fields (title and municipality).';
+      });
+      return;
+    }
+    if (_selectedLocations.isEmpty) {
+      setState(() {
+        _saveError = 'Please fill required fields (title and municipality).';
+      });
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
+
     try {
+      // Retry pending image upload before writing Firestore (URL may still be empty).
+      if (_imageController.text.trim().isEmpty &&
+          _previewBytes != null &&
+          _previewBytes!.isNotEmpty) {
+        if (mounted) setState(() => _uploadingImage = true);
+        try {
+          final slug = _folderSlug(
+            _titleController.text.trim().isEmpty
+                ? 'event'
+                : _titleController.text.trim(),
+          );
+          final url =
+              await uploadTourismCatalogImage(_previewBytes!, 'events/$slug');
+          if (mounted) _imageController.text = url;
+        } catch (e) {
+          if (mounted) {
+            setState(() => _uploadingImage = false);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Could not upload image ($e). Saving event without image.',
+                ),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+        } finally {
+          if (mounted) setState(() => _uploadingImage = false);
+        }
+      }
+
+      final locationNames = _selectedLocations.toList()
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      var rangeStart = eventCalendarDay(_rangeStart);
+      var rangeEnd = eventCalendarDay(_rangeEnd);
+      if (rangeEnd.isBefore(rangeStart)) {
+        final swap = rangeStart;
+        rangeStart = rangeEnd;
+        rangeEnd = swap;
+      }
+      final oneDay = rangeStart == rangeEnd;
+      final ev = TourismEvent(
+        id: _docId,
+        title: _titleController.text.trim(),
+        imagePath: _imageController.text.trim(),
+        venue: _venueController.text.trim(),
+        municipality: locationNames.join(', '),
+        municipalities: locationNames,
+        dateTime: combineEventDateAndTime(rangeStart, _dateTime),
+        dateMode: oneDay
+            ? TourismEventDateMode.single
+            : TourismEventDateMode.range,
+        eventDates: const [],
+        rangeStart: oneDay ? null : rangeStart,
+        rangeEnd: oneDay ? null : rangeEnd,
+        eventType: _eventType,
+        description: _descriptionController.text.trim(),
+      );
       await upsertTourismEventToFirestore(ev);
-      await loadEventsFromFirestore();
+      try {
+        await loadEventsFromFirestore();
+      } catch (_) {}
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to save event: $e'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
+        setState(() {
+          _saving = false;
+          _saveError = 'Save failed: $e';
+        });
       }
       return;
     }
-    if (mounted) Navigator.pop(context);
+    if (mounted) Navigator.pop(context, true);
   }
 
   @override
@@ -228,19 +281,25 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
             children: [
               TextFormField(
                 controller: _titleController,
-                decoration: const InputDecoration(labelText: 'Event title'),
+                decoration: const InputDecoration(labelText: 'Name'),
                 validator: (v) => v?.trim().isEmpty ?? true ? 'Required' : null,
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
                 value: _eventType,
                 decoration: const InputDecoration(
-                  labelText: 'Event type',
-                  hintText: 'What kind of event is this?',
+                  labelText: 'Type',
+                  hintText: 'Select a type',
                 ),
+                hint: const Text('Select a type'),
                 isExpanded: true,
                 items: kEventTypeOptions
-                    .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                    .map(
+                      (option) => DropdownMenuItem(
+                        value: option,
+                        child: Text(option),
+                      ),
+                    )
                     .toList(),
                 onChanged: (v) =>
                     setState(() => _eventType = v ?? kEventTypeOptions.first),
@@ -248,86 +307,56 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
                     v == null || v.isEmpty ? 'Please select a type' : null,
               ),
               const SizedBox(height: 16),
-              const Text(
-                'Date & time',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.textDark,
+              FormField<Set<String>>(
+                validator: (_) => _selectedLocations.isEmpty
+                    ? 'Please select a municipality'
+                    : null,
+                builder: (state) => EventLocationMultiSelect(
+                  selectedNames: _selectedLocations,
+                  errorText: state.errorText,
+                  onChanged: (next) {
+                    setState(() => _selectedLocations = next);
+                    state.didChange(next);
+                  },
                 ),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _pickDate,
-                      icon: const Icon(Icons.calendar_today, size: 18),
-                      label: Text(formatEventDateWords(_dateTime)),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _pickTime,
-                      icon: const Icon(Icons.schedule, size: 18),
-                      label: Text(formatEventTime12(_dateTime)),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Selected: ${formatEventDateTimeDisplay(_dateTime)}',
-                style: const TextStyle(fontSize: 13, color: AppColors.textGrey),
               ),
               const SizedBox(height: 16),
-              DropdownButtonFormField<String?>(
-                value: _municipality,
-                decoration: const InputDecoration(
-                  labelText: 'Municipality',
-                  hintText: 'Where is this event held?',
-                ),
-                hint: const Text('Select municipality'),
-                isExpanded: true,
-                items: [
-                  const DropdownMenuItem(
-                    value: null,
-                    child: Text('Select municipality'),
-                  ),
-                  ...municipalities.map(
-                    (m) => DropdownMenuItem(value: m.name, child: Text(m.name)),
-                  ),
-                ],
-                onChanged: municipalities.isEmpty
-                    ? null
-                    : (v) => setState(() => _municipality = v),
-                validator: (v) =>
-                    v == null || v.trim().isEmpty ? 'Required' : null,
+              TextFormField(
+                controller: _descriptionController,
+                decoration: const InputDecoration(labelText: 'Description'),
+                maxLines: 3,
               ),
               const SizedBox(height: 16),
               TextFormField(
                 controller: _venueController,
                 decoration: const InputDecoration(
                   labelText: 'Venue',
-                  hintText: 'Specific place (e.g. plaza, gym, church)',
+                  hintText: 'e.g. plaza, gym, church',
                 ),
                 validator: (v) => v?.trim().isEmpty ?? true ? 'Required' : null,
               ),
               const SizedBox(height: 16),
-              TextFormField(
-                controller: _descriptionController,
-                decoration: const InputDecoration(
-                  labelText: 'Description',
-                  hintText: 'What visitors can expect (optional)',
-                  alignLabelWithHint: true,
-                ),
-                minLines: 3,
-                maxLines: 8,
+              EventDateSchedulePicker(
+                timeSource: _dateTime,
+                rangeStart: _rangeStart,
+                rangeEnd: _rangeEnd,
+                onTimeChanged: (t) => setState(() {
+                  _dateTime = DateTime(
+                    _dateTime.year,
+                    _dateTime.month,
+                    _dateTime.day,
+                    t.hour,
+                    t.minute,
+                  );
+                }),
+                onRangeChanged: (start, end) => setState(() {
+                  _rangeStart = start;
+                  _rangeEnd = end;
+                }),
               ),
               const SizedBox(height: 16),
               const Text(
-                'Event image',
+                'Profile picture',
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
@@ -381,20 +410,42 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
                   hintText: 'Firebase Storage URL or any image URL',
                 ),
               ),
+              if (_saveError != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _saveError!,
+                  style: TextStyle(
+                    color: Colors.red.shade700,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
               const SizedBox(height: 24),
               ElevatedButton(
-                onPressed: _save,
+                onPressed: _saving ? null : _save,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
+                  disabledBackgroundColor:
+                      AppColors.primary.withValues(alpha: 0.5),
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10),
                   ),
                 ),
-                child: const Text(
-                  'Save',
-                  style: TextStyle(color: Colors.white),
-                ),
+                child: _saving
+                    ? const SizedBox(
+                        height: 22,
+                        width: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text(
+                        'Save',
+                        style: TextStyle(color: Colors.white),
+                      ),
               ),
             ],
           ),
@@ -402,4 +453,31 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
       ),
     );
   }
+}
+
+Future<bool> openAdminEventForm(
+  BuildContext context, {
+  TourismEvent? existing,
+}) async {
+  final size = MediaQuery.sizeOf(context);
+  final saved = await showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: size.width < 640 ? size.width : 560,
+        height: size.height * 0.9,
+        child: AdminEventFormPage(existing: existing),
+      ),
+    ),
+  );
+  if (saved == true && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Event saved successfully!')),
+    );
+  }
+  return saved == true;
 }

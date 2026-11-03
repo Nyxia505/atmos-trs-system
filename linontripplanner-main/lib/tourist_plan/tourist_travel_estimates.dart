@@ -234,7 +234,7 @@ int _publicFareBetweenSpots(
 String? _hubNameForSpot(TouristSpot spot) {
   for (final m in municipalities) {
     if (m.name == spot.location || m.shortName == spot.location) {
-      return transportEndpointFor(m).name;
+      return transportEndpointFor(m)?.name;
     }
   }
   return null;

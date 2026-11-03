@@ -23,18 +23,25 @@ service cloud.firestore {
           staffRole().matches('(?i)^\\s*governor\\s*$')
           || staffRole().matches('(?i)^\\s*provincial[_\\s-]?tourism\\s*$')
           || staffRole().matches('(?i)^\\s*tourism[_\\s-]?province\\s*$')
-          || staffRole().matches('(?i)^\\s*tourism(_office)?\\s*$')
-          || staffRole().matches('(?i)^\\s*lgu\\s*tourism\\s*$')
-          || staffRole().matches('(?i)^\\s*tourism\\s*office\\s*$')
+          || isLguOfficeRole(staffRole())
         );
     }
 
     /// Tourism / governor demo and LGU staff emails (works even before users/{uid} exists).
+    /// Trip Planner OPTACA portal. Read-only access to the same provincial
+    /// records tourism@gmail.com already uses. Not a write role.
+    function isOptacaPortalReader() {
+      return isSignedIn()
+        && request.auth.token.email != null
+        && request.auth.token.email.matches('(?i)^optaca@gmail\\.com$');
+    }
+
     function isKnownStaffEmail() {
       return isSignedIn()
         && request.auth.token.email != null
         && (
-          request.auth.token.email.matches('(?i)^governor\\.atmos@misocc-demo\\.ph$')
+          request.auth.token.email.matches('(?i)^optaca@gmail\\.com$')
+          || request.auth.token.email.matches('(?i)^governor\\.atmos@misocc-demo\\.ph$')
           || request.auth.token.email.matches('(?i)^tourismoffice\\.atmos@misocc-demo\\.ph$')
           || request.auth.token.email.matches('(?i)^provincial\\.tourism@misocc-demo\\.ph$')
           || request.auth.token.email.matches('(?i)^tourism@gmail\\.com$')
@@ -47,17 +54,19 @@ service cloud.firestore {
     }
 
     function lguMunicipalityId() {
+      // Prefer the normalized `municipalityId` field; fall back to the display
+      // `municipality` field for accounts created before the field was added
+      // (e.g. docs that only have municipality:"oroquieta").
       return userExists()
-        ? get(userDocPath()).data.get('municipalityId', '')
+        ? (get(userDocPath()).data.get('municipalityId', '').size() > 0
+            ? get(userDocPath()).data.get('municipalityId', '')
+            : get(userDocPath()).data.get('municipality', ''))
         : '';
     }
 
     function isLguTourismFromUserDoc() {
       return userExists()
-        && (
-          staffRole().matches('(?i)^\\s*tourism(_office)?\\s*$')
-          || staffRole().matches('(?i)^\\s*lgu\\s*tourism\\s*$')
-        )
+        && isLguOfficeRole(staffRole())
         && lguMunicipalityId() != '';
     }
 
@@ -93,8 +102,10 @@ service cloud.firestore {
 
     function isLguOfficeRole(role) {
       return role.matches('(?i)^\\s*tourism(_office)?\\s*$')
+        || role.matches('(?i)^\\s*lgu(_tourism|_office)?\\s*$')
         || role.matches('(?i)^\\s*lgu\\s*tourism\\s*$')
-        || role.matches('(?i)^\\s*tourism\\s*office\\s*$');
+        || role.matches('(?i)^\\s*tourism\\s*office\\s*$')
+        || role.matches('(?i)^\\s*municipal[_\\s-]?tourism\\s*$');
     }
 
     function holderOwnsLguOffice(uid, municipalityId) {
@@ -168,9 +179,12 @@ service cloud.firestore {
       allow delete: if isLguStaff();
     }
 
+    /// Analytics only. Tour content is tourist_spots.vr_link (LGU-only via tourist_spots rules).
+    /// Signed-in may sync/increment views; OPTACA cannot change tour URLs through this collection.
     match /vr_tours/{vrTourId} {
       allow get, list: if true;
-      allow create, update, delete: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if isLguTourismFromUserDoc();
     }
 
     match /notifications/{notificationId} {
@@ -186,9 +200,10 @@ service cloud.firestore {
 
     match /announcements/{announcementId} {
       allow read: if true;
-      // Event announcements belong to the municipal tourism office.
-      // Governor and OPTACA may read them, not edit them.
-      allow create, update, delete: if isLguTourismFromUserDoc();
+      // LGU owns municipal announcements; OPTACA / provincial may manage
+      // province-wide posts from the portal Events & Announcements tab.
+      allow create, update, delete: if isLguTourismFromUserDoc()
+        || provincialMayManageSpot();
     }
 
     match /users/{userId} {
@@ -225,8 +240,8 @@ service cloud.firestore {
     }
 
     match /check_ins/{docId} {
-      allow get: if isLguStaff() || canReadOwnCheckInRow();
-      allow list: if isLguStaff() || canReadOwnCheckInRow() || checkInInLguMunicipality();
+      allow get: if isLguStaff() || isOptacaPortalReader() || canReadOwnCheckInRow();
+      allow list: if isLguStaff() || isOptacaPortalReader() || canReadOwnCheckInRow() || checkInInLguMunicipality();
       allow create, update: if isSignedIn();
       allow delete: if isLguStaff();
     }
@@ -332,8 +347,8 @@ service cloud.firestore {
     }
 
     match /checkins/{docId} {
-      allow get: if isLguStaff() || canReadOwnCheckInRow();
-      allow list: if isLguStaff() || canReadOwnCheckInRow() || checkInInLguMunicipality();
+      allow get: if isLguStaff() || isOptacaPortalReader() || canReadOwnCheckInRow();
+      allow list: if isLguStaff() || isOptacaPortalReader() || canReadOwnCheckInRow() || checkInInLguMunicipality();
       allow create: if isCheckInOwner() || isLguStaff();
       allow update: if false;
       allow delete: if isLguStaff();
@@ -345,11 +360,79 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    /// Destinations: LGU manages own municipality; OPTACA / provincial may
+    /// manage the province-wide catalog (portal Tourist Spots tab).
+    function spotMunicipalityId(data) {
+      let mid = data.get('municipalityId', '');
+      return mid == 'ozamis' ? 'ozamiz' : mid;
+    }
+
+    function spotMunicipalityName(data) {
+      return data.get('municipality', '').lower();
+    }
+
+    function lguOwnsSpotData(data) {
+      let mid = lguMunicipalityId() == 'ozamis' ? 'ozamiz' : lguMunicipalityId();
+      let catalog = lguCatalogName(mid).lower();
+      let dataMid = spotMunicipalityId(data);
+      let name = spotMunicipalityName(data);
+      return isLguTourismFromUserDoc()
+        && mid != ''
+        && (
+          (dataMid != '' && dataMid == mid)
+          || (dataMid == '' && catalog.size() > 0 && (
+            name == catalog
+            || (mid == 'ozamiz' && (
+              name == 'ozamiz city' || name == 'ozamis city' || name == 'ozamis' || name == 'ozamiz'
+            ))
+            || (mid == 'dvc' && (
+              name == 'don victoriano' || name == 'don victoriano chiongbian'
+            ))
+          ))
+        );
+    }
+
+    function provincialMayManageSpot() {
+      return isProvincialStaff() || isOptacaPortalReader();
+    }
+
     match /tourist_spots/{spotId} {
       allow read: if true;
-      // LGU / provincial tourism create & edit spots + QR metadata.
-      allow create, update: if isSignedIn();
-      allow delete: if isLguStaff();
+      allow create: if lguOwnsSpotData(request.resource.data)
+        || provincialMayManageSpot();
+      allow update: if (lguOwnsSpotData(resource.data)
+          && lguOwnsSpotData(request.resource.data))
+        || provincialMayManageSpot();
+      allow delete: if lguOwnsSpotData(resource.data)
+        || provincialMayManageSpot();
+    }
+
+    /// Province / LGU catalog of municipalities (public read for dropdowns).
+    match /municipalities/{muniId} {
+      allow read: if true;
+      allow create, update, delete: if provincialMayManageSpot();
+    }
+
+    /// OPTACA / provincial admin login rows (Trip Planner portal bootstrap).
+    match /admin_accounts/{accountId} {
+      allow get: if isSignedIn() && (
+        isLguStaff()
+        || isOptacaPortalReader()
+        || !exists(/databases/$(database)/documents/admin_accounts/$(accountId))
+        || resource.data.get('emailLower', '') == request.auth.token.email.lower()
+        || resource.data.get('firebaseUid', '') == request.auth.uid
+      );
+      allow list: if isLguStaff() || isOptacaPortalReader();
+      allow create, delete: if isProvincialStaff() || isOptacaPortalReader();
+      allow update: if isProvincialStaff()
+        || isOptacaPortalReader()
+        || (
+          isSignedIn()
+          && request.auth.token.email != null
+          && resource.data.get('emailLower', '') == request.auth.token.email.lower()
+          && request.resource.data.get('emailLower', '') == request.auth.token.email.lower()
+          && request.resource.data.get('firebaseUid', '') == request.auth.uid
+        );
     }
 
     /// Provincial Tourism Office campaigns (province-wide promotions).
@@ -360,7 +443,7 @@ service cloud.firestore {
 
     /// LGU → OPTACA (Provincial Tourism) formal report packages.
     match /lgu_report_submissions/{submissionId} {
-      allow read: if isLguStaff();
+      allow read: if isLguStaff() || isOptacaPortalReader();
       allow create: if isLguStaff()
         && request.resource.data.keys().hasAll([
           'municipalityId',
@@ -467,11 +550,13 @@ service cloud.firestore {
       // exist yet (resource == null) before creating it.
       allow get: if ownsAeReport(reportId)
         || isProvincialStaff()
+        || isOptacaPortalReader()
         || (resource != null && registerInLguMunicipality(resource.data));
       allow list: if isSignedIn()
         && (
           resource.data.get('aeId', '') == request.auth.uid
           || isProvincialStaff()
+          || isOptacaPortalReader()
           || registerInLguMunicipality(resource.data)
         );
       allow create: if (ownsAeReport(reportId)
@@ -485,7 +570,7 @@ service cloud.firestore {
       allow delete: if ownsAeReport(reportId) || isLguStaff();
 
       match /rows/{rowId} {
-        allow read: if ownsAeReport(reportId) || isLguStaff();
+        allow read: if ownsAeReport(reportId) || isLguStaff() || isOptacaPortalReader();
         allow create, update: if ownsAeReport(reportId)
           || (isLguStaff() && request.resource.data.get('seed', '') == 'demo');
         allow delete: if ownsAeReport(reportId) || isLguStaff();
@@ -497,11 +582,13 @@ service cloud.firestore {
     match /mice_monthly_reports/{reportId} {
       allow get: if ownsAeReport(reportId)
         || isProvincialStaff()
+        || isOptacaPortalReader()
         || (resource != null && registerInLguMunicipality(resource.data));
       allow list: if isSignedIn()
         && (
           resource.data.get('aeId', '') == request.auth.uid
           || isProvincialStaff()
+          || isOptacaPortalReader()
           || registerInLguMunicipality(resource.data)
         );
       allow create: if (ownsAeReport(reportId)
@@ -515,7 +602,7 @@ service cloud.firestore {
       allow delete: if ownsAeReport(reportId) || isLguStaff();
 
       match /events/{eventId} {
-        allow read: if ownsAeReport(reportId) || isLguStaff();
+        allow read: if ownsAeReport(reportId) || isLguStaff() || isOptacaPortalReader();
         allow create, update: if ownsAeReport(reportId)
           || (isLguStaff() && request.resource.data.get('seed', '') == 'demo');
         allow delete: if ownsAeReport(reportId) || isLguStaff();
@@ -524,7 +611,7 @@ service cloud.firestore {
 
     /// Venue's custom MICE event types (suggestion list).
     match /mice_venue_settings/{aeId} {
-      allow read: if isSignedIn() && (request.auth.uid == aeId || isLguStaff());
+      allow read: if isSignedIn() && (request.auth.uid == aeId || isLguStaff() || isOptacaPortalReader());
       allow write: if isSignedIn() && request.auth.uid == aeId;
     }
 
@@ -596,15 +683,15 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    /// Trip Planner catalogs the Governor edits from the dashboard.
+    /// Trip Planner featured catalog (OPTACA portal + LGU / provincial staff).
     match /featured_spots/{docId} {
       allow read: if true;
-      allow write: if isLguStaff();
+      allow write: if isLguStaff() || provincialMayManageSpot();
     }
 
     match /events/{docId} {
       allow read: if true;
-      allow write: if isLguStaff();
+      allow write: if isLguStaff() || provincialMayManageSpot();
     }
 
     match /transportation_fees/{docId} {
@@ -618,6 +705,12 @@ service cloud.firestore {
     }
 
     match /municipal_road_distances/{docId} {
+      allow read: if true;
+      allow write: if isLguStaff();
+    }
+
+    /// Map & Routes bus terminals and stops. Public read; staff edit.
+    match /bus_locations/{docId} {
       allow read: if true;
       allow write: if isLguStaff();
     }
@@ -637,6 +730,29 @@ service cloud.firestore {
         && request.resource.data.nameKey.size() >= 2
         && request.resource.data.createdByUid == request.auth.uid;
       allow update, delete: if false;
+    }
+
+    // Tourists: own plans only. OPTACA / provincial staff: province-wide
+    // read for Trip Planner Analytics (no public list).
+    match /tourist_trip/{tripId} {
+      allow read: if isSignedIn()
+        && (
+          resource.data.touristId == request.auth.uid
+          || isProvincialStaff()
+          || isOptacaPortalReader()
+        );
+      allow create: if isSignedIn()
+        && request.resource.data.touristId == request.auth.uid;
+      allow update, delete: if isSignedIn()
+        && resource.data.touristId == request.auth.uid;
+    }
+
+    match /spot_ratings/{ratingId} {
+      allow read: if true;
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
     }
 
     match /{document=**} {

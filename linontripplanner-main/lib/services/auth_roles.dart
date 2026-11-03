@@ -80,15 +80,70 @@ class AuthRoles {
     return resolveAppRole(fallbackRole: match?.role ?? 'tourist');
   }
 
+  /// ATMOS staff who manage the trip-planner catalog. Their Firestore role
+  /// stays unchanged so ATMOS routing is not rewritten to `admin`.
+  static bool isAtmosStaffAdminRole(String? raw) {
+    final role = (raw ?? '')
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[\s-]+'), '_');
+    const roles = {
+      'governor',
+      'provincial_tourism',
+      'tourism_province',
+      'tourism',
+      'tourism_office',
+      'lgu_tourism',
+      'admin',
+      'municipal_manager',
+      'municipalmanager',
+    };
+    return roles.contains(role);
+  }
+
   /// Governor portal + full content management.
   static bool canAccessAdminDashboard([AppUser? user]) {
-    final role = user != null ? roleForUser(user) : currentRole();
+    final resolved =
+        user ?? findAppUserByFirebaseUid(FirebaseAuth.instance.currentUser?.uid);
+    final role = roleForUser(resolved);
     if (role == AppRole.admin || role == AppRole.municipalManager) {
       return true;
     }
+    if (isAtmosStaffAdminRole(resolved?.role)) return true;
     final email = FirebaseAuth.instance.currentUser?.email ?? '';
     return AdminAccountsService.emailMatchesDefaultAdmin(email) ||
         isRegisteredAdminEmail(email);
+  }
+
+  /// OPTACA / provincial tourism portal identity (email or role).
+  /// Used for VR view-only gating; tourist spot catalog edits are allowed.
+  static bool isOptacaDestinationViewer([AppUser? user]) {
+    final resolved =
+        user ?? findAppUserByFirebaseUid(FirebaseAuth.instance.currentUser?.uid);
+    final role = (resolved?.role ?? '')
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[\s-]+'), '_');
+    if (role == 'provincial_tourism' || role == 'tourism_province') {
+      return true;
+    }
+    final email =
+        (FirebaseAuth.instance.currentUser?.email ?? '').trim().toLowerCase();
+    return email == 'optaca@gmail.com' ||
+        email == 'tourism@gmail.com' ||
+        email == 'provincial.tourism@misocc-demo.ph';
+  }
+
+  /// True when the signed-in staff may add/edit/delete tourist spots.
+  /// OPTACA / provincial tourism may manage the province-wide catalog.
+  static bool canEditTouristSpotCatalog([AppUser? user]) {
+    return canAccessAdminDashboard(user) || isOptacaDestinationViewer(user);
+  }
+
+  /// Virtual tour URL edits stay LGU/admin — OPTACA is view-only.
+  static bool canEditVirtualTourLinks([AppUser? user]) {
+    if (isOptacaDestinationViewer(user)) return false;
+    return canAccessAdminDashboard(user);
   }
 
   /// Municipal managers: events/announcements for their area (subset enforced in UI).

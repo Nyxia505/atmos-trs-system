@@ -1,4 +1,4 @@
-import 'dart:async' show Completer;
+import 'dart:async' show Completer, StreamSubscription, unawaited;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
@@ -160,6 +160,7 @@ class BusLocationStore {
 
   bool _listening = false;
   Future<void>? _firstLoad;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _sub;
 
   List<BusLocation> get active =>
       locations.where((l) => l.isActive && l.hasValidCoordinates).toList();
@@ -168,8 +169,8 @@ class BusLocationStore {
     if (_listening) return;
     _listening = true;
     final done = Completer<void>();
-    _firstLoad = done.future;
-    FirebaseFirestore.instance
+    _firstLoad ??= done.future;
+    _sub = FirebaseFirestore.instance
         .collection(kBusLocationsCollection)
         .snapshots()
         .listen(
@@ -188,6 +189,10 @@ class BusLocationStore {
       onError: (Object e) {
         debugPrint('BusLocationStore: $e');
         if (!done.isCompleted) done.complete();
+        _listening = false;
+        unawaited(_sub?.cancel());
+        _sub = null;
+        Future<void>.delayed(const Duration(seconds: 3), ensureListening);
       },
     );
   }

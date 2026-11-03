@@ -93,6 +93,12 @@ String formatFarePhp(int amount) => '₱$amount';
 /// Hub at the trip destination (matches End Point), not the last itinerary leg.
 String hubSummaryLineForMunicipality(Municipality municipality) {
   final hub = transportEndpointFor(municipality);
+  if (hub == null) {
+    final label = municipality.shortName.isNotEmpty
+        ? municipality.shortName
+        : municipality.name;
+    return 'No bus stop is saved for $label.';
+  }
   final kind = hub.kind == 'terminal' ? 'Bus terminal' : 'Bus stop';
   return 'Ends at $kind: ${hub.name}';
 }
@@ -119,7 +125,7 @@ TripRouteFareBreakdown? buildDirectTripFareBreakdownSync(
   if (fare == null) return null;
 
   final hub = transportEndpointFor(end);
-  if (!_isBusHubEndpoint(hub.kind)) return null;
+  if (hub == null || !_isBusHubEndpoint(hub.kind)) return null;
 
   return TripRouteFareBreakdown(
     segments: [
@@ -189,7 +195,7 @@ Future<TripRouteFareSegment?> _resolveSegment(
   if (matrixFare == null) return null;
 
   final hub = transportEndpointFor(to);
-  if (!_isBusHubEndpoint(hub.kind)) return null;
+  if (hub == null || !_isBusHubEndpoint(hub.kind)) return null;
 
   return TripRouteFareSegment(
     from: from,

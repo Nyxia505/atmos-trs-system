@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:smooth_page_indicator/smooth_page_indicator.dart';
@@ -27,6 +28,7 @@ import 'services/spot_interaction_history.dart';
 import 'widgets/responsive_layout.dart';
 import 'widgets/tourism_plan_ui.dart';
 import 'widgets/profile_header_photo.dart';
+import 'widgets/trip_plan_app_icon.dart';
 
 
 class HomeScreen extends StatefulWidget {
@@ -41,6 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   int _bottomIndex = 0;
+  final Set<int> _mountedTabs = {0};
   Timer? _bannerAutoPlayTimer;
   int _featuredBannerIndex = 0;
   bool _bannerPageChangeFromTimer = false;
@@ -71,16 +74,18 @@ class _HomeScreenState extends State<HomeScreen> {
     final ranked =
         HomePersonalizationService.instance.featuredRanked(limit: 8);
     if (ranked.isNotEmpty) {
-      return ranked.map((e) => e.spot).toList(growable: false);
+      return [
+        for (final e in ranked) ?liveAuthoritativeTouristSpot(e.spot),
+      ];
     }
     // Warm-up fallback before first recompute finishes.
     if (featuredSpots.isNotEmpty) {
       return [
         for (final f in recommendedFeaturedForBanner)
-          findTouristSpotByNameFuzzy(f.name),
-      ].whereType<TouristSpot>().toList();
+          ?_authoritativeNamed(f.name),
+      ];
     }
-    return List<TouristSpot>.from(allSpots)
+    return List<TouristSpot>.from(authoritativeHomeTouristSpots())
       ..sort((a, b) => b.rating.compareTo(a.rating));
   }
 
@@ -92,9 +97,15 @@ class _HomeScreenState extends State<HomeScreen> {
     final ranked =
         HomePersonalizationService.instance.recommendedRanked(limit: 12);
     if (ranked.isNotEmpty) {
-      return ranked.map((e) => e.spot).toList(growable: false);
+      return [
+        for (final e in ranked) ?liveAuthoritativeTouristSpot(e.spot),
+      ];
     }
-    return HomePersonalizationService.instance.personalizedSpots(limit: 12);
+    return [
+      for (final s
+          in HomePersonalizationService.instance.personalizedSpots(limit: 12))
+        ?liveAuthoritativeTouristSpot(s),
+    ];
   }
 
   List<Municipality> get _homeMunicipalities {
@@ -123,19 +134,46 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool _spotMatchesSearch(TouristSpot spot) {
     return _textMatchesSearch(spot.name) ||
-        _textMatchesSearch(spot.location) ||
-        _textMatchesSearch(spot.description) ||
-        _textMatchesSearch(spot.type) ||
-        _textMatchesSearch(spot.category) ||
-        _textMatchesSearch(spot.priceRange);
+        _textMatchesSearch(spot.displayName) ||
+        _textMatchesSearch(spot.location);
+  }
+
+  String? _loggedHomeSpotIds;
+
+  TouristSpot? _authoritativeNamed(String name) {
+    final named = canonicalTouristSpotByName(name);
+    if (named == null) return null;
+    return liveAuthoritativeTouristSpot(named);
   }
 
   List<TouristSpot> _spotsForHomeGrid() {
-    final seenNames = <String>{};
-    final base = _isSearching ? allSpots : _recommendedForYouSpots;
-    return _filterSpots(
-      base.where((s) => seenNames.add(s.name)).toList(),
-    );
+    final seenIds = <String>{};
+    final base = _isSearching
+        ? canonicalTouristSpotsForDisplay()
+        : _recommendedForYouSpots;
+    final resolved = <TouristSpot>[];
+    for (final s in base) {
+      final live = _isSearching
+          ? liveSpotsPageRecord(s)
+          : liveAuthoritativeTouristSpot(s);
+      if (live == null) continue;
+      final id = live.firestoreDocId ?? live.name;
+      if (!seenIds.add(id)) continue;
+      resolved.add(live);
+    }
+    final shown = _filterSpots(resolved);
+    if (kDebugMode) {
+      final ids = shown.map((s) => s.firestoreDocId).join(',');
+      if (ids != _loggedHomeSpotIds) {
+        _loggedHomeSpotIds = ids;
+        debugPrint(
+          'HomeSpots ${DateTime.now().toIso8601String()} '
+          'source=tourist_spots searching=$_isSearching '
+          'count=${shown.length} ids=$ids',
+        );
+      }
+    }
+    return shown;
   }
 
   List<TouristSpot> get _displayFeaturedSpots =>
@@ -166,11 +204,19 @@ class _HomeScreenState extends State<HomeScreen> {
     _reloadHomeDataFromFirestore();
   }
 
+  void _selectShellTab(int index) {
+    if (!mounted) return;
+    setState(() {
+      _mountedTabs.add(index);
+      _bottomIndex = index;
+    });
+  }
+
   void _onShellTabRequest() {
     final index = tourismShellTabRequest.value;
     if (index == null || !mounted) return;
     tourismShellTabRequest.value = null;
-    setState(() => _bottomIndex = index);
+    _selectShellTab(index);
     _tabNavKeys[index].currentState?.popUntil((r) => r.isFirst);
   }
 
@@ -210,16 +256,6 @@ class _HomeScreenState extends State<HomeScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _syncBannerPageWithListAndRestartAutoPlay();
       });
-
-      unawaited(
-        HomePersonalizationService.instance.refresh().then((_) {
-          if (!mounted) return;
-          setState(() {});
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _syncBannerPageWithListAndRestartAutoPlay();
-          });
-        }),
-      );
     } catch (_) {
       // Keep existing in-memory fallback if Firestore read fails.
       if (mounted) setState(() {});
@@ -294,7 +330,7 @@ class _HomeScreenState extends State<HomeScreen> {
           return;
         }
         if (_bottomIndex != 0) {
-          setState(() => _bottomIndex = 0);
+          _selectShellTab(0);
           return;
         }
         SystemNavigator.pop();
@@ -304,19 +340,19 @@ class _HomeScreenState extends State<HomeScreen> {
         body: IndexedStack(
           index: _bottomIndex,
           children: [
-            _tabNavigator(0, _buildHomeTabRoot),
-            _tabNavigator(
+            _lazyShellTab(0, _buildHomeTabRoot),
+            _lazyShellTab(
               1,
               () => const TouristSpotsScreen(embeddedInShell: true),
             ),
-            _tabNavigator(
+            _lazyShellTab(
               2,
               () => const MyTripsScreen(embeddedInShell: true),
             ),
-            _tabNavigator(_profileTab, () => const ProfileScreen()),
-            _tabNavigator(4, () => const MappingScreen()),
-            _tabNavigator(5, () => const NotificationsScreen()),
-            _tabNavigator(6, () => const EventsScreen()),
+            _lazyShellTab(_profileTab, () => const ProfileScreen()),
+            _lazyShellTab(4, () => const MappingScreen()),
+            _lazyShellTab(5, () => const NotificationsScreen()),
+            _lazyShellTab(6, () => const EventsScreen()),
           ],
         ),
         bottomNavigationBar: TourismBottomNavShell(
@@ -338,7 +374,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 }
                 return;
               }
-              setState(() => _bottomIndex = index);
+              _selectShellTab(index);
               if (index == 5 || index == 6) {
                 unawaited(_refreshEventsAndNotifications());
               }
@@ -404,6 +440,13 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _lazyShellTab(int tabIndex, Widget Function() rootBuilder) {
+    if (!_mountedTabs.contains(tabIndex)) {
+      return const SizedBox.shrink();
+    }
+    return _tabNavigator(tabIndex, rootBuilder);
+  }
+
   Widget _tabNavigator(int tabIndex, Widget Function() rootBuilder) {
     return Navigator(
       key: _tabNavKeys[tabIndex],
@@ -424,7 +467,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openBottomTab(int index) {
-    setState(() => _bottomIndex = index);
+    _selectShellTab(index);
   }
 
   Widget _buildProfileButton({required double size, required bool compact}) {
@@ -457,10 +500,8 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Image.asset(
-                'assets/images/tripplan.png',
+              TripPlanAppIcon(
                 height: compactHeader ? 48 : 64,
-                filterQuality: FilterQuality.high,
               ),
               SizedBox(width: compactHeader ? 8 : 10),
               Column(
@@ -468,7 +509,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'TripPlan',
+                    'Trip Plan',
                     style: TextStyle(
                       fontFamily: AppFonts.holidayCalling,
                       color: AppColors.primary,
@@ -590,7 +631,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ] else if (!_isSearching && allSpots.isEmpty) ...[
                           const SizedBox(height: 16),
                           Text(
-                            'Tourist spots are still loading...',
+                            'Loading tourist spots…',
                             style: TextStyle(
                               color: AppColors.textGrey.withValues(alpha: 0.95),
                             ),
@@ -600,13 +641,6 @@ class _HomeScreenState extends State<HomeScreen> {
                           _buildSectionHeader(
                             'Recommended for You',
                             onTap: () => _openBottomTab(1),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Open Spots to browse all ${allSpots.length} places.',
-                            style: TextStyle(
-                              color: AppColors.textGrey.withValues(alpha: 0.95),
-                            ),
                           ),
                           const SizedBox(height: 12),
                         ],
@@ -632,7 +666,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _homeUiTick.value++;
           final q = value.trim();
           if (q.length >= 3) {
-            final matches = allSpots
+            final matches = canonicalTouristSpotsForDisplay()
                 .where(_spotMatchesSearch)
                 .map((s) => s.name)
                 .take(8);
@@ -674,8 +708,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildEmptySearchState() {
     return TourismEmptyState(
       icon: Icons.search_off_rounded,
-      message:
-          'No destinations match "${_searchQuery.trim()}".\nTry another name or municipality.',
+      message: 'No destinations match "${_searchQuery.trim()}".',
       topPadding: 24,
     );
   }
@@ -702,6 +735,7 @@ class _HomeScreenState extends State<HomeScreen> {
           itemBuilder: (context, index) {
             final spot = recommended[index];
             return GestureDetector(
+              key: ValueKey('featured-${spot.firestoreDocId ?? spot.name}'),
               onTap: () {
                 unawaited(SpotInteractionHistoryStore.instance.recordViewed(spot));
                 Navigator.push(
@@ -751,6 +785,7 @@ class _HomeScreenState extends State<HomeScreen> {
           itemBuilder: (context, index) {
             final spot = recommended[index];
             return GestureDetector(
+              key: ValueKey('rec-${spot.firestoreDocId ?? spot.name}'),
               onTap: () {
                 unawaited(
                   SpotInteractionHistoryStore.instance.recordViewed(spot),

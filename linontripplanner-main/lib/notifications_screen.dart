@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'data.dart';
-import 'event_datetime_format.dart';
+import 'event_schedule.dart';
 import 'firestore_loader.dart';
 import 'widgets/municipality_image.dart';
 import 'services/tourism_notifications_state.dart';
@@ -248,16 +248,16 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                   color: AppColors.textDark,
                                 ),
                               ),
-                              const SizedBox(height: 4),
-                              Text(
-                                feed.isEmpty
-                                    ? 'Announcements and events will appear here'
-                                    : '${feed.length} notification${feed.length == 1 ? '' : 's'}',
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  color: AppColors.textGrey,
+                              if (unread > 0) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  '${feed.length} notification${feed.length == 1 ? '' : 's'}',
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    color: AppColors.textGrey,
+                                  ),
                                 ),
-                              ),
+                              ],
                             ],
                           ),
                         ),
@@ -278,9 +278,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   hasScrollBody: false,
                   child: TourismEmptyState(
                     icon: Icons.notifications_none_rounded,
-                    message:
-                        'No notifications yet.\nWhen admins post announcements '
-                        'or events, they will show up here.',
+                    message: 'No notifications yet.',
                     topPadding: 24,
                   ),
                 )
@@ -456,7 +454,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               const SizedBox(width: 8),
               Flexible(
                 child: Text(
-                  formatEventDateTimeDisplay(e.dateTime),
+                  formatEventScheduleSubtitle(e),
                   style: const TextStyle(
                     fontSize: 12,
                     color: AppColors.textGrey,
@@ -466,10 +464,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               ),
             ],
           ),
-          if (e.municipality.isNotEmpty) ...[
+          if (formatEventListLocationLine(e).isNotEmpty) ...[
             const SizedBox(height: 6),
             Text(
-              e.municipality,
+              formatEventListLocationLine(e),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(

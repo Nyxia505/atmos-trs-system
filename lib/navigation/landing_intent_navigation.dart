@@ -45,19 +45,34 @@ class LandingIntentNavigation {
     }
   }
 
-  /// Opens the Trip Planner home when the signed-in account is a tourist.
+  /// Opens Trip Planner. Catalog admins get the admin dashboard; tourists
+  /// get the planner home.
   static Future<bool> openPlanner(BuildContext context) async {
+    final admin = await TripPlannerAccess.isCatalogAdmin();
+    if (!context.mounted) return false;
+    if (admin) {
+      return _pushPlanner(context, adminDashboard: true);
+    }
     final access = await TripPlannerAccess.evaluate();
     if (!context.mounted) return false;
     if (access != TripPlannerAccessResult.allowed) {
       await TripPlannerAccess.showDenied(context);
       return false;
     }
+    return _pushPlanner(context, adminDashboard: false);
+  }
+
+  static Future<bool> _pushPlanner(
+    BuildContext context, {
+    required bool adminDashboard,
+  }) async {
+    if (!context.mounted) return false;
     final heroController = OnboardingHeroVideo.read(context)?.controller;
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (context) => TripPlanEntryScreen(
           sharedHeroController: heroController,
+          adminDashboard: adminDashboard,
         ),
       ),
     );

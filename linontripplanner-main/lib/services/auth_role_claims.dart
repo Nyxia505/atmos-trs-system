@@ -73,21 +73,8 @@ Future<void> persistLongTermStaffRoleClaims({int maxAttempts = 4}) async {
 ///
 /// These must not be rewritten to `admin`. [AppRole.fromString] maps
 /// `governor` to admin, and saving that value would break ATMOS routing.
-bool isAtmosCatalogStaffRole(String? raw) {
-  final role = (raw ?? '')
-      .trim()
-      .toLowerCase()
-      .replaceAll(RegExp(r'[\s-]+'), '_');
-  const roles = {
-    'governor',
-    'provincial_tourism',
-    'tourism_province',
-    'tourism',
-    'tourism_office',
-    'lgu_tourism',
-  };
-  return roles.contains(role);
-}
+bool isAtmosCatalogStaffRole(String? raw) =>
+    AuthRoles.isAtmosStaffAdminRole(raw);
 
 /// Ensures `users/{uid}` has permanent staff/admin role and JWT claims before catalog writes.
 Future<void> ensurePermanentStaffRoleForCatalogWrite() async {
@@ -101,13 +88,35 @@ Future<void> ensurePermanentStaffRoleForCatalogWrite() async {
   }
 
   final email = (auth.email ?? '').trim();
-  if (email.isNotEmpty && isKnownAdminEmail(email)) {
-    await AdminAccountsService.applyAdminRoleIfRegistered();
+
+  // Already has staff JWT — skip noisy admin_accounts / Cloud Function bootstrap.
+  try {
+    final claims = await auth.getIdTokenResult();
+    final staff = claims.claims?['staff'] == true ||
+        claims.claims?['staff'] == 'true' ||
+        claims.claims?['admin'] == true ||
+        claims.claims?['admin'] == 'true';
+    if (staff) return;
+  } catch (_) {}
+
+  // OPTACA / default admin / provincial: allow catalog writes even when
+  // admin_accounts bootstrap or claims sync fails (common on demo accounts).
+  if ((email.isNotEmpty && isKnownAdminEmail(email)) ||
+      AuthRoles.isOptacaDestinationViewer()) {
+    try {
+      await AdminAccountsService.applyAdminRoleIfRegistered();
+    } catch (e) {
+      debugPrint('catalog write bootstrap (non-fatal): $e');
+    }
     return;
   }
 
   if (await AdminAccountsService.isCurrentUserAdminAccount()) {
-    await AdminAccountsService.applyAdminRoleIfRegistered();
+    try {
+      await AdminAccountsService.applyAdminRoleIfRegistered();
+    } catch (e) {
+      debugPrint('catalog write admin bootstrap (non-fatal): $e');
+    }
     return;
   }
 

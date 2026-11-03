@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data.dart';
 import '../event_datetime_format.dart';
+import '../event_schedule.dart';
 import 'municipality_image.dart';
 import 'tourism_plan_ui.dart';
 
@@ -33,6 +34,7 @@ class _TourismEventsCalendarState extends State<TourismEventsCalendar> {
   static const _weekdayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
   late DateTime _monthStart;
+  DateTime? _focusedDay;
 
   @override
   void initState() {
@@ -64,15 +66,21 @@ class _TourismEventsCalendarState extends State<TourismEventsCalendar> {
   void _shiftMonth(int delta) {
     setState(() {
       _monthStart = DateTime(_monthStart.year, _monthStart.month + delta);
+      _focusedDay = null;
     });
   }
 
   Map<DateTime, List<TourismEvent>> _eventsByDay() {
     final map = <DateTime, List<TourismEvent>>{};
     for (final e in widget.events) {
-      final d = e.dateTime;
-      final key = DateTime(d.year, d.month, d.day);
-      (map[key] ??= []).add(e);
+      final seenDays = <String>{};
+      for (final d in eventExpandedCalendarDays(e)) {
+        final key = eventCalendarDay(d);
+        if (!seenDays.add(formatEventCalendarDateKey(key))) continue;
+        final list = map[key] ??= [];
+        if (list.any((existing) => existing.id == e.id)) continue;
+        list.add(e);
+      }
     }
     for (final list in map.values) {
       list.sort((a, b) => a.dateTime.compareTo(b.dateTime));
@@ -85,61 +93,6 @@ class _TourismEventsCalendarState extends State<TourismEventsCalendar> {
 
   String _shortMonth(DateTime m) =>
       formatEventDateWords(DateTime(m.year, m.month, 1)).split(' ').first;
-
-  void _handleDayTap(DateTime day, List<TourismEvent> dayEvents) {
-    if (dayEvents.isEmpty) return;
-    if (widget.onDayTap != null) {
-      widget.onDayTap!(day, dayEvents);
-      return;
-    }
-    if (dayEvents.length == 1) {
-      _openEvent(dayEvents.first);
-      return;
-    }
-    showModalBottomSheet<void>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-              child: Text(
-                formatEventDateWords(day),
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textDark,
-                ),
-              ),
-            ),
-            Flexible(
-              child: ListView.separated(
-                shrinkWrap: true,
-                itemCount: dayEvents.length,
-                separatorBuilder: (context, index) => const Divider(height: 1),
-                itemBuilder: (context, index) {
-                  final e = dayEvents[index];
-                  return ListTile(
-                    title: Text(e.title),
-                    subtitle: Text(formatEventTime12(e.dateTime)),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _openEvent(e);
-                    },
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   void _openEvent(TourismEvent e) {
     if (widget.onEventTap != null) {
@@ -164,102 +117,144 @@ class _TourismEventsCalendarState extends State<TourismEventsCalendar> {
     final prev = DateTime(firstOfMonth.year, firstOfMonth.month - 1);
     final next = DateTime(firstOfMonth.year, firstOfMonth.month + 1);
 
+    final focus = _resolveFocus(byDay, todayKey);
+    final focusEvents = focus == null
+        ? const <TourismEvent>[]
+        : (byDay[focus] ?? const <TourismEvent>[]);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Row(
           children: [
-            TextButton(
+            _MonthNavButton(
+              tooltip: _shortMonth(prev),
+              icon: Icons.chevron_left_rounded,
+              color: widget.accentColor,
               onPressed: () => _shiftMonth(-1),
-              style: TextButton.styleFrom(
-                foregroundColor: widget.accentColor,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-              ),
-              child: Text('◀ ${_shortMonth(prev)}'),
             ),
             Expanded(
-              child: Text(
-                _monthYearLabel(firstOfMonth),
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textDark,
-                ),
+              child: Column(
+                children: [
+                  Text(
+                    _monthYearLabel(firstOfMonth),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.textDark,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _monthSummary(byDay, firstOfMonth),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textGrey.withValues(alpha: 0.95),
+                    ),
+                  ),
+                ],
               ),
             ),
-            TextButton(
+            _MonthNavButton(
+              tooltip: _shortMonth(next),
+              icon: Icons.chevron_right_rounded,
+              color: widget.accentColor,
               onPressed: () => _shiftMonth(1),
-              style: TextButton.styleFrom(
-                foregroundColor: widget.accentColor,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-              ),
-              child: Text('${_shortMonth(next)} ▶'),
             ),
           ],
         ),
-        const SizedBox(height: 8),
-        Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            border: Border.all(color: Colors.grey.shade300),
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: Column(
-            children: [
-              Row(
-                children: [
-                  for (final label in _weekdayLabels)
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        decoration: BoxDecoration(
-                          border: Border(
-                            bottom: BorderSide(color: Colors.grey.shade300),
-                            right: label == 'Sun'
-                                ? BorderSide.none
-                                : BorderSide(color: Colors.grey.shade300),
-                          ),
-                        ),
-                        child: Text(
-                          label,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.grey.shade700,
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            for (var i = 0; i < _weekdayLabels.length; i++)
+              Expanded(
+                child: Text(
+                  _weekdayLabels[i],
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: i >= 5
+                        ? widget.accentColor.withValues(alpha: 0.85)
+                        : Colors.grey.shade600,
+                  ),
+                ),
               ),
-              for (var row = 0; row < cellCount ~/ 7; row++)
-                IntrinsicHeight(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      for (var col = 0; col < 7; col++)
-                        Expanded(
-                          child: _buildCell(
-                            cellIndex: row * 7 + col,
-                            leading: leading,
-                            daysInMonth: daysInMonth,
-                            monthStart: firstOfMonth,
-                            byDay: byDay,
-                            todayKey: todayKey,
-                            isLastCol: col == 6,
-                            isLastRow: row == cellCount ~/ 7 - 1,
-                          ),
-                        ),
-                    ],
+          ],
+        ),
+        const SizedBox(height: 6),
+        for (var row = 0; row < cellCount ~/ 7; row++)
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var col = 0; col < 7; col++)
+                Expanded(
+                  child: _buildCell(
+                    cellIndex: row * 7 + col,
+                    leading: leading,
+                    daysInMonth: daysInMonth,
+                    monthStart: firstOfMonth,
+                    byDay: byDay,
+                    todayKey: todayKey,
+                    focus: focus,
                   ),
                 ),
             ],
           ),
-        ),
+        if (focus != null && focusEvents.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          _DayAgenda(
+            day: focus,
+            events: focusEvents,
+            accentColor: widget.accentColor,
+            onEventTap: _openEvent,
+          ),
+        ],
       ],
     );
+  }
+
+  DateTime? _resolveFocus(
+    Map<DateTime, List<TourismEvent>> byDay,
+    DateTime todayKey,
+  ) {
+    final stored = _focusedDay;
+    if (stored != null &&
+        stored.year == _monthStart.year &&
+        stored.month == _monthStart.month) {
+      return stored;
+    }
+    if (todayKey.year == _monthStart.year &&
+        todayKey.month == _monthStart.month &&
+        (byDay[todayKey]?.isNotEmpty ?? false)) {
+      return todayKey;
+    }
+    DateTime? first;
+    for (final day in byDay.keys) {
+      if (day.year != _monthStart.year || day.month != _monthStart.month) {
+        continue;
+      }
+      if (first == null || day.isBefore(first)) first = day;
+    }
+    return first;
+  }
+
+  String _monthSummary(
+    Map<DateTime, List<TourismEvent>> byDay,
+    DateTime month,
+  ) {
+    var count = 0;
+    for (final entry in byDay.entries) {
+      if (entry.key.year == month.year && entry.key.month == month.month) {
+        count += entry.value.length;
+      }
+    }
+    if (count == 0) return 'No events this month';
+    if (count == 1) return '1 event this month';
+    return '$count events this month';
   }
 
   Widget _buildCell({
@@ -269,105 +264,250 @@ class _TourismEventsCalendarState extends State<TourismEventsCalendar> {
     required DateTime monthStart,
     required Map<DateTime, List<TourismEvent>> byDay,
     required DateTime todayKey,
-    required bool isLastCol,
-    required bool isLastRow,
+    required DateTime? focus,
   }) {
     final dayNum = cellIndex - leading + 1;
     final inMonth = dayNum >= 1 && dayNum <= daysInMonth;
     if (!inMonth) {
-      return Container(
-        constraints: const BoxConstraints(minHeight: 84),
-        decoration: BoxDecoration(
-          color: Colors.grey.shade50,
-          border: Border(
-            right: isLastCol ? BorderSide.none : BorderSide(color: Colors.grey.shade300),
-            bottom: isLastRow ? BorderSide.none : BorderSide(color: Colors.grey.shade300),
-          ),
-        ),
-      );
+      return const SizedBox(height: 78);
     }
 
     final day = DateTime(monthStart.year, monthStart.month, dayNum);
     final dayEvents = byDay[day] ?? const <TourismEvent>[];
     final hasEvents = dayEvents.isNotEmpty;
     final isToday = day == todayKey;
+    final isFocused = focus == day;
+    final accent = widget.accentColor;
 
-    return Material(
-      color: Colors.white,
-      child: InkWell(
-        onTap: hasEvents ? () => _handleDayTap(day, dayEvents) : null,
-        child: Container(
-          constraints: const BoxConstraints(minHeight: 84),
-          padding: const EdgeInsets.fromLTRB(6, 4, 4, 4),
-          decoration: BoxDecoration(
-            border: Border(
-              right: isLastCol ? BorderSide.none : BorderSide(color: Colors.grey.shade300),
-              bottom: isLastRow ? BorderSide.none : BorderSide(color: Colors.grey.shade300),
+    return Padding(
+      padding: const EdgeInsets.all(3),
+      child: Material(
+        color: isFocused
+            ? accent.withValues(alpha: 0.12)
+            : hasEvents
+                ? AppColors.listTilePeach.withValues(alpha: 0.7)
+                : const Color(0xFFF7F8FA),
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: hasEvents
+              ? () {
+                  setState(() => _focusedDay = day);
+                  if (widget.onDayTap != null) {
+                    widget.onDayTap!(day, dayEvents);
+                  }
+                }
+              : null,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 72),
+            padding: const EdgeInsets.fromLTRB(4, 6, 4, 6),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isFocused
+                    ? accent.withValues(alpha: 0.55)
+                    : isToday
+                        ? accent.withValues(alpha: 0.35)
+                        : Colors.transparent,
+              ),
             ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 26,
-                height: 26,
-                alignment: Alignment.center,
-                decoration: isToday
-                    ? BoxDecoration(
-                        color: widget.accentColor,
-                        shape: BoxShape.circle,
-                      )
-                    : null,
-                child: Text(
-                  '$dayNum',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: isToday
-                        ? Colors.white
-                        : hasEvents
-                            ? widget.accentColor
-                            : AppColors.textDark,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: 26,
+                  height: 26,
+                  alignment: Alignment.center,
+                  decoration: isToday
+                      ? BoxDecoration(color: accent, shape: BoxShape.circle)
+                      : null,
+                  child: Text(
+                    '$dayNum',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: isToday
+                          ? Colors.white
+                          : hasEvents
+                              ? accent
+                              : AppColors.textDark,
+                    ),
                   ),
                 ),
-              ),
-              if (hasEvents) ...[
-                const SizedBox(height: 2),
-                for (final e in widget.titleOnly ? dayEvents : dayEvents.take(2))
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 2),
-                    child: InkWell(
-                      onTap: () => _openEvent(e),
-                      borderRadius: BorderRadius.circular(4),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 1),
-                        child: Text(
-                          e.title,
-                          maxLines: widget.titleOnly ? 2 : 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 13,
-                            height: 1.25,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textDark,
-                          ),
-                        ),
+                if (hasEvents) ...[
+                  const SizedBox(height: 4),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 4,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: accent.withValues(alpha: isFocused ? 0.18 : 0.1),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      dayEvents.first.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 10,
+                        height: 1.15,
+                        fontWeight: FontWeight.w700,
+                        color: accent.withValues(alpha: 0.95),
                       ),
                     ),
                   ),
-                if (!widget.titleOnly && dayEvents.length > 2)
-                  Text(
-                    '+${dayEvents.length - 2} more',
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: widget.accentColor,
-                      fontWeight: FontWeight.w600,
+                  if (dayEvents.length > 1)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        '+${dayEvents.length - 1}',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: accent,
+                        ),
+                      ),
                     ),
-                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _MonthNavButton extends StatelessWidget {
+  const _MonthNavButton({
+    required this.tooltip,
+    required this.icon,
+    required this.color,
+    required this.onPressed,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: color.withValues(alpha: 0.1),
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onPressed,
+          child: SizedBox(
+            width: 36,
+            height: 36,
+            child: Icon(icon, color: color, size: 22),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DayAgenda extends StatelessWidget {
+  const _DayAgenda({
+    required this.day,
+    required this.events,
+    required this.accentColor,
+    required this.onEventTap,
+  });
+
+  final DateTime day;
+  final List<TourismEvent> events;
+  final Color accentColor;
+  final void Function(TourismEvent event) onEventTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      decoration: BoxDecoration(
+        color: AppColors.listTilePeach.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: accentColor.withValues(alpha: 0.12)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            formatEventDateWords(day),
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w800,
+              color: AppColors.textDark,
+            ),
+          ),
+          const SizedBox(height: 8),
+          for (final e in events)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Material(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () => onEventTap(e),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                e.title,
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.textDark,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                [
+                                  formatEventTime12(e.dateTime),
+                                  if (e.venue.trim().isNotEmpty) e.venue.trim(),
+                                  if (formatEventListLocationLine(e).isNotEmpty)
+                                    formatEventListLocationLine(e),
+                                ].join(' · '),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: AppColors.textGrey.withValues(
+                                    alpha: 0.95,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Icon(
+                          Icons.chevron_right_rounded,
+                          color: accentColor,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -431,22 +571,29 @@ class TourismEventDetailPage extends StatelessWidget {
     final topPad = MediaQuery.paddingOf(context).top;
     final bannerHeight = MediaQuery.sizeOf(context).height * 0.34;
 
+    final locationSummary = formatEventListLocationLine(e);
     final detailRows = <_EventDetailRowData>[
       _EventDetailRowData(
         icon: Icons.calendar_today_outlined,
-        label: 'Date',
-        value: formatEventDateWords(e.dateTime),
+        label: e.dateMode == TourismEventDateMode.range
+            ? 'Date range'
+            : e.dateMode == TourismEventDateMode.multiple
+                ? 'Dates'
+                : 'Date',
+        value: formatEventDatesSummary(e),
       ),
       _EventDetailRowData(
         icon: Icons.access_time_rounded,
         label: 'Time',
         value: formatEventTime12(e.dateTime),
       ),
-      if (e.municipality.isNotEmpty)
+      if (locationSummary.isNotEmpty)
         _EventDetailRowData(
           icon: Icons.business_outlined,
-          label: 'Municipality',
-          value: e.municipality,
+          label: e.locationNames.length > 1
+              ? 'Municipalities & cities'
+              : 'Municipality',
+          value: locationSummary,
         ),
       if (e.venue.isNotEmpty)
         _EventDetailRowData(
@@ -533,30 +680,28 @@ class TourismEventDetailPage extends StatelessWidget {
                     const SizedBox(height: 12),
                     _EventCategoryTag(label: e.eventType, color: accentColor),
                   ],
-                  const SizedBox(height: 18),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: AppColors.listTilePeach.withValues(alpha: 0.65),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: accentColor.withValues(alpha: 0.14),
+                  if (e.description.trim().isNotEmpty) ...[
+                    const SizedBox(height: 18),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: AppColors.listTilePeach.withValues(alpha: 0.65),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: accentColor.withValues(alpha: 0.14),
+                        ),
+                      ),
+                      child: Text(
+                        e.description,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          height: 1.55,
+                          color: AppColors.textDark,
+                        ),
                       ),
                     ),
-                    child: Text(
-                      e.description.isNotEmpty
-                          ? e.description
-                          : 'No description provided.',
-                      style: TextStyle(
-                        fontSize: 15,
-                        height: 1.55,
-                        color: e.description.isNotEmpty
-                            ? AppColors.textDark
-                            : AppColors.textGrey,
-                      ),
-                    ),
-                  ),
+                  ],
                   const SizedBox(height: 22),
                   TourismPlanUi.sectionTitleBar(title: 'Event details'),
                   const SizedBox(height: 10),
@@ -584,6 +729,39 @@ class TourismEventDetailPage extends StatelessWidget {
                       ],
                     ),
                   ),
+                  if (e.locationNames.length > 1) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                      decoration: TourismPlanUi.planCardDecoration(),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Selected locations',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textGrey,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              for (final name in e.locationNames)
+                                Chip(
+                                  label: Text(name),
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   if (onEdit != null || onDelete != null) ...[
                     const SizedBox(height: 28),
                     if (onEdit != null)
@@ -789,11 +967,17 @@ class TourismEventTitlesList extends StatelessWidget {
     required this.events,
     this.accentColor = AppColors.primary,
     this.onEventTap,
+    this.selectedIds,
+    this.onToggleSelect,
+    this.selectableIds,
   });
 
   final List<TourismEvent> events;
   final Color accentColor;
   final void Function(TourismEvent event)? onEventTap;
+  final Set<String>? selectedIds;
+  final ValueChanged<TourismEvent>? onToggleSelect;
+  final Set<String>? selectableIds;
 
   @override
   Widget build(BuildContext context) {
@@ -803,7 +987,7 @@ class TourismEventTitlesList extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(18, 20, 18, 20),
         decoration: TourismPlanUi.planCardDecoration(),
         child: Text(
-          'No events yet. Posted events will be listed here.',
+          'No events yet.',
           style: TextStyle(
             fontSize: 13.5,
             height: 1.4,
@@ -813,70 +997,148 @@ class TourismEventTitlesList extends StatelessWidget {
       );
     }
 
-    return Container(
-      decoration: TourismPlanUi.planCardDecoration(),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 18, 18, 6),
-            child: Text(
-              'Events (${events.length})',
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: AppColors.textDark,
-                letterSpacing: -0.2,
-              ),
-            ),
-          ),
-          for (var i = 0; i < events.length; i++) ...[
-            if (i > 0)
-              Divider(
-                height: 1,
-                thickness: 1,
-                indent: 18,
-                endIndent: 18,
-                color: Colors.black.withValues(alpha: 0.07),
-              ),
-            Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap:
-                    onEventTap == null ? null : () => onEventTap!(events[i]),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 16,
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          events[i].title,
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                            color: AppColors.textDark,
-                            height: 1.25,
-                          ),
+    const monthNames = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+
+    return Column(
+      children: [
+        for (var i = 0; i < events.length; i++) ...[
+          if (i > 0) const SizedBox(height: 10),
+          Builder(
+            builder: (context) {
+              final event = events[i];
+              final canSelect = onToggleSelect != null &&
+                  (selectableIds == null || selectableIds!.contains(event.id));
+              final selected = selectedIds?.contains(event.id) ?? false;
+              final locationLine = formatEventListLocationLine(event);
+              return Material(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  hoverColor: AppColors.primary.withValues(alpha: 0.04),
+                  onTap: onEventTap == null ? null : () => onEventTap!(event),
+                  child: Ink(
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? const Color(0xFFFFF1E6)
+                          : Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: selected
+                            ? AppColors.primary.withValues(alpha: 0.35)
+                            : const Color(0xFFE2E8F0),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF0F172A).withValues(alpha: 0.04),
+                          blurRadius: 16,
+                          offset: const Offset(0, 6),
                         ),
+                      ],
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 12, 10, 12),
+                      child: Row(
+                        children: [
+                          if (canSelect)
+                            Checkbox(
+                              value: selected,
+                              onChanged: (_) => onToggleSelect!(event),
+                            ),
+                          Container(
+                            width: 52,
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            decoration: BoxDecoration(
+                              color: AppColors.listTilePeach,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              children: [
+                                Text(
+                                  '${event.dateTime.day}',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w800,
+                                    height: 1,
+                                    color: accentColor,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  monthNames[event.dateTime.month - 1],
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: accentColor.withValues(alpha: 0.85),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  event.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.textDark,
+                                    height: 1.25,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  [
+                                    formatEventScheduleSubtitle(event),
+                                    if (event.venue.trim().isNotEmpty)
+                                      event.venue.trim(),
+                                    if (locationLine.isNotEmpty) locationLine,
+                                  ].join(' · '),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    color: AppColors.textGrey.withValues(
+                                      alpha: 0.95,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Icon(
+                            Icons.chevron_right_rounded,
+                            size: 24,
+                            color: accentColor,
+                          ),
+                        ],
                       ),
-                      Icon(
-                        Icons.chevron_right_rounded,
-                        size: 24,
-                        color: accentColor,
-                      ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
-            ),
-          ],
-          const SizedBox(height: 6),
+              );
+            },
+          ),
         ],
-      ),
+      ],
     );
   }
 }

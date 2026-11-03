@@ -14,6 +14,7 @@ import '../hub_spot_transport_fees_loader.dart';
 import '../transportation_fees_loader.dart';
 import '../widgets/municipality_image.dart' show clearTourismImageUrlCache;
 import 'admin_accounts_service.dart';
+import 'bus_location_store.dart';
 import 'admin_session_bootstrap.dart' show isKnownAdminEmail;
 import 'auth_role_claims.dart';
 import 'firestore_gate.dart';
@@ -26,6 +27,7 @@ import 'supabase_image_library.dart' show ensureSupabaseImageIndexLoaded;
 bool tourismIsGuestSession() => FirebaseAuth.instance.currentUser == null;
 
 bool _publicCatalogLoaded = false;
+bool _busLocationsBound = false;
 Future<void>? _publicCatalogLoadFuture;
 String? _completedBootstrapKey;
 Future<void>? _bootstrapFuture;
@@ -159,7 +161,15 @@ Future<void> _runCatalogLoaders() async {
     for (final e in rest) loadOne(e.key, e.value),
   ]);
 
+  await BusLocationStore.instance.ensureLoaded();
   applyDefaultMunicipalityBusTerminals();
+  if (!_busLocationsBound) {
+    _busLocationsBound = true;
+    BusLocationStore.instance.revision.addListener(() {
+      applyDefaultMunicipalityBusTerminals();
+      tourismCatalogRevision.value++;
+    });
+  }
   _publicCatalogLoaded = true;
   tourismCatalogRevision.value++;
 }

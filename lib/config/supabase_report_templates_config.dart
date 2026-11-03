@@ -32,6 +32,7 @@ enum DotFormCategory {
   attraction,
   accommodation,
   mice,
+  optaca,
 }
 
 extension DotFormCategoryX on DotFormCategory {
@@ -39,6 +40,7 @@ extension DotFormCategoryX on DotFormCategory {
         DotFormCategory.attraction => 'Attraction (VAR)',
         DotFormCategory.accommodation => 'Accommodation (DAE)',
         DotFormCategory.mice => 'Events (MICE)',
+        DotFormCategory.optaca => 'OPTACA',
       };
 }
 
@@ -102,6 +104,7 @@ class DotFormCatalogEntry {
     required this.localFilename,
     required this.searchTags,
     this.reportType,
+    this.offersOfficialBlankSecondary = true,
   });
 
   final String id;
@@ -122,6 +125,10 @@ class DotFormCatalogEntry {
   /// Non-null when ATMOS can fill this form.
   final DotReportType? reportType;
 
+  /// Official empty template is secondary — never the primary Analytics CTA.
+  /// Portal summaries (events / matrix fares) have no official DOT blank.
+  final bool offersOfficialBlankSecondary;
+
   String get publicUrl =>
       SupabaseReportTemplatesConfig.publicUrlForObjectKey(objectFilename);
 
@@ -132,12 +139,15 @@ class DotFormCatalogEntry {
         DotFormFillMode.atmosDerived => 'Best-effort + gaps',
       };
 
+  /// Gray line under the title in [DotReportFormTypeDropdown].
+  /// Same `Family · detail` pattern as VAR / DAE (`Attraction (VAR) · ATMOS fill`).
+  String get menuDescription => category == DotFormCategory.optaca
+      ? '${category.label} · $subtitle'
+      : '${category.label} · $capabilityLabel';
+
   bool get supportsAtmosFill =>
       fillMode == DotFormFillMode.atmosFill ||
       fillMode == DotFormFillMode.atmosDerived;
-
-  /// Official empty template is secondary — never the primary Analytics CTA.
-  bool get offersOfficialBlankSecondary => true;
 
   bool matchesSearch(String query) {
     final q = query.trim().toLowerCase();
