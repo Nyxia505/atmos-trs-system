@@ -399,7 +399,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           child: Row(
             children: [
               Expanded(
-                child: TourismPlanUi.sectionTitleBar(title: 'Municipalities'),
+                child: TourismPlanUi.sectionTitleBar(title: 'Explore municipalities'),
               ),
               TextButton(
                 onPressed: () => Navigator.push(
@@ -626,7 +626,7 @@ class _FavoriteSpotsScreenState extends State<FavoriteSpotsScreen> {
               child: Padding(
                 padding: EdgeInsets.all(24),
                 child: Text(
-                  'No saved places yet.',
+                  'No saved places yet.\nOpen a spot and tap the heart to save it here.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: AppColors.textGrey,

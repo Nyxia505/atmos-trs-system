@@ -91,13 +91,14 @@ abstract final class AeRegisterService {
           );
 
   static Stream<List<AeRegisterRow>> watchRows(String aeId, int year, int month) =>
-      rowsRef(aeId, year, month).snapshots().map(
-            (s) => AeRegisterCalculator.rowsInMonth(
-              s.docs.map(AeRegisterRow.fromDoc),
-              year,
-              month,
-            ),
-          );
+      rowsRef(aeId, year, month).snapshots().map((s) {
+        final monthRows = AeRegisterCalculator.rowsInMonth(
+          s.docs.map(AeRegisterRow.fromDoc),
+          year,
+          month,
+        );
+        return AeRegisterCalculator.sortDailyRegisterRows(monthRows);
+      });
 
   static Future<List<AeRegisterRow>> fetchRows(String aeId, int year, int month) async {
     final snap = await rowsRef(aeId, year, month).get().timeout(_writeTimeout);
@@ -489,11 +490,20 @@ abstract final class AeRegisterService {
     await batch.commit().timeout(_writeTimeout);
   }
 
-  /// Refreshes profile fields on all existing headers (rooms / type changes).
-  static Future<void> refreshProfileOnHeaders(AeRegisterProfile profile) async {
-    final snap = await _col.where('aeId', isEqualTo: profile.aeId).get().timeout(_writeTimeout);
+  /// Refreshes profile fields on existing monthly headers (rooms / type changes).
+  ///
+  /// By default skips **submitted** months so historical occupancy stays tied to
+  /// the capacity that was in force when the month was signed. Draft (and any
+  /// not-yet-submitted) months pick up the current profile.
+  static Future<void> refreshProfileOnHeaders(
+    AeRegisterProfile profile, {
+    bool includeSubmitted = false,
+  }) async {
+    final snap =
+        await _col.where('aeId', isEqualTo: profile.aeId).get().timeout(_writeTimeout);
     for (final d in snap.docs) {
       final r = AeMonthlyReport.fromDoc(d);
+      if (!includeSubmitted && r.isSubmitted) continue;
       await touchHeader(profile, r.year, r.month);
     }
   }

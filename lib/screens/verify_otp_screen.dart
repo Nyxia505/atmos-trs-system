@@ -11,6 +11,7 @@ import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/navigation/role_router.dart';
 import 'package:atmos_trs_system/navigation/pending_checkin_navigation.dart';
+import 'package:atmos_trs_system/navigation/post_registration_qr_navigation.dart';
 import 'package:atmos_trs_system/navigation/landing_intent_navigation.dart';
 import 'package:atmos_trs_system/services/landing_intent_service.dart';
 import 'package:atmos_trs_system/services/auth_service.dart';
@@ -405,6 +406,17 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
     await LandingIntentService.clear();
 
     if (!mounted) return;
+
+    final args = ModalRoute.of(context)?.settings.arguments;
+    final fromSignup = args is Map && args['fromSignup'] == true;
+    if (fromSignup && route == '/dashboard') {
+      await openTouristQrSuccessThenContinue(
+        context,
+        defaultRoute: route,
+      );
+      return;
+    }
+
     if (await openQrDestinationIfPending(context)) return;
     if (!mounted) return;
     await navigateToPendingSpotCheckInOrDashboard(

@@ -41,6 +41,38 @@ void main() {
     );
   });
 
+  test('event photos use events/{eventId}/{unique file}', () {
+    final key = SupabaseStorageUpload.eventPhotoObjectKey('evt_1', 'jpeg');
+    expect(key, startsWith('events/evt_1/photo_'));
+    expect(key, endsWith('.jpg'));
+    expect(
+      () => SupabaseStorageUpload.eventPhotoObjectKey('evt_1', 'gif'),
+      throwsStateError,
+    );
+  });
+
+  test('webp bytes are accepted as an event image type', () {
+    final bytes = Uint8List.fromList([
+      0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, //
+      0x57, 0x45, 0x42, 0x50,
+    ]);
+    expect(SupabaseStorageUpload.contentTypeForImageBytes(bytes), 'image/webp');
+    expect(SupabaseStorageUpload.eventImageTypes.contains('image/webp'), isTrue);
+  });
+
+  test('event photo delete stays inside that event folder', () {
+    const eventId = 'evt1';
+    const owned =
+        'https://cgpjqkbbmyxvitwpkikn.supabase.co/storage/v1/object/public/tourist-images/events/evt1/photo_1.jpg';
+    const firebase =
+        'https://firebasestorage.googleapis.com/v0/b/atmos-trs-system.appspot.com/o/lgu_events%2Fa.jpg?alt=media';
+    const otherEvent =
+        'https://cgpjqkbbmyxvitwpkikn.supabase.co/storage/v1/object/public/tourist-images/events/evt2/photo_1.jpg';
+    expect(SupabaseStorageUpload.ownsEventPhoto(owned, eventId), isTrue);
+    expect(SupabaseStorageUpload.ownsEventPhoto(firebase, eventId), isFalse);
+    expect(SupabaseStorageUpload.ownsEventPhoto(otherEvent, eventId), isFalse);
+  });
+
   test('only this spot folder is deleted after a successful save', () {
     const spotId = 'spot1';
     const owned =

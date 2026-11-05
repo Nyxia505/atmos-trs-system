@@ -36,9 +36,15 @@ import 'package:atmos_trs_system/services/qr_launch_bootstrap.dart';
 import 'package:atmos_trs_system/services/camera_qr_deep_link_service.dart';
 import 'package:atmos_trs_system/services/startup_route_resolver.dart';
 import 'package:atmos_trs_system/screens/qr_scan_welcome_screen.dart';
+import 'package:atmos_trs_system/screens/qr_entry_gate_screen.dart';
 import 'package:atmos_trs_system/screens/qr_pending_resume_screen.dart';
+import 'package:atmos_trs_system/screens/qr_tourist_basic_signup_screen.dart';
+import 'package:atmos_trs_system/navigation/guest_startup_routes.dart';
+import 'package:atmos_trs_system/navigation/post_registration_qr_navigation.dart';
 import 'package:atmos_trs_system/screens/mobile_onboarding_screen.dart';
 import 'package:trip_plan/widgets/optaca_flutter_error_shell.dart';
+import 'package:atmos_trs_system/screens/splash_screen.dart';
+import 'package:atmos_trs_system/screens/welcome_screen.dart';
 
 export 'package:atmos_trs_system/navigation/root_navigator.dart' show rootNavigatorKey;
 
@@ -117,13 +123,22 @@ void main() async {
     }
   }
 
-  await AppThemeController.instance.load();
-  await preloadAtmosBrandFonts();
+  final resetLaunch =
+      PasswordResetService.emailResetOobCodeFromLaunchUrl() != null;
 
-  final initialRoute =
-      PasswordResetService.emailResetOobCodeFromLaunchUrl() != null
-          ? _passwordResetRoute
-          : await StartupRouteResolver.resolveQuickInitialRoute();
+  late final String initialRoute;
+  if (resetLaunch) {
+    await AppThemeController.instance.load();
+    await preloadAtmosBrandFonts();
+    initialRoute = _passwordResetRoute;
+  } else if (kIsWeb) {
+    await AppThemeController.instance.load();
+    await preloadAtmosBrandFonts();
+    initialRoute = await StartupRouteResolver.resolveQuickInitialRoute();
+  } else {
+    // Mobile shows the branded splash while session restore continues.
+    initialRoute = GuestStartupRoutes.splash;
+  }
 
   runApp(MyApp(initialRoute: initialRoute));
 }
@@ -148,7 +163,10 @@ class _MyAppState extends State<MyApp> {
       // Register device for announcement pop-ups for all logged-in roles.
       unawaited(registerTouristPushNotifications());
     }
-    if (widget.initialRoute == _passwordResetRoute) return;
+    if (widget.initialRoute == _passwordResetRoute ||
+        widget.initialRoute == GuestStartupRoutes.splash) {
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(
         StartupRouteResolver.refineAndNavigateIfNeeded(
@@ -192,12 +210,18 @@ class _MyAppState extends State<MyApp> {
                   );
             },
             routes: {
-          '/': (context) => kIsWeb ? const LandingPage() : const LoginScreen(),
-          // Website landing is web-only; the installed app shows sign-in.
+          '/': (context) => kIsWeb
+              ? const LandingPage()
+              : const WelcomeScreen(),
+          '/splash': (context) => const SplashScreen(),
+          '/welcome': (context) => const WelcomeScreen(),
+          // Website landing is web-only; the installed app opens Welcome.
           '/landing': (context) =>
-              kIsWeb ? const LandingPage() : const LoginScreen(),
+              kIsWeb ? const LandingPage() : const WelcomeScreen(),
           '/qr-welcome': (context) => const QrScanWelcomeScreen(),
+          '/qr-entry': (context) => const QrEntryGateScreen(),
           '/qr-resume': (context) => const QrPendingResumeScreen(),
+          '/tourist-qr-success': (context) => const TouristQrSuccessScreen(),
           '/mobile-onboarding': (context) => const MobileOnboardingScreen(),
           '/verify-otp': (context) => const VerifyOtpScreen(),
           '/establishment-dashboard': (context) =>
@@ -234,6 +258,8 @@ class _MyAppState extends State<MyApp> {
                     ),
                 '/signup' => (_) => const SignupAccountTypeScreen(),
                 '/signup-tourist' => (_) => const SignupScreen(),
+                '/signup-tourist-qr' => (_) =>
+                    const QrTouristBasicSignupScreen(),
                 '/signup-lgu' ||
                 '/signup-lgu-info' =>
                   (_) => const LguSignupScreen(),

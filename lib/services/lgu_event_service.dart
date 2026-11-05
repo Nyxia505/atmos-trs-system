@@ -1,14 +1,13 @@
 import 'dart:async' show unawaited;
-import 'dart:convert';
 
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
 import 'package:atmos_trs_system/services/announcement_push_service.dart';
+import 'package:atmos_trs_system/services/supabase_storage_upload.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
-import 'package:image/image.dart' as img;
+import 'package:trip_plan/catalog_targeting.dart';
 
 /// LGU-submitted events stored in the `announcements` collection.
 /// New posts auto-publish immediately (no Governor approval). Visible to
@@ -27,9 +26,6 @@ class LguEventService {
   static const String typePromo = 'Promo';
   static const String typeAlert = 'Alert';
   static const String typeGeneral = 'General';
-
-  /// Max base64 length for Firestore fallback (~90KB decoded JPEG).
-  static const int maxImageBase64Length = 120000;
 
   /// Categories LGUs can pick when creating a post.
   static const String typeOther = 'Other';
@@ -107,7 +103,13 @@ class LguEventService {
   }
 
   static DateTime? eventStart(Map<String, dynamic> data) {
-    final raw = _readDate(data['startsAt'] ?? data['startDate'] ?? data['date']);
+    final raw = _readDate(
+      data['startsAt'] ??
+          data['startAt'] ??
+          data['startDate'] ??
+          data['date'] ??
+          data['publishedAt'],
+    );
     if (raw == null) return null;
     if (_usesManilaClock(data)) return manilaWallFromInstant(raw);
     return raw;
@@ -299,16 +301,14 @@ class LguEventService {
 
   static List<String> imageUrlsOf(Map<String, dynamic> data) {
     final urls = <String>[];
+    final cover = resolveDisplayImage(data);
+    if (cover != null && cover.isNotEmpty) urls.add(cover);
     final gallery = data['imageUrls'];
     if (gallery is List) {
       for (final item in gallery) {
         final url = item?.toString().trim() ?? '';
         if (url.isNotEmpty && !urls.contains(url)) urls.add(url);
       }
-    }
-    final cover = resolveDisplayImage(data);
-    if (cover != null && cover.isNotEmpty && !urls.contains(cover)) {
-      urls.insert(0, cover);
     }
     return urls;
   }
@@ -325,19 +325,179 @@ class LguEventService {
   /// Live posts tourists / province feeds may show.
   /// A scheduled post stays hidden until its Manila window opens, even if the
   /// backend flag has not flipped yet. Expired posts stay hidden.
-  static bool isVisibleToTourists(Map<String, dynamic> data) {
-    final status = statusOf(data);
-    if (status == 'rejected') return false;
-    if (!isWithinSchedule(data)) return false;
+  /// Governor/OPTACA catalog notices use [publishedAt] (not a 1-day event window).
+  static bool isVisibleToTourists(Map<String, dynamic> data, [DateTime? now]) {
+    if (statusOf(data) == 'rejected') return false;
+    if (_isCatalogNotice(data)) {
+      if (data['published'] == false) return false;
+      final release = _catalogReleaseAt(data);
+      final clock = now ?? DateTime.now();
+      if (release != null && clock.toUtc().isBefore(release.toUtc())) {
+        return false;
+      }
+      return true;
+    }
+    if (!isWithinSchedule(data, now)) return false;
     if (data['published'] == true) return true;
     final state = data['scheduleState']?.toString() ?? '';
     return state == 'scheduled' || state == 'live';
   }
 
-  static String displayStatus(Map<String, dynamic> data) {
+  static bool isGovernorOwned(Map<String, dynamic> data) {
+    final office = _publisherOffice(data);
+    if (office == 'governor' ||
+        office == 'governor_office' ||
+        office == "governor's office") {
+      return true;
+    }
+    final by = data['createdBy']?.toString().trim().toLowerCase() ?? '';
+    return by == 'governor' || by == "governor's office";
+  }
+
+  static bool isOptacaOwned(Map<String, dynamic> data) {
+    final office = _publisherOffice(data);
+    if (office == 'optaca' ||
+        office == 'provincial' ||
+        office == 'provincial_tourism' ||
+        office == 'tourism_province') {
+      return true;
+    }
+    final by = data['createdBy']?.toString().trim().toLowerCase() ?? '';
+    return by == 'optaca' ||
+        by == 'provincial tourism' ||
+        by == 'provincial_tourism';
+  }
+
+  static bool lguMayManage(
+    Map<String, dynamic> data,
+    String municipalityId,
+  ) {
+    if (isGovernorOwned(data) || isOptacaOwned(data)) return false;
+    return matchesMunicipality(data, municipalityId);
+  }
+
+  static bool isAnnouncementType(Map<String, dynamic> data) {
+    final type = normalizeType(data['type']?.toString() ?? data['eventType']?.toString());
+    final lower = type.toLowerCase();
+    return lower == 'announcement' ||
+        lower == typePromo.toLowerCase() ||
+        lower == typeAlert.toLowerCase() ||
+        lower == typeGeneral.toLowerCase();
+  }
+
+  /// Governor municipality-specific posts stay in that LGU feed only.
+  /// Province-wide Governor posts and all LGU/OPTACA posts are eligible.
+  static bool isTargetedAtLguFeed(
+    Map<String, dynamic> data, {
+    required String municipalityId,
+    String municipalityName = '',
+  }) {
+    if (!isGovernorOwned(data)) return true;
+    if (!_isGovernorMunicipalitySpecific(data)) return true;
+    return matchesViewerMunicipality(
+      data,
+      municipalityId: municipalityId,
+      municipalityName: municipalityName,
+    );
+  }
+
+  /// Province Live: live posts that [isTargetedAtLguFeed] allows for this LGU.
+  static bool isEligibleForProvinceLive(
+    Map<String, dynamic> data, {
+    required String municipalityId,
+    String municipalityName = '',
+    DateTime? now,
+  }) {
+    if (!isVisibleToTourists(data, now)) return false;
+    return isTargetedAtLguFeed(
+      data,
+      municipalityId: municipalityId,
+      municipalityName: municipalityName,
+    );
+  }
+
+  static String _publisherOffice(Map<String, dynamic> data) {
+    return (data['publisherOffice'] ??
+            data['ownerOffice'] ??
+            data['publisherRole'] ??
+            data['publisher'] ??
+            '')
+        .toString()
+        .trim()
+        .toLowerCase();
+  }
+
+  /// Governor/OPTACA catalog notices: `publishedAt` is the go-live instant,
+  /// not an LGU event window. Dated catalog events keep [startsAt]/[endsAt].
+  static bool _isCatalogNotice(Map<String, dynamic> data) {
+    if (!(isGovernorOwned(data) || isOptacaOwned(data))) return false;
+    if (data['startsAt'] != null ||
+        data['startAt'] != null ||
+        data['endsAt'] != null) {
+      return false;
+    }
+    return true;
+  }
+
+  static DateTime? _catalogReleaseAt(Map<String, dynamic> data) {
+    return _readDate(
+      data['publishedAt'] ?? data['published_at'] ?? data['createdAt'],
+    );
+  }
+
+  static bool _isGovernorMunicipalitySpecific(Map<String, dynamic> data) {
+    if (isProvinceWideAudience(data)) return false;
+    final id = data['municipalityId']?.toString().trim() ?? '';
+    final name =
+        (data['municipalityName'] ?? data['municipality'] ?? '').toString().trim();
+    if (id.isEmpty && name.isEmpty) return false;
+    if (id.toLowerCase() == 'province' ||
+        id.toLowerCase() == kProvinceWideValue) {
+      return false;
+    }
+    return true;
+  }
+
+  static bool isProvinceWideAudience(Map<String, dynamic> data) {
+    return isProvinceWideTarget(
+      audienceScope:
+          (data['audienceScope'] ?? data['targetScope'] ?? '').toString(),
+      municipality:
+          (data['municipalityName'] ?? data['municipality'] ?? '').toString(),
+      municipalityId: (data['municipalityId'] ?? '').toString(),
+    );
+  }
+
+  static bool matchesViewerMunicipality(
+    Map<String, dynamic> data, {
+    required String municipalityId,
+    String municipalityName = '',
+  }) {
+    if (matchesMunicipality(data, municipalityId)) return true;
+    final label =
+        (data['municipalityName'] ?? data['municipality'] ?? '').toString();
+    final fromLabel = municipalityIdForLabel(label);
+    final target = municipalityId.trim().toLowerCase();
+    if (fromLabel.isNotEmpty && fromLabel.toLowerCase() == target) {
+      return true;
+    }
+    final viewerName = municipalityName.trim().toLowerCase();
+    return viewerName.isNotEmpty && label.trim().toLowerCase() == viewerName;
+  }
+
+  static String displayStatus(Map<String, dynamic> data, [DateTime? now]) {
     if (statusOf(data) == 'rejected') return 'Rejected (legacy)';
+    if (_isCatalogNotice(data)) {
+      if (data['published'] == false) return 'Scheduled';
+      final release = _catalogReleaseAt(data);
+      final clock = now ?? DateTime.now();
+      if (release != null && clock.toUtc().isBefore(release.toUtc())) {
+        return 'Scheduled';
+      }
+      return 'Ongoing';
+    }
     if (eventStart(data) != null || data['scheduleState'] != null) {
-      return schedulePhase(data);
+      return schedulePhase(data, now);
     }
     switch (statusOf(data)) {
       case 'approved':
@@ -348,25 +508,110 @@ class LguEventService {
   }
 
   static String sourceMunicipalityLabel(Map<String, dynamic> data) {
-    final name = data['municipalityName']?.toString().trim() ?? '';
+    if (isProvinceWideAudience(data) ||
+        (isGovernorOwned(data) && !_isGovernorMunicipalitySpecific(data))) {
+      return kProvinceWideDisplay;
+    }
+    final name = (data['municipalityName'] ?? data['municipality'])
+            ?.toString()
+            .trim() ??
+        '';
     if (name.isNotEmpty) return name;
     final id = data['municipalityId']?.toString().trim() ?? '';
-    return id.isEmpty ? 'LGU' : id;
+    if (id.isEmpty || id.toLowerCase() == 'province') {
+      return isGovernorOwned(data) ? kProvinceWideDisplay : 'LGU';
+    }
+    return id;
   }
 
   /// Resolves a displayable image for tourist/LGU UI.
-  /// Prefers Storage [imageUrl]; falls back to [imageBase64] as a data URI.
+  /// A saved [imageUrl] wins. A saved [imageBase64] wins over leftover legacy
+  /// fields (`image`, `imagePath`, …) so a replaced photo is not hidden by the
+  /// previous file after reload.
   static String? resolveDisplayImage(Map<String, dynamic>? data) {
     if (data == null) return null;
-    for (final key in ['imageUrl', 'image_url', 'image', 'photoUrl', 'photo']) {
+    for (final key in ['imageUrl', 'image_url']) {
       final url = data[key]?.toString().trim();
       if (url != null && url.isNotEmpty) return url;
     }
+    final embedded = _embeddedImage(data);
+    if (embedded != null) return embedded;
+    for (final key in ['image', 'imagePath', 'photoUrl', 'photo']) {
+      final url = data[key]?.toString().trim();
+      if (url != null && url.isNotEmpty) return url;
+    }
+    return null;
+  }
+
+  static String? _embeddedImage(Map<String, dynamic> data) {
     final b64 = data['imageBase64']?.toString().trim() ??
         data['image_base64']?.toString().trim();
     if (b64 == null || b64.isEmpty) return null;
     if (b64.startsWith('data:')) return b64;
     return 'data:image/jpeg;base64,$b64';
+  }
+
+  static const List<String> _legacyImageKeys = [
+    'imageUrl',
+    'image_url',
+    'image',
+    'imagePath',
+    'photoUrl',
+    'photo',
+    'imageBase64',
+    'image_base64',
+  ];
+
+  /// Fields to write when the LGU replaces or clears the cover photo.
+  /// Every legacy key is updated together so reload cannot resurrect the old file.
+  static Map<String, dynamic> coverImageUpdates({
+    required Map<String, dynamic> current,
+    required Map<String, dynamic> imageFields,
+    bool remove = false,
+  }) {
+    final updates = <String, dynamic>{};
+    if (remove) {
+      for (final key in _legacyImageKeys) {
+        updates[key] = FieldValue.delete();
+      }
+      updates['imageUrls'] = FieldValue.delete();
+      return updates;
+    }
+
+    final newUrl = imageFields['imageUrl']?.toString().trim() ?? '';
+    final newB64 = imageFields['imageBase64']?.toString().trim() ?? '';
+    if (newUrl.isEmpty && newB64.isEmpty) return updates;
+
+    final oldCover = resolveDisplayImage(current);
+    final extras = <String>[];
+    final gallery = current['imageUrls'];
+    if (gallery is List) {
+      for (final item in gallery) {
+        final url = item?.toString().trim() ?? '';
+        if (url.isEmpty || url == oldCover || url == newUrl) continue;
+        if (!extras.contains(url)) extras.add(url);
+      }
+    }
+
+    if (newUrl.isNotEmpty) {
+      for (final key in ['imageUrl', 'image_url', 'image', 'imagePath', 'photoUrl', 'photo']) {
+        updates[key] = newUrl;
+      }
+      updates['imageBase64'] = FieldValue.delete();
+      updates['image_base64'] = FieldValue.delete();
+      updates['imageUrls'] = [newUrl, ...extras];
+    } else {
+      for (final key in ['imageUrl', 'image_url', 'image', 'imagePath', 'photoUrl', 'photo', 'image_base64']) {
+        updates[key] = FieldValue.delete();
+      }
+      updates['imageBase64'] = newB64;
+      if (extras.isEmpty) {
+        updates['imageUrls'] = FieldValue.delete();
+      } else {
+        updates['imageUrls'] = extras;
+      }
+    }
+    return updates;
   }
 
   Future<List<Map<String, dynamic>>> loadForMunicipality(
@@ -386,16 +631,16 @@ class LguEventService {
         snap = await _firestore.collection(collection).limit(80).get();
       }
       final list = _mergeById([
-        ...snap.docs.map((d) => {'id': d.id, ...d.data()}),
+        ...snap.docs.map((d) => normalizeAnnouncementDoc(d.id, d.data())),
         ...await _loadEventsCatalog(),
       ]).where((e) => _matchesMunicipality(e, municipalityId)).toList();
-      list.sort(_sortByCreatedAtDesc);
+      list.sort(compareBySchedule);
       return list;
     } catch (e) {
       debugPrint('[LguEventService] loadForMunicipality: $e');
       final catalog = await _loadEventsCatalog();
       final list = catalog.where((event) => _matchesMunicipality(event, municipalityId)).toList();
-      list.sort(_sortByCreatedAtDesc);
+      list.sort(compareBySchedule);
       return list;
     }
   }
@@ -410,23 +655,22 @@ class LguEventService {
       try {
         snap = await _firestore
             .collection(collection)
-            .where('published', isEqualTo: true)
             .limit(limit)
             .get();
       } catch (_) {
         snap = await _firestore.collection(collection).limit(limit).get();
       }
       final list = _mergeById([
-        ...snap.docs.map((d) => {'id': d.id, ...d.data()}),
+        ...snap.docs.map((d) => normalizeAnnouncementDoc(d.id, d.data())),
         ...await _loadEventsCatalog(),
       ]).where(isVisibleToTourists).toList();
-      list.sort(_sortByCreatedAtDesc);
+      list.sort(compareBySchedule);
       return list;
     } catch (e) {
       debugPrint('[LguEventService] loadPublishedProvinceWide: $e');
       final catalog = await _loadEventsCatalog();
       final list = catalog.where(isVisibleToTourists).toList();
-      list.sort(_sortByCreatedAtDesc);
+      list.sort(compareBySchedule);
       return list;
     }
   }
@@ -514,10 +758,10 @@ class LguEventService {
         snap = await _firestore.collection(collection).limit(100).get();
       }
       final list = _mergeById([
-        ...snap.docs.map((d) => {'id': d.id, ...d.data()}),
+        ...snap.docs.map((d) => normalizeAnnouncementDoc(d.id, d.data())),
         ...await _loadEventsCatalog(),
       ]);
-      list.sort(_sortByCreatedAtDesc);
+      list.sort(compareBySchedule);
       return list;
     } catch (e) {
       debugPrint('[LguEventService] loadAllForGovernor: $e');
@@ -576,34 +820,52 @@ class LguEventService {
         ? municipalityName.trim()
         : (user?.email ?? 'LGU');
 
-    final imageFields = preparedImageFields != null
-        ? await preparedImageFields
-        : await _resolveImageFields(
+    final wantsPhoto = preparedImageFields != null ||
+        (imageBytes != null && imageBytes.isNotEmpty);
+    final uploaded = <String>[];
+    var wrote = false;
+    late final Map<String, dynamic> imageFields;
+    late final List<String> gallery;
+    late final ({DateTime start, DateTime end, int days}) window;
+    late final bool liveNow;
+    try {
+      if (wantsPhoto) {
+        try {
+          imageFields = await _coverFieldsFromUpload(
             eventId: docRef.id,
             municipalityId: municipalityId,
-            bytes: imageBytes,
-            contentType: imageContentType,
-            requiredIfBytesPresent: true,
+            imageBytes: imageBytes,
+            imageContentType: imageContentType,
+            preparedImageFields: preparedImageFields,
           );
+        } catch (e) {
+          throw _photoSaveError(e);
+        }
+        final cover = imageFields['imageUrl']?.toString().trim() ?? '';
+        if (cover.isNotEmpty) uploaded.add(cover);
+      } else {
+        imageFields = const {};
+      }
 
-    final existing = await docRef.get();
-    if (existing.exists) {
-      throw StateError('This post was already published.');
-    }
+      final existing = await docRef.get();
+      if (existing.exists) {
+        throw StateError('This post was already published.');
+      }
 
-    final gallery = await _uploadGallery(
-      eventId: docRef.id,
-      municipalityId: municipalityId,
-      bytesList: galleryBytes,
-    );
-    final window = _windowForWrite(
-      startsAt: startsAt,
-      endsAt: endsAt,
-      allDay: allDay,
-      durationDays: durationDays,
-    );
-    final liveNow = _windowIsOpen(window);
-    final data = <String, dynamic>{
+      gallery = await _uploadGallery(
+        eventId: docRef.id,
+        municipalityId: municipalityId,
+        bytesList: galleryBytes,
+      );
+      uploaded.addAll(gallery);
+      window = _windowForWrite(
+        startsAt: startsAt,
+        endsAt: endsAt,
+        allDay: allDay,
+        durationDays: durationDays,
+      );
+      liveNow = _windowIsOpen(window);
+      final data = <String, dynamic>{
       'title': title.trim(),
       'content': content.trim(),
       'type': normalizedType,
@@ -624,21 +886,62 @@ class LguEventService {
       'municipalityId': municipalityId,
       'municipalityName': munName,
       ...imageFields,
-      if (gallery.isNotEmpty) 'imageUrls': gallery,
-      if (gallery.isNotEmpty && !imageFields.containsKey('imageUrl'))
-        'imageUrl': gallery.first,
+      if (imageFields['imageUrl'] is String &&
+          (imageFields['imageUrl'] as String).trim().isNotEmpty)
+        'imageUrls': <String>[
+          (imageFields['imageUrl'] as String).trim(),
+          ...gallery.where(
+            (url) => url != (imageFields['imageUrl'] as String).trim(),
+          ),
+        ]
+      else if (gallery.isNotEmpty)
+        'imageUrls': gallery,
     };
 
-    await docRef.set(data);
+      await docRef.set(data);
+      wrote = true;
+      if (wantsPhoto) {
+        try {
+          await _verifyCoverSaved(
+            ref: docRef,
+            eventId: docRef.id,
+            catalog: false,
+            imageFields: imageFields,
+          );
+        } catch (e) {
+          debugPrint('[LguEventService] saved event is missing its photo: $e');
+          await docRef.delete();
+          wrote = false;
+          throw StateError('Photo upload failed. Please retry.');
+        }
+      }
+    } catch (e) {
+      if (!wrote) {
+        await _deleteOwnedEventPhotos(docRef.id, uploaded);
+      }
+      rethrow;
+    }
 
-    if (liveNow) {
-      final pushBody = content.trim().isEmpty
-          ? 'New $normalizedType from $munName'
-          : content.trim();
+    final saved = <String, dynamic>{
+      'allDay': allDay,
+      'startsAt': Timestamp.fromDate(window.start),
+      'endsAt': Timestamp.fromDate(window.end),
+      'published': liveNow,
+    };
+    if (schedulePhase(saved) != 'Expired') {
+      final savedEvent = <String, dynamic>{
+        'title': title.trim(),
+        ...saved,
+      };
       unawaited(
         AnnouncementPushService.broadcastToInstalledApps(
-          title: '${title.trim()} · $munName',
-          content: pushBody,
+          title: touristNotificationTitle(savedEvent),
+          content: touristNotificationBody(
+            title: title.trim(),
+            place: munName,
+            description: content,
+            schedule: savedEvent,
+          ),
           type: normalizedType,
           announcementId: docRef.id,
         ),
@@ -699,6 +1002,8 @@ class LguEventService {
     required String title,
     required String content,
     String type = typeEvent,
+    /// `announcements` (LGU posts) or `events` (Trip Planner catalog).
+    String sourceCollection = collection,
     Uint8List? imageBytes,
     String? imageContentType,
     Future<Map<String, dynamic>>? preparedImageFields,
@@ -711,14 +1016,25 @@ class LguEventService {
     int? durationDays,
     List<Uint8List> galleryBytes = const [],
   }) async {
-    final ref = _firestore.collection(collection).doc(eventId);
+    final target = sourceCollection == eventsCollection
+        ? eventsCollection
+        : collection;
+    final ref = _firestore.collection(target).doc(eventId);
     final snap = await ref.get();
     if (!snap.exists) {
       throw StateError('This post no longer exists.');
     }
     final current = snap.data() ?? {};
-    if (!matchesMunicipality(current, municipalityId)) {
-      throw StateError('You can only edit posts from your municipality.');
+    final normalized = target == eventsCollection
+        ? normalizeCatalogEvent(eventId, current)
+        : normalizeAnnouncementDoc(eventId, current);
+    if (!lguMayManage(normalized, municipalityId) &&
+        !lguMayManage(current, municipalityId)) {
+      throw StateError(
+        isGovernorOwned(normalized) || isGovernorOwned(current)
+            ? "Only the Governor's Office can edit this post."
+            : 'You can only edit posts from your municipality.',
+      );
     }
     final wasPublished = current['published'] == true;
     final updates = <String, dynamic>{
@@ -728,28 +1044,37 @@ class LguEventService {
       'updatedAt': FieldValue.serverTimestamp(),
       'status': 'approved',
     };
+    if (target == eventsCollection) {
+      updates['name'] = title.trim();
+      updates['description'] = content.trim();
+      updates['municipalityId'] = municipalityId;
+    }
 
+    final replacingPhoto = !removeImage &&
+        (preparedImageFields != null ||
+            (imageBytes != null && imageBytes.isNotEmpty));
+    final previousUrls = imageUrlsOf(current);
+    final uploaded = <String>[];
+    var wrote = false;
+    Map<String, dynamic> savedCover = const {};
+    try {
     if (removeImage) {
-      updates['imageUrl'] = FieldValue.delete();
-      updates['imageBase64'] = FieldValue.delete();
-    } else if (preparedImageFields != null ||
-        (imageBytes != null && imageBytes.isNotEmpty)) {
-      final imageFields = preparedImageFields != null
-          ? await preparedImageFields
-          : await _resolveImageFields(
-              eventId: eventId,
-              municipalityId: municipalityId,
-              bytes: imageBytes,
-              contentType: imageContentType,
-              requiredIfBytesPresent: true,
-            );
-      updates.addAll(imageFields);
-      if (!imageFields.containsKey('imageUrl')) {
-        updates['imageUrl'] = FieldValue.delete();
+      updates.addAll(coverImageUpdates(current: current, imageFields: const {}, remove: true));
+    } else if (replacingPhoto) {
+      try {
+        savedCover = await _coverFieldsFromUpload(
+          eventId: eventId,
+          municipalityId: municipalityId,
+          imageBytes: imageBytes,
+          imageContentType: imageContentType,
+          preparedImageFields: preparedImageFields,
+        );
+      } catch (e) {
+        throw _photoSaveError(e);
       }
-      if (!imageFields.containsKey('imageBase64')) {
-        updates['imageBase64'] = FieldValue.delete();
-      }
+      final cover = savedCover['imageUrl']?.toString().trim() ?? '';
+      if (cover.isNotEmpty) uploaded.add(cover);
+      updates.addAll(coverImageUpdates(current: current, imageFields: savedCover));
     }
     final dayLong = allDay ?? isAllDay(current);
     final window = _windowForWrite(
@@ -780,25 +1105,75 @@ class LguEventService {
         municipalityId: municipalityId,
         bytesList: galleryBytes,
       );
+      uploaded.addAll(gallery);
       if (gallery.isNotEmpty) {
-        updates['imageUrls'] = gallery;
-        updates.putIfAbsent('imageUrl', () => gallery.first);
+        final coverUrl = updates['imageUrl'];
+        final cover = coverUrl is String ? coverUrl : '';
+        updates['imageUrls'] = [
+          if (cover.isNotEmpty) cover,
+          ...gallery.where((url) => url != cover),
+        ];
+        if (cover.isEmpty) {
+          updates['imageUrl'] = gallery.first;
+        }
       }
     }
 
     await ref.update(updates);
-    if (liveNow && !wasPublished) {
-      final munName = current['municipalityName']?.toString().trim() ?? '';
+    wrote = true;
+    if (replacingPhoto) {
+      await _verifyCoverSaved(
+        ref: ref,
+        eventId: eventId,
+        catalog: target == eventsCollection,
+        imageFields: savedCover,
+      );
+    }
+    if (removeImage || replacingPhoto || galleryBytes.isNotEmpty) {
+      final kept = <String>{};
+      final nextCover = updates['imageUrl'];
+      if (nextCover is String && nextCover.trim().isNotEmpty) {
+        kept.add(nextCover.trim());
+      }
+      final nextGallery = updates['imageUrls'];
+      if (nextGallery is List) {
+        for (final item in nextGallery) {
+          final url = item?.toString().trim() ?? '';
+          if (url.isNotEmpty) kept.add(url);
+        }
+      }
+      await _deleteOwnedEventPhotos(
+        eventId,
+        previousUrls.where((url) => !kept.contains(url)),
+      );
+    }
+    if (target == collection && liveNow && !wasPublished) {
+      final place = current['municipalityName']?.toString().trim() ?? '';
+      final savedEvent = <String, dynamic>{
+        'title': title.trim(),
+        'allDay': dayLong,
+        'startsAt': updates['startsAt'],
+        'endsAt': updates['endsAt'],
+      };
       unawaited(
         AnnouncementPushService.broadcastToInstalledApps(
-          title: '${title.trim()} · $munName',
-          content: content.trim().isEmpty
-              ? 'New ${normalizeType(type)} from $munName'
-              : content.trim(),
+          title: touristNotificationTitle(savedEvent),
+          content: touristNotificationBody(
+            title: title.trim(),
+            place: place,
+            description: content,
+            schedule: savedEvent,
+          ),
           type: normalizeType(type),
           announcementId: eventId,
         ),
       );
+    }
+    } catch (e) {
+      if (!wrote) {
+        await _deleteOwnedEventPhotos(eventId, uploaded);
+      }
+      rethrow;
     }
   }
 
@@ -825,10 +1200,10 @@ class LguEventService {
         municipalityId: municipalityId,
         bytes: bytes,
         contentType: 'image/jpeg',
-        requiredIfBytesPresent: false,
+        requiredIfBytesPresent: true,
       );
-      final url = fields['imageUrl']?.toString() ?? fields['imageBase64']?.toString();
-      if (url != null && url.isNotEmpty) urls.add(url);
+      final url = fields['imageUrl']?.toString().trim() ?? '';
+      if (url.isNotEmpty) urls.add(url);
     }
     return urls;
   }
@@ -836,16 +1211,33 @@ class LguEventService {
   Future<void> deleteEvent(
     String eventId, {
     String? municipalityId,
+    String sourceCollection = collection,
   }) async {
-    final ref = _firestore.collection(collection).doc(eventId);
+    final target = sourceCollection == eventsCollection
+        ? eventsCollection
+        : collection;
+    final ref = _firestore.collection(target).doc(eventId);
+    final snap = await ref.get();
+    if (!snap.exists) return;
+    final data = snap.data() ?? {};
     if (municipalityId != null && municipalityId.trim().isNotEmpty) {
-      final snap = await ref.get();
-      if (!snap.exists) return;
-      if (!matchesMunicipality(snap.data() ?? {}, municipalityId)) {
-        throw StateError('You can only delete posts from your municipality.');
+      final normalized = target == eventsCollection
+          ? normalizeCatalogEvent(eventId, data)
+          : normalizeAnnouncementDoc(eventId, data);
+      if (!lguMayManage(normalized, municipalityId) &&
+          !lguMayManage(data, municipalityId)) {
+        throw StateError(
+          isGovernorOwned(normalized) || isGovernorOwned(data)
+              ? "Only the Governor's Office can delete this post."
+              : 'You can only delete posts from your municipality.',
+        );
       }
     }
+    final photos = imageUrlsOf(
+      target == eventsCollection ? normalizeCatalogEvent(eventId, data) : data,
+    );
     await ref.delete();
+    await _deleteOwnedEventPhotos(eventId, photos);
   }
 
   /// Live updates for the LGU calendar and post lists.
@@ -865,13 +1257,14 @@ class LguEventService {
 
       final postsSub = _firestore.collection(collection).limit(200).snapshots().listen(
         (snap) {
-          posts = snap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
+          posts = snap.docs
+              .map((d) => normalizeAnnouncementDoc(d.id, d.data()))
+              .toList();
           emit();
         },
         onError: (Object e) {
           debugPrint('[LguEventService] watch announcements: $e');
-          posts ??= const [];
-          emit();
+          controller.addError(e);
         },
       );
       final catalogSub =
@@ -885,8 +1278,7 @@ class LguEventService {
         },
         onError: (Object e) {
           debugPrint('[LguEventService] watch events: $e');
-          catalog ??= const [];
-          emit();
+          controller.addError(e);
         },
       );
       controller.onCancel = () {
@@ -910,6 +1302,44 @@ class LguEventService {
     }
   }
 
+  /// Maps an `announcements` document (LGU or Governor catalog) onto the feed shape.
+  static Map<String, dynamic> normalizeAnnouncementDoc(
+    String id,
+    Map<String, dynamic> data,
+  ) {
+    final content = (data['content'] ??
+            data['body'] ??
+            data['description'] ??
+            data['message'] ??
+            '')
+        .toString();
+    final municipality =
+        (data['municipalityName'] ?? data['municipality'] ?? '').toString().trim();
+    final storedId = data['municipalityId']?.toString().trim() ?? '';
+    final provinceWide = isProvinceWideTarget(
+      audienceScope:
+          (data['audienceScope'] ?? data['targetScope'] ?? '').toString(),
+      municipality: municipality,
+      municipalityId: storedId,
+    );
+    final municipalityId = storedId.isNotEmpty
+        ? storedId
+        : (provinceWide ? 'province' : municipalityIdForLabel(municipality));
+    final type = data['type'] ?? data['eventType'] ?? typeEvent;
+    return {
+      ...data,
+      'id': id,
+      'title': data['title'] ?? '',
+      'content': content,
+      'type': type,
+      'municipalityName': municipality.isEmpty && provinceWide
+          ? kProvinceWideDisplay
+          : municipality,
+      'municipalityId': municipalityId,
+      if (provinceWide) 'audienceScope': data['audienceScope'] ?? kProvinceWideScope,
+    };
+  }
+
   /// Maps a Trip Planner `events` document onto the LGU calendar shape.
   static Map<String, dynamic> normalizeCatalogEvent(
     String id,
@@ -920,17 +1350,34 @@ class LguEventService {
     final storedId = data['municipalityId']?.toString().trim() ?? '';
     final municipalityId = storedId.isNotEmpty
         ? storedId
-        : municipalityIdForLabel(municipality);
+        : (isProvinceWideTarget(
+            audienceScope: (data['audienceScope'] ?? data['targetScope'] ?? '').toString(),
+            municipality: municipality,
+          )
+            ? 'province'
+            : municipalityIdForLabel(municipality));
     final start = data['startsAt'] ??
         data['startAt'] ??
         data['start_at'] ??
         data['date'] ??
         data['eventDate'] ??
         data['event_date'];
-    final image = data['imageUrl'] ??
-        data['image_url'] ??
-        data['imagePath'] ??
-        data['image'];
+    final explicitUrl = data['imageUrl']?.toString().trim() ??
+        data['image_url']?.toString().trim() ??
+        '';
+    final hasEmbedded = _embeddedImage(data) != null;
+    final legacyUrl = [
+      data['imagePath'],
+      data['image'],
+      data['photoUrl'],
+      data['photo'],
+    ].map((value) => value?.toString().trim() ?? '').firstWhere(
+          (value) => value.isNotEmpty,
+          orElse: () => '',
+        );
+    final image = explicitUrl.isNotEmpty
+        ? explicitUrl
+        : (hasEmbedded ? '' : legacyUrl);
     final venue = data['venue']?.toString().trim() ?? '';
     final location = data['location']?.toString().trim() ?? '';
     return {
@@ -945,7 +1392,7 @@ class LguEventService {
       'location': location.isNotEmpty
           ? location
           : (venue.isNotEmpty ? venue : municipality),
-      'imageUrl': image,
+      if (image.isNotEmpty) 'imageUrl': image,
       'published': data['published'] ?? true,
       'status': data['status'] ?? 'approved',
       'allDay': data['allDay'] ?? true,
@@ -1028,7 +1475,70 @@ class LguEventService {
     });
   }
 
-  /// Uploads to Storage; on failure stores compressed JPEG as [imageBase64].
+  Future<Map<String, dynamic>> _coverFieldsFromUpload({
+    required String eventId,
+    required String municipalityId,
+    Uint8List? imageBytes,
+    String? imageContentType,
+    Future<Map<String, dynamic>>? preparedImageFields,
+  }) async {
+    Map<String, dynamic> fields = const {};
+    if (preparedImageFields != null) {
+      try {
+        fields = await preparedImageFields;
+      } catch (e) {
+        debugPrint('[LguEventService] prepared photo failed, uploading again: $e');
+      }
+    }
+    final url = fields['imageUrl']?.toString().trim() ?? '';
+    final b64 = fields['imageBase64']?.toString().trim() ?? '';
+    if (url.isEmpty && b64.isEmpty) {
+      fields = await _resolveImageFields(
+        eventId: eventId,
+        municipalityId: municipalityId,
+        bytes: imageBytes,
+        contentType: imageContentType,
+        requiredIfBytesPresent: true,
+      );
+    }
+    final savedUrl = fields['imageUrl']?.toString().trim() ?? '';
+    final savedB64 = fields['imageBase64']?.toString().trim() ?? '';
+    if (savedUrl.isEmpty && savedB64.isEmpty) {
+      throw StateError('Photo upload failed. Please retry.');
+    }
+    return fields;
+  }
+
+  Future<void> _verifyCoverSaved({
+    required DocumentReference<Map<String, dynamic>> ref,
+    required String eventId,
+    required bool catalog,
+    required Map<String, dynamic> imageFields,
+  }) async {
+    final snap = await ref.get();
+    final raw = snap.data() ?? {};
+    final saved = catalog ? normalizeCatalogEvent(eventId, raw) : raw;
+    final newUrl = imageFields['imageUrl']?.toString().trim() ?? '';
+    final newB64 = imageFields['imageBase64']?.toString().trim() ?? '';
+    if (newUrl.isNotEmpty) {
+      final stored = saved['imageUrl']?.toString().trim() ?? '';
+      if (stored != newUrl) {
+        throw StateError('The new photo was not saved on this event.');
+      }
+      return;
+    }
+    if (newB64.isEmpty || (raw['imageBase64']?.toString().trim().isEmpty ?? true)) {
+      throw StateError('The new photo was not saved on this event.');
+    }
+    final shown = resolveDisplayImage(saved);
+    if (shown == null || !shown.contains(newB64.substring(0, newB64.length.clamp(0, 24)))) {
+      throw StateError('The old photo is still attached to this event.');
+    }
+  }
+
+  /// Uploads the cover to Supabase Storage and returns `{imageUrl: publicUrl}`.
+  /// Existing Firebase URLs stay on the event until this upload and the
+  /// Firestore update both succeed.
   Future<Map<String, dynamic>> _resolveImageFields({
     required String eventId,
     required String municipalityId,
@@ -1037,127 +1547,195 @@ class LguEventService {
     required bool requiredIfBytesPresent,
   }) async {
     if (bytes == null || bytes.isEmpty) return {};
-
-    final ct = _normalizeContentType(contentType);
-    final url = await _uploadImage(
-      eventId: eventId,
-      municipalityId: municipalityId,
-      bytes: bytes,
-      contentType: ct,
-    );
-    if (url != null && url.isNotEmpty) {
-      return {'imageUrl': url};
-    }
-
-    final b64 = _imageBase64ForFirestore(bytes);
-    if (b64 != null && b64.isNotEmpty) {
+    try {
+      final url = await SupabaseStorageUpload.uploadEventPhoto(
+        eventId: eventId,
+        bytes: bytes,
+        contentType: contentType,
+      );
       debugPrint(
-        '[LguEventService] Storage upload failed; saved imageBase64 fallback '
-        '(${b64.length} chars)',
+        '[LguEventService] event photo stored for $municipalityId: $url',
       );
-      return {'imageBase64': b64};
-    }
-
-    if (requiredIfBytesPresent) {
-      throw StateError(
-        'Could not upload the photo. Check your connection and try again.',
-      );
-    }
-    return {};
-  }
-
-  static String _normalizeContentType(String? contentType) {
-    final raw = contentType?.trim() ?? '';
-    if (raw.startsWith('image/')) return raw;
-    if (raw == 'png' || raw.endsWith('.png')) return 'image/png';
-    if (raw == 'webp' || raw.endsWith('.webp')) return 'image/webp';
-    if (raw == 'gif' || raw.endsWith('.gif')) return 'image/gif';
-    return 'image/jpeg';
-  }
-
-  Future<String?> _uploadImage({
-    required String eventId,
-    required String municipalityId,
-    required Uint8List bytes,
-    required String contentType,
-  }) async {
-    try {
-      final ext = contentType.contains('png')
-          ? 'png'
-          : contentType.contains('webp')
-              ? 'webp'
-              : 'jpg';
-      final folder = municipalityId
-          .trim()
-          .toLowerCase()
-          .replaceAll(RegExp(r'[^a-z0-9_-]+'), '_');
-      final safeFolder = folder.isEmpty ? 'unknown' : folder;
-      // Unique name per upload: an abandoned pre-upload (dialog cancelled)
-      // must never overwrite the photo a live post still points to.
-      final stamp = DateTime.now().millisecondsSinceEpoch;
-      final ref = FirebaseStorage.instance.ref().child(
-        'lgu_events/$safeFolder/${eventId}_$stamp.$ext',
-      );
-      final task = await ref.putData(
-        bytes,
-        SettableMetadata(contentType: contentType),
-      );
-      return await task.ref.getDownloadURL();
-    } catch (e) {
-      debugPrint('[LguEventService] image upload failed: $e');
-      return null;
+      return {'imageUrl': url};
+    } catch (e, stack) {
+      debugPrint('[LguEventService] event photo upload failed: $e\n$stack');
+      if (requiredIfBytesPresent) rethrow;
+      return {};
     }
   }
 
-  static String? _imageBase64ForFirestore(Uint8List raw) {
-    var bytes = _compressJpeg(raw, maxSide: 1280, quality: 75);
-    var encoded = base64Encode(bytes);
-    if (encoded.length <= maxImageBase64Length) return encoded;
-
-    bytes = _compressJpeg(bytes, maxSide: 960, quality: 65);
-    encoded = base64Encode(bytes);
-    if (encoded.length <= maxImageBase64Length) return encoded;
-
-    bytes = _compressJpeg(bytes, maxSide: 720, quality: 55);
-    encoded = base64Encode(bytes);
-    if (encoded.length <= maxImageBase64Length) return encoded;
-
-    return null;
-  }
-
-  static Uint8List _compressJpeg(
-    Uint8List raw, {
-    required int maxSide,
-    required int quality,
-  }) {
-    try {
-      final decoded = img.decodeImage(raw);
-      if (decoded == null) return raw;
-      var work = decoded;
-      if (work.width > maxSide || work.height > maxSide) {
-        if (work.width >= work.height) {
-          work = img.copyResize(work, width: maxSide);
-        } else {
-          work = img.copyResize(work, height: maxSide);
-        }
+  /// User-facing save error. Storage status codes stay in the debug log.
+  StateError _photoSaveError(Object error) {
+    if (error is StateError) {
+      final message = error.message.trim();
+      if (message.isNotEmpty && !message.startsWith('Photo upload failed')) {
+        return error;
       }
-      return Uint8List.fromList(img.encodeJpg(work, quality: quality));
-    } catch (e) {
-      debugPrint('[LguEventService] compress skipped: $e');
-      return raw;
+    }
+    return StateError('Photo upload failed. Please retry.');
+  }
+
+  /// Removes Supabase files this event owns. Firebase Storage URLs are kept.
+  Future<void> _deleteOwnedEventPhotos(
+    String eventId,
+    Iterable<String> urls,
+  ) async {
+    final seen = <String>{};
+    for (final url in urls) {
+      final trimmed = url.trim();
+      if (trimmed.isEmpty || !seen.add(trimmed)) continue;
+      try {
+        await SupabaseStorageUpload.deleteEventPhotoIfOwned(trimmed, eventId);
+      } catch (e) {
+        debugPrint('[LguEventService] could not remove event photo: $e');
+      }
     }
   }
 
-  static int _sortByCreatedAtDesc(
-    Map<String, dynamic> a,
-    Map<String, dynamic> b,
-  ) {
-    final aTs = a['publishedAt'] ?? a['createdAt'];
-    final bTs = b['publishedAt'] ?? b['createdAt'];
-    if (aTs is Timestamp && bTs is Timestamp) {
-      return bTs.compareTo(aTs);
+  /// Drops a pre-upload when the dialog is cancelled or the photo is replaced.
+  Future<void> discardPreparedUpload({
+    required String eventId,
+    Future<Map<String, dynamic>>? prepared,
+  }) async {
+    if (prepared == null) return;
+    try {
+      final fields = await prepared;
+      final url = fields['imageUrl']?.toString().trim() ?? '';
+      if (url.isEmpty) return;
+      await SupabaseStorageUpload.deleteEventPhotoIfOwned(url, eventId);
+    } catch (e) {
+      debugPrint('[LguEventService] unused event photo left in place: $e');
     }
-    return (b['date']?.toString() ?? '').compareTo(a['date']?.toString() ?? '');
+  }
+
+  /// Upcoming, then ongoing, then expired. Times are Asia/Manila wall clocks.
+  /// Upcoming is nearest first, ongoing ends soonest first, expired is newest first.
+  static int compareBySchedule(
+    Map<String, dynamic> a,
+    Map<String, dynamic> b, [
+    DateTime? now,
+  ]) {
+    final clock = now ?? manilaNow();
+    final rankA = _scheduleRank(a, clock);
+    final rankB = _scheduleRank(b, clock);
+    if (rankA != rankB) return rankA.compareTo(rankB);
+    if (rankA == 0) {
+      final byStart = _compareClock(_scheduleStart(a), _scheduleStart(b));
+      if (byStart != 0) return byStart;
+    } else {
+      final byEnd = rankA == 2
+          ? _compareClock(_scheduleEnd(b), _scheduleEnd(a))
+          : _compareClock(_scheduleEnd(a), _scheduleEnd(b));
+      if (byEnd != 0) return byEnd;
+    }
+    return (a['title']?.toString() ?? '').compareTo(b['title']?.toString() ?? '');
+  }
+
+  /// Push body: date, place, and a short plain-text description.
+  static String notificationSummary({
+    required String when,
+    required String place,
+    required String description,
+  }) {
+    final plain = description
+        .replaceAllMapped(RegExp(r'\*\*(.+?)\*\*'), (match) => match.group(1) ?? '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    final short = plain.length > 140 ? '${plain.substring(0, 137)}...' : plain;
+    return [when.trim(), place.trim(), short]
+        .where((part) => part.isNotEmpty)
+        .join(' · ');
+  }
+
+  static const List<String> _monthNames = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+
+  /// Tray title. Does not rewrite the stored event title.
+  static String touristNotificationTitle(
+    Map<String, dynamic> data, [
+    DateTime? now,
+  ]) {
+    final raw = data['title']?.toString().trim() ?? '';
+    final prefix =
+        schedulePhase(data, now) == 'Ongoing' ? 'Ongoing Event' : 'Upcoming Event';
+    return '$prefix: $raw';
+  }
+
+  /// Tray body. Uses the saved description when it exists; otherwise a short
+  /// sentence with the place and Manila date. Does not rewrite the event.
+  static String touristNotificationBody({
+    required String title,
+    required String place,
+    required String description,
+    required Map<String, dynamic> schedule,
+  }) {
+    final when = _longManilaDate(eventStart(schedule));
+    final plain = description
+        .replaceAllMapped(RegExp(r'\*\*(.+?)\*\*'), (match) => match.group(1) ?? '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    final where = place.trim();
+    if (plain.isEmpty) {
+      if (where.isNotEmpty && when.isNotEmpty) {
+        return 'Join the ${title.trim()} in $where on $when!';
+      }
+      return [where, when].where((part) => part.isNotEmpty).join(' · ');
+    }
+    var body = plain.length > 140 ? '${plain.substring(0, 137)}...' : plain;
+    final extras = <String>[];
+    if (where.isNotEmpty && !body.toLowerCase().contains(where.toLowerCase())) {
+      extras.add(where);
+    }
+    if (when.isNotEmpty && !body.contains(when)) extras.add(when);
+    if (extras.isNotEmpty) body = '$body — ${extras.join(' · ')}';
+    return body;
+  }
+
+  static String _longManilaDate(DateTime? wall) {
+    if (wall == null) return '';
+    return '${_monthNames[wall.month - 1]} ${wall.day}, ${wall.year}';
+  }
+
+  static int _scheduleRank(Map<String, dynamic> data, DateTime clock) {
+    final start = _scheduleStart(data);
+    if (start == null) return 1;
+    final end = _scheduleEnd(data);
+    if (end != null && !clock.isBefore(end)) return 2;
+    if (!clock.isBefore(start)) return 1;
+    return 0;
+  }
+
+  static DateTime? _scheduleStart(Map<String, dynamic> data) {
+    final start = eventStart(data);
+    if (start == null) return null;
+    if (_usesManilaClock(data)) return start;
+    return DateTime(start.year, start.month, start.day);
+  }
+
+  static DateTime? _scheduleEnd(Map<String, dynamic> data) {
+    if (_usesManilaClock(data)) return eventEnd(data);
+    final start = _scheduleStart(data);
+    if (start == null) return null;
+    return start.add(Duration(days: eventDurationDays(data)));
+  }
+
+  static int _compareClock(DateTime? a, DateTime? b) {
+    if (a == null && b == null) return 0;
+    if (a == null) return 1;
+    if (b == null) return -1;
+    return a.compareTo(b);
   }
 
   static bool matchesMunicipality(

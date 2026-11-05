@@ -1,6 +1,7 @@
 import 'package:atmos_trs_system/features/governor/theme/governor_dashboard_tokens.dart';
 import 'package:atmos_trs_system/widgets/chart_transition.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 class GovernorDonutSegment {
@@ -13,6 +14,14 @@ class GovernorDonutSegment {
   final String label;
   final double value;
   final Color color;
+}
+
+/// fl_chart reports `-1` when the pointer is in a gap / outside a slice.
+/// Never use that as a list index.
+@visibleForTesting
+int? governorDonutTouchedIndex(int? index, int length) {
+  if (index == null || index < 0 || index >= length) return null;
+  return index;
 }
 
 class GovernorDonutChart extends StatefulWidget {
@@ -40,11 +49,32 @@ class GovernorDonutChart extends StatefulWidget {
 class _GovernorDonutChartState extends State<GovernorDonutChart> {
   int? _touched;
 
+  List<GovernorDonutSegment> get _visible {
+    final out = <GovernorDonutSegment>[];
+    for (final s in widget.segments) {
+      if (!s.value.isFinite || s.value <= 0) continue;
+      final label = s.label.trim().isEmpty ? 'Other' : s.label.trim();
+      out.add(
+        GovernorDonutSegment(label: label, value: s.value, color: s.color),
+      );
+    }
+    return out;
+  }
+
+  @override
+  void didUpdateWidget(covariant GovernorDonutChart oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final next = governorDonutTouchedIndex(_touched, _visible.length);
+    if (next != _touched) {
+      _touched = next;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final total =
-        widget.segments.fold<double>(0, (a, s) => a + s.value);
-    if (total <= 0) {
+    final segments = _visible;
+    final total = segments.fold<double>(0, (a, s) => a + s.value);
+    if (total <= 0 || segments.isEmpty) {
       return Center(
         child: Text(
           widget.emptyMessage,
@@ -54,9 +84,8 @@ class _GovernorDonutChartState extends State<GovernorDonutChart> {
       );
     }
 
-    final touched = _touched != null && _touched! < widget.segments.length
-        ? widget.segments[_touched!]
-        : null;
+    final touchedIndex = governorDonutTouchedIndex(_touched, segments.length);
+    final touched = touchedIndex == null ? null : segments[touchedIndex];
 
     return Row(
       children: [
@@ -67,9 +96,10 @@ class _GovernorDonutChartState extends State<GovernorDonutChart> {
             children: [
               ChartTransition(
                 swapKey: Object.hashAll([
-                  for (final s in widget.segments) s.label,
+                  for (final s in segments) ...[s.label, s.value],
                 ]),
-                builder: (context, progress) => _pie(total, progress),
+                builder: (context, progress) =>
+                    _pie(segments, total, progress, touchedIndex),
               ),
               if (widget.centerLabel != null)
                 IgnorePointer(
@@ -95,7 +125,7 @@ class _GovernorDonutChartState extends State<GovernorDonutChart> {
           const SizedBox(width: 8),
           Expanded(
             flex: widget.showCounts ? 6 : 4,
-            child: _legend(total),
+            child: _legend(segments, total),
           ),
         ],
       ],
@@ -103,7 +133,12 @@ class _GovernorDonutChartState extends State<GovernorDonutChart> {
   }
 
   /// [progress] < 1 sweeps the ring in via a transparent remainder slice.
-  Widget _pie(double total, double progress) {
+  Widget _pie(
+    List<GovernorDonutSegment> segments,
+    double total,
+    double progress,
+    int? touchedIndex,
+  ) {
     final sweeping = progress < 1;
     final radius = widget.dense ? 18.0 : 22.0;
     return PieChart(
@@ -113,25 +148,25 @@ class _GovernorDonutChartState extends State<GovernorDonutChart> {
         pieTouchData: PieTouchData(
           enabled: !sweeping,
           touchCallback: (event, response) {
-            setState(() {
-              if (!event.isInterestedForInteractions ||
-                  response == null ||
-                  response.touchedSection == null) {
-                _touched = null;
-                return;
-              }
-              _touched = response.touchedSection!.touchedSectionIndex;
-            });
+            final next = !event.isInterestedForInteractions ||
+                    response?.touchedSection == null
+                ? null
+                : governorDonutTouchedIndex(
+                    response!.touchedSection!.touchedSectionIndex,
+                    segments.length,
+                  );
+            if (next == _touched) return;
+            setState(() => _touched = next);
           },
         ),
         sections: [
-          for (var i = 0; i < widget.segments.length; i++)
+          for (var i = 0; i < segments.length; i++)
             PieChartSectionData(
-              value: widget.segments[i].value * progress,
-              color: widget.segments[i].color,
-              radius: _touched == i ? (widget.dense ? 22 : 28) : radius,
-              title: !sweeping && widget.segments[i].value / total >= 0.08
-                  ? '${((widget.segments[i].value / total) * 100).round()}%'
+              value: segments[i].value * progress,
+              color: segments[i].color,
+              radius: touchedIndex == i ? (widget.dense ? 22 : 28) : radius,
+              title: !sweeping && segments[i].value / total >= 0.08
+                  ? '${((segments[i].value / total) * 100).round()}%'
                   : '',
               titleStyle: TextStyle(
                 color: Colors.white,
@@ -182,12 +217,12 @@ class _GovernorDonutChartState extends State<GovernorDonutChart> {
     );
   }
 
-  Widget _legend(double total) {
+  Widget _legend(List<GovernorDonutSegment> segments, double total) {
     final rows = Column(
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        for (final s in widget.segments)
+        for (final s in segments)
           Padding(
             padding: EdgeInsets.only(bottom: widget.dense ? 4 : 6),
             child: Row(
@@ -216,7 +251,9 @@ class _GovernorDonutChartState extends State<GovernorDonutChart> {
                 ),
                 const SizedBox(width: 4),
                 Text(
-                  '${((s.value / total) * 100).round()}%',
+                  total <= 0
+                      ? '0%'
+                      : '${((s.value / total) * 100).round()}%',
                   style: GovernorDashboardTokens.sectionTitle(
                     size: widget.dense ? 10.5 : 12,
                   ),

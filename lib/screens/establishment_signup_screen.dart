@@ -13,7 +13,7 @@ import 'package:atmos_trs_system/screens/verify_otp_screen.dart';
 import 'package:atmos_trs_system/services/auth_service.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_barangays.dart';
-import 'package:atmos_trs_system/services/establishment_registration_service.dart';
+import 'package:atmos_trs_system/services/establishment_category_service.dart';
 import 'package:atmos_trs_system/services/firestore_auth_gate.dart';
 import 'package:atmos_trs_system/services/otp_delivery_service.dart';
 import 'package:atmos_trs_system/services/otp_service.dart';
@@ -24,6 +24,7 @@ import 'package:atmos_trs_system/services/username_registry_service.dart';
 import 'package:atmos_trs_system/utils/email_utils.dart';
 import 'package:atmos_trs_system/utils/establishment_capability.dart';
 import 'package:atmos_trs_system/utils/establishment_lodging_hours.dart';
+import 'package:atmos_trs_system/utils/logo_utils.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/signup_field_validation.dart';
 import 'package:atmos_trs_system/widgets/dial_code_mobile_field.dart';
@@ -62,6 +63,8 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
 
   String _contactDialCode = '+63';
   String? _category;
+  bool _categoryPendingReview = false;
+  List<String> _approvedExtraCategories = const [];
   String? _municipality;
   String? _barangay;
   int? _yearEstablished;
@@ -103,6 +106,39 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
 
   bool get _isLodgingCategory =>
       EstablishmentCapability.isLodging(_category);
+
+  List<String> get _officialCategories =>
+      EstablishmentCategoryService.mergeOfficial(
+        extras: _approvedExtraCategories,
+      );
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadOfficialCategories());
+  }
+
+  Future<void> _loadOfficialCategories() async {
+    final extras = await EstablishmentCategoryService.loadApprovedExtras();
+    if (!mounted) return;
+    setState(() => _approvedExtraCategories = extras);
+  }
+
+  Future<void> _openSuggestCategoryDialog() async {
+    if (_submitting) return;
+    final accepted = await showDialog<String>(
+      context: context,
+      builder: (ctx) => _SuggestCategoryDialog(
+        official: _officialCategories,
+        alreadySuggested: _categoryPendingReview ? _category : null,
+      ),
+    );
+    if (accepted == null || accepted.isEmpty || !mounted) return;
+    setState(() {
+      _category = accepted;
+      _categoryPendingReview = true;
+    });
+  }
 
   Future<void> _pickCheckInTime() async {
     final picked = await showTimePicker(
@@ -556,6 +592,20 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
         return;
       }
 
+      String? suggestionId;
+      if (_categoryPendingReview && (_category ?? '').trim().isNotEmpty) {
+        if (mounted) {
+          setState(() => _submitPhase = 'Saving category suggestion...');
+        }
+        suggestionId =
+            await EstablishmentCategoryService.submitPendingSuggestion(
+          uid: uid,
+          name: _category!,
+          establishmentId: uid,
+          businessName: businessName,
+        );
+      }
+
       if (mounted) {
         setState(() => _submitPhase = 'Sending verification email...');
       }
@@ -583,6 +633,9 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
 
       final municipalityId = getMunicipalityIdFromName(_municipality);
       final permitNo = _businessPermitNoController.text.trim();
+      if (mounted && _permitImageBytes != null) {
+        setState(() => _submitPhase = 'Uploading permit photo...');
+      }
       final permitUrl = await permitFuture;
       final lodging = EstablishmentCapability.isLodging(_category);
       final checkInStr = EstablishmentLodgingHours.format(_checkInTime);
@@ -600,6 +653,11 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
         'username': username,
         'contactNumber': contact,
         'category': _category,
+        if (_categoryPendingReview) ...{
+          'categoryPendingReview': true,
+          'suggestedCategory': _category,
+          if (suggestionId != null) 'categorySuggestionId': suggestionId,
+        },
         'latitude': lat,
         'longitude': lng,
         'yearEstablished': _yearEstablished,
@@ -619,6 +677,11 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
         'businessName': businessName,
         'type': _category,
         'category': _category,
+        if (_categoryPendingReview) ...{
+          'categoryPendingReview': true,
+          'suggestedCategory': _category,
+          if (suggestionId != null) 'categorySuggestionId': suggestionId,
+        },
         'ownerName': ownerName,
         'contactNumber': contact,
         'email': email,
@@ -729,43 +792,61 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
     );
   }
 
-  Widget _sectionLabel(String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8, top: 4),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 14,
-          fontWeight: FontWeight.w800,
-          letterSpacing: 0.2,
-          color: _isDesktopGlass ? Colors.white : const Color(0xFF292524),
-          shadows: _isDesktopGlass
-              ? const [
-                  Shadow(
-                    color: Color(0x99000000),
-                    blurRadius: 6,
-                    offset: Offset(0, 1),
-                  ),
-                ]
-              : null,
-        ),
-      ),
-    );
-  }
+  TextStyle get _labelTextStyle => TextStyle(
+        fontSize: 13.5,
+        fontWeight: FontWeight.w800,
+        letterSpacing: 0.15,
+        color: _isDesktopGlass ? Colors.white : const Color(0xFF292524),
+        shadows: _isDesktopGlass
+            ? const [
+                Shadow(
+                  color: Color(0x99000000),
+                  blurRadius: 6,
+                  offset: Offset(0, 1),
+                ),
+              ]
+            : null,
+      );
 
-  @override
-  Widget build(BuildContext context) {
-    final formBody = Form(
-      key: _formKey,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
+  Widget _brandHeader({required bool showTitle}) {
+    return Column(
+      children: [
+        Center(
+          child: Container(
+            width: 96,
+            height: 96,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.18),
+                  blurRadius: 20,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: const ClipOval(
+              child: Padding(
+                padding: EdgeInsets.all(6),
+                child: TransparentLogo(
+                  width: 84,
+                  height: 84,
+                  fit: BoxFit.contain,
+                ),
+              ),
+            ),
+          ),
+        ),
+        if (showTitle) ...[
+          const SizedBox(height: 12),
           Text(
-            'Tourism Establishment',
+            'Tourism Establishment Signup',
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 24,
+              fontSize: 22,
               fontWeight: FontWeight.w800,
+              height: 1.2,
               color: _isDesktopGlass ? Colors.white : const Color(0xFF1C1917),
               shadows: _isDesktopGlass
                   ? const [
@@ -778,9 +859,9 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
                   : null,
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
           Text(
-            'Register your business for ATMOS-TRS',
+            'Register your tourism business.',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 14,
@@ -797,9 +878,176 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
                   : null,
             ),
           ),
-          const SizedBox(height: 20),
-          _sectionLabel('Name of Business'),
-          TextFormField(
+        ],
+      ],
+    );
+  }
+
+  Widget _fieldLabel(String text, {bool required = false}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8, top: 2),
+      child: Row(
+        children: [
+          Flexible(
+            child: Text(text, style: _labelTextStyle),
+          ),
+          if (required)
+            Text(
+              ' *',
+              style: TextStyle(
+                color: Colors.red.shade600,
+                fontWeight: FontWeight.w900,
+                fontSize: _labelTextStyle.fontSize,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _formSection({
+    required String title,
+    required IconData icon,
+    required List<Widget> children,
+  }) {
+    final onGlass = _isDesktopGlass;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
+      decoration: BoxDecoration(
+        color: onGlass ? Colors.white.withValues(alpha: 0.10) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: onGlass
+              ? Colors.white.withValues(alpha: 0.18)
+              : const Color(0xFFFFEDD5),
+        ),
+        boxShadow: onGlass
+            ? null
+            : [
+                BoxShadow(
+                  color: const Color(0xFFEA580C).withValues(alpha: 0.08),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppTheme.brandOrange.withValues(alpha: onGlass ? 0.22 : 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, size: 18, color: AppTheme.brandOrange),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.2,
+                      color: onGlass ? Colors.white : AppTheme.brandOrangeDark,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          ...children,
+        ],
+      ),
+    );
+  }
+
+  List<DropdownMenuItem<String>> _categoryMenuItems() {
+    final items = <DropdownMenuItem<String>>[
+      for (final c in _officialCategories)
+        DropdownMenuItem(value: c, child: Text(c)),
+    ];
+    final pending = _category;
+    if (_categoryPendingReview &&
+        pending != null &&
+        EstablishmentCategoryNames.canonicalMatch(
+              pending,
+              _officialCategories,
+            ) ==
+            null) {
+      items.add(
+        DropdownMenuItem(
+          value: pending,
+          child: Text('$pending (pending review)'),
+        ),
+      );
+    }
+    return items;
+  }
+
+  Widget _createAccountButton() {
+    return FilledButton(
+      onPressed: _submitting ? null : _submit,
+      style: FilledButton.styleFrom(
+        backgroundColor: AppTheme.brandOrange,
+        minimumSize: const Size.fromHeight(52),
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+      child: _submitting
+          ? Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const SizedBox(
+                  height: 22,
+                  width: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    color: Colors.white,
+                  ),
+                ),
+                if (_submitPhase != null) ...[
+                  const SizedBox(width: 12),
+                  Flexible(
+                    child: Text(
+                      _submitPhase!,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ],
+            )
+          : const Text(
+              'Create account',
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+            ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final formBody = Form(
+      key: _formKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _brandHeader(showTitle: true),
+          const SizedBox(height: 18),
+          _formSection(
+            title: 'Business Details',
+            icon: Icons.storefront_outlined,
+            children: [
+              _fieldLabel('Name of Business', required: true),
+              TextFormField(
             controller: _businessNameController,
             style: _fieldTextStyle,
             cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
@@ -813,25 +1061,64 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
             validator: (v) =>
                 (v == null || v.trim().isEmpty) ? 'Required' : null,
           ),
-          const SizedBox(height: 12),
-          _sectionLabel('Category type'),
-          _glassDropdown<String>(
-            value: _category,
-            hint: 'Select your category',
-            icon: Icons.category,
-            items: EstablishmentRegistrationService.categoryTypes
-                .map(
-                  (c) => DropdownMenuItem(value: c, child: Text(c)),
-                )
-                .toList(),
-            onChanged: _submitting
-                ? null
-                : (v) => setState(() => _category = v),
-            validator: (v) => v == null ? 'Required' : null,
-          ),
-          if (_isLodgingCategory) ...[
-            const SizedBox(height: 12),
-            _sectionLabel('Standard check-in / check-out times'),
+              const SizedBox(height: 12),
+              _fieldLabel('Category Type', required: true),
+              _glassDropdown<String>(
+                value: _category,
+                hint: 'Select your category',
+                icon: Icons.category,
+                items: _categoryMenuItems(),
+                onChanged: _submitting
+                    ? null
+                    : (v) => setState(() {
+                          _category = v;
+                          _categoryPendingReview = v != null &&
+                              EstablishmentCategoryNames.canonicalMatch(
+                                    v,
+                                    _officialCategories,
+                                  ) ==
+                                  null;
+                        }),
+                validator: (v) => v == null ? 'Required' : null,
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: _submitting ? null : _openSuggestCategoryDialog,
+                  icon: const Icon(Icons.add_rounded, size: 18),
+                  label: const Text('+ Add New Category'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppTheme.brandOrangeDark,
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                  ),
+                ),
+              ),
+              if (_categoryPendingReview && _category != null)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF7ED),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFFED7AA)),
+                  ),
+                  child: Text(
+                    'Suggested category “$_category” is pending OPTACA review. '
+                    'Your application can still be submitted.',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      height: 1.35,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF9A3412),
+                    ),
+                  ),
+                ),
+              if (_isLodgingCategory) ...[
+                const SizedBox(height: 4),
+                _fieldLabel('Standard check-in / check-out times'),
             Row(
               children: [
                 Expanded(
@@ -888,9 +1175,9 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
               ),
             ),
           ],
-          const SizedBox(height: 12),
-          _sectionLabel('Name of Owner (from Business Permit)'),
-          TextFormField(
+              const SizedBox(height: 12),
+              _fieldLabel('Name of Owner (from Business Permit)', required: true),
+              TextFormField(
             controller: _ownerNameController,
             focusNode: _ownerNameFocus,
             style: _fieldTextStyle,
@@ -905,9 +1192,9 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
             validator: (v) =>
                 (v == null || v.trim().isEmpty) ? 'Required' : null,
           ),
-          const SizedBox(height: 12),
-          _sectionLabel('Business Permit (optional)'),
-          TextFormField(
+              const SizedBox(height: 12),
+              _fieldLabel('Business Permit Number'),
+              TextFormField(
             controller: _businessPermitNoController,
             focusNode: _businessPermitNoFocus,
             style: _fieldTextStyle,
@@ -930,7 +1217,7 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
             ),
             label: Text(
               _permitImageBytes == null
-                  ? 'Attach permit photo (optional)'
+                  ? 'Attach Business Permit Photo (optional)'
                   : 'Permit photo attached'
                       '${_permitImageName != null ? ' · $_permitImageName' : ''}',
             ),
@@ -942,31 +1229,46 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
               padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
             ),
           ),
-          if (_permitImageBytes != null) ...[
-            const SizedBox(height: 6),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton(
-                onPressed: _submitting
-                    ? null
-                    : () => setState(() {
-                          _permitImageBytes = null;
-                          _permitImageName = null;
-                        }),
-                child: Text(
-                  'Remove photo',
-                  style: TextStyle(
-                    color: _isDesktopGlass
-                        ? Colors.white70
-                        : const Color(0xFF78716C),
+              if (_permitImageBytes != null) ...[
+                const SizedBox(height: 10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.memory(
+                    _permitImageBytes!,
+                    height: 140,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
                   ),
                 ),
-              ),
-            ),
-          ],
-          const SizedBox(height: 12),
-          _sectionLabel('Contact Number'),
-          DialCodeMobileField(
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    onPressed: _submitting
+                        ? null
+                        : () => setState(() {
+                              _permitImageBytes = null;
+                              _permitImageName = null;
+                            }),
+                    child: Text(
+                      'Remove photo',
+                      style: TextStyle(
+                        color: _isDesktopGlass
+                            ? Colors.white70
+                            : const Color(0xFF78716C),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 14),
+          _formSection(
+            title: 'Contact Details',
+            icon: Icons.contact_phone_outlined,
+            children: [
+              _fieldLabel('Contact Number (+63)', required: true),
+              DialCodeMobileField(
             controller: _contactController,
             focusNode: _contactFocus,
             textInputAction: TextInputAction.next,
@@ -994,9 +1296,9 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
               icon: Icons.phone_rounded,
             ),
           ),
-          const SizedBox(height: 12),
-          _sectionLabel('Email Address'),
-          TextFormField(
+              const SizedBox(height: 12),
+              _fieldLabel('Email Address', required: true),
+              TextFormField(
             controller: _emailController,
             focusNode: _emailFocus,
             style: _fieldTextStyle,
@@ -1015,24 +1317,30 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
               return null;
             },
           ),
-          Padding(
-            padding: const EdgeInsets.only(top: 6, bottom: 4),
-            child: Text(
-              'Use your real email. A verification code will be sent before '
-              'your account is activated.',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                height: 1.35,
-                color: _isDesktopGlass
-                    ? Colors.white.withValues(alpha: 0.9)
-                    : const Color(0xFF78716C),
+              Padding(
+                padding: const EdgeInsets.only(top: 6, bottom: 4),
+                child: Text(
+                  'Use your real email. A verification code will be sent before '
+                  'your account is activated.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    height: 1.35,
+                    color: _isDesktopGlass
+                        ? Colors.white.withValues(alpha: 0.9)
+                        : const Color(0xFF78716C),
+                  ),
+                ),
               ),
-            ),
+            ],
           ),
-          const SizedBox(height: 12),
-          _sectionLabel('Location'),
-          _glassDropdown<String>(
+          const SizedBox(height: 14),
+          _formSection(
+            title: 'Location',
+            icon: Icons.place_outlined,
+            children: [
+              _fieldLabel('Municipality / City', required: true),
+              _glassDropdown<String>(
             value: _municipality,
             hint: 'Select municipality / city',
             icon: Icons.location_city,
@@ -1047,8 +1355,9 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
                     }),
             validator: (v) => v == null ? 'Required' : null,
           ),
-          const SizedBox(height: 12),
-          _glassDropdown<String>(
+              const SizedBox(height: 12),
+              _fieldLabel('Barangay', required: true),
+              _glassDropdown<String>(
             value: _barangay,
             hint: 'Select barangay',
             icon: Icons.place,
@@ -1060,12 +1369,15 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
                 : (v) => setState(() => _barangay = v),
             validator: (v) => v == null ? 'Required' : null,
           ),
-          const SizedBox(height: 12),
-          _sectionLabel('Map pin (for tourist Explore map)'),
-          EstablishmentLocationCapture(
+              const SizedBox(height: 12),
+              _fieldLabel('Map Pin / Get Location', required: true),
+              EstablishmentLocationCapture(
             latitude: _latitude,
             longitude: _longitude,
             busy: _locating || _submitting,
+            municipalityId: _municipality == null
+                ? null
+                : getMunicipalityIdFromName(_municipality),
             onBusyChanged: (b) {
               if (mounted) setState(() => _locating = b);
             },
@@ -1078,139 +1390,117 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
               }
             },
           ),
-          const SizedBox(height: 12),
-          _sectionLabel('Year Established'),
-          _glassDropdown<int>(
-            value: _yearEstablished,
-            hint: 'Select year established',
-            icon: Icons.calendar_today,
-            items: _years
-                .map(
-                  (y) => DropdownMenuItem(value: y, child: Text('$y')),
-                )
-                .toList(),
-            onChanged: _submitting
-                ? null
-                : (v) => setState(() => _yearEstablished = v),
-            validator: (v) => v == null ? 'Required' : null,
+            ],
           ),
-          const SizedBox(height: 12),
-          _sectionLabel('Username'),
-          TextFormField(
-            controller: _usernameController,
-            focusNode: _usernameFocus,
-            style: _fieldTextStyle,
-            cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
-            autocorrect: false,
-            textInputAction: TextInputAction.next,
-            onFieldSubmitted: (_) => _passwordFocus.requestFocus(),
-            decoration: _dec(
-              hint: 'Enter your username',
-              icon: Icons.person,
-            ),
-            validator: UsernameRegistryService.validateFormat,
-          ),
-          const SizedBox(height: 12),
-          _sectionLabel('Password'),
-          TextFormField(
-            controller: _passwordController,
-            focusNode: _passwordFocus,
-            style: _fieldTextStyle,
-            cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
-            obscureText: _obscurePassword,
-            enableInteractiveSelection: true,
-            autovalidateMode: AutovalidateMode.onUserInteraction,
-            textInputAction: TextInputAction.next,
-            onChanged: (_) => _onPasswordEdited(),
-            onFieldSubmitted: (_) => _confirmPasswordFocus.requestFocus(),
-            decoration: _dec(
-              hint: 'At least 6 characters',
-              icon: Icons.lock_outline,
-              suffix: IconButton(
-                icon: Icon(
-                  _obscurePassword
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined,
-                  color: _fieldIconColor,
-                ),
-                onPressed: () =>
-                    setState(() => _obscurePassword = !_obscurePassword),
+          const SizedBox(height: 14),
+          _formSection(
+            title: 'Account Setup',
+            icon: Icons.lock_person_outlined,
+            children: [
+              _fieldLabel('Year Established', required: true),
+              _glassDropdown<int>(
+                value: _yearEstablished,
+                hint: 'Select year established',
+                icon: Icons.calendar_today,
+                items: _years
+                    .map(
+                      (y) => DropdownMenuItem(value: y, child: Text('$y')),
+                    )
+                    .toList(),
+                onChanged: _submitting
+                    ? null
+                    : (v) => setState(() => _yearEstablished = v),
+                validator: (v) => v == null ? 'Required' : null,
               ),
-            ),
-            validator: validateSimplePassword,
-          ),
-          const SizedBox(height: 12),
-          _sectionLabel('Confirm Password'),
-          TextFormField(
-            key: _confirmPasswordFieldKey,
-            controller: _confirmPasswordController,
-            focusNode: _confirmPasswordFocus,
-            style: _fieldTextStyle,
-            cursorColor: _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
-            obscureText: _obscureConfirm,
-            enableInteractiveSelection: true,
-            autovalidateMode: AutovalidateMode.onUserInteraction,
-            textInputAction: TextInputAction.done,
-            onFieldSubmitted: (_) {
-              if (!_submitting) unawaited(_submit());
-            },
-            decoration: _dec(
-              hint: 'Confirm your password',
-              icon: Icons.lock_outline,
-              suffix: IconButton(
-                icon: Icon(
-                  _obscureConfirm
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined,
-                  color: _fieldIconColor,
+              const SizedBox(height: 12),
+              _fieldLabel('Username', required: true),
+              TextFormField(
+                controller: _usernameController,
+                focusNode: _usernameFocus,
+                style: _fieldTextStyle,
+                cursorColor:
+                    _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
+                autocorrect: false,
+                textInputAction: TextInputAction.next,
+                onFieldSubmitted: (_) => _passwordFocus.requestFocus(),
+                decoration: _dec(
+                  hint: 'Enter your username',
+                  icon: Icons.person,
                 ),
-                onPressed: () =>
-                    setState(() => _obscureConfirm = !_obscureConfirm),
+                validator: UsernameRegistryService.validateFormat,
               ),
-            ),
-            validator: (v) {
-              if (v == null || v.isEmpty) return 'Required';
-              if (v != _passwordController.text) {
-                return 'Passwords do not match.';
-              }
-              return null;
-            },
-          ),
-          const SizedBox(height: 16),
-          FilledButton(
-            onPressed: _submitting ? null : _submit,
-            style: FilledButton.styleFrom(
-              backgroundColor: AppTheme.brandOrange,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-            ),
-            child: _submitting
-                ? Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const SizedBox(
-                        height: 22,
-                        width: 22,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          color: Colors.white,
-                        ),
-                      ),
-                      if (_submitPhase != null) ...[
-                        const SizedBox(width: 12),
-                        Flexible(
-                          child: Text(
-                            _submitPhase!,
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                      ],
-                    ],
-                  )
-                : const Text(
-                    'Create account',
-                    style: TextStyle(fontWeight: FontWeight.w800),
+              const SizedBox(height: 12),
+              _fieldLabel('Password', required: true),
+              TextFormField(
+                controller: _passwordController,
+                focusNode: _passwordFocus,
+                style: _fieldTextStyle,
+                cursorColor:
+                    _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
+                obscureText: _obscurePassword,
+                enableInteractiveSelection: true,
+                autovalidateMode: AutovalidateMode.onUserInteraction,
+                textInputAction: TextInputAction.next,
+                onChanged: (_) => _onPasswordEdited(),
+                onFieldSubmitted: (_) => _confirmPasswordFocus.requestFocus(),
+                decoration: _dec(
+                  hint: 'At least 6 characters',
+                  icon: Icons.lock_outline,
+                  suffix: IconButton(
+                    icon: Icon(
+                      _obscurePassword
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                      color: _fieldIconColor,
+                    ),
+                    onPressed: () =>
+                        setState(() => _obscurePassword = !_obscurePassword),
                   ),
+                ),
+                validator: validateSimplePassword,
+              ),
+              const SizedBox(height: 12),
+              _fieldLabel('Confirm Password', required: true),
+              TextFormField(
+                key: _confirmPasswordFieldKey,
+                controller: _confirmPasswordController,
+                focusNode: _confirmPasswordFocus,
+                style: _fieldTextStyle,
+                cursorColor:
+                    _isDesktopGlass ? Colors.white : AppTheme.brandOrange,
+                obscureText: _obscureConfirm,
+                enableInteractiveSelection: true,
+                autovalidateMode: AutovalidateMode.onUserInteraction,
+                textInputAction: TextInputAction.done,
+                onFieldSubmitted: (_) {
+                  if (!_submitting) unawaited(_submit());
+                },
+                decoration: _dec(
+                  hint: 'Confirm your password',
+                  icon: Icons.lock_outline,
+                  suffix: IconButton(
+                    icon: Icon(
+                      _obscureConfirm
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                      color: _fieldIconColor,
+                    ),
+                    onPressed: () =>
+                        setState(() => _obscureConfirm = !_obscureConfirm),
+                  ),
+                ),
+                validator: (v) {
+                  if (v == null || v.isEmpty) return 'Required';
+                  if (v != _passwordController.text) {
+                    return 'Passwords do not match.';
+                  }
+                  return null;
+                },
+              ),
+            ],
           ),
+          const SizedBox(height: 18),
+          _createAccountButton(),
         ],
       ),
     );
@@ -1233,6 +1523,8 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  _brandHeader(showTitle: false),
+                  const SizedBox(height: 16),
                   TouristSignupSectionHeader(
                     title: 'Terms & Data Privacy',
                     description:
@@ -1292,6 +1584,7 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(
         backgroundColor: AppTheme.brandOrange,
         foregroundColor: Colors.white,
@@ -1304,11 +1597,105 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
         ),
       ),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
-          child: _signupStep == 0 ? SignupLegalCard(child: form) : form,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                child: _signupStep == 0 ? SignupLegalCard(child: form) : form,
+              ),
+            );
+          },
         ),
       ),
+    );
+  }
+}
+
+class _SuggestCategoryDialog extends StatefulWidget {
+  const _SuggestCategoryDialog({
+    required this.official,
+    this.alreadySuggested,
+  });
+
+  final List<String> official;
+  final String? alreadySuggested;
+
+  @override
+  State<_SuggestCategoryDialog> createState() => _SuggestCategoryDialogState();
+}
+
+class _SuggestCategoryDialogState extends State<_SuggestCategoryDialog> {
+  final _controller = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final msg = EstablishmentCategoryService.validateSuggestion(
+      raw: _controller.text,
+      official: widget.official,
+      alreadySuggested: widget.alreadySuggested,
+    );
+    if (msg != null) {
+      setState(() => _error = msg);
+      return;
+    }
+    Navigator.pop(context, EstablishmentCategoryNames.cleaned(_controller.text));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('Suggest a category'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'OPTACA will review this before it is added to the official list. '
+            'You can finish signup with this category marked as pending review.',
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.35,
+              color: Colors.grey.shade700,
+            ),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _controller,
+            textCapitalization: TextCapitalization.words,
+            autofocus: true,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => _submit(),
+            decoration: InputDecoration(
+              labelText: 'Category name',
+              hintText: 'Enter a category name',
+              errorText: _error,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          style: FilledButton.styleFrom(backgroundColor: AppTheme.brandOrange),
+          child: const Text('Use this category'),
+        ),
+      ],
     );
   }
 }

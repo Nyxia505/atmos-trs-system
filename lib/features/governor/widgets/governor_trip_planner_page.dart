@@ -17,7 +17,10 @@ class GovernorTripPlannerPage extends StatelessWidget {
       GovernorTripPlannerSection.featured =>
         const AdminFeaturedSpotsTab(onChanged: _noop),
       GovernorTripPlannerSection.events =>
-        const AdminAnnouncementsTab(onChanged: _noop),
+        const AdminAnnouncementsTab(
+          onChanged: _noop,
+          manageOwnedOnly: true,
+        ),
       GovernorTripPlannerSection.fares => const AdminMatrixFaresTab(),
     };
   }

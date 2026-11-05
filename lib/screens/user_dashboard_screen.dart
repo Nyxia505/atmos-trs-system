@@ -20,6 +20,7 @@ import 'package:atmos_trs_system/services/local_qr_spot_checkin_service.dart';
 import 'package:atmos_trs_system/screens/qr_spot_checkin_screen.dart';
 import 'package:atmos_trs_system/services/lgu_event_service.dart';
 import 'package:atmos_trs_system/screens/event_detail_screen.dart';
+import 'package:atmos_trs_system/widgets/event_description_text.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -264,21 +265,7 @@ class _UserDashboardScreenState extends State<UserDashboardScreen>
               .map((doc) => {'id': doc.id, ...doc.data()})
               .where(LguEventService.isVisibleToTourists)
               .toList();
-          list.sort((a, b) {
-            final aAt = a['publishedAt'] ?? a['approvedAt'] ?? a['createdAt'];
-            final bAt = b['publishedAt'] ?? b['approvedAt'] ?? b['createdAt'];
-            DateTime? toTime(dynamic v) {
-              if (v is Timestamp) return v.toDate();
-              if (v is DateTime) return v;
-              return null;
-            }
-            final aTime = toTime(aAt);
-            final bTime = toTime(bAt);
-            if (aTime == null && bTime == null) return 0;
-            if (aTime == null) return 1;
-            if (bTime == null) return -1;
-            return bTime.compareTo(aTime);
-          });
+          list.sort(LguEventService.compareBySchedule);
           if (!mounted) return;
           setState(() {
             _firestoreAnnouncements = list.take(20).toList();
@@ -1015,8 +1002,9 @@ class _UserDashboardScreenState extends State<UserDashboardScreen>
                       event['title'] as String,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontWeight: FontWeight.bold,
+                        fontWeight: FontWeight.w700,
                         fontSize: 15,
+                        height: 1.25,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -1155,26 +1143,26 @@ class _UserDashboardScreenState extends State<UserDashboardScreen>
                         Expanded(
                           child: Text(
                             ann['title'] as String,
-                            style: TextStyle(
+                            style: const TextStyle(
                               color: Colors.white,
-                              fontWeight: isUnread
-                                  ? FontWeight.w700
-                                  : FontWeight.w600,
-                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15,
+                              height: 1.25,
                             ),
                           ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 2),
-                    Text(
-                      ann['message'] as String,
+                    EventDescriptionText(
+                      text: ann['message']?.toString() ?? '',
+                      maxLines: 2,
                       style: TextStyle(
                         color: Colors.white.withOpacity(isUnread ? 0.78 : 0.5),
                         fontSize: 12,
+                        height: 1.3,
+                        fontWeight: FontWeight.w400,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),

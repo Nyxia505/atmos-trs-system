@@ -88,6 +88,15 @@ class AeRegisterIssue {
   final String message;
 }
 
+/// Display order for the Daily Register table. Does not affect DAE occupancy math.
+enum AeDailyRegisterSort {
+  /// Default: latest stay date first; same date uses [createdAt] newest first.
+  newestDate,
+  oldestDate,
+  recentlyAdded,
+  recentlyUpdated,
+}
+
 /// Pure DAE-1B workbook math. Mirrors MonthlyRecord / DAE2_Auto / By Country.
 abstract final class AeRegisterCalculator {
   static List<AeRegisterRow> rowsInMonth(
@@ -103,6 +112,50 @@ abstract final class AeRegisterCalculator {
           if (c != 0) return c;
           return _roomSortKey(a.roomNo).compareTo(_roomSortKey(b.roomNo));
         });
+
+  static DateTime _createdAt(AeRegisterRow r) =>
+      r.audit.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+
+  static DateTime _updatedAt(AeRegisterRow r) =>
+      r.audit.updatedAt ?? r.audit.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+
+  static int _newerCreatedFirst(AeRegisterRow a, AeRegisterRow b) {
+    final c = _createdAt(b).compareTo(_createdAt(a));
+    if (c != 0) return c;
+    return a.id.compareTo(b.id);
+  }
+
+  /// Daily Register display order. Edits bump [updatedAt] only; default sort
+  /// stays date + createdAt so an edit does not jump the row.
+  static List<AeRegisterRow> sortDailyRegisterRows(
+    Iterable<AeRegisterRow> rows, {
+    AeDailyRegisterSort sort = AeDailyRegisterSort.newestDate,
+  }) {
+    final list = rows.toList();
+    list.sort((a, b) {
+      switch (sort) {
+        case AeDailyRegisterSort.newestDate:
+          final d = b.date.compareTo(a.date);
+          if (d != 0) return d;
+          return _newerCreatedFirst(a, b);
+        case AeDailyRegisterSort.oldestDate:
+          final d = a.date.compareTo(b.date);
+          if (d != 0) return d;
+          return _newerCreatedFirst(a, b);
+        case AeDailyRegisterSort.recentlyAdded:
+          final c = _newerCreatedFirst(a, b);
+          if (c != 0) return c;
+          return b.date.compareTo(a.date);
+        case AeDailyRegisterSort.recentlyUpdated:
+          final c = _updatedAt(b).compareTo(_updatedAt(a));
+          if (c != 0) return c;
+          final d = b.date.compareTo(a.date);
+          if (d != 0) return d;
+          return a.id.compareTo(b.id);
+      }
+    });
+    return list;
+  }
 
   static int _roomSortKey(String room) => int.tryParse(room.trim()) ?? 1 << 20;
 

@@ -163,7 +163,7 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
     if (!mounted) return;
     Navigator.pushReplacementNamed(
       context,
-      '/signup-tourist',
+      '/signup-tourist-qr',
       arguments: LoginRouteArgs.forFeature(
         returnFeature: LoginRouteArgs.featureQr,
       ),

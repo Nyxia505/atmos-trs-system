@@ -28,8 +28,22 @@ import 'package:atmos_trs_system/widgets/app_tutorial/coach_mark_overlay.dart';
 import 'package:atmos_trs_system/widgets/theme_reactive_scope.dart';
 import 'package:atmos_trs_system/screens/event_detail_screen.dart';
 
+/// How the tourist shell handles the Android / system back button.
+enum TouristShellBackResult { popTabRoute, goHomeTab, exitApp }
+
+/// Pops the active tab's stack first, then returns to Home, then leaves the app.
+TouristShellBackResult resolveTouristShellBack({
+  required bool currentTabCanPop,
+  required int currentIndex,
+}) {
+  if (currentTabCanPop) return TouristShellBackResult.popTabRoute;
+  if (currentIndex != 0) return TouristShellBackResult.goHomeTab;
+  return TouristShellBackResult.exitApp;
+}
+
 /// Responsive shell: Home, Explore, Scan (center elevated), Notification, Account.
-/// Uses IndexedStack so each tab keeps state.
+/// Each tab has its own [Navigator] so spot details stay above the shared
+/// bottom bar and other tabs remain reachable without pressing Back.
 class MainShell extends StatefulWidget {
   const MainShell({super.key, this.initialIndex = 0});
 
@@ -47,13 +61,20 @@ class MainShell extends StatefulWidget {
     });
   }
 
-  /// Switches the top-most shell to the Home tab (e.g. after a flow pushed
-  /// from the Scan tab pops back to the shell).
+  /// Switches the top-most shell to the Home dashboard (root of the Home tab).
   static void showHome() {
+    selectTab(0, popToRoot: true);
+  }
+
+  /// Switches the top-most shell to [index]. Re-tapping the current tab, or
+  /// [popToRoot], pops that tab back to its dashboard.
+  static void selectTab(int index, {bool popToRoot = false}) {
     final shells = _MainShellState._mounted;
     if (shells.isEmpty) return;
     final state = shells.last;
-    if (state.mounted) state._onNavTap(0);
+    if (!state.mounted) return;
+    state._onNavTap(index);
+    if (popToRoot) state._popTabToRoot(index);
   }
 
   @override
@@ -66,6 +87,13 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   late int _currentIndex;
   final _badge = NotificationBadgeNotifier.instance;
   final _tourKeys = TouristTutorialKeys();
+  final List<GlobalKey<NavigatorState>> _tabNavKeys = [
+    GlobalKey<NavigatorState>(debugLabel: 'tourist-home'),
+    GlobalKey<NavigatorState>(debugLabel: 'tourist-explore'),
+    GlobalKey<NavigatorState>(debugLabel: 'tourist-scan'),
+    GlobalKey<NavigatorState>(debugLabel: 'tourist-alerts'),
+    GlobalKey<NavigatorState>(debugLabel: 'tourist-account'),
+  ];
   @override
   void initState() {
     super.initState();
@@ -143,17 +171,43 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   // Scanner is mounted only while its tab is open so the camera is not running
   // (and holding the device camera) behind Home / Explore / Alerts / Account.
   List<Widget> _buildPages() => [
-        const ThemeReactiveScope(child: HomeScreen()),
-        const ThemeReactiveScope(child: ExploreScreen()),
+        _tabNavigator(0, const ThemeReactiveScope(child: HomeScreen())),
+        _tabNavigator(1, const ThemeReactiveScope(child: ExploreScreen())),
         _currentIndex == _scanTabIndex
-            ? const ThemeReactiveScope(child: ScanTabPage())
+            ? _tabNavigator(
+                _scanTabIndex,
+                const ThemeReactiveScope(child: ScanTabPage()),
+              )
             : const SizedBox.shrink(),
-        const ThemeReactiveScope(child: AlertsTabPage()),
-        const ThemeReactiveScope(child: ProfileTabPage()),
+        _tabNavigator(3, const ThemeReactiveScope(child: AlertsTabPage())),
+        _tabNavigator(4, const ThemeReactiveScope(child: ProfileTabPage())),
       ];
 
+  Widget _tabNavigator(int index, Widget child) {
+    return _TouristTabNavigator(
+      navigatorKey: _tabNavKeys[index],
+      child: child,
+    );
+  }
+
+  void _popTabToRoot(int index) {
+    if (index < 0 || index >= _tabNavKeys.length) return;
+    final nav = _tabNavKeys[index].currentState;
+    if (nav == null || !nav.canPop()) return;
+    nav.popUntil((route) => route.isFirst);
+  }
+
+  bool _currentTabCanPop() {
+    final nav = _tabNavKeys[_currentIndex].currentState;
+    return nav != null && nav.canPop();
+  }
+
   void _onNavTap(int index) {
-    if (index != _currentIndex) SaveSpotNotice.dismiss();
+    SaveSpotNotice.dismiss();
+    if (index == _currentIndex) {
+      _popTabToRoot(index);
+      return;
+    }
     setState(() => _currentIndex = index);
     if (index == 0) {
       // Returning to Home — refresh Visited count from check-ins.
@@ -199,15 +253,21 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
 
     return PopScope(
       // Native: the root `/` login route sits under a cold-started `/dashboard`,
-      // so system back must never pop the shell.
+      // so system back must never pop the shell. Tab stacks are popped first.
       canPop: kIsWeb,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        if (_currentIndex != 0) {
-          _onNavTap(0);
-          return;
+        switch (resolveTouristShellBack(
+          currentTabCanPop: _currentTabCanPop(),
+          currentIndex: _currentIndex,
+        )) {
+          case TouristShellBackResult.popTabRoute:
+            _tabNavKeys[_currentIndex].currentState?.pop();
+          case TouristShellBackResult.goHomeTab:
+            _onNavTap(0);
+          case TouristShellBackResult.exitApp:
+            SystemNavigator.pop();
         }
-        SystemNavigator.pop();
       },
       child: _buildShell(isMobile),
     );
@@ -252,6 +312,32 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
           );
         },
       ),
+    );
+  }
+}
+
+/// Nested navigator for one tourist tab. Pushes (spot details, search, saved
+/// lists) stay in this stack so the shell's bottom bar remains visible.
+class _TouristTabNavigator extends StatelessWidget {
+  const _TouristTabNavigator({
+    required this.navigatorKey,
+    required this.child,
+  });
+
+  final GlobalKey<NavigatorState> navigatorKey;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Navigator(
+      key: navigatorKey,
+      requestFocus: false,
+      onGenerateRoute: (settings) {
+        return MaterialPageRoute<void>(
+          settings: settings,
+          builder: (_) => child,
+        );
+      },
     );
   }
 }

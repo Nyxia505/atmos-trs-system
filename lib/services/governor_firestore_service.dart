@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
+import 'package:atmos_trs_system/utils/checkin_time.dart';
 
 /// Provincial analytics loaded from Firestore for the Governor portal.
 class GovernorFirestoreSnapshot {
@@ -142,7 +143,9 @@ class GovernorFirestoreService {
     final hasData = snapshot.tourists.isNotEmpty ||
         snapshot.touristSpots.isNotEmpty ||
         snapshot.checkIns.isNotEmpty;
-    if (!hasData) {
+    // Cached spots/tourists must not skip a server check-in read.
+    final checkInsMissing = includeCheckIns && snapshot.checkIns.isEmpty;
+    if (!hasData || checkInsMissing) {
       snapshot = await loadProvincialSnapshot(
         getOptions: _serverGet,
         includeCheckIns: includeCheckIns,
@@ -428,18 +431,7 @@ class GovernorFirestoreService {
   }
 
   static DateTime? parseCheckInTime(Map<String, dynamic> c) {
-    final t = c['timestamp'] ?? c['checkin_time'] ?? c['checkedInAt'] ?? c['createdAt'];
-    if (t == null) return null;
-    if (t is Timestamp) return t.toDate();
-    if (t is DateTime) return t;
-    if (t is int) {
-      return DateTime.fromMillisecondsSinceEpoch(
-        t > 9999999999 ? t : t * 1000,
-      );
-    }
-    final s = t.toString().trim();
-    if (s.isEmpty) return null;
-    return DateTime.tryParse(s);
+    return parseCheckInTimestamp(c);
   }
 
   static String checkInUserId(Map<String, dynamic> c) {

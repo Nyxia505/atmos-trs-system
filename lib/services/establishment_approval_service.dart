@@ -46,6 +46,9 @@ class EstablishmentRegistryEntry {
     this.reviewedAt,
     this.reviewNotes = '',
     this.hostsMice = false,
+    this.categoryPendingReview = false,
+    this.suggestedCategory = '',
+    this.categorySuggestionId = '',
   });
 
   final String id;
@@ -70,6 +73,10 @@ class EstablishmentRegistryEntry {
   final String reviewNotes;
   /// Hosts MICE events (CUS MICE survey) — field `hostsMice`, category default.
   final bool hostsMice;
+  /// Applicant suggested a type that is not yet on the official list.
+  final bool categoryPendingReview;
+  final String suggestedCategory;
+  final String categorySuggestionId;
 
   bool get isPending => EstablishmentRegistryStatus.isPending(status);
   bool get isActive => EstablishmentRegistryStatus.isActive(status);
@@ -122,6 +129,9 @@ class EstablishmentRegistryEntry {
       checkOutTime: (d['checkOutTime'] ?? '').toString().trim(),
       reviewedAt: reviewed,
       reviewNotes: (d['reviewNotes'] ?? '').toString(),
+      categoryPendingReview: d['categoryPendingReview'] == true,
+      suggestedCategory: (d['suggestedCategory'] ?? '').toString(),
+      categorySuggestionId: (d['categorySuggestionId'] ?? '').toString(),
     );
   }
 }

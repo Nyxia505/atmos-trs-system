@@ -9,6 +9,7 @@ import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/models/sign_off.dart';
 import 'package:atmos_trs_system/services/ae_register_service.dart';
+import 'package:atmos_trs_system/services/ae_room_inventory_service.dart';
 import 'package:atmos_trs_system/services/sign_off_service.dart';
 import 'package:atmos_trs_system/services/establishment_gallery_service.dart';
 import 'package:atmos_trs_system/services/establishment_firestore_write.dart';
@@ -53,8 +54,10 @@ class _EstablishmentDashboardScreenState
   String _municipality = '';
   String _municipalityId = '';
   int _roomCount = 0;
+  List<String> _roomLabels = const [];
   String _aeType = '';
   String _classificationCode = '';
+  List<String> _customAeTypes = const [];
   bool _hostsMice = false;
   String _checkInTime = EstablishmentLodgingHours.defaultCheckIn;
   String _checkOutTime = EstablishmentLodgingHours.defaultCheckOut;
@@ -169,10 +172,12 @@ class _EstablishmentDashboardScreenState
           .toString();
       final municipalityId =
           (user['municipalityId'] ?? est['municipalityId'] ?? '').toString();
-      final roomRaw = est['roomCount'] ?? user['roomCount'];
-      final roomCount = roomRaw is int
-          ? roomRaw
-          : int.tryParse(roomRaw?.toString() ?? '') ?? 0;
+      final roomInventory = AeRoomInventoryService.fromEstablishmentMap({
+        ...user,
+        ...est,
+      });
+      final roomCount = roomInventory.roomCount;
+      final roomLabels = roomInventory.roomLabels;
       final checkInRaw = (est['checkInTime'] ?? user['checkInTime'] ?? '')
           .toString()
           .trim();
@@ -209,9 +214,14 @@ class _EstablishmentDashboardScreenState
             (user['municipality'] ?? est['municipality'] ?? '').toString();
         _municipalityId = municipalityId;
         _roomCount = roomCount;
+        _roomLabels = roomLabels;
         _aeType = aeType;
         _classificationCode =
             codeRaw.isNotEmpty ? codeRaw : AeTypeCatalog.codeFor(aeType);
+        _customAeTypes = AeTypeCatalog.parseExtras(est['customAeTypes']);
+        if (aeType.isNotEmpty && !AeTypeCatalog.isOfficial(aeType)) {
+          _customAeTypes = AeTypeCatalog.parseExtras([aeType, ..._customAeTypes]);
+        }
         _hostsMice = EstablishmentCapability.hostsMice(category, est['hostsMice']);
         _checkInTime = EstablishmentLodgingHours.tryParse(checkInRaw) != null
             ? checkInRaw
@@ -242,11 +252,39 @@ class _EstablishmentDashboardScreenState
     }
   }
 
+  Future<void> _onRoomsInventoryChanged(AeRoomInventory inventory) async {
+    if (!mounted) return;
+    setState(() {
+      _roomCount = inventory.roomCount;
+      _roomLabels = List<String>.from(inventory.roomLabels);
+    });
+    final nextProfile = AeRegisterProfile(
+      aeId: _uid,
+      aeName: _businessName,
+      municipalityId: _municipalityId,
+      municipality: _municipality,
+      totalRooms: _schema.tracksRooms ? inventory.roomCount : 0,
+      aeType: _aeType,
+      classificationCode: _classificationCode,
+      category: _category,
+    );
+    try {
+      await AeRegisterService.refreshProfileOnHeaders(nextProfile);
+    } catch (e) {
+      debugPrint('[AE Dashboard] room inventory header refresh: $e');
+    }
+    if (!mounted) return;
+    _snack(
+      'Room inventory updated: ${inventory.roomCount} available rooms.',
+    );
+  }
+
   Future<void> _saveReportingProfile({
     required int totalRooms,
     required String aeType,
     required String classificationCode,
     required bool hostsMice,
+    List<String> customAeTypes = const [],
   }) async {
     if (_uid.isEmpty || _savingProfile) return;
     final before = <String, dynamic>{
@@ -276,6 +314,11 @@ class _EstablishmentDashboardScreenState
     if (capture == null || !mounted) return;
     setState(() => _savingProfile = true);
     try {
+      final extras = AeTypeCatalog.parseExtras([
+        ...customAeTypes,
+        if (!AeTypeCatalog.isOfficial(aeType)) aeType,
+      ]);
+      // Persist first — do not update local UI until the write succeeds.
       await SignOffService.writeStandalone(
         subjectType: SignOffSubjects.aeProfile,
         subjectId: _uid,
@@ -292,27 +335,72 @@ class _EstablishmentDashboardScreenState
         snapshot: after,
         changes: [SignOffChange(op: 'edit', label: 'DOT reporting profile', before: before, after: after)],
       );
+      // Canonical capacity field is `roomCount` (also mirrored as totalRooms).
+      // Expand sequential roomLabels when Profile capacity increases.
+      List<String>? nextLabels;
+      if (_schema.tracksRooms) {
+        nextLabels = AeRoomInventoryService.parseLabels(
+          _roomLabels,
+          fallbackCount: _roomCount,
+        );
+        for (var i = 1; i <= totalRooms; i++) {
+          final s = '$i';
+          if (!nextLabels.any((e) => e.toLowerCase() == s)) nextLabels.add(s);
+        }
+        // Keep any custom (non-sequential) labels already saved.
+        for (final e in _roomLabels) {
+          if (!nextLabels.any((x) => x.toLowerCase() == e.toLowerCase())) {
+            nextLabels.add(e);
+          }
+        }
+      }
       await EstablishmentFirestoreWrite.mergeFields(_uid, {
-        if (_schema.tracksRooms) 'roomCount': totalRooms,
+        if (_schema.tracksRooms) ...{
+          'roomCount': totalRooms,
+          'totalRooms': totalRooms,
+          if (nextLabels != null) 'roomLabels': nextLabels,
+        },
         'aeType': aeType,
         'classificationCode': classificationCode,
         'hostsMice': hostsMice,
+        'customAeTypes': extras,
       });
+
+      final nextProfile = AeRegisterProfile(
+        aeId: _uid,
+        aeName: _businessName,
+        municipalityId: _municipalityId,
+        municipality: _municipality,
+        totalRooms: _schema.tracksRooms ? totalRooms : 0,
+        aeType: aeType,
+        classificationCode: classificationCode,
+        category: _category,
+      );
+      // Draft months only — submitted / signed months keep their capacity snapshot.
+      try {
+        await AeRegisterService.refreshProfileOnHeaders(nextProfile);
+      } catch (e) {
+        debugPrint('[AE Dashboard] draft header refresh: $e');
+      }
+
       if (!mounted) return;
       final tab = _currentTab;
       setState(() {
-        if (_schema.tracksRooms) _roomCount = totalRooms;
+        if (_schema.tracksRooms) {
+          _roomCount = totalRooms;
+          if (nextLabels != null) _roomLabels = nextLabels;
+        }
         _aeType = aeType;
         _classificationCode = classificationCode;
+        _customAeTypes = extras;
         _hostsMice = hostsMice;
         final i = _tabs.indexOf(tab);
         _selectedIndex = i < 0 ? 0 : i;
       });
-      _snack('Reporting profile saved and signed. Monthly reports updated.');
-      unawaited(
-        AeRegisterService.refreshProfileOnHeaders(_profile).catchError(
-          (Object e) => debugPrint('[AE Dashboard] header refresh: $e'),
-        ),
+      _snack(
+        _schema.tracksRooms
+            ? 'Profile saved. DOT Register now uses $totalRooms available rooms for draft months.'
+            : 'Reporting profile saved and signed.',
       );
     } catch (e) {
       _snack('Save failed: $e', error: true);
@@ -445,16 +533,28 @@ class _EstablishmentDashboardScreenState
   }
 
   Future<void> _addGalleryPhoto() async {
-    if (_uid.isEmpty || _galleryBusy) return;
+    if (_galleryBusy) return;
+    if (_uid.isEmpty) {
+      _snack('Sign in to add photos.', error: true);
+      return;
+    }
     setState(() => _galleryBusy = true);
+    final before = _galleryUrls.length;
     try {
       final next = await EstablishmentGalleryService.pickAndUpload(
         establishmentId: _uid,
         currentUrls: _galleryUrls,
       );
       if (!mounted) return;
+      if (next == null) return;
       setState(() => _galleryUrls = next);
-      _snack('Photo added. Tourists will see it on your map profile.');
+      final added = next.length - before;
+      if (added <= 0) return;
+      _snack(
+        added == 1
+            ? 'Photo added. Tourists will see it on your map profile.'
+            : '$added photos added. Tourists will see them on your map profile.',
+      );
     } catch (e) {
       if (!mounted) return;
       final msg = e.toString().replaceFirst('Bad state: ', '');
@@ -468,15 +568,19 @@ class _EstablishmentDashboardScreenState
     if (!mounted) return;
     final messenger = ScaffoldMessenger.maybeOf(context);
     if (messenger == null) return;
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          backgroundColor: error ? Colors.red.shade700 : null,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+    try {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: error ? Colors.red.shade700 : null,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+    } catch (e) {
+      debugPrint('[AE Dashboard] snack skipped: $e');
+    }
   }
 
   Future<void> _removeGalleryPhoto(int index) async {
@@ -771,11 +875,15 @@ class _EstablishmentDashboardScreenState
     switch (_currentTab) {
       case _AeTab.register:
         return AeRegisterWorkspace(
-          key: ValueKey('register-$_uid-$_roomCount-$_aeType-$_classificationCode'),
+          key: ValueKey(
+            'register-$_uid-$_roomCount-${_roomLabels.length}-$_aeType-$_classificationCode',
+          ),
           profile: _profile,
           schema: _schema,
+          roomLabels: _roomLabels,
           banner: _statusBannerDismissed ? null : _statusBanner(),
           onOpenProfile: () => _selectTab(_tabs.indexOf(_AeTab.profile)),
+          onRoomsChanged: _onRoomsInventoryChanged,
         );
       case _AeTab.events:
         return MiceRegisterWorkspace(
@@ -867,8 +975,11 @@ class _EstablishmentDashboardScreenState
                     totalRooms: _roomCount,
                     aeType: _aeType,
                     classificationCode: _classificationCode,
+                    customAeTypes: _customAeTypes,
                     hostsMice: _hostsMice,
                     saving: _savingProfile,
+                    establishmentId: _uid,
+                    businessName: _businessName,
                     onSave: _saveReportingProfile,
                   ),
                   const SizedBox(height: 18),
@@ -883,6 +994,7 @@ class _EstablishmentDashboardScreenState
                   EstablishmentMapPinCard(
                     latitude: _latitude,
                     longitude: _longitude,
+                    municipalityId: _municipalityId,
                     locating: _locating,
                     saving: _savingLocation,
                     onBusyChanged: (b) {

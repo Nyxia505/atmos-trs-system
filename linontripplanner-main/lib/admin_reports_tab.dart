@@ -10,7 +10,6 @@ import 'widgets/reports/report_analytics_view.dart';
 import 'widgets/reports/report_export_dialog.dart';
 import 'widgets/reports/report_preview_page.dart';
 import 'widgets/tourism_plan_ui.dart';
-import 'trip_plan_host_bridge.dart';
 
 /// Supplies the province-wide DOT Excel / PDF panel. The trip planner package
 /// cannot import that panel, so the host app sets this before the portal opens.
@@ -87,6 +86,40 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
         _loading = false;
       });
     }
+  }
+
+  void _selectKind(ReportKind kind) {
+    if (kind == _kind) return;
+    setState(() {
+      _kind = kind;
+      // Drop filters the new report does not support so results stay honest.
+      _filters = _prune(_filters, kind);
+    });
+    _load();
+  }
+
+  static ReportFilters _prune(ReportFilters filters, ReportKind kind) {
+    final supported = kind.supportedFilters;
+    return ReportFilters(
+      scope: supported.contains(ReportFilterField.municipality)
+          ? filters.scope
+          : ReportScope.overall,
+      dateRange: supported.contains(ReportFilterField.dateRange)
+          ? filters.dateRange
+          : null,
+      municipality: supported.contains(ReportFilterField.municipality)
+          ? filters.municipality
+          : null,
+      touristSpot: supported.contains(ReportFilterField.touristSpot)
+          ? filters.touristSpot
+          : null,
+      eventId: supported.contains(ReportFilterField.event)
+          ? filters.eventId
+          : null,
+      transportType: supported.contains(ReportFilterField.transportType)
+          ? filters.transportType
+          : null,
+    );
   }
 
   Future<bool> _isAuthorizedToExport() async {
@@ -257,21 +290,30 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
       builder: (context, constraints) {
         final pad = constraints.maxWidth < 620 ? 14.0 : 20.0;
         final dotReports = AdminReportsTab.dotReportsBuilder;
-        final hostDotReports = TripPlanHostBridge.officialDotReports;
-        final officialDotPanel = dotReports != null
-            ? dotReports(context, _filters)
-            : hostDotReports?.call(context);
         return SingleChildScrollView(
           padding: EdgeInsets.fromLTRB(pad, 20, pad, 36),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (officialDotPanel != null) ...[
+              if (dotReports != null) ...[
                 _sectionTitle('Official DOT forms'),
+                const SizedBox(height: 6),
+                const Text(
+                  'Same forms as ATMOS TRS tourism@gmail.com: preview, then Excel or PDF.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.35,
+                    color: AppColors.textGrey,
+                  ),
+                ),
                 const SizedBox(height: 12),
-                officialDotPanel,
-                const SizedBox(height: 24),
+                dotReports(context, _filters),
+                const SizedBox(height: 28),
               ],
+              _sectionTitle('Exports & summaries'),
+              const SizedBox(height: 12),
+              _reportCards(),
+              const SizedBox(height: 24),
               _sectionTitle('Analytics'),
               const SizedBox(height: 12),
               _analytics(),
@@ -279,6 +321,35 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
           ),
         );
       },
+    );
+  }
+
+  Widget _reportCards() {
+    return Container(
+      decoration: TourismPlanUi.planCardDecoration(),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          for (final kind in ReportKind.values) ...[
+            _ReportTile(
+              kind: kind,
+              selected: kind == _kind,
+              busy: _exporting,
+              // Every report honours the LGU scope, so each card states the
+              // one it will download.
+              scope: _filters.scopeLabel,
+              scopedToOneLgu: !_filters.isOverall,
+              onSelect: () => _selectKind(kind),
+              onPreview: () => _openPreview(kind),
+              onExport: () => _export(context, kind),
+              onManage: kind == ReportKind.matrixFares
+                  ? widget.onOpenMatrixFares
+                  : null,
+            ),
+            if (kind != ReportKind.values.last) const Divider(height: 1),
+          ],
+        ],
+      ),
     );
   }
 
@@ -394,29 +465,95 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
         else ...[
           ReportMetricGrid(metrics: dataset.metrics),
           const SizedBox(height: 14),
-          _chartsLiveInTheReportNote(),
+          _chartsLiveInTheReportNote(dataset),
         ],
       ],
     );
   }
 
-  Widget _chartsLiveInTheReportNote() {
-    return Align(
-      alignment: Alignment.centerRight,
-      child: OutlinedButton.icon(
-        onPressed: _exporting ? null : () => _openPreview(_kind),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: AppColors.textDark,
-          side: BorderSide(
-            color: AppColors.primary.withValues(alpha: 0.35),
-          ),
-          padding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 13,
-          ),
-        ),
-        icon: const Icon(Icons.visibility_outlined, size: 18),
-        label: const Text('Open preview'),
+  /// The tab shows headline numbers only; charts and detail tables belong to
+  /// the preview and the downloaded file. Say where they went.
+  Widget _chartsLiveInTheReportNote(ReportDataset dataset) {
+    final chartCount = dataset.charts.where((c) => c.hasData).length;
+    final tableCount = dataset.tables.where((t) => !t.isEmpty).length;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: TourismPlanUi.planCardDecoration(),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final narrow = constraints.maxWidth < 520;
+          final message = Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(
+                Icons.insert_chart_outlined,
+                size: 20,
+                color: AppColors.primary,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Charts and detailed tables are in the report',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textDark,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '$chartCount ${chartCount == 1 ? 'chart' : 'charts'} and '
+                      '$tableCount detailed '
+                      '${tableCount == 1 ? 'table' : 'tables'} are included in '
+                      'the preview and in every exported PDF, CSV, and Excel '
+                      'file, using these same filters.',
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        color: AppColors.textGrey,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+
+          final action = OutlinedButton.icon(
+            onPressed: _exporting ? null : () => _openPreview(_kind),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.textDark,
+              side: BorderSide(
+                color: AppColors.primary.withValues(alpha: 0.35),
+              ),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 13,
+              ),
+            ),
+            icon: const Icon(Icons.visibility_outlined, size: 18),
+            label: const Text('Open preview'),
+          );
+
+          if (narrow) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [message, const SizedBox(height: 12), action],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: message),
+              const SizedBox(width: 14),
+              action,
+            ],
+          );
+        },
       ),
     );
   }
@@ -473,6 +610,160 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
       letterSpacing: 0.6,
     ),
   );
+}
+
+class _ReportTile extends StatelessWidget {
+  final ReportKind kind;
+  final bool selected;
+  final bool busy;
+
+  /// The LGU scope this card will preview and export.
+  final String scope;
+  final bool scopedToOneLgu;
+  final VoidCallback onSelect;
+  final VoidCallback onPreview;
+  final VoidCallback onExport;
+
+  /// Matrix Fares only: opens the existing fare management tab.
+  final VoidCallback? onManage;
+
+  const _ReportTile({
+    required this.kind,
+    required this.selected,
+    required this.busy,
+    required this.scope,
+    required this.scopedToOneLgu,
+    required this.onSelect,
+    required this.onPreview,
+    required this.onExport,
+    this.onManage,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onSelect,
+      child: Container(
+        color: selected ? AppColors.listTilePeach : Colors.transparent,
+        padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final narrow = constraints.maxWidth < 560;
+            final label = Row(
+              children: [
+                CircleAvatar(
+                  backgroundColor: AppColors.primary.withValues(alpha: 0.1),
+                  child: Icon(kind.icon, color: AppColors.primary),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        kind.title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textDark,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        kind.subtitle,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: AppColors.textGrey,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      _scopePill(),
+                    ],
+                  ),
+                ),
+              ],
+            );
+
+            final actions = Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: narrow ? WrapAlignment.start : WrapAlignment.end,
+              children: [
+                if (onManage != null)
+                  TextButton(
+                    onPressed: busy ? null : onManage,
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppColors.primary,
+                    ),
+                    child: const Text('Manage'),
+                  ),
+                OutlinedButton(
+                  onPressed: busy ? null : onPreview,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.textDark,
+                    side: BorderSide(
+                      color: AppColors.primary.withValues(alpha: 0.35),
+                    ),
+                  ),
+                  child: const Text('Preview'),
+                ),
+                FilledButton.tonal(
+                  onPressed: busy ? null : onExport,
+                  child: const Text('Export'),
+                ),
+              ],
+            );
+
+            if (narrow) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [label, const SizedBox(height: 12), actions],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(child: label),
+                const SizedBox(width: 12),
+                actions,
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _scopePill() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      decoration: BoxDecoration(
+        color: scopedToOneLgu
+            ? AppColors.primary.withValues(alpha: 0.12)
+            : Colors.black.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            scopedToOneLgu
+                ? Icons.location_city_outlined
+                : Icons.public_outlined,
+            size: 13,
+            color: scopedToOneLgu ? AppColors.primary : AppColors.textGrey,
+          ),
+          const SizedBox(width: 5),
+          Text(
+            scope,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: scopedToOneLgu ? AppColors.primary : AppColors.textGrey,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// Hosts [ReportPreviewPage] so the Export button there can show its own

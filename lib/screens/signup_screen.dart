@@ -125,6 +125,9 @@ class _SignupScreenState extends State<SignupScreen> {
   int _currentStep = 0;
   int _personalDetailsSubStep =
       0; // 0: Terms, 1: Basic, 2: Personal, 3: Contact, 4: Family
+  /// Furthest sub-step opened so users can jump back without losing later data.
+  int _highestSubStepReached = 0;
+  bool _leaveDialogVisible = false;
 
   // Personal Details Controllers
   final _firstNameController = TextEditingController();
@@ -202,8 +205,13 @@ class _SignupScreenState extends State<SignupScreen> {
   static const Color _requiredAccent = Color(0xFFEF4444);
 
   /// Mock visual step (0–2): Personal Details → Personal Info → Contact.
-  int get _visualStepIndex {
-    switch (_personalDetailsSubStep) {
+  int get _visualStepIndex => _visualIndexForSubStep(_personalDetailsSubStep);
+
+  int get _highestVisualStepIndex =>
+      _visualIndexForSubStep(_highestSubStepReached);
+
+  static int _visualIndexForSubStep(int subStep) {
+    switch (subStep) {
       case 0:
       case 1:
         return 0;
@@ -211,6 +219,18 @@ class _SignupScreenState extends State<SignupScreen> {
         return 1;
       default:
         return 2;
+    }
+  }
+
+  /// Progress chips map to the named registration pages (not Terms).
+  static int _subStepForVisualIndex(int visualIndex) {
+    switch (visualIndex) {
+      case 0:
+        return 1;
+      case 1:
+        return 2;
+      default:
+        return 3;
     }
   }
 
@@ -745,6 +765,7 @@ class _SignupScreenState extends State<SignupScreen> {
       _pendingContactEmailBaseline = pending.contactEmail;
       _currentStep = 0;
       _personalDetailsSubStep = 3; // Contact & Address (email)
+      _highestSubStepReached = 3;
       _agreeToTerms = true;
       _hasReviewedPrivacy = true;
       _hasReviewedTerms = true;
@@ -1026,6 +1047,9 @@ class _SignupScreenState extends State<SignupScreen> {
       if (_personalDetailsSubStep < 4) {
         setState(() {
           _personalDetailsSubStep++;
+          if (_personalDetailsSubStep > _highestSubStepReached) {
+            _highestSubStepReached = _personalDetailsSubStep;
+          }
         });
         return;
       }
@@ -1101,9 +1125,94 @@ class _SignupScreenState extends State<SignupScreen> {
   }
 
   void _previousStep() {
+    _onSignupBack();
+  }
+
+  void _onSignupBack() {
+    if (_isSubmitting || _registrationInFlight) return;
     if (_personalDetailsSubStep > 0) {
       setState(() => _personalDetailsSubStep--);
+      return;
     }
+    unawaited(_confirmLeaveRegistration());
+  }
+
+  void _goToVisualStep(int visualIndex) {
+    if (_isSubmitting || _registrationInFlight) return;
+    if (visualIndex < 0 || visualIndex > _highestVisualStepIndex) return;
+    if (visualIndex == _visualStepIndex) return;
+    final target = _subStepForVisualIndex(visualIndex);
+    if (target > _highestSubStepReached) return;
+    setState(() => _personalDetailsSubStep = target);
+  }
+
+  Future<void> _confirmLeaveRegistration({VoidCallback? onLeave}) async {
+    if (_isSubmitting || _registrationInFlight || _leaveDialogVisible) return;
+    _leaveDialogVisible = true;
+    final leave = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Leave registration?'),
+        content: const Text(
+          'Are you sure you want to leave registration? Your entered information may be lost.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Leave Registration'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            style: FilledButton.styleFrom(
+              backgroundColor: TouristSignupChrome.heroOrange,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Continue Registration'),
+          ),
+        ],
+      ),
+    );
+    _leaveDialogVisible = false;
+    if (leave == true && mounted) {
+      (onLeave ?? _leaveRegistration)();
+    }
+  }
+
+  void _leaveRegistration() {
+    if (Navigator.canPop(context)) {
+      Navigator.pop(context);
+      return;
+    }
+    openLoginFromSignup(context);
+  }
+
+  void _revealStepForSnapshotError(String error) {
+    final lower = error.toLowerCase();
+    final int target;
+    if (lower.contains('parent') || lower.contains('guardian')) {
+      target = 4;
+    } else if (lower.contains('data privacy') ||
+        lower.contains('terms and conditions') ||
+        lower.contains('agree to the terms')) {
+      target = 0;
+    } else if (lower.contains('first name') || lower.contains('last name')) {
+      target = 1;
+    } else if (lower.contains('sex') ||
+        lower.contains('nationality') ||
+        lower.contains('date of birth') ||
+        lower.contains('birth')) {
+      target = 2;
+    } else {
+      target = 3;
+    }
+    if (target != _personalDetailsSubStep) {
+      setState(() => _personalDetailsSubStep = target);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _formKey.currentState?.validate();
+    });
   }
 
   String _formatPhoneNumber(String phone) {
@@ -1555,6 +1664,8 @@ class _SignupScreenState extends State<SignupScreen> {
         _registrationSnack(snapshotError, background: Colors.red.shade700);
         if (snapshotError == _passwordMismatchMessage) {
           _focusConfirmPasswordMismatch();
+        } else {
+          _revealStepForSnapshotError(snapshotError);
         }
         return;
       }
@@ -1897,6 +2008,8 @@ class _SignupScreenState extends State<SignupScreen> {
         _registrationSnack(snapshotError, background: Colors.red.shade700);
         if (snapshotError == _passwordMismatchMessage) {
           _focusConfirmPasswordMismatch();
+        } else {
+          _revealStepForSnapshotError(snapshotError);
         }
         return;
       }
@@ -2263,20 +2376,20 @@ class _SignupScreenState extends State<SignupScreen> {
       ),
       errorMaxLines: 2,
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         borderSide: BorderSide(color: _formBorderColor, width: 1),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
-        borderSide: const BorderSide(color: AppTheme.brandOrange, width: 1.8),
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: AppTheme.brandOrange, width: 2),
       ),
       errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         borderSide: BorderSide(color: Colors.red.shade300, width: 1),
       ),
       focusedErrorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16),
-        borderSide: BorderSide(color: Colors.red.shade400, width: 1.8),
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide(color: Colors.red.shade400, width: 2),
       ),
     );
   }
@@ -2318,47 +2431,55 @@ class _SignupScreenState extends State<SignupScreen> {
     );
   }
 
+  Widget _buildAlreadyHaveAccountLine({bool center = false}) {
+    final muted = _isDesktopGlass
+        ? Colors.white.withValues(alpha: 0.9)
+        : TouristSignupChrome.textMuted;
+    return Wrap(
+      alignment: center ? WrapAlignment.center : WrapAlignment.start,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text(
+          'Already have an account? ',
+          style: TextStyle(
+            fontSize: 13.5,
+            height: 1.35,
+            fontWeight: FontWeight.w500,
+            color: muted,
+          ),
+        ),
+        GestureDetector(
+          onTap: () => unawaited(
+            _confirmLeaveRegistration(
+              onLeave: () => openLoginFromSignup(context),
+            ),
+          ),
+          child: const Text(
+            'Log in',
+            style: TextStyle(
+              color: AppTheme.brandOrange,
+              fontWeight: FontWeight.w800,
+              fontSize: 13.5,
+              decoration: TextDecoration.underline,
+              decorationColor: AppTheme.brandOrange,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildSignupIntro() {
     if (_isDesktopGlass) {
-      final bodyStyle = TextStyle(
-        fontSize: 14,
-        color: Colors.white,
-        height: 1.45,
-        fontWeight: FontWeight.w600,
-      );
-      return RichText(
-        textAlign: TextAlign.center,
-        text: TextSpan(
-          style: bodyStyle,
-          children: [
-            const TextSpan(
-              text:
-                  'Please provide accurate and valid details only to help us serve you better. If you already have an account, ',
-            ),
-            WidgetSpan(
-              alignment: PlaceholderAlignment.baseline,
-              baseline: TextBaseline.alphabetic,
-              child: GestureDetector(
-                onTap: () => openLoginFromSignup(context),
-                child: const Text(
-                  'Log in',
-                  style: TextStyle(
-                    color: AppTheme.brandOrange,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                    decoration: TextDecoration.underline,
-                    decorationColor: AppTheme.brandOrange,
-                  ),
-                ),
-              ),
-            ),
-            const TextSpan(text: ' instead.'),
-          ],
-        ),
-      );
+      return _buildAlreadyHaveAccountLine(center: true);
     }
-
-    return _buildStepInfoBanner();
+    if (_personalDetailsSubStep == 0) {
+      return _buildStepInfoBanner();
+    }
+    if (_personalDetailsSubStep == 1) {
+      return _buildAlreadyHaveAccountLine();
+    }
+    return const SizedBox.shrink();
   }
 
   Widget _buildStepInfoBanner() {
@@ -2424,7 +2545,11 @@ class _SignupScreenState extends State<SignupScreen> {
                   alignment: PlaceholderAlignment.baseline,
                   baseline: TextBaseline.alphabetic,
                   child: GestureDetector(
-                    onTap: () => openLoginFromSignup(context),
+                    onTap: () => unawaited(
+                      _confirmLeaveRegistration(
+                        onLeave: () => openLoginFromSignup(context),
+                      ),
+                    ),
                     child: const Text(
                       'Log in',
                       style: TextStyle(
@@ -2458,9 +2583,9 @@ class _SignupScreenState extends State<SignupScreen> {
       borderRadius: BorderRadius.circular(20),
       boxShadow: [
         BoxShadow(
-          color: Colors.black.withValues(alpha: 0.10),
-          blurRadius: 28,
-          offset: const Offset(0, 12),
+          color: Colors.black.withValues(alpha: 0.06),
+          blurRadius: 18,
+          offset: const Offset(0, 8),
         ),
       ],
     );
@@ -2620,7 +2745,7 @@ class _SignupScreenState extends State<SignupScreen> {
   BoxDecoration _compactDropdownDecoration() {
     return BoxDecoration(
       color: _formFillColor,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(12),
       border: Border.all(color: _formBorderColor),
     );
   }
@@ -2632,6 +2757,8 @@ class _SignupScreenState extends State<SignupScreen> {
         if (_isDesktopGlass) ...[
           TouristSignupProgressTracker(
             visualStepIndex: _visualStepIndex,
+            highestReachedIndex: _highestVisualStepIndex,
+            onStepSelected: _goToVisualStep,
             onDark: true,
           ),
           const SizedBox(height: 16),
@@ -2649,9 +2776,9 @@ class _SignupScreenState extends State<SignupScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (!_isDesktopGlass) ...[
+                    if (!_isDesktopGlass && _personalDetailsSubStep <= 1) ...[
                       _buildSignupIntro(),
-                      const SizedBox(height: 18),
+                      const SizedBox(height: 16),
                     ],
                     _isDesktopGlass
                         ? Theme(
@@ -2677,7 +2804,13 @@ class _SignupScreenState extends State<SignupScreen> {
   @override
   Widget build(BuildContext context) {
     if (_isDesktopGlass) {
-      return Scaffold(
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop) return;
+          _onSignupBack();
+        },
+        child: Scaffold(
         backgroundColor: Colors.transparent,
         body: WebGlassAuthScaffold(
           maxWidth: 560,
@@ -2691,13 +2824,14 @@ class _SignupScreenState extends State<SignupScreen> {
                   Align(
                     alignment: Alignment.centerLeft,
                     child: WebGlassBackButton(
-                      onPressed: () => Navigator.pop(context),
+                      onPressed: _onSignupBack,
                     ),
                   ),
                   const SizedBox(height: 12),
                   TouristSignupBrandRow(
                     onDark: true,
                     tripPlanner: _tripPlannerSignup,
+                    height: 82,
                   ),
                   const SizedBox(height: 16),
                   Text(
@@ -2729,18 +2863,33 @@ class _SignupScreenState extends State<SignupScreen> {
             ),
           ),
         ),
+        ),
       );
     }
 
     final topPad = MediaQuery.paddingOf(context).top;
     final bottomPad = MediaQuery.paddingOf(context).bottom;
-    final heroH = (MediaQuery.sizeOf(context).height * 0.28).clamp(210.0, 260.0);
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    final screenH = MediaQuery.sizeOf(context).height;
+    final compactHeader = screenH < 720;
+    final logoSize = compactHeader ? 68.0 : 76.0;
+    final heroH = compactHeader ? 198.0 : (screenH * 0.24).clamp(210.0, 232.0);
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _onSignupBack();
+      },
+      child: Scaffold(
       backgroundColor: Colors.white,
-      body: SingleChildScrollView(
+      resizeToAvoidBottomInset: true,
+      body: SafeArea(
+        top: false,
+        bottom: false,
+        child: SingleChildScrollView(
         physics: const BouncingScrollPhysics(),
-        padding: EdgeInsets.only(bottom: bottomPad + 8),
+        padding: EdgeInsets.only(bottom: bottomPad + (keyboard > 0 ? 12 : 8)),
         child: Column(
           children: [
             SizedBox(
@@ -2752,105 +2901,88 @@ class _SignupScreenState extends State<SignupScreen> {
                   fit: StackFit.expand,
                   children: [
                     const ColoredBox(color: TouristSignupChrome.heroOrange),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: FractionallySizedBox(
-                        widthFactor: 0.72,
-                        heightFactor: 1,
-                        child: Image.asset(
-                          TouristSignupChrome.heroAsset,
-                          fit: BoxFit.cover,
-                          alignment: const Alignment(0.2, 0),
-                          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                        ),
-                      ),
+                    Image.asset(
+                      TouristSignupChrome.heroAsset,
+                      fit: BoxFit.cover,
+                      alignment: const Alignment(0.15, 0),
+                      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
                     ),
                     DecoratedBox(
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
-                          begin: Alignment.centerLeft,
-                          end: Alignment.centerRight,
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
                           colors: [
-                            TouristSignupChrome.heroOrange,
-                            TouristSignupChrome.heroOrange.withValues(
-                              alpha: 0.94,
-                            ),
                             TouristSignupChrome.heroOrange.withValues(
                               alpha: 0.55,
                             ),
+                            TouristSignupChrome.heroOrange.withValues(
+                              alpha: 0.78,
+                            ),
+                            TouristSignupChrome.heroOrange.withValues(
+                              alpha: 0.92,
+                            ),
                           ],
-                          stops: const [0.0, 0.45, 1.0],
+                          stops: const [0.0, 0.55, 1.0],
                         ),
                       ),
                     ),
                     Padding(
-                      padding: EdgeInsets.fromLTRB(16, topPad + 4, 16, 36),
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          return FittedBox(
-                            fit: BoxFit.scaleDown,
-                            alignment: Alignment.topCenter,
-                            child: SizedBox(
-                              width: constraints.maxWidth,
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  Row(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      IconButton(
-                                        icon: const Icon(
-                                          Icons.arrow_back_ios_new_rounded,
-                                          color: Colors.white,
-                                          size: 18,
-                                        ),
-                                        onPressed: () => Navigator.pop(context),
-                                        tooltip: 'Back',
-                                        padding: EdgeInsets.zero,
-                                        constraints: const BoxConstraints(
-                                          minWidth: 36,
-                                          minHeight: 36,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Expanded(
-                                        child: TouristSignupBrandRow(
-                                          onDark: true,
-                                          tripPlanner: _tripPlannerSignup,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    'Step $_displayStepNumber',
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      fontSize: 28,
-                                      fontWeight: FontWeight.w800,
+                      padding: EdgeInsets.fromLTRB(8, topPad + 2, 8, 24),
+                      child: Column(
+                        children: [
+                          SizedBox(
+                            height: logoSize,
+                            child: Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: IconButton(
+                                    icon: const Icon(
+                                      Icons.arrow_back_ios_new_rounded,
                                       color: Colors.white,
-                                      letterSpacing: 0.2,
+                                      size: 18,
+                                    ),
+                                    onPressed: _onSignupBack,
+                                    tooltip: 'Back',
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(
+                                      minWidth: 44,
+                                      minHeight: 44,
                                     ),
                                   ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    'Registration',
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.white.withValues(
-                                        alpha: 0.92,
-                                      ),
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                                ),
+                                TouristSignupBrandRow(
+                                  onDark: true,
+                                  tripPlanner: _tripPlannerSignup,
+                                  height: logoSize,
+                                ),
+                              ],
                             ),
-                          );
-                        },
+                          ),
+                          SizedBox(height: compactHeader ? 4 : 8),
+                          Text(
+                            'Step $_displayStepNumber',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: compactHeader ? 22 : 26,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white,
+                              letterSpacing: 0.2,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Registration',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.white.withValues(alpha: 0.94),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
@@ -2858,15 +2990,17 @@ class _SignupScreenState extends State<SignupScreen> {
               ),
             ),
             Transform.translate(
-              offset: const Offset(0, -28),
+              offset: const Offset(0, -18),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 18),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Column(
                   children: [
                     TouristSignupProgressTracker(
                       visualStepIndex: _visualStepIndex,
+                      highestReachedIndex: _highestVisualStepIndex,
+                      onStepSelected: _goToVisualStep,
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 14),
                     _buildSignupFormBody(
                       formPadding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
                     ),
@@ -2877,6 +3011,8 @@ class _SignupScreenState extends State<SignupScreen> {
             const TouristSignupFooterMotif(),
           ],
         ),
+      ),
+      ),
       ),
     );
   }
@@ -3006,7 +3142,7 @@ class _SignupScreenState extends State<SignupScreen> {
       children: [
         _buildSubStepHeader(
           'Basic Information',
-          'Let\'s start with your name. This will be used for your tourist ID.',
+          'Enter your name as it appears on your valid ID.',
           Icons.person_outline,
         ),
 
@@ -3079,7 +3215,7 @@ class _SignupScreenState extends State<SignupScreen> {
       children: [
         _buildSubStepHeader(
           'Personal Information',
-          'Tell us more about yourself. This helps us personalize your experience.',
+          'Add the details used on your tourist ID.',
           Icons.info_outline,
         ),
 
@@ -3261,11 +3397,7 @@ class _SignupScreenState extends State<SignupScreen> {
             ),
           ],
         ),
-        const SizedBox(height: 20),
-        if (!_isDesktopGlass) ...[
-          const TouristSignupExploreStrip(),
-          const SizedBox(height: 12),
-        ],
+        const SizedBox(height: 8),
         _buildPersonalDetailsNavButtons(),
       ],
     );
@@ -3277,7 +3409,7 @@ class _SignupScreenState extends State<SignupScreen> {
       children: [
         _buildSubStepHeader(
           'Contact & Address',
-          'How can we reach you? This information keeps your account secure.',
+          'Enter a reachable email, mobile number, and address.',
           Icons.contact_mail_outlined,
         ),
 
@@ -3743,7 +3875,8 @@ class _SignupScreenState extends State<SignupScreen> {
       backgroundColor: TouristSignupChrome.heroOrange,
       foregroundColor: Colors.white,
       elevation: 0,
-      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+      minimumSize: const Size(128, 48),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     );
 
@@ -3808,9 +3941,12 @@ class _SignupScreenState extends State<SignupScreen> {
               TextButton(
                 onPressed: _previousStep,
                 style: TextButton.styleFrom(
-                  foregroundColor: TouristSignupChrome.textMuted,
+                  foregroundColor: _isDesktopGlass
+                      ? Colors.white
+                      : const Color(0xFF4B5563),
+                  minimumSize: const Size(64, 48),
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
+                    horizontal: 12,
                     vertical: 12,
                   ),
                 ),
@@ -3821,11 +3957,14 @@ class _SignupScreenState extends State<SignupScreen> {
               )
             else
               TextButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => unawaited(_confirmLeaveRegistration()),
                 style: TextButton.styleFrom(
-                  foregroundColor: TouristSignupChrome.textMuted,
+                  foregroundColor: _isDesktopGlass
+                      ? Colors.white
+                      : const Color(0xFF4B5563),
+                  minimumSize: const Size(64, 48),
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
+                    horizontal: 12,
                     vertical: 12,
                   ),
                 ),

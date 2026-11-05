@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:atmos_trs_system/config/ae_register_schema.dart';
 import 'package:atmos_trs_system/config/dae_residence_catalog.dart';
 import 'package:atmos_trs_system/models/ae_register.dart';
+import 'package:atmos_trs_system/services/ae_room_inventory_service.dart';
 import 'package:atmos_trs_system/utils/ae_register_calculator.dart';
 import 'package:atmos_trs_system/widgets/ae_register/ae_sheet_kit.dart';
 import 'package:atmos_trs_system/widgets/establishment_dash_tokens.dart';
@@ -23,6 +24,9 @@ class AeRegisterRowDialog extends StatefulWidget {
     required this.showCharges,
     this.initial,
     this.lastRate = 0,
+    this.establishmentId = '',
+    this.roomLabels = const [],
+    this.onInventoryChanged,
   });
 
   final AeRowDialogMode mode;
@@ -34,6 +38,15 @@ class AeRegisterRowDialog extends StatefulWidget {
   final AeRegisterRow? initial;
   final double lastRate;
 
+  /// Authenticated AE id — required to persist "+ Add New Room".
+  final String establishmentId;
+
+  /// Explicit room identifiers from the establishment inventory (optional).
+  final List<String> roomLabels;
+
+  /// Fired after a room is saved so Profile / Register capacity can sync.
+  final ValueChanged<AeRoomInventory>? onInventoryChanged;
+
   static Future<List<AeRegisterRow>?> show(
     BuildContext context, {
     required AeRowDialogMode mode,
@@ -44,6 +57,9 @@ class AeRegisterRowDialog extends StatefulWidget {
     required bool showCharges,
     AeRegisterRow? initial,
     double lastRate = 0,
+    String establishmentId = '',
+    List<String> roomLabels = const [],
+    ValueChanged<AeRoomInventory>? onInventoryChanged,
   }) =>
       showDialog<List<AeRegisterRow>>(
         context: context,
@@ -56,6 +72,9 @@ class AeRegisterRowDialog extends StatefulWidget {
           showCharges: showCharges,
           initial: initial,
           lastRate: lastRate,
+          establishmentId: establishmentId,
+          roomLabels: roomLabels,
+          onInventoryChanged: onInventoryChanged,
         ),
       );
 
@@ -77,8 +96,15 @@ class _AeRegisterRowDialogState extends State<AeRegisterRowDialog> {
   final _chargesA = TextEditingController();
   final _chargesB = TextEditingController();
   String? _error;
+  late int _capacity;
+  late List<String> _labels;
+  bool _addingRoom = false;
 
   bool get _isStay => widget.mode == AeRowDialogMode.stay && widget.schema.tracksNights;
+  bool get _canAddRoom =>
+      widget.schema.tracksRooms &&
+      widget.establishmentId.trim().isNotEmpty &&
+      widget.mode != AeRowDialogMode.edit;
 
   @override
   void initState() {
@@ -98,9 +124,66 @@ class _AeRegisterRowDialogState extends State<AeRegisterRowDialog> {
     _rate.text = rate == 0 ? '' : _fmt(rate);
     _chargesA.text = (i?.chargesA ?? 0) == 0 ? '' : _fmt(i!.chargesA);
     _chargesB.text = (i?.chargesB ?? 0) == 0 ? '' : _fmt(i!.chargesB);
+    _capacity = widget.totalRooms;
+    _labels = AeRoomInventoryService.parseLabels(
+      widget.roomLabels,
+      fallbackCount: widget.totalRooms,
+    );
   }
 
   static String _fmt(double v) => v == v.roundToDouble() ? v.toInt().toString() : v.toString();
+
+  List<String> get _roomOptions {
+    final base = _labels.isNotEmpty
+        ? List<String>.from(_labels)
+        : [for (var r = 1; r <= (_capacity < 0 ? 0 : _capacity); r++) '$r'];
+    final cur = _room.trim();
+    if (cur.isNotEmpty && !base.any((e) => e.toLowerCase() == cur.toLowerCase())) {
+      base.add(cur);
+    }
+    return base;
+  }
+
+  bool _roomOptionValid(String room) {
+    final t = room.trim();
+    if (t.isEmpty) return false;
+    return _roomOptions.any((e) => e.toLowerCase() == t.toLowerCase());
+  }
+
+  Future<void> _addNewRoom() async {
+    if (!_canAddRoom || _addingRoom) return;
+    final inventory = AeRoomInventory(roomCount: _capacity, roomLabels: _labels);
+    final suggested = AeRoomInventoryService.suggestNext(inventory);
+    final entered = await showDialog<String>(
+      context: context,
+      builder: (ctx) => _AddRoomDialog(suggested: suggested),
+    );
+    if (entered == null || !mounted) return;
+    setState(() {
+      _addingRoom = true;
+      _error = null;
+    });
+    try {
+      final next = await AeRoomInventoryService.addRoom(
+        establishmentId: widget.establishmentId,
+        roomId: entered,
+      );
+      if (!mounted) return;
+      setState(() {
+        _capacity = next.roomCount;
+        _labels = List<String>.from(next.roomLabels);
+        _room = entered.trim();
+        _addingRoom = false;
+      });
+      widget.onInventoryChanged?.call(next);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _addingRoom = false;
+        _error = e.toString().replaceFirst('StateError: ', '');
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -150,6 +233,16 @@ class _AeRegisterRowDialogState extends State<AeRegisterRowDialog> {
     final residence = _residence.trim().isEmpty ? DaeResidenceCatalog.unspecified : _residence.trim();
     if (s.tracksRooms) {
       if (_room.trim().isEmpty) return setState(() => _error = 'Pick a room number.');
+      final editingExisting = widget.initial != null;
+      // New stays must use a currently available room; edits may keep a
+      // historical room number that is no longer in the active inventory.
+      if (!editingExisting && !_roomOptionValid(_room)) {
+        return setState(
+          () => _error =
+              'Room ${_room.trim()} is not in the current $_capacity available rooms. '
+              'Use + Add New Room first.',
+        );
+      }
     }
     final phRegion = DaeResidenceCatalog.bucketFor(residence) == DaeResidenceBucket.philippineResident
         ? _phRegion
@@ -207,7 +300,7 @@ class _AeRegisterRowDialogState extends State<AeRegisterRowDialog> {
       AeRowDialogMode.edit => 'Edit record',
     };
     final isPh = DaeResidenceCatalog.bucketFor(_residence) == DaeResidenceBucket.philippineResident;
-    final rooms = widget.totalRooms;
+    final roomOpts = _roomOptions;
     final digits = [FilteringTextInputFormatter.digitsOnly];
     final money = [FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]'))];
 
@@ -255,16 +348,32 @@ class _AeRegisterRowDialogState extends State<AeRegisterRowDialog> {
                 if (s.tracksRooms) ...[
                   const SizedBox(width: 10),
                   SizedBox(
-                    width: 120,
+                    width: 128,
                     child: _field(
                       label: 'Room No.',
-                      child: rooms > 0
+                      child: roomOpts.isNotEmpty
                           ? DropdownButtonFormField<String>(
-                              initialValue: _room.isNotEmpty && int.tryParse(_room) != null && int.parse(_room) <= rooms ? _room : null,
+                              key: ValueKey('room-dd-$_capacity-${roomOpts.length}-$_room'),
+                              initialValue: _roomOptionValid(_room) ? _room : null,
                               isExpanded: true,
+                              menuMaxHeight: 280,
                               decoration: _dec(),
                               items: [
-                                for (var r = 1; r <= rooms; r++) DropdownMenuItem(value: '$r', child: Text('$r')),
+                                for (final r in roomOpts)
+                                  DropdownMenuItem(
+                                    value: r,
+                                    child: Text(
+                                      r,
+                                      style: TextStyle(
+                                        fontWeight: r == _room
+                                            ? FontWeight.w800
+                                            : FontWeight.w500,
+                                        color: r == _room
+                                            ? AeDashTokens.accent
+                                            : AeDashTokens.text,
+                                      ),
+                                    ),
+                                  ),
                               ],
                               onChanged: (v) => setState(() => _room = v ?? ''),
                             )
@@ -277,6 +386,25 @@ class _AeRegisterRowDialogState extends State<AeRegisterRowDialog> {
                   ),
                 ],
               ]),
+              if (_canAddRoom)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: _addingRoom ? null : _addNewRoom,
+                    icon: _addingRoom
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.add_rounded, size: 18),
+                    label: Text(_addingRoom ? 'Saving room…' : '+ Add New Room'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: AeDashTokens.accent,
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                    ),
+                  ),
+                ),
               _field(
                 label: 'Residence / Nationality',
                 child: Autocomplete<String>(
@@ -424,4 +552,93 @@ class _AeRegisterRowDialogState extends State<AeRegisterRowDialog> {
         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
       );
+}
+
+class _AddRoomDialog extends StatefulWidget {
+  const _AddRoomDialog({required this.suggested});
+
+  final String suggested;
+
+  @override
+  State<_AddRoomDialog> createState() => _AddRoomDialogState();
+}
+
+class _AddRoomDialogState extends State<_AddRoomDialog> {
+  late final TextEditingController _ctrl;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.suggested);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final err = AeRoomInventoryService.validateRoomId(_ctrl.text);
+    if (err != null) {
+      setState(() => _error = err);
+      return;
+    }
+    Navigator.pop(context, _ctrl.text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    return AlertDialog(
+      title: const Text('Add New Room'),
+      content: SizedBox(
+        width: width < 480 ? width * 0.9 : 320,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Saves permanently to your establishment inventory and updates '
+              'Total Available Rooms.',
+              style: AeDashTokens.body(size: 12.5),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _ctrl,
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: 'New Room Number',
+                hintText: widget.suggested,
+                errorText: _error,
+                filled: true,
+                fillColor: const Color(0xFFFFF7ED),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: AeDashTokens.accent, width: 1.4),
+                ),
+              ),
+              onChanged: (_) {
+                if (_error != null) setState(() => _error = null);
+              },
+              onSubmitted: (_) => _save(),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: AeDashTokens.accent),
+          onPressed: _save,
+          child: const Text('Save Room'),
+        ),
+      ],
+    );
+  }
 }

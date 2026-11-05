@@ -4,6 +4,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
 import 'package:atmos_trs_system/services/governor_firestore_service.dart';
+import 'package:atmos_trs_system/services/lgu_report_submission_service.dart';
+import 'package:atmos_trs_system/utils/checkin_time.dart';
+import 'package:atmos_trs_system/utils/checkin_visitor_count.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/production_data_filters.dart';
 import 'package:atmos_trs_system/utils/provincial_report_builder.dart';
@@ -65,6 +68,7 @@ class ProvincialTourismSnapshot {
     required this.announcements,
     required this.campaigns,
     required this.loadWarnings,
+    this.reportSubmissions = const [],
   });
 
   final List<Map<String, dynamic>> tourists;
@@ -73,6 +77,7 @@ class ProvincialTourismSnapshot {
   final List<Map<String, dynamic>> announcements;
   final List<Map<String, dynamic>> campaigns;
   final List<String> loadWarnings;
+  final List<LguReportSubmission> reportSubmissions;
 }
 
 /// Province-wide tourism ops data for the Provincial Tourism Office dashboard.
@@ -91,18 +96,50 @@ class ProvincialTourismService {
   Future<ProvincialTourismSnapshot> loadSnapshot({
     bool includeCheckIns = true,
   }) async {
-    final gov = await _governor.loadProvincialSnapshotCacheFirst(
+    final campaignsFuture = loadCampaigns();
+    final reportsFuture = loadReportSubmissions();
+
+    // Cache can contain spots/tourists without check-ins. Always follow with
+    // a server read so visit KPIs are not stuck at zero.
+    var gov = await _governor.loadProvincialSnapshot(
+      getOptions: const GetOptions(source: Source.cache),
       includeCheckIns: includeCheckIns,
     );
-    final campaigns = await loadCampaigns();
+    gov = await _governor.loadProvincialSnapshot(
+      getOptions: const GetOptions(source: Source.server),
+      includeCheckIns: includeCheckIns,
+    );
+
+    final campaigns = await campaignsFuture;
+    final reports = await reportsFuture;
     return ProvincialTourismSnapshot(
       tourists: ProductionDataFilters.realTourists(gov.tourists),
       checkIns: ProductionDataFilters.realCheckIns(gov.checkIns),
       spots: gov.touristSpots,
       announcements: gov.announcements,
       campaigns: campaigns,
-      loadWarnings: gov.loadWarnings,
+      loadWarnings: [
+        ...gov.loadWarnings,
+        if (reports.warning != null) reports.warning!,
+      ],
+      reportSubmissions: reports.submissions,
     );
+  }
+
+  Future<({List<LguReportSubmission> submissions, String? warning})>
+      loadReportSubmissions() async {
+    try {
+      final list =
+          await LguReportSubmissionService().listForProvincial(limit: 250);
+      return (submissions: list, warning: null);
+    } catch (e) {
+      debugPrint('[ProvincialTourism] report submissions: $e');
+      return (
+        submissions: const <LguReportSubmission>[],
+        warning:
+            'Could not load LGU report submissions. LGUs reporting may be incomplete.',
+      );
+    }
   }
 
   Future<List<Map<String, dynamic>>> loadCampaigns() async {
@@ -196,35 +233,16 @@ class ProvincialTourismService {
   }
 
   static ({DateTime start, DateTime end, DateTime prevStart, DateTime prevEnd})
-      rangeForFilter(String filter) {
-    final now = DateTime.now();
-    final end = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
-    late DateTime start;
-    late DateTime prevStart;
-    late DateTime prevEnd;
-    switch (filter) {
-      case 'This Week':
-        final weekday = now.weekday; // Mon=1
-        start = DateTime(now.year, now.month, now.day)
-            .subtract(Duration(days: weekday - 1));
-        prevEnd = start.subtract(const Duration(milliseconds: 1));
-        prevStart = prevEnd.subtract(const Duration(days: 6));
-        prevStart = DateTime(prevStart.year, prevStart.month, prevStart.day);
-        break;
-      case 'This Year':
-        start = DateTime(now.year, 1, 1);
-        prevStart = DateTime(now.year - 1, 1, 1);
-        prevEnd = DateTime(now.year - 1, 12, 31, 23, 59, 59, 999);
-        break;
-      case 'This Month':
-      default:
-        start = DateTime(now.year, now.month, 1);
-        final prevMonth = DateTime(now.year, now.month - 1, 1);
-        prevStart = prevMonth;
-        prevEnd = DateTime(now.year, now.month, 0, 23, 59, 59, 999);
-        break;
-    }
-    return (start: start, end: end, prevStart: prevStart, prevEnd: prevEnd);
+      rangeForFilter(String filter, [DateTime? now]) {
+    final clock = now ?? DateTime.now();
+    final current = manilaRangeForFilter(filter, clock);
+    final previous = manilaPreviousRangeForFilter(filter, clock);
+    return (
+      start: current.startDate,
+      end: current.endDateInclusive,
+      prevStart: previous.startDate,
+      prevEnd: previous.endDateInclusive,
+    );
   }
 
   static List<Map<String, dynamic>> checkInsInRange(
@@ -233,6 +251,13 @@ class ProvincialTourismService {
     DateTime end,
   ) =>
       filterCheckInsInDateRange(checkIns, start, end);
+
+  static List<Map<String, dynamic>> checkInsForFilter(
+    List<Map<String, dynamic>> checkIns,
+    String filter, {
+    DateTime? now,
+  }) =>
+      checkInsInManilaFilter(checkIns, filter, now: now);
 
   static String municipalityIdOf(Map<String, dynamic> row) {
     final mid = row['municipalityId']?.toString().trim() ?? '';
@@ -254,11 +279,11 @@ class ProvincialTourismService {
     required List<Map<String, dynamic>> checkIns,
     required List<Map<String, dynamic>> spots,
     required String timeFilter,
+    DateTime? now,
   }) {
-    final range = rangeForFilter(timeFilter);
-    final current = checkInsInRange(checkIns, range.start, range.end);
-    final previous =
-        checkInsInRange(checkIns, range.prevStart, range.prevEnd);
+    final clock = now ?? DateTime.now();
+    final currentRange = manilaRangeForFilter(timeFilter, clock);
+    final previousRange = manilaPreviousRangeForFilter(timeFilter, clock);
 
     final arrivals = <String, int>{};
     final prevArrivals = <String, int>{};
@@ -285,21 +310,26 @@ class ProvincialTourismService {
       }
     }
 
-    void ingest(List<Map<String, dynamic>> rows, Map<String, int> bucket,
-        {bool trackUnique = false}) {
-      for (final c in rows) {
-        final id = municipalityIdOf(c);
-        if (id.isEmpty || !bucket.containsKey(id)) continue;
-        bucket[id] = (bucket[id] ?? 0) + 1;
-        if (trackUnique) {
-          final uid = GovernorFirestoreService.checkInUserId(c);
-          if (uid.isNotEmpty) unique[id]!.add(uid);
-        }
+    void ingest(
+      Map<String, dynamic> checkIn,
+      ManilaRange range,
+      Map<String, int> bucket, {
+      bool trackUnique = false,
+    }) {
+      if (!checkInInManilaRange(checkIn, range)) return;
+      final id = municipalityIdOf(checkIn);
+      if (id.isEmpty || !bucket.containsKey(id)) return;
+      bucket[id] = (bucket[id] ?? 0) + checkInVisitorCount(checkIn);
+      if (trackUnique) {
+        final uid = GovernorFirestoreService.checkInUserId(checkIn);
+        if (uid.isNotEmpty) unique[id]!.add(uid);
       }
     }
 
-    ingest(current, arrivals, trackUnique: true);
-    ingest(previous, prevArrivals);
+    for (final checkIn in checkIns) {
+      ingest(checkIn, currentRange, arrivals, trackUnique: true);
+      ingest(checkIn, previousRange, prevArrivals);
+    }
 
     final list = getMisamisOccidentalMunicipalities()
         .map(
@@ -427,6 +457,31 @@ class ProvincialTourismService {
     if (current.contains(id)) return;
     current.add(id);
     await prefs.setStringList(_ackPrefsKey, current);
+  }
+
+  /// Distinct LGUs with a genuine DOT/OPTACA submission overlapping [timeFilter].
+  /// Rejected and withdrawn packages do not count. Visits alone do not count.
+  static int lgusReportingCount(
+    List<LguReportSubmission> submissions,
+    String timeFilter, {
+    DateTime? now,
+  }) {
+    final range = manilaRangeForFilter(timeFilter, now ?? DateTime.now());
+    final ids = <String>{};
+    for (final submission in submissions) {
+      if (submission.status == LguReportSubmissionStatus.rejected ||
+          submission.status == LguReportSubmissionStatus.withdrawn) {
+        continue;
+      }
+      final start = manilaCalendarDate(submission.periodStart);
+      final end = manilaCalendarDate(submission.periodEnd);
+      final overlaps = !end.isBefore(range.startDate) &&
+          !start.isAfter(range.endDateInclusive);
+      if (!overlaps) continue;
+      final id = normalizeMunicipalityId(submission.municipalityId);
+      if (isMisamisOccidentalMunicipalityId(id)) ids.add(id);
+    }
+    return ids.length;
   }
 
   static Map<String, int> localForeignCounts(

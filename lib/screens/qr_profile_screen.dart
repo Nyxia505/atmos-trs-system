@@ -9,6 +9,7 @@ import 'package:gal/gal.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
+import 'package:atmos_trs_system/navigation/pending_checkin_navigation.dart';
 import 'package:atmos_trs_system/services/qr_registry_service.dart';
 
 class QrProfileScreen extends StatefulWidget {
@@ -18,6 +19,8 @@ class QrProfileScreen extends StatefulWidget {
     required this.fullName,
     required this.location,
     this.isAfterRegistration = false,
+    this.continueRoute = '/dashboard',
+    this.displayTouristId = '',
   });
 
   /// Firebase Auth UID of the logged-in tourist (encoded in QR as tourist_id).
@@ -25,6 +28,13 @@ class QrProfileScreen extends StatefulWidget {
   final String fullName;
   final String location;
   final bool isAfterRegistration;
+
+  /// After registration success, Continue navigates here unless a pending
+  /// entry QR exists (then `/qr-resume`).
+  final String continueRoute;
+
+  /// Human-readable MO-… id shown under the success heading (not the QR payload).
+  final String displayTouristId;
 
   /// JSON payload for the tourist QR: {"type":"tourist","tourist_id":"<uid>"}.
   static String buildTouristQrData(String firebaseUid) {
@@ -206,7 +216,7 @@ class _QrProfileScreenState extends State<QrProfileScreen> {
                   ),
                   const SizedBox(height: 16),
                   const Text(
-                    'Registration Successful!',
+                    'Registration Successful',
                     style: TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.bold,
@@ -215,10 +225,14 @@ class _QrProfileScreenState extends State<QrProfileScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Your Tourist ID has been generated',
+                    widget.displayTouristId.trim().isNotEmpty
+                        ? 'Your Tourist ID: ${widget.displayTouristId.trim()}'
+                        : 'Your personal Tourist QR is ready.',
+                    textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 14,
-                      color: QrProfileScreen._textMuted.withOpacity(0.8),
+                      color: QrProfileScreen._textMuted.withValues(alpha: 0.85),
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                   const SizedBox(height: 32),
@@ -420,7 +434,11 @@ class _QrProfileScreenState extends State<QrProfileScreen> {
                       ),
                     ),
                     label: Text(
-                      _isSaving ? 'Saving QR...' : 'Save QR Code',
+                      _isSaving
+                          ? 'Saving QR...'
+                          : (widget.isAfterRegistration
+                              ? 'Download My QR Code'
+                              : 'Save QR Code'),
                     ),
                   ),
                 ),
@@ -430,8 +448,14 @@ class _QrProfileScreenState extends State<QrProfileScreen> {
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton(
-                      onPressed: () {
-                        Navigator.pushReplacementNamed(context, '/dashboard');
+                      onPressed: () async {
+                        if (await openQrDestinationIfPending(context)) return;
+                        if (!context.mounted) return;
+                        Navigator.pushNamedAndRemoveUntil(
+                          context,
+                          widget.continueRoute,
+                          (route) => false,
+                        );
                       },
                       style: FilledButton.styleFrom(
                         backgroundColor: AppTheme.primaryDark,
@@ -442,7 +466,7 @@ class _QrProfileScreenState extends State<QrProfileScreen> {
                         ),
                       ),
                       child: const Text(
-                        'Continue to Dashboard',
+                        'Continue to Home',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,

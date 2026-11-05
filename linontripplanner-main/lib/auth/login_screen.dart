@@ -76,13 +76,32 @@ class _LoginScreenState extends State<LoginScreen> {
       unawaited(bootstrapAppFirestoreOnce());
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
+      final feedback = _loginFeedback(e);
+      if (feedback.clearPassword) {
+        _password.clear();
+      }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_friendlyAuthMessage(e))),
+        SnackBar(
+          content: Text(feedback.message),
+          action: feedback.signUp
+              ? SnackBarAction(
+                  label: 'Sign Up',
+                  onPressed: _openSignUp,
+                )
+              : feedback.forgotPassword
+                  ? SnackBarAction(
+                      label: 'Forgot Password',
+                      onPressed: _forgotPassword,
+                    )
+                  : null,
+        ),
       );
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Sign in failed: $e')),
+        const SnackBar(
+          content: Text('Could not sign in. Please try again.'),
+        ),
       );
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -108,23 +127,75 @@ class _LoginScreenState extends State<LoginScreen> {
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_friendlyAuthMessage(e))),
+        SnackBar(content: Text(_loginFeedback(e).message)),
       );
     }
   }
 
-  static String _friendlyAuthMessage(FirebaseAuthException e) {
-    switch (e.code) {
+  static ({String message, bool clearPassword, bool signUp, bool forgotPassword})
+      _loginFeedback(FirebaseAuthException e) {
+    switch (e.code.replaceAll('_', '-')) {
       case 'user-not-found':
+        return (
+          message:
+              'Sorry, your email is not registered. Please sign up first.',
+          clearPassword: false,
+          signUp: true,
+          forgotPassword: false,
+        );
       case 'wrong-password':
+        return (
+          message:
+              'Sorry, your password is incorrect. Please try again.',
+          clearPassword: true,
+          signUp: false,
+          forgotPassword: true,
+        );
       case 'invalid-credential':
-        return 'Invalid email or password.';
+      case 'invalid-login-credentials':
+        return (
+          message:
+              'Incorrect email or password. Please try again or sign up.',
+          clearPassword: true,
+          signUp: true,
+          forgotPassword: false,
+        );
       case 'invalid-email':
-        return 'That email address does not look valid.';
+        return (
+          message: 'Please enter a valid email address.',
+          clearPassword: false,
+          signUp: false,
+          forgotPassword: false,
+        );
+      case 'too-many-requests':
+        return (
+          message: 'Too many attempts. Please try again later.',
+          clearPassword: false,
+          signUp: false,
+          forgotPassword: false,
+        );
+      case 'network-request-failed':
+        return (
+          message:
+              'Unable to connect. Please check your internet connection.',
+          clearPassword: false,
+          signUp: false,
+          forgotPassword: false,
+        );
       case 'user-disabled':
-        return 'This account has been disabled.';
+        return (
+          message: 'This account has been disabled.',
+          clearPassword: false,
+          signUp: false,
+          forgotPassword: false,
+        );
       default:
-        return e.message ?? 'Authentication error (${e.code}).';
+        return (
+          message: 'Could not sign in. Please try again.',
+          clearPassword: false,
+          signUp: false,
+          forgotPassword: false,
+        );
     }
   }
 
@@ -181,8 +252,12 @@ class _LoginScreenState extends State<LoginScreen> {
                         enabled: !_busy,
                         validator: (v) {
                           final s = v?.trim() ?? '';
-                          if (s.isEmpty) return 'Required';
-                          if (!s.contains('@')) return 'Enter a valid email';
+                          if (s.isEmpty) {
+                            return 'Please enter your email address.';
+                          }
+                          if (!s.contains('@')) {
+                            return 'Please enter a valid email address.';
+                          }
                           return null;
                         },
                       ),
@@ -232,7 +307,9 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                         validator: (v) {
-                          if (v == null || v.isEmpty) return 'Required';
+                          if (v == null || v.isEmpty) {
+                            return 'Please enter your password.';
+                          }
                           return null;
                         },
                       ),

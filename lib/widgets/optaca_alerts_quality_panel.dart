@@ -128,16 +128,27 @@ class _OptacaAlertsQualityPanelState extends State<OptacaAlertsQualityPanel> {
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (r?.loadWarnings.isNotEmpty == true)
-                Expanded(
-                  child: Text(
-                    r!.loadWarnings.join(' '),
-                    style: GovernorDashboardTokens.body(size: 12.5),
-                  ),
-                )
-              else
-                const Spacer(),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Alerts & Quality',
+                      style: GovernorDashboardTokens.heading(size: 20),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      r == null
+                          ? 'Scanning tourist spots, featured destinations, and events…'
+                          : 'Live audit of ${r.spotCount} tourist_spots + Trip Planner records'
+                              '${r.loadWarnings.isEmpty ? '' : ' · ${r.loadWarnings.join(' ')}'}',
+                      style: GovernorDashboardTokens.body(size: 12.5),
+                    ),
+                  ],
+                ),
+              ),
               if (widget.timeFilterWidget != null) widget.timeFilterWidget!,
               IconButton(
                 tooltip: 'Re-scan',
@@ -146,7 +157,7 @@ class _OptacaAlertsQualityPanelState extends State<OptacaAlertsQualityPanel> {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 14),
           if (_loading && r == null)
             const Padding(
               padding: EdgeInsets.all(40),
@@ -185,6 +196,12 @@ class _OptacaAlertsQualityPanelState extends State<OptacaAlertsQualityPanel> {
                             ? 'No data-quality issues in scanned records.'
                             : 'No issues match the current filters.',
                         style: GovernorDashboardTokens.sectionTitle(),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'QR checks use qrValue / qr_payload the same way LGU enrollment and tourist check-in do.',
+                        style: GovernorDashboardTokens.body(size: 12.5),
                         textAlign: TextAlign.center,
                       ),
                     ],

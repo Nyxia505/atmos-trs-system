@@ -30,9 +30,8 @@ class TouristSignupHeroWaveClipper extends CustomClipper<Path> {
     final w = size.width;
     final h = size.height;
     return Path()
-      ..lineTo(0, h - 36)
-      ..cubicTo(w * 0.2, h - 6, w * 0.4, h - 52, w * 0.58, h - 28)
-      ..cubicTo(w * 0.75, h - 8, w * 0.9, h - 42, w, h - 18)
+      ..lineTo(0, h - 22)
+      ..quadraticBezierTo(w * 0.5, h + 6, w, h - 22)
       ..lineTo(w, 0)
       ..close();
   }
@@ -81,84 +80,54 @@ class TouristSignupFooterPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
-/// Compact logo + ATMOS-TRS + tagline (mock header brand row).
+/// Original ATMOS TRS logo on a white circle — same treatment as login.
 class TouristSignupBrandRow extends StatelessWidget {
   const TouristSignupBrandRow({
     super.key,
     this.onDark = true,
     this.tripPlanner = false,
+    this.height = 72,
   });
 
   final bool onDark;
   final bool tripPlanner;
+  final double height;
+
+  static const double _logoInset = 6;
 
   @override
   Widget build(BuildContext context) {
-    final titleColor = onDark ? Colors.white : TouristSignupChrome.textDark;
-    final subColor = onDark
-        ? Colors.white.withValues(alpha: 0.9)
-        : TouristSignupChrome.textMuted;
-
     if (tripPlanner) {
       return TripPlanAuthBrand(compact: true, onDark: onDark);
     }
 
-    return Row(
-      children: [
-        Container(
-          width: 52,
-          height: 52,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.white,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.14),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: const ClipOval(
-            child: Padding(
-              padding: EdgeInsets.all(4),
-              child: TransparentLogo(
-                width: 44,
-                height: 44,
-                fit: BoxFit.contain,
-              ),
+    final inner = height - (_logoInset * 2);
+    return Center(
+      child: Container(
+        width: height,
+        height: height,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.white,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.18),
+              blurRadius: 20,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: ClipOval(
+          child: Padding(
+            padding: const EdgeInsets.all(_logoInset),
+            child: TransparentLogo(
+              width: inner,
+              height: inner,
+              fit: BoxFit.contain,
             ),
           ),
         ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'ATMOS-TRS',
-                style: TextStyle(
-                  color: titleColor,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.4,
-                  height: 1.1,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                'Explore Misamis Occidental',
-                style: TextStyle(
-                  color: subColor,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w500,
-                  height: 1.2,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
+      ),
     );
   }
 }
@@ -192,16 +161,30 @@ class TouristSignupScriptSlogan extends StatelessWidget {
   }
 }
 
-/// 4-step progress tracker matching the mock.
+/// 3-step progress tracker matching the mock.
 class TouristSignupProgressTracker extends StatelessWidget {
   const TouristSignupProgressTracker({
     super.key,
     required this.visualStepIndex,
+    this.highestReachedIndex,
+    this.onStepSelected,
     this.onDark = false,
   });
 
   final int visualStepIndex;
+
+  /// Furthest visual step the user has opened (inclusive).
+  /// Defaults to [visualStepIndex] so later steps stay locked until visited.
+  final int? highestReachedIndex;
+  final ValueChanged<int>? onStepSelected;
   final bool onDark;
+
+  int get _highestReached => highestReachedIndex ?? visualStepIndex;
+
+  bool _canOpen(int index) =>
+      onStepSelected != null &&
+      index <= _highestReached &&
+      index != visualStepIndex;
 
   @override
   Widget build(BuildContext context) {
@@ -217,7 +200,12 @@ class TouristSignupProgressTracker extends StatelessWidget {
       children: [
         SizedBox(
           height: 36,
-          child: Stack(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final stepW = constraints.maxWidth / labels.length;
+              final start = stepW / 2;
+              final end = stepW * visualStepIndex + stepW / 2;
+              return Stack(
             alignment: Alignment.center,
             children: [
               Positioned.fill(
@@ -229,50 +217,66 @@ class TouristSignupProgressTracker extends StatelessWidget {
                   ),
                 ),
               ),
+              if (visualStepIndex > 0)
+                Positioned(
+                  left: start,
+                  width: (end - start).clamp(0.0, constraints.maxWidth).toDouble(),
+                  top: 17,
+                  child: Container(
+                    height: 2,
+                    color: TouristSignupChrome.heroOrange,
+                  ),
+                ),
               Row(
                 children: List.generate(labels.length, (index) {
-                  final completed = index < visualStepIndex;
                   final current = index == visualStepIndex;
+                  final completed = !current && index <= _highestReached;
                   return Expanded(
                     child: Center(
-                      child: Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: completed || current
-                              ? TouristSignupChrome.heroOrange
-                              : (onDark
-                                  ? Colors.white.withValues(alpha: 0.12)
-                                  : Colors.white),
-                          border: Border.all(
+                      child: _ProgressStepHitTarget(
+                        enabled: _canOpen(index),
+                        semanticLabel: labels[index],
+                        keyName: 'signup-progress-step-$index',
+                        onTap: () => onStepSelected?.call(index),
+                        child: Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
                             color: completed || current
                                 ? TouristSignupChrome.heroOrange
-                                : muted,
-                            width: 1.6,
+                                : (onDark
+                                    ? Colors.white.withValues(alpha: 0.12)
+                                    : Colors.white),
+                            border: Border.all(
+                              color: completed || current
+                                  ? TouristSignupChrome.heroOrange
+                                  : muted,
+                              width: 1.6,
+                            ),
                           ),
-                        ),
-                        child: Center(
-                          child: completed
-                              ? const Icon(
-                                  Icons.check_rounded,
-                                  color: Colors.white,
-                                  size: 16,
-                                )
-                              : Text(
-                                  '${index + 1}',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w700,
-                                    color: current
-                                        ? Colors.white
-                                        : (onDark
-                                            ? Colors.white.withValues(
-                                                alpha: 0.7,
-                                              )
-                                            : TouristSignupChrome.textMuted),
+                          child: Center(
+                            child: completed
+                                ? const Icon(
+                                    Icons.check_rounded,
+                                    color: Colors.white,
+                                    size: 16,
+                                  )
+                                : Text(
+                                    '${index + 1}',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: current
+                                          ? Colors.white
+                                          : (onDark
+                                              ? Colors.white.withValues(
+                                                  alpha: 0.7,
+                                                )
+                                              : TouristSignupChrome.textMuted),
+                                    ),
                                   ),
-                                ),
+                          ),
                         ),
                       ),
                     ),
@@ -280,6 +284,8 @@ class TouristSignupProgressTracker extends StatelessWidget {
                 }),
               ),
             ],
+              );
+            },
           ),
         ),
         const SizedBox(height: 8),
@@ -287,27 +293,66 @@ class TouristSignupProgressTracker extends StatelessWidget {
           children: List.generate(labels.length, (index) {
             final current = index == visualStepIndex;
             return Expanded(
-              child: Text(
-                labels[index],
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 10.5,
-                  height: 1.15,
-                  fontWeight: current ? FontWeight.w700 : FontWeight.w500,
-                  color: current
-                      ? TouristSignupChrome.heroOrange
-                      : labelMuted,
-                  decoration: current ? TextDecoration.underline : null,
-                  decorationColor: TouristSignupChrome.heroOrange,
-                  decorationThickness: 1.4,
+              child: _ProgressStepHitTarget(
+                enabled: _canOpen(index),
+                semanticLabel: labels[index],
+                keyName: 'signup-progress-label-$index',
+                onTap: () => onStepSelected?.call(index),
+                child: Text(
+                  labels[index],
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    height: 1.15,
+                    fontWeight: current ? FontWeight.w700 : FontWeight.w500,
+                    color: current
+                        ? TouristSignupChrome.heroOrange
+                        : (index < visualStepIndex
+                            ? TouristSignupChrome.heroOrange
+                            : labelMuted),
+                  ),
                 ),
               ),
             );
           }),
         ),
       ],
+    );
+  }
+}
+
+class _ProgressStepHitTarget extends StatelessWidget {
+  const _ProgressStepHitTarget({
+    required this.enabled,
+    required this.semanticLabel,
+    required this.keyName,
+    required this.onTap,
+    required this.child,
+  });
+
+  final bool enabled;
+  final String semanticLabel;
+  final String keyName;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: enabled,
+      enabled: enabled,
+      label: semanticLabel,
+      child: MouseRegion(
+        cursor: enabled ? SystemMouseCursors.click : MouseCursor.defer,
+        child: GestureDetector(
+          key: ValueKey(keyName),
+          behavior: HitTestBehavior.opaque,
+          onTap: enabled ? onTap : null,
+          child: child,
+        ),
+      ),
     );
   }
 }
@@ -421,29 +466,18 @@ class TouristSignupFooterMotif extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
       child: Column(
         children: [
           SizedBox(
-            height: 56,
+            height: 28,
             width: double.infinity,
             child: CustomPaint(painter: const TouristSignupFooterPainter()),
           ),
           TouristSignupScriptSlogan(
             text: 'Misamis Occidental',
-            fontSize: 26,
-            color: TouristSignupChrome.heroOrange.withValues(alpha: 0.85),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'A PROVINCE OF ENDLESS POSSIBILITIES.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0.8,
-              color: TouristSignupChrome.heroOrange.withValues(alpha: 0.75),
-            ),
+            fontSize: 20,
+            color: TouristSignupChrome.heroOrange.withValues(alpha: 0.7),
           ),
         ],
       ),

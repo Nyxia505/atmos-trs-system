@@ -28,11 +28,18 @@ class DirectionsResult {
 
 /// Fetches a driving road route: OSRM (OpenStreetMap, no key) first, then
 /// Google Directions as a fallback.
-Future<DirectionsResult> getDirectionsRoute(List<LatLng> waypoints) async {
+Future<DirectionsResult> getDirectionsRoute(
+  List<LatLng> waypoints, {
+  bool osrmOnly = false,
+  Duration osrmTimeout = const Duration(seconds: 8),
+}) async {
   if (waypoints.length < 2) return const DirectionsResult();
 
-  final osrm = await _getDirectionsViaOsrm(waypoints);
-  if (osrm.polyline != null) return osrm;
+  final osrm = await _getDirectionsViaOsrm(
+    waypoints,
+    timeout: osrmTimeout,
+  );
+  if (osrm.polyline != null || osrmOnly) return osrm;
 
   final keys = googleMapsApiKeysForDirections;
   if (keys.isEmpty) return osrm;
@@ -65,7 +72,10 @@ Future<DirectionsResult> getDirectionsRoute(List<LatLng> waypoints) async {
 }
 
 /// Public OSRM demo server; allows browser CORS and needs no API key.
-Future<DirectionsResult> _getDirectionsViaOsrm(List<LatLng> waypoints) async {
+Future<DirectionsResult> _getDirectionsViaOsrm(
+  List<LatLng> waypoints, {
+  Duration timeout = const Duration(seconds: 8),
+}) async {
   final coords = waypoints
       .map((p) => '${p.longitude},${p.latitude}')
       .join(';');
@@ -74,7 +84,7 @@ Future<DirectionsResult> _getDirectionsViaOsrm(List<LatLng> waypoints) async {
     '?overview=full&geometries=polyline',
   );
   try {
-    final response = await http.get(uri).timeout(const Duration(seconds: 15));
+    final response = await http.get(uri).timeout(timeout);
     final map = jsonDecode(response.body) as Map<String, dynamic>?;
     if (map == null) return const DirectionsResult(errorStatus: 'NO_RESPONSE');
     if (map['code'] != 'Ok') {

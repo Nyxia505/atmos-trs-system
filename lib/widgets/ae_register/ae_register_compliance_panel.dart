@@ -99,6 +99,21 @@ class _AeRegisterCompliancePanelState extends State<AeRegisterCompliancePanel> {
     return DateTime(now.year, now.month - 1);
   }
 
+  /// Same window as the hotel DAE-1B date picker: five years back through
+  /// the current month. Past years list January–December; the current year
+  /// stops at this month (future periods are not opened for reporting).
+  static List<DateTime> _calendarMonths() {
+    final now = DateTime.now();
+    final startYear = now.year - 5;
+    return [
+      for (var year = startYear; year <= now.year; year++)
+        for (var month = 1;
+            month <= (year == now.year ? now.month : 12);
+            month++)
+          DateTime(year, month),
+    ];
+  }
+
   String get _mid => normalizeMunicipalityId(widget.municipalityId ?? '');
   bool get _province => _mid.isEmpty;
 
@@ -303,9 +318,28 @@ class _AeRegisterCompliancePanelState extends State<AeRegisterCompliancePanel> {
     );
   }
 
+  void _setPeriod({int? year, int? month}) {
+    final allowed = _calendarMonths();
+    final y = year ?? _month.year;
+    final m = month ?? _month.month;
+    final inYear = allowed.where((d) => d.year == y).toList();
+    if (inYear.isEmpty) return;
+    final next = inYear.firstWhere((d) => d.month == m, orElse: () => inYear.last);
+    if (next.year == _month.year && next.month == _month.month) return;
+    setState(() => _month = DateTime(next.year, next.month));
+  }
+
   Widget _header(List<String> municipalities) {
-    final now = DateTime.now();
-    final months = [for (var i = 0; i < 13; i++) DateTime(now.year, now.month - i)];
+    final allowed = _calendarMonths();
+    final years = {for (final d in allowed) d.year}.toList()..sort();
+    final year = years.contains(_month.year) ? _month.year : years.last;
+    final monthsInYear = [
+      for (final d in allowed)
+        if (d.year == year) d.month,
+    ]..sort();
+    final month =
+        monthsInYear.contains(_month.month) ? _month.month : monthsInYear.last;
+
     final title = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -320,11 +354,17 @@ class _AeRegisterCompliancePanelState extends State<AeRegisterCompliancePanel> {
         ),
       ],
     );
-    final monthPicker = _dropdown<DateTime>(
-      value: months.firstWhere((m) => m.year == _month.year && m.month == _month.month, orElse: () => months.first),
-      items: {for (final m in months) m: '${AeSheetKit.months[m.month - 1]} ${m.year}'},
+    final yearPicker = _dropdown<int>(
+      value: year,
+      items: {for (final y in years) y: '$y'},
+      icon: Icons.calendar_today_rounded,
+      onChanged: (y) => _setPeriod(year: y),
+    );
+    final monthPicker = _dropdown<int>(
+      value: month,
+      items: {for (final m in monthsInYear) m: AeSheetKit.months[m - 1]},
       icon: Icons.calendar_month_rounded,
-      onChanged: (m) => setState(() => _month = m),
+      onChanged: (m) => _setPeriod(month: m),
     );
     final munPicker = _province && municipalities.length > 1
         ? _dropdown<String>(
@@ -336,7 +376,15 @@ class _AeRegisterCompliancePanelState extends State<AeRegisterCompliancePanel> {
         : null;
     return LayoutBuilder(
       builder: (context, c) {
-        final pickers = Wrap(spacing: 8, runSpacing: 8, children: [monthPicker, if (munPicker != null) munPicker]);
+        final pickers = Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            yearPicker,
+            monthPicker,
+            if (munPicker != null) munPicker,
+          ],
+        );
         if (c.maxWidth < 720) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -404,79 +452,217 @@ class _AeRegisterCompliancePanelState extends State<AeRegisterCompliancePanel> {
     final miceVenues = all.where((l) => l.tracksMice).toList();
     final miceSubmitted = miceVenues.where((l) => l.miceStatus == _RegStatus.submitted).length;
     final miceEvents = miceVenues.fold<int>(0, (s, l) => s + (l.mice?.totals.events ?? 0));
-    final cards = [
-      ('Submitted', '$submitted / ${lines.length}', Icons.task_alt_rounded, _kSubmitted),
-      ('Draft', '$draft', Icons.edit_note_rounded, _kDraft),
-      ('Missing', '$missing', Icons.report_gmailerrorred_rounded, _kMissing),
-      ('Rooms', '$rooms', Icons.bed_rounded, const Color(0xFF7C3AED)),
+    final cards = <({
+      String label,
+      String value,
+      IconData icon,
+      Color color,
+      VoidCallback? onTap,
+    })>[
       (
-        'Occupancy',
-        AeRegisterCalculator.pct(AeRegisterCalculator.combinedOccupancy(reports), digits: 1),
-        Icons.hotel_class_rounded,
-        widget.primaryColor,
+        label: 'Submitted',
+        value: '$submitted / ${lines.length}',
+        icon: Icons.check_circle_rounded,
+        color: const Color(0xFF34D399),
+        onTap: () => setState(() => _filter = _StatusFilter.submitted),
       ),
-      ('ALOS', AeRegisterCalculator.dec(t.alos), Icons.nights_stay_rounded, const Color(0xFF0284C7)),
-      ('Guest-nights', '${t.guestNights}', Icons.people_alt_rounded, const Color(0xFF14B8A6)),
-      ('Sales', _peso(t.grandTotalSales), Icons.payments_rounded, const Color(0xFF16A34A)),
+      (
+        label: 'Draft',
+        value: '$draft',
+        icon: Icons.description_rounded,
+        color: const Color(0xFFFB923C),
+        onTap: () => setState(() => _filter = _StatusFilter.draft),
+      ),
+      (
+        label: 'Missing',
+        value: '$missing',
+        icon: Icons.error_rounded,
+        color: const Color(0xFFFB7185),
+        onTap: () => setState(() => _filter = _StatusFilter.missing),
+      ),
+      (
+        label: 'Rooms',
+        value: '$rooms',
+        icon: Icons.king_bed_rounded,
+        color: const Color(0xFFA78BFA),
+        onTap: null,
+      ),
+      (
+        label: 'Occupancy',
+        value: AeRegisterCalculator.pct(
+          AeRegisterCalculator.combinedOccupancy(reports),
+          digits: 1,
+        ),
+        icon: Icons.star_rounded,
+        color: const Color(0xFFFBBF24),
+        onTap: null,
+      ),
+      (
+        label: 'ALOS',
+        value: AeRegisterCalculator.dec(t.alos),
+        icon: Icons.person_rounded,
+        color: const Color(0xFF38BDF8),
+        onTap: null,
+      ),
+      (
+        label: 'Guest-nights',
+        value: '${t.guestNights}',
+        icon: Icons.groups_rounded,
+        color: const Color(0xFF2DD4BF),
+        onTap: null,
+      ),
+      (
+        label: 'Sales',
+        value: _peso(t.grandTotalSales),
+        icon: Icons.account_balance_wallet_rounded,
+        color: const Color(0xFF4ADE80),
+        onTap: null,
+      ),
       if (miceVenues.isNotEmpty) ...[
-        ('MICE submitted', '$miceSubmitted / ${miceVenues.length}', Icons.celebration_rounded, const Color(0xFFDB2777)),
-        ('MICE events', '$miceEvents', Icons.groups_rounded, const Color(0xFF9333EA)),
+        (
+          label: 'MICE submitted',
+          value: '$miceSubmitted / ${miceVenues.length}',
+          icon: Icons.celebration_rounded,
+          color: const Color(0xFFF472B6),
+          onTap: () => setState(() => _filter = _StatusFilter.miceMissing),
+        ),
+        (
+          label: 'MICE events',
+          value: '$miceEvents',
+          icon: Icons.event_rounded,
+          color: const Color(0xFFC084FC),
+          onTap: null,
+        ),
       ],
     ];
-    return LayoutBuilder(
-      builder: (context, c) {
-        const gap = 10.0;
-        final perRow = c.maxWidth >= 1100
-            ? 8
-            : c.maxWidth >= 700
-            ? 4
-            : 2;
-        final w = (c.maxWidth - gap * (perRow - 1)) / perRow;
-        return Wrap(
-          spacing: gap,
-          runSpacing: gap,
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
           children: [
-            for (final k in cards)
-              SizedBox(
-                width: w,
-                child: AtmosHoverLift(
-                  restColor: k.$4.withValues(alpha: 0.06),
-                  restBorderColor: k.$4.withValues(alpha: 0.22),
-                  child: Padding(
-                padding: const EdgeInsets.all(12),
+            Icon(
+              Icons.sync_rounded,
+              size: 15,
+              color: widget.textMuted,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'KEY PERFORMANCE METRICS',
+              style: TextStyle(
+                color: widget.textDark,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.85,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        LayoutBuilder(
+            builder: (context, c) {
+              const gap = 8.0;
+              final scroll = c.maxWidth < 980;
+              final tiles = [
+                for (final k in cards)
+                  _metricBox(
+                    label: k.label,
+                    value: k.value,
+                    icon: k.icon,
+                    color: k.color,
+                    onTap: k.onTap,
+                  ),
+              ];
+              if (scroll) {
+                return SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (var i = 0; i < tiles.length; i++) ...[
+                        if (i > 0) const SizedBox(width: gap),
+                        SizedBox(width: 152, child: tiles[i]),
+                      ],
+                    ],
+                  ),
+                );
+              }
+              return Row(
+                children: [
+                  for (var i = 0; i < tiles.length; i++) ...[
+                    if (i > 0) const SizedBox(width: gap),
+                    Expanded(child: tiles[i]),
+                  ],
+                ],
+              );
+            },
+          ),
+      ],
+    );
+  }
+
+  Widget _metricBox({
+    required String label,
+    required String value,
+    required IconData icon,
+    required Color color,
+    VoidCallback? onTap,
+  }) {
+    return Material(
+      color: color,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+          child: Row(
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.22),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, size: 16, color: Colors.white),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Icon(k.$3, size: 16, color: k.$4),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            k.$1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: widget.textMuted),
-                          ),
-                        ),
-                      ],
+                    Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.95),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        height: 1.1,
+                      ),
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 2),
                     FittedBox(
                       fit: BoxFit.scaleDown,
                       alignment: Alignment.centerLeft,
                       child: Text(
-                        k.$2,
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: widget.textDark),
+                        value,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                          height: 1.15,
+                        ),
                       ),
                     ),
                   ],
                 ),
-                  ),
-                ),
               ),
-          ],
-        );
-      },
+            ],
+          ),
+        ),
+      ),
     );
   }
 

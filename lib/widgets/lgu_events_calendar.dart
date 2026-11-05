@@ -49,6 +49,10 @@ class LguEventsCalendar extends StatefulWidget {
   State<LguEventsCalendar> createState() => _LguEventsCalendarState();
 }
 
+const _kFrameOrange = Color(0xFFFF6B00);
+const _kCellBorder = Color(0xFFE5E7EB);
+const _kGridFill = Color(0xFFF8FAFC);
+
 class _LguEventsCalendarState extends State<LguEventsCalendar> {
   // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -97,10 +101,10 @@ class _LguEventsCalendarState extends State<LguEventsCalendar> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _buildHeader(isNarrow),
-          const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
-          _buildWeekdayRow(),
-          const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
-          widget.viewMode == 'week' ? _buildWeekGrid() : _buildMonthGrid(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+            child: _buildCalendarFrame(),
+          ),
         ],
       ),
     );
@@ -309,26 +313,56 @@ class _LguEventsCalendarState extends State<LguEventsCalendar> {
 
   // ── weekday row ─────────────────────────────────────────────────────────────
 
+  Widget _buildCalendarFrame() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _kFrameOrange, width: 2),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildWeekdayRow(),
+          ColoredBox(
+            color: _kGridFill,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
+              child: widget.viewMode == 'week'
+                  ? _buildWeekGrid()
+                  : _buildMonthGrid(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildWeekdayRow() {
-    return Row(
-      children: LguEventsCalendar._weekdays
-          .map(
-            (d) => Expanded(
+    return ColoredBox(
+      color: _kFrameOrange,
+      child: Row(
+        children: [
+          for (final d in LguEventsCalendar._weekdays)
+            Expanded(
               child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.symmetric(vertical: 10),
                 child: Text(
                   d.toUpperCase(),
                   textAlign: TextAlign.center,
                   style: const TextStyle(
-                      color: Color(0xFF9CA3AF),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.5),
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.6,
+                  ),
                 ),
               ),
             ),
-          )
-          .toList(),
+        ],
+      ),
     );
   }
 
@@ -345,25 +379,18 @@ class _LguEventsCalendarState extends State<LguEventsCalendar> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: List.generate(rows, (row) {
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (row > 0)
-              const Divider(height: 1, thickness: 1, color: Color(0xFFE5E7EB)),
-            _MonthRow(
-              row: row,
-              leading: leading,
-              daysInMonth: daysInMonth,
-              month: widget.month,
-              today: today,
-              selected: widget.selectedDay,
-              events: widget.events,
-              accent: widget.accent,
-              onDayTap: widget.onDaySelected,
-              onEventTap: widget.onEventTap,
-              onOverflowTap: _showOverflowDialog,
-            ),
-          ],
+        return _MonthRow(
+          row: row,
+          leading: leading,
+          daysInMonth: daysInMonth,
+          month: widget.month,
+          today: today,
+          selected: widget.selectedDay,
+          events: widget.events,
+          accent: widget.accent,
+          onDayTap: widget.onDaySelected,
+          onEventTap: widget.onEventTap,
+          onOverflowTap: _showOverflowDialog,
         );
       }),
     );
@@ -449,18 +476,18 @@ class _LguEventsCalendarState extends State<LguEventsCalendar> {
               widget.selectedDay != null && _same(date, widget.selectedDay!);
 
           return Expanded(
-            child: GestureDetector(
+            child: Padding(
+              padding: const EdgeInsets.all(3),
+              child: GestureDetector(
               onTap: () => widget.onDaySelected(date),
               child: Container(
                 constraints: const BoxConstraints(minHeight: 160),
                 decoration: BoxDecoration(
                   color: isSelected
                       ? widget.accent.withValues(alpha: 0.08)
-                      : null,
-                  border: i < 6
-                      ? const Border(
-                          right: BorderSide(color: Color(0xFFE5E7EB)))
-                      : null,
+                      : Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _kCellBorder),
                 ),
                 padding: const EdgeInsets.fromLTRB(5, 6, 4, 8),
                 child: Column(
@@ -489,6 +516,7 @@ class _LguEventsCalendarState extends State<LguEventsCalendar> {
                   ],
                 ),
               ),
+            ),
             ),
           );
         }),
@@ -564,18 +592,18 @@ class _MonthRow extends StatelessWidget {
               : <Map<String, dynamic>>[];
 
           return Expanded(
-            child: GestureDetector(
+            child: Padding(
+              padding: const EdgeInsets.all(3),
+              child: GestureDetector(
               onTap: inMonth ? () => onDayTap(date) : null,
               child: Container(
                 constraints: const BoxConstraints(minHeight: 82),
                 decoration: BoxDecoration(
                   color: isSelected
                       ? accent.withValues(alpha: 0.08)
-                      : Colors.transparent,
-                  border: col < 6
-                      ? const Border(
-                          right: BorderSide(color: Color(0xFFE5E7EB)))
-                      : null,
+                      : Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _kCellBorder),
                 ),
                 padding: const EdgeInsets.fromLTRB(5, 5, 4, 5),
                 child: Column(
@@ -595,6 +623,7 @@ class _MonthRow extends StatelessWidget {
                   ],
                 ),
               ),
+            ),
             ),
           );
         }),
@@ -673,7 +702,7 @@ class _DateBubble extends StatelessWidget {
                       ? accent
                       : const Color(0xFF1F2937),
           fontWeight:
-              (isToday || isSelected) ? FontWeight.w800 : FontWeight.w500,
+              (isToday || isSelected || inMonth) ? FontWeight.w700 : FontWeight.w500,
           fontSize: 12.5,
         ),
       ),

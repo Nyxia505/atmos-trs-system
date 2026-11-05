@@ -1,14 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart'
-    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'dart:async';
 import 'dart:typed_data';
-import 'dart:ui' as ui;
-import 'package:cross_file/cross_file.dart';
-import 'package:share_plus/share_plus.dart';
-import 'package:gal/gal.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/beta_testing_config.dart';
@@ -41,7 +34,9 @@ import 'package:atmos_trs_system/models/tourist_spot.dart';
 import 'package:atmos_trs_system/navigation/post_logout_navigation.dart';
 import 'package:atmos_trs_system/services/spot_category_service.dart';
 import 'package:atmos_trs_system/services/tourist_spots_firestore_service.dart';
-import 'package:atmos_trs_system/utils/csv_file_download.dart';
+import 'package:atmos_trs_system/utils/lgu_registered_tourists_xlsx.dart';
+import 'package:atmos_trs_system/widgets/registered_tourists_export_dialog.dart';
+import 'package:atmos_trs_system/utils/checkin_time.dart';
 import 'package:atmos_trs_system/utils/checkin_visitor_count.dart';
 import 'package:atmos_trs_system/utils/visit_analytics.dart';
 import 'package:atmos_trs_system/widgets/visit_analytics_board.dart';
@@ -269,13 +264,10 @@ class _LguDashboardState extends State<LguDashboard>
   bool _isExporting = false;
   double _exportProgress = 0.0;
 
-  /// Analytics page RepaintBoundary (insights) for PNG screenshot.
-  final GlobalKey _reportsRepaintKey = GlobalKey();
-  bool _reportsScreenshotBusy = false;
-
   /// One-shot Firestore sync for `qrValue` / `qr_payload` / `createdAt` on `tourist_spots`.
   bool _isBackfillingSpotQr = false;
   bool _didAutoBackfillSpotQr = false;
+  bool _spotQrPosterBusy = false;
   bool _touristFirestoreReadsBlocked = false;
 
   // Settings (local prefs; same pattern as governor dashboard)
@@ -300,7 +292,6 @@ class _LguDashboardState extends State<LguDashboard>
     _NavItem(icon: Icons.settings_rounded, label: 'Settings'),
   ];
 
-  static const int _mainNavCount = 7; // Dashboard through Analytics
   static const int _touristSpotsNavIndex = 2;
   static const int _establishmentsIndex = 3;
   static const int _spotQRCodesIndex = 4;
@@ -308,6 +299,13 @@ class _LguDashboardState extends State<LguDashboard>
   static const int _analyticsIndex = 6;
   static const int _eventsIndex = 7;
   static const int _settingsIndex = 8;
+
+  static const List<({String title, List<int> indices})> _sidebarNavSections = [
+    (title: 'Overview', indices: [0]),
+    (title: 'Tourism Management', indices: [1, 2, 3, 4, 5]),
+    (title: 'Reports & Engagement', indices: [6, 7]),
+    (title: 'Account', indices: [8]),
+  ];
 
   List<String> get _categories => [
         'All',
@@ -1461,10 +1459,7 @@ class _LguDashboardState extends State<LguDashboard>
 
   /// Parse [timestamp] from a `qr_checkins` or legacy check-in map.
   DateTime? _parseCheckInTimestamp(Map<String, dynamic> c) {
-    final ts = c['timestamp'] ?? c['createdAt'] ?? c['checkin_time'];
-    if (ts is Timestamp) return ts.toDate();
-    if (ts is DateTime) return ts;
-    return null;
+    return parseCheckInTimestamp(c);
   }
 
   bool _isDummyCheckIn(Map<String, dynamic> row) =>
@@ -2362,43 +2357,81 @@ class _LguDashboardState extends State<LguDashboard>
     return byId.values.toList();
   }
 
-  /// Sidebar + drawer: scrollable nav including Settings at the bottom.
+  /// Sidebar + drawer: scrollable grouped nav. Logout stays outside this scroll.
   Widget _buildSidebarNavScroll({required bool expanded}) {
     return Expanded(
       child: SingleChildScrollView(
         padding: EdgeInsets.only(
-          top: _isMobile ? 10 : 20,
-          bottom: 4,
+          top: _isMobile ? 6 : 8,
+          bottom: 8,
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (int i = 0; i < _mainNavCount; i++)
-                    _buildTourismNavItem(
-                      index: i,
-                      expanded: expanded,
-                      bottomMargin: i == 0
-                          ? (_isMobile ? 8 : 14)
-                          : (_isMobile ? 4 : 6),
-                    ),
-                  SizedBox(height: _isMobile ? 2 : 4),
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: expanded ? 12 : 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var s = 0; s < _sidebarNavSections.length; s++) ...[
+                _buildSidebarSectionHeading(
+                  _sidebarNavSections[s].title,
+                  expanded: expanded,
+                  isFirst: s == 0,
+                ),
+                for (final index in _sidebarNavSections[s].indices)
                   _buildTourismNavItem(
-                    index: _eventsIndex,
+                    index: index,
                     expanded: expanded,
+                    bottomMargin: _isMobile ? 3 : 4,
                   ),
-                  SizedBox(height: _isMobile ? 4 : 6),
-                  _buildTourismNavItem(
-                    index: _settingsIndex,
-                    expanded: expanded,
-                  ),
-                ],
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSidebarSectionHeading(
+    String title, {
+    required bool expanded,
+    required bool isFirst,
+  }) {
+    if (!expanded) {
+      return Padding(
+        padding: EdgeInsets.fromLTRB(6, isFirst ? 4 : 10, 6, 8),
+        child: isFirst
+            ? const SizedBox.shrink()
+            : Semantics(
+                excludeSemantics: true,
+                child: Container(
+                  height: 1,
+                  color: Colors.white.withValues(alpha: 0.22),
+                ),
               ),
+      );
+    }
+    return Padding(
+      padding: EdgeInsets.fromLTRB(6, isFirst ? 4 : 14, 6, 8),
+      child: Semantics(
+        header: true,
+        label: title,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title.toUpperCase(),
+              style: GoogleFonts.poppins(
+                color: const Color(0xFFFFF1E6).withValues(alpha: 0.92),
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.2,
+                height: 1.2,
+              ),
+            ),
+            const SizedBox(height: 7),
+            Container(
+              height: 1,
+              color: Colors.white.withValues(alpha: 0.18),
             ),
           ],
         ),
@@ -2413,14 +2446,14 @@ class _LguDashboardState extends State<LguDashboard>
   }) {
     final item = _navItems[index];
     final isSelected = _selectedIndex == index;
-    final iconSize = _isMobile ? 22.0 : 24.0;
-    final labelSize = _isMobile ? 13.0 : 14.0;
+    final iconSize = _isMobile ? 20.0 : 22.0;
+    final labelSize = _isMobile ? 13.0 : 13.5;
     final horizontalPadding = _isMobile
-        ? (expanded ? 12.0 : 10.0)
-        : (expanded ? 14.0 : 12.0);
+        ? (expanded ? 10.0 : 8.0)
+        : (expanded ? 12.0 : 10.0);
     final verticalPadding = _isMobile
-        ? (expanded ? 11.0 : 12.0)
-        : (expanded ? 13.0 : 14.0);
+        ? (expanded ? 9.0 : 10.0)
+        : (expanded ? 10.0 : 11.0);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
       curve: Curves.easeOutCubic,
@@ -2436,9 +2469,10 @@ class _LguDashboardState extends State<LguDashboard>
                 _toggleSidebar();
               }
             },
-            borderRadius: BorderRadius.circular(16),
-            hoverColor: Colors.white.withValues(alpha: 0.12),
-            splashColor: Colors.white.withValues(alpha: 0.16),
+            borderRadius: BorderRadius.circular(12),
+            hoverColor: Colors.white.withValues(alpha: 0.14),
+            focusColor: Colors.white.withValues(alpha: 0.22),
+            splashColor: Colors.white.withValues(alpha: 0.18),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               curve: Curves.easeOutCubic,
@@ -2446,26 +2480,10 @@ class _LguDashboardState extends State<LguDashboard>
                 horizontal: horizontalPadding,
                 vertical: verticalPadding,
               ),
-              constraints: const BoxConstraints(minHeight: 48),
+              constraints: const BoxConstraints(minHeight: 40),
               decoration: BoxDecoration(
-                color: isSelected
-                    ? Colors.white.withValues(alpha: 0.92)
-                    : Colors.white.withValues(alpha: 0.06),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: isSelected
-                      ? Colors.white.withValues(alpha: 0.95)
-                      : Colors.white.withValues(alpha: 0.14),
-                ),
-                boxShadow: isSelected
-                    ? [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.14),
-                          blurRadius: 14,
-                          offset: const Offset(0, 6),
-                        ),
-                      ]
-                    : null,
+                color: isSelected ? Colors.white : Colors.transparent,
+                borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
                 mainAxisAlignment: expanded
@@ -2490,7 +2508,7 @@ class _LguDashboardState extends State<LguDashboard>
                               : Colors.white.withValues(alpha: 0.94),
                           fontSize: labelSize,
                           fontWeight: isSelected
-                              ? FontWeight.w600
+                              ? FontWeight.w700
                               : FontWeight.w500,
                         ),
                         overflow: TextOverflow.ellipsis,
@@ -2540,36 +2558,19 @@ class _LguDashboardState extends State<LguDashboard>
       padding: EdgeInsets.fromLTRB(expanded ? 16 : 10, 0, expanded ? 16 : 10, 4),
       child: Tooltip(
         message: expanded ? '' : 'Logout',
-        child: Material(
+          child: Material(
           color: Colors.transparent,
-          elevation: 10,
-          shadowColor: Colors.black.withValues(alpha: 0.28),
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(14),
           child: InkWell(
             onTap: _logout,
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(14),
             child: Ink(
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(0xFFFFF7ED),
-                    Color(0xFFFFEDD5),
-                    Color(0xFFFDBA74),
-                  ],
-                ),
-                borderRadius: BorderRadius.circular(18),
+                color: Colors.white.withValues(alpha: 0.95),
+                borderRadius: BorderRadius.circular(14),
                 border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.7),
+                  color: Colors.white.withValues(alpha: 0.85),
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFFEA580C).withValues(alpha: 0.28),
-                    blurRadius: 16,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
               ),
               child: Padding(
                 padding: EdgeInsets.symmetric(
@@ -2765,7 +2766,7 @@ class _LguDashboardState extends State<LguDashboard>
     final cityLabel = _dashboardCityDisplayName;
 
     return ColoredBox(
-      color: _darkBg,
+      color: const Color(0xFFFBFBFD),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -2777,10 +2778,10 @@ class _LguDashboardState extends State<LguDashboard>
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 padding: EdgeInsets.fromLTRB(
-                  _isMobile ? 16 : 24,
-                  16,
-                  _isMobile ? 16 : 24,
-                  32,
+                  _isMobile ? 16 : 28,
+                  20,
+                  _isMobile ? 16 : 28,
+                  36,
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2894,8 +2895,8 @@ class _LguDashboardState extends State<LguDashboard>
     const onHeader = Colors.white;
     return Container(
       padding: EdgeInsets.symmetric(
-        horizontal: _isMobile ? 14 : 20,
-        vertical: _isMobile ? 12 : 14,
+        horizontal: _isMobile ? 14 : 22,
+        vertical: _isMobile ? 12 : 16,
       ),
       decoration: BoxDecoration(
         gradient: _lguBrandGradient,
@@ -2958,60 +2959,68 @@ class _LguDashboardState extends State<LguDashboard>
             ),
           ),
           if (!_isMobile) ...[
-            const SizedBox(width: 16),
+            const SizedBox(width: 20),
             Expanded(
               flex: 3,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.95),
-                  borderRadius: BorderRadius.circular(999),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.08),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: TextField(
-                  controller: _dashboardSearchController,
-                  onSubmitted: (q) {
-                    final query = q.trim();
-                    if (query.isEmpty) return;
-                    _touristsSearchController.text = query;
-                    setState(() => _selectedIndex = _registeredTouristsIndex);
-                  },
-                  style: GoogleFonts.inter(fontSize: 14, color: _textDark),
-                  decoration: InputDecoration(
-                    hintText: 'Search tourists, spots, or reports...',
-                    hintStyle: GoogleFonts.inter(
-                      color: _textMuted,
-                      fontSize: 13,
-                    ),
-                    prefixIcon: const Icon(
-                      Icons.search_rounded,
-                      color: _textMuted,
-                      size: 22,
-                    ),
-                    filled: true,
-                    fillColor: Colors.white,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 14,
-                    ),
-                    border: OutlineInputBorder(
+              child: Align(
+                alignment: Alignment.center,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 520),
+                  child: Container(
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.96),
                       borderRadius: BorderRadius.circular(999),
-                      borderSide: BorderSide.none,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.06),
+                          blurRadius: 10,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
                     ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(999),
-                      borderSide: BorderSide.none,
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(999),
-                      borderSide: const BorderSide(
-                        color: Colors.white,
-                        width: 1.5,
+                    child: TextField(
+                      controller: _dashboardSearchController,
+                      onSubmitted: (q) {
+                        final query = q.trim();
+                        if (query.isEmpty) return;
+                        _touristsSearchController.text = query;
+                        setState(() => _selectedIndex = _registeredTouristsIndex);
+                      },
+                      style: GoogleFonts.inter(fontSize: 14, color: _textDark),
+                      decoration: InputDecoration(
+                        hintText: 'Search tourists, spots, or reports...',
+                        hintStyle: GoogleFonts.inter(
+                          color: _textMuted,
+                          fontSize: 13,
+                        ),
+                        prefixIcon: const Icon(
+                          Icons.search_rounded,
+                          color: _textMuted,
+                          size: 20,
+                        ),
+                        isDense: true,
+                        filled: true,
+                        fillColor: Colors.transparent,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 10,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(999),
+                          borderSide: BorderSide.none,
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(999),
+                          borderSide: BorderSide.none,
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(999),
+                          borderSide: const BorderSide(
+                            color: Colors.white,
+                            width: 1.5,
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -3046,41 +3055,52 @@ class _LguDashboardState extends State<LguDashboard>
     return Image.asset(
       _dashboardHeroImageAsset,
       fit: BoxFit.cover,
-      alignment: Alignment.center,
+      alignment: const Alignment(0.55, 0.05),
       gaplessPlayback: true,
       errorBuilder: (_, __, ___) => Container(color: _tintOrange),
     );
   }
 
   Widget _buildDashboardHeroBanner({required String cityLabel}) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(24),
-      child: SizedBox(
-        height: _isMobile ? 176 : 196,
-        child: DecoratedBox(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-              colors: [
-                Color(0xFFFFF3E8),
-                Color(0xFFFFE7D1),
-                Color(0xFFFFF8F3),
-              ],
-            ),
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
           ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                flex: _isMobile ? 5 : 6,
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    _isMobile ? 18 : 28,
-                    _isMobile ? 18 : 24,
-                    12,
-                    _isMobile ? 18 : 24,
-                  ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: SizedBox(
+          height: _isMobile ? 180 : 210,
+          child: DecoratedBox(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: [
+                  Color(0xFFFFF8F1),
+                  Color(0xFFFFF3E8),
+                  Color(0xFFFFE7D1),
+                ],
+              ),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  flex: _isMobile ? 6 : 5,
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      _isMobile ? 18 : 32,
+                      _isMobile ? 18 : 26,
+                      8,
+                      _isMobile ? 18 : 26,
+                    ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -3135,30 +3155,32 @@ class _LguDashboardState extends State<LguDashboard>
                   ),
                 ),
               ),
-              Expanded(
-                flex: _isMobile ? 4 : 5,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    _dashboardHeroImage(),
+                Expanded(
+                  flex: _isMobile ? 4 : 6,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      _dashboardHeroImage(),
                       const DecoratedBox(
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
                             begin: Alignment.centerLeft,
                             end: Alignment.centerRight,
                             colors: [
-                              Color(0xFFFFE7D1),
-                              Color(0x99FFE7D1),
-                              Color(0x00FFE7D1),
+                              Color(0xFFFFF3E8),
+                              Color(0xCCFFF3E8),
+                              Color(0x66FFF3E8),
+                              Color(0x00FFF3E8),
                             ],
-                            stops: [0.0, 0.12, 0.38],
+                            stops: [0.0, 0.16, 0.38, 0.68],
                           ),
                         ),
                       ),
                     ],
                   ),
                 ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -3170,7 +3192,7 @@ class _LguDashboardState extends State<LguDashboard>
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Container(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
           decoration: _tourismPanelDecoration(),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -3193,14 +3215,14 @@ class _LguDashboardState extends State<LguDashboard>
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 14),
               GridView.count(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 crossAxisCount: 2,
-                mainAxisSpacing: 8,
-                crossAxisSpacing: 8,
-                childAspectRatio: 1.55,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+                childAspectRatio: 1.22,
                 children: [
                   _buildQuickActionGridTile(
                     icon: Icons.qr_code_2_rounded,
@@ -3225,7 +3247,7 @@ class _LguDashboardState extends State<LguDashboard>
                   ),
                   _buildQuickActionGridTile(
                     icon: Icons.description_outlined,
-                    label: 'Create Report',
+                    label: 'Generate Report',
                     onTap: () => setState(() {
                       _selectedIndex = _analyticsIndex;
                       if (_isMobile) _isSidebarExpanded = false;
@@ -3249,22 +3271,24 @@ class _LguDashboardState extends State<LguDashboard>
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
+        hoverColor: _primaryOrange.withValues(alpha: 0.08),
+        splashColor: _primaryOrange.withValues(alpha: 0.12),
         child: Ink(
           decoration: BoxDecoration(
             color: _tintOrange,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: _primaryOrange.withValues(alpha: 0.22),
+              color: _primaryOrange.withValues(alpha: 0.14),
             ),
           ),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(icon, color: _primaryOrange, size: 18),
-                const SizedBox(height: 4),
+                Icon(icon, color: _primaryOrange, size: 28),
+                const SizedBox(height: 8),
                 Text(
                   label,
                   textAlign: TextAlign.center,
@@ -3272,9 +3296,9 @@ class _LguDashboardState extends State<LguDashboard>
                   overflow: TextOverflow.ellipsis,
                   style: GoogleFonts.inter(
                     color: const Color(0xFF9A3412),
-                    fontSize: 10,
+                    fontSize: 12,
                     fontWeight: FontWeight.w700,
-                    height: 1.15,
+                    height: 1.2,
                   ),
                 ),
               ],
@@ -3302,7 +3326,7 @@ class _LguDashboardState extends State<LguDashboard>
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+      padding: const EdgeInsets.fromLTRB(22, 20, 22, 14),
       decoration: _tourismPanelDecoration(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3314,15 +3338,33 @@ class _LguDashboardState extends State<LguDashboard>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Registered tourists',
-                      style: GoogleFonts.inter(
-                        color: _textDark,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
-                      ),
+                    Row(
+                      children: [
+                        Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: _tintOrange,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(
+                            Icons.people_alt_rounded,
+                            color: _primaryOrange,
+                            size: 18,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Text(
+                          'Registered Tourists',
+                          style: GoogleFonts.inter(
+                            color: _textDark,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 6),
                     Text(
                       'Newest sign-ups — names hidden for data privacy',
                       style: GoogleFonts.inter(
@@ -3386,11 +3428,16 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   Widget _buildDashboardTouristsTable(List<Map<String, dynamic>> recent) {
-    const idColumnWidth = 156.0;
+    const idColumnWidth = 168.0;
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
+        Container(
+          padding: const EdgeInsets.fromLTRB(12, 0, 8, 10),
+          decoration: const BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: Color(0xFFEEF0F3)),
+            ),
+          ),
           child: Row(
             children: [
               const SizedBox(width: 44),
@@ -3398,9 +3445,8 @@ class _LguDashboardState extends State<LguDashboard>
                 width: idColumnWidth,
                 child: _tableHeader('Tourist ID'),
               ),
-              const SizedBox(width: 17),
               Expanded(child: _tableHeader('Registration Date')),
-              const SizedBox(width: 44),
+              SizedBox(width: 52, child: _tableHeader('Actions')),
             ],
           ),
         ),
@@ -3408,48 +3454,47 @@ class _LguDashboardState extends State<LguDashboard>
           final t = recent[index];
           final id = TouristIdHelper.displayForTourist(t);
           final regDt = _registeredDateTimeNullableFromTourist(t);
+          final isEven = index.isEven;
 
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: AtmosHoverLift(
-              radius: BorderRadius.circular(16),
-              restColor: index.isEven ? const Color(0xFFFAFAFA) : Colors.white,
-              child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: () => _showTouristDetailsDialog(t),
-                borderRadius: BorderRadius.circular(16),
-                hoverColor: Colors.transparent,
-                child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 10,
+          return Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () => _showTouristDetailsDialog(t),
+              hoverColor: _tintOrange.withValues(alpha: 0.35),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: isEven ? const Color(0xFFFAFBFC) : Colors.white,
+                  border: const Border(
+                    bottom: BorderSide(color: Color(0xFFF1F3F5)),
+                  ),
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 12,
+                ),
+                child: Row(
+                  children: [
+                    _buildVisitPrivacyAvatar(radius: 18),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: idColumnWidth,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: _buildVisitTouristIdChip(id),
+                      ),
                     ),
-                    child: Row(
-                      children: [
-                        _buildVisitPrivacyAvatar(radius: 18),
-                        const SizedBox(width: 8),
-                        SizedBox(
-                          width: idColumnWidth,
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: _buildVisitTouristIdChip(id),
-                          ),
+                    Expanded(
+                      child: Text(
+                        _formatRegisteredDateOnlyDisplay(regDt),
+                        style: GoogleFonts.inter(
+                          color: _textMuted,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
                         ),
-                        Container(width: 1, height: 28, color: kAtmosTableGrid),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Text(
-                            _formatRegisteredDateOnlyDisplay(regDt),
-                            style: GoogleFonts.inter(
-                              color: _textMuted,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                        SizedBox(
-                          width: 44,
+                      ),
+                    ),
+                    SizedBox(
+                      width: 52,
                           child: IconButton(
                             tooltip: 'View',
                             onPressed: () => _showTouristDetailsDialog(t),
@@ -3467,10 +3512,8 @@ class _LguDashboardState extends State<LguDashboard>
                               ),
                             ),
                           ),
-                        ),
-                      ],
                     ),
-                  ),
+                  ],
                 ),
               ),
             ),
@@ -3828,15 +3871,18 @@ class _LguDashboardState extends State<LguDashboard>
           : 'Search',
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(onColoredHeader ? 999 : 16),
         child: Stack(
           clipBehavior: Clip.none,
           children: [
             Container(
-              padding: const EdgeInsets.all(10),
+              width: onColoredHeader ? 42 : null,
+              height: onColoredHeader ? 42 : null,
+              padding: EdgeInsets.all(onColoredHeader ? 0 : 10),
+              alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: bgColor,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(onColoredHeader ? 999 : 16),
                 border: onColoredHeader
                     ? Border.all(color: Colors.white.withValues(alpha: 0.35))
                     : null,
@@ -3935,7 +3981,7 @@ class _LguDashboardState extends State<LguDashboard>
 
     final stats = [
       _StatCard(
-        title: 'Today\'s visitors',
+        title: 'Today\'s Visitors',
         value: '${todayStats.visitors}',
         subtitle: '${todayStats.asVisitorsSubtitle}$cappedNote',
         icon: Icons.qr_code_scanner_rounded,
@@ -4003,7 +4049,8 @@ class _LguDashboardState extends State<LguDashboard>
     ];
 
     final crossCount = _isMobile ? 2 : (_isTablet ? 2 : 4);
-    const gap = 16.0;
+    const gap = 18.0;
+    final cardHeight = _isMobile ? 150.0 : 164.0;
 
     return DashboardFadeIn(
       child: LayoutBuilder(
@@ -4017,6 +4064,7 @@ class _LguDashboardState extends State<LguDashboard>
               for (final stat in stats)
                 SizedBox(
                   width: cardWidth,
+                  height: cardHeight,
                   child: _buildStatCard(stat),
                 ),
             ],
@@ -4259,8 +4307,8 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   Widget _buildStatCard(_StatCard stat) {
-    final valueSize = _isMobile ? 28.0 : 34.0;
-    final tint = stat.tint ?? stat.color.withValues(alpha: 0.1);
+    final valueSize = _isMobile ? 30.0 : 36.0;
+    final tint = stat.tint ?? stat.color.withValues(alpha: 0.12);
     final trend = stat.trendLabel ?? '';
     final trendColor = stat.trendPositive
         ? const Color(0xFF059669)
@@ -4269,22 +4317,17 @@ class _LguDashboardState extends State<LguDashboard>
     return _HoverLiftCard(
       onTap: stat.onTap,
       child: Container(
+        width: double.infinity,
+        height: double.infinity,
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Colors.white,
-              tint.withValues(alpha: 0.7),
-            ],
-          ),
+          color: tint,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: stat.color.withValues(alpha: 0.12)),
+          border: Border.all(color: stat.color.withValues(alpha: 0.10)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 20,
-              offset: const Offset(0, 8),
+              color: stat.color.withValues(alpha: 0.08),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
             ),
           ],
         ),
@@ -4292,30 +4335,34 @@ class _LguDashboardState extends State<LguDashboard>
         child: Stack(
           children: [
             Positioned(
-              right: -10,
-              bottom: -8,
+              right: -6,
+              bottom: -10,
               child: Icon(
                 stat.icon,
-                size: 72,
-                color: stat.color.withValues(alpha: 0.08),
+                size: 78,
+                color: stat.color.withValues(alpha: 0.10),
               ),
             ),
             Padding(
-              padding: EdgeInsets.all(_isMobile ? 14 : 16),
+              padding: EdgeInsets.fromLTRB(
+                _isMobile ? 14 : 18,
+                _isMobile ? 14 : 16,
+                _isMobile ? 12 : 14,
+                _isMobile ? 12 : 14,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
                 children: [
                   Row(
                     children: [
                       Container(
-                        width: 36,
-                        height: 36,
+                        width: 38,
+                        height: 38,
                         decoration: BoxDecoration(
-                          color: tint,
+                          color: Colors.white.withValues(alpha: 0.78),
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: Icon(stat.icon, color: stat.color, size: 18),
+                        child: Icon(stat.icon, color: stat.color, size: 20),
                       ),
                       const Spacer(),
                       if (trend.isNotEmpty)
@@ -4334,7 +4381,7 @@ class _LguDashboardState extends State<LguDashboard>
                         ),
                     ],
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 14),
                   Text(
                     stat.value,
                     maxLines: 1,
@@ -4354,7 +4401,7 @@ class _LguDashboardState extends State<LguDashboard>
                     overflow: TextOverflow.ellipsis,
                     style: GoogleFonts.inter(
                       color: _textDark,
-                      fontSize: 14,
+                      fontSize: 13.5,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -5832,22 +5879,13 @@ class _LguDashboardState extends State<LguDashboard>
                       ),
                     ),
                   ElevatedButton.icon(
-                    onPressed: () async {
-                      await downloadSpotQrPng(
-                        mid.isNotEmpty ? mid : municipalityId,
-                        spot.id,
-                        latitude: spot.latitude,
-                        longitude: spot.longitude,
-                      );
-                      if (!mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('PNG download started (check Downloads)'),
-                          backgroundColor: _primaryOrange,
-                          behavior: SnackBarBehavior.floating,
-                        ),
-                      );
-                    },
+                    onPressed: () => _exportSpotQrPoster(
+                      spot: spot,
+                      municipalityId:
+                          mid.isNotEmpty ? mid : municipalityId,
+                      municipalityDisplayName: placeLabel,
+                      pdf: false,
+                    ),
                     icon: const Icon(Icons.download_rounded, size: 16),
                     label: const Text('PNG'),
                     style: ElevatedButton.styleFrom(
@@ -5863,17 +5901,13 @@ class _LguDashboardState extends State<LguDashboard>
                     ),
                   ),
                   OutlinedButton.icon(
-                    onPressed: () async {
-                      await downloadSpotQrPdf(
-                        municipalityId:
-                            mid.isNotEmpty ? mid : municipalityId,
-                        spotId: spot.id,
-                        spotName: spot.name,
-                        municipalityDisplayName: municipalityDisplayName,
-                        latitude: spot.latitude,
-                        longitude: spot.longitude,
-                      );
-                    },
+                    onPressed: () => _exportSpotQrPoster(
+                      spot: spot,
+                      municipalityId:
+                          mid.isNotEmpty ? mid : municipalityId,
+                      municipalityDisplayName: placeLabel,
+                      pdf: true,
+                    ),
                     icon: Icon(
                       Icons.picture_as_pdf_rounded,
                       color: _primaryOrange,
@@ -5936,6 +5970,93 @@ class _LguDashboardState extends State<LguDashboard>
       ),
       ),
     );
+  }
+
+  Future<void> _exportSpotQrPoster({
+    required TouristSpot spot,
+    required String municipalityId,
+    required String municipalityDisplayName,
+    required bool pdf,
+  }) async {
+    if (_spotQrPosterBusy) return;
+    _spotQrPosterBusy = true;
+    final payload = _spotQrPayloadFor(spot, municipalityId);
+    var dialogOpen = true;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const AlertDialog(
+        content: Row(
+          children: [
+            SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(strokeWidth: 3),
+            ),
+            SizedBox(width: 16),
+            Expanded(child: Text('Preparing QR poster…')),
+          ],
+        ),
+      ),
+    );
+
+    Future<void> closeDialog() async {
+      if (!dialogOpen) return;
+      dialogOpen = false;
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+    }
+
+    try {
+      if (pdf) {
+        await downloadSpotQrPdf(
+          municipalityId: municipalityId,
+          spotId: spot.id,
+          spotName: spot.name,
+          municipalityDisplayName: municipalityDisplayName,
+          qrPayload: payload,
+          category: spot.category,
+          latitude: spot.latitude,
+          longitude: spot.longitude,
+          onPrepared: closeDialog,
+        );
+      } else {
+        await downloadSpotQrPng(
+          municipalityId,
+          spot.id,
+          spotName: spot.name,
+          municipalityDisplayName: municipalityDisplayName,
+          qrPayload: payload,
+          category: spot.category,
+          latitude: spot.latitude,
+          longitude: spot.longitude,
+          onPrepared: closeDialog,
+        );
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'PNG poster saved. Check Downloads or the share sheet.',
+            ),
+            backgroundColor: _primaryOrange,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      await closeDialog();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not export QR poster: $e'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      _spotQrPosterBusy = false;
+    }
   }
 
   Future<void> _persistSpotQr({
@@ -6429,19 +6550,6 @@ class _LguDashboardState extends State<LguDashboard>
                 ),
               ],
               onChanged: (value) => setState(() => _spotVrFilter = value!),
-            ),
-          ),
-        ),
-        ElevatedButton.icon(
-          onPressed: _showAddSpotDialog,
-          icon: const Icon(Icons.add, size: 18),
-          label: const Text('Add Spot'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: _primaryOrange,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
             ),
           ),
         ),
@@ -8036,187 +8144,31 @@ class _LguDashboardState extends State<LguDashboard>
     return null;
   }
 
-  String _buildTouristsExportCsv() {
-    var csv =
-        'Tourist ID,Full Name,Email,Mobile,Nationality,Type,Origin,Visits,Status,Registered Date,Registered Time\n';
-    for (final t in _tourists) {
-      final name = _getTouristDisplayName(t);
-      final touristId = TouristIdHelper.displayForTourist(t);
-      final email = t['email']?.toString() ?? '';
-      final mobile = t['mobile']?.toString() ?? '';
-      final nationality = t['nationality']?.toString() ?? '';
-      final isLocal = t['isLocal'] == true || t['localOrForeign'] == 'Local';
-      final origin = _getTouristOrigin(t);
-      final visits = t['totalVisits'] ?? t['visits'] ?? 0;
-      final status = t['status']?.toString() ?? 'Active';
-      final regDt = _registeredDateTimeNullableFromTourist(t);
-      final dateCsv = _formatRegisteredDateOnlyDisplay(regDt);
-      final timeCsv = _formatRegisteredTimeOnlyDisplay(regDt);
-      csv +=
-          '$touristId,"$name",$email,$mobile,$nationality,${isLocal ? 'Local' : 'Foreign'},"$origin",$visits,$status,$dateCsv,$timeCsv\n';
-    }
-    return csv;
+  List<LguRegisteredTouristExportRow> _lguTouristExportRows() {
+    return _sortedTouristsByRegistrationDate(_tourists)
+        .map(lguRegisteredTouristExportRowFromMap)
+        .toList();
   }
 
   Future<void> _exportTouristsData() async {
-    setState(() {
-      _isExporting = true;
-      _exportProgress = 0.0;
-    });
-
-    for (int i = 1; i <= 10; i++) {
-      await Future.delayed(const Duration(milliseconds: 150));
-      setState(() => _exportProgress = i / 10);
-    }
-
-    final csv = _buildTouristsExportCsv();
-
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('tourists_export', csv);
-
-    setState(() => _isExporting = false);
-
+    if (_isExporting) return;
+    final location =
+        (_municipalityName ?? _storedMunicipalityId ?? 'Misamis Occidental')
+            .trim();
+    final rows = _lguTouristExportRows();
     if (!mounted) return;
-    _showTouristsExportOrganizedDialog(csv);
-  }
-
-  void _showTouristsExportOrganizedDialog(String csv) {
-    final textStyle = TextStyle(color: _textDark, fontSize: 13);
-    final rows = <List<Widget>>[];
-    for (final t in _tourists) {
-      final name = _getTouristDisplayName(t);
-      final touristId = TouristIdHelper.displayForTourist(t);
-      final email = t['email']?.toString() ?? '?';
-      final mobile = t['mobile']?.toString() ?? '?';
-      final nationality = t['nationality']?.toString() ?? '?';
-      final isLocal = t['isLocal'] == true || t['localOrForeign'] == 'Local';
-      final origin = _getTouristOrigin(t);
-      final visits = '${t['totalVisits'] ?? t['visits'] ?? 0}';
-      final status = t['status']?.toString() ?? 'Active';
-      final regDt = _registeredDateTimeNullableFromTourist(t);
-      final dateStr = _formatRegisteredDateOnlyDisplay(regDt);
-      final timeStr = _formatRegisteredTimeOnlyDisplay(regDt);
-      Widget cell(String value) => Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: textStyle,
-          );
-      rows.add([
-        cell(touristId),
-        cell(name),
-        cell(email),
-        cell(mobile),
-        cell(nationality),
-        cell(isLocal ? 'Local' : 'Foreign'),
-        cell(origin),
-        cell(visits),
-        cell(status),
-        cell(dateStr),
-        cell(timeStr),
-      ]);
-    }
-
-    final w = MediaQuery.of(context).size.width;
-    final h = MediaQuery.of(context).size.height;
-
-    showDialog<void>(
+    await showRegisteredTouristsExportDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _cardBg,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-        title: Row(
-          children: [
-            Icon(Icons.table_chart_rounded, color: _primaryOrange, size: 26),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                'Registered Tourists export',
-                style: const TextStyle(
-                  color: _textDark,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ],
-        ),
-        content: SizedBox(
-          width: w > 900 ? 880 : w * 0.92,
-          height: h * 0.62,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                '${_tourists.length} record${_tourists.length == 1 ? '' : 's'} ? scroll horizontally for all columns',
-                style: TextStyle(color: _textMuted, fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-              Expanded(
-                child: _tourists.isEmpty
-                    ? Center(
-                        child: Text(
-                          'No registered tourists to export.',
-                          style: TextStyle(color: _textMuted, fontSize: 16),
-                        ),
-                      )
-                    : SingleChildScrollView(
-                        child: AtmosResponsiveTable(
-                        columns: const [
-                          AtmosTableColumn('Tourist ID', minWidth: 120),
-                          AtmosTableColumn('Full name', flex: 2, minWidth: 150),
-                          AtmosTableColumn('Email', flex: 2, minWidth: 160),
-                          AtmosTableColumn('Mobile', minWidth: 120),
-                          AtmosTableColumn('Nationality', minWidth: 120),
-                          AtmosTableColumn('Type', minWidth: 90),
-                          AtmosTableColumn('Origin', flex: 2, minWidth: 140),
-                          AtmosTableColumn('Visits', minWidth: 72, align: Alignment.centerRight),
-                          AtmosTableColumn('Status', minWidth: 90),
-                          AtmosTableColumn('Date', minWidth: 110),
-                          AtmosTableColumn('Time', minWidth: 90),
-                        ],
-                        rows: rows,
-                        ),
-                      ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton.icon(
-            onPressed: () async {
-              final filename =
-                  'tourists_export_${DateTime.now().toIso8601String().split('T').first}.csv';
-              await downloadCsvFile(filename, csv);
-              if (!context.mounted) return;
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    csvDownloadUsesClipboard
-                        ? 'CSV copied to clipboard ? paste into Excel or save as .csv'
-                        : 'CSV file download started',
-                  ),
-                  backgroundColor: _primaryOrange,
-                  behavior: SnackBarBehavior.floating,
-                ),
-              );
-            },
-            icon: Icon(Icons.download_rounded, color: _primaryOrange, size: 20),
-            label: Text(
-              'Download CSV',
-              style: TextStyle(
-                color: _primaryOrange,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text('Close', style: TextStyle(color: _primaryOrange)),
-          ),
-        ],
-      ),
+      rows: rows,
+      officeLabel: 'LGU Office',
+      location: location,
+      privacyLabel: 'Privacy-safe LGU export',
+      subtitle:
+          '${rows.length} record${rows.length == 1 ? '' : 's'} — Excel and PDF of every registered tourist, not the search page. Names and contact details are omitted for LGU privacy.',
+      accent: _primaryOrange,
+      cardBg: _cardBg,
+      textDark: _textDark,
+      textMuted: _textMuted,
     );
   }
 
@@ -8236,28 +8188,6 @@ class _LguDashboardState extends State<LguDashboard>
       child: _buildFramedContentShell(
         title: 'Analytics',
         subtitle: subtitle,
-        actions: [
-          if (_analyticsTab == 0)
-            Tooltip(
-              message: 'Save an image of analytics (key insights and charts)',
-              child: IconButton(
-                onPressed: _reportsScreenshotBusy
-                    ? null
-                    : _captureReportsSectionScreenshot,
-                icon: _reportsScreenshotBusy
-                    ? const SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: _primaryOrange,
-                        ),
-                      )
-                    : const Icon(Icons.screenshot_monitor_outlined),
-                color: Colors.white,
-              ),
-            ),
-        ],
         body: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -8374,9 +8304,7 @@ class _LguDashboardState extends State<LguDashboard>
         _isMobile ? 16 : 24,
         28,
       ),
-      child: RepaintBoundary(
-        key: _reportsRepaintKey,
-        child: Column(
+      child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _buildAnalyticsIntroBanner(city),
@@ -8424,7 +8352,6 @@ class _LguDashboardState extends State<LguDashboard>
               categoryNamesByKey: _analyticsCategoryNamesByKey(),
             ),
           ],
-        ),
       ),
     );
   }
@@ -8764,107 +8691,6 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
-  // ==================== REPORTS SECTION ====================
-  Future<void> _captureReportsSectionScreenshot() async {
-    if (_reportsScreenshotBusy) return;
-    setState(() => _reportsScreenshotBusy = true);
-    try {
-      await WidgetsBinding.instance.endOfFrame;
-      await Future<void>.delayed(const Duration(milliseconds: 80));
-      if (!mounted) return;
-      final boundary =
-          _reportsRepaintKey.currentContext?.findRenderObject()
-              as RenderRepaintBoundary?;
-      if (boundary == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Analytics view is not ready yet. Try again.'),
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        }
-        return;
-      }
-      final pr = MediaQuery.devicePixelRatioOf(context).clamp(1.0, 2.5);
-      final ui.Image image = await boundary.toImage(pixelRatio: pr);
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-      final png = byteData?.buffer.asUint8List();
-      if (png == null || png.isEmpty) {
-        throw Exception('empty png');
-      }
-      final baseName =
-          'atmos_trs_reports_${DateTime.now().millisecondsSinceEpoch}';
-      final fileName = '$baseName.png';
-
-      if (kIsWeb) {
-        final xfile = XFile.fromData(
-          png,
-          mimeType: 'image/png',
-          name: fileName,
-        );
-        await SharePlus.instance.share(
-          ShareParams(
-            files: [xfile],
-            text: 'ATMOS-TRS — Analytics',
-            title: 'Analytics screenshot',
-          ),
-        );
-      } else {
-        switch (defaultTargetPlatform) {
-          case TargetPlatform.android:
-          case TargetPlatform.iOS:
-            final hasAccess = await Gal.hasAccess();
-            if (!hasAccess) {
-              final granted = await Gal.requestAccess();
-              if (!granted) throw Exception('gallery permission denied');
-            }
-            await Gal.putImageBytes(png, name: fileName);
-            break;
-          default:
-            final xfile = XFile.fromData(
-              png,
-              mimeType: 'image/png',
-              name: fileName,
-            );
-            await SharePlus.instance.share(
-              ShareParams(
-                files: [xfile],
-                text: 'ATMOS-TRS — Analytics',
-                title: 'Analytics screenshot',
-              ),
-            );
-        }
-      }
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            kIsWeb
-                ? 'Screenshot ready ? use your browser or share dialog to save.'
-                : (defaultTargetPlatform == TargetPlatform.android ||
-                      defaultTargetPlatform == TargetPlatform.iOS)
-                ? 'Screenshot saved to gallery.'
-                : 'Screenshot ready to save or share.',
-          ),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not capture screenshot. Please try again.'),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _reportsScreenshotBusy = false);
-    }
-  }
-
   Widget _buildEventsContent() {
     final scope = (_municipalityName ?? _storedMunicipalityId ?? 'LGU').trim();
     return _buildFramedContentShell(
@@ -9136,7 +8962,7 @@ class _LguDashboardState extends State<LguDashboard>
                 Icons.download_outlined,
                 _isExporting
                     ? 'Exporting... ${(_exportProgress * 100).toInt()}%'
-                    : 'Download registered tourist data as CSV',
+                    : 'Download registered tourist data as Excel or PDF',
                 _showTourismExportDataDialog,
               ),
               _buildTourismSettingsTileWithSubtitle(
@@ -9974,7 +9800,7 @@ class _LguDashboardState extends State<LguDashboard>
           mainAxisSize: MainAxisSize.min,
           children: [
             _buildTourismExportOption(
-              'Registered Tourists data (CSV)',
+              'Registered Tourists data (Excel or PDF)',
               Icons.people_alt_rounded,
               () {
                 Navigator.pop(context);
@@ -10556,7 +10382,7 @@ class _HoverLiftCardState extends State<_HoverLiftCard> {
             child: InkWell(
               onTap: widget.onTap,
               borderRadius: BorderRadius.circular(20),
-              child: widget.child,
+              child: SizedBox.expand(child: widget.child),
             ),
           ),
         ),

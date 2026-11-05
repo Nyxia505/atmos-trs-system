@@ -146,7 +146,12 @@ class _VisitAnalyticsBoardState extends State<VisitAnalyticsBoard> {
       ),
       child: GovernorArrivalsAreaChart(
         values: snapshot.arrivals,
+        labels: snapshot.arrivalLabels,
+        tooltipLabels: snapshot.arrivalTooltips,
         valueNoun: 'visitors',
+        emptyMessage: snapshot.arrivalPeriodLabel.isEmpty
+            ? 'No arrivals recorded for this period'
+            : 'No arrivals recorded for this period (${snapshot.arrivalPeriodLabel})',
         showAllBottomLabels: _range == 'This Month',
       ),
     );

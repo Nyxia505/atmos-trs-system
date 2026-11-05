@@ -1,15 +1,20 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:ui' show ImageFilter, TileMode;
 
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
+import 'package:atmos_trs_system/services/announcement_push_service.dart';
 import 'package:atmos_trs_system/services/lgu_event_service.dart';
+import 'package:atmos_trs_system/widgets/event_description_text.dart';
 import 'package:atmos_trs_system/widgets/lgu_events_calendar.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:atmos_trs_system/widgets/ui_skeleton.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:trip_plan/catalog_publisher.dart';
 
 /// LGU dashboard panel — create/edit/delete own posts (auto-published).
 /// Province Live tab shows all LGU events across Misamis Occidental.
@@ -60,6 +65,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
   final Set<String> _expandedPosts = {};
   final Map<String, int> _photoIndex = {};
   final Set<String> _publishingIds = {};
+  final List<String> _customEventTypes = [];
   StreamSubscription<List<Map<String, dynamic>>>? _eventsSub;
   late final TabController _tabController;
 
@@ -92,6 +98,8 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     _tabController.addListener(_onTabChanged);
     _hydrateFromCacheThenLoad();
     _listen();
+    unawaited(_loadCustomEventTypes());
+    unawaited(AnnouncementPushService.backfillOnce());
   }
 
   @override
@@ -100,8 +108,10 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     if (_municipalityId != _idFrom(oldWidget) ||
         oldWidget.municipalityName != widget.municipalityName) {
       _didLoadOnce = false;
+      _customEventTypes.clear();
       _hydrateFromCacheThenLoad();
       _listen();
+      unawaited(_loadCustomEventTypes());
     } else if (oldWidget.initialTabIndex != widget.initialTabIndex) {
       final next = widget.initialTabIndex.clamp(0, _tabs.length - 1);
       if (_tabController.index != next) {
@@ -184,18 +194,180 @@ class _LguEventsPanelState extends State<LguEventsPanel>
   bool _isOwnEvent(Map<String, dynamic> event) {
     final mun = _municipalityId;
     if (mun.isEmpty) return false;
+    if (LguEventService.isGovernorOwned(event) ||
+        LguEventService.isOptacaOwned(event)) {
+      return false;
+    }
     return LguEventService.matchesMunicipality(event, mun);
   }
 
-  bool _isAnnouncement(Map<String, dynamic> event) {
-    switch (LguEventService.normalizeType(event['type']?.toString())) {
-      case LguEventService.typePromo:
-      case LguEventService.typeAlert:
-      case LguEventService.typeGeneral:
-        return true;
-      default:
-        return false;
+  /// This LGU may edit, reschedule, and delete its own posts and catalog events.
+  bool _canManageEvent(Map<String, dynamic> event) {
+    if (widget.readOnly) return false;
+    return LguEventService.lguMayManage(event, _municipalityId);
+  }
+
+  CatalogPublisher _publisherOf(Map<String, dynamic> event) {
+    return resolveCatalogPublisher(
+      publisherOffice: event['publisherOffice']?.toString() ?? '',
+      createdBy: event['createdBy']?.toString() ?? '',
+      createdByUid: event['createdByUid']?.toString() ?? '',
+      municipalityId: event['municipalityId']?.toString() ?? '',
+      municipalityName: (event['municipalityName'] ?? event['municipality'])
+              ?.toString() ??
+          '',
+    );
+  }
+
+  String _postBody(Map<String, dynamic> event) {
+    final content = event['content']?.toString().trim() ?? '';
+    if (content.isNotEmpty) return content;
+    return (event['body'] ?? event['description'] ?? '').toString().trim();
+  }
+
+  List<Widget> _feedChips(
+    Map<String, dynamic> event, {
+    required String type,
+    required Color typeColor,
+    required String status,
+    required Color statusColor,
+    required bool pending,
+    bool onDark = false,
+  }) {
+    final publisher = _publisherOf(event);
+    return [
+      _metaChip(type, typeColor, onDark: onDark),
+      if (publisher.kind != CatalogPublisherKind.unknown)
+        _metaChip(publisher.label, widget.primaryColor, onDark: onDark),
+      _metaChip(
+        pending ? 'Publishing…' : status,
+        pending ? widget.primaryColor : statusColor,
+        onDark: onDark,
+      ),
+    ];
+  }
+
+  String get _eventTypePrefsKey =>
+      'lgu_event_categories_${_municipalityId.trim().toLowerCase()}';
+
+  List<String> _eventTypeChoices() {
+    final seen = <String>{};
+    final choices = <String>[];
+    void add(String? raw) {
+      final name = LguEventService.normalizeType(raw);
+      if (name.isEmpty ||
+          name.toLowerCase() == LguEventService.typeOther.toLowerCase()) {
+        return;
+      }
+      if (!seen.add(name.toLowerCase())) return;
+      choices.add(name);
     }
+
+    for (final type in LguEventService.postTypes) {
+      add(type);
+    }
+    for (final type in _customEventTypes) {
+      add(type);
+    }
+    for (final event in _allEvents) {
+      if (!_isOwnEvent(event)) continue;
+      add(event['type']?.toString());
+    }
+    return choices;
+  }
+
+  Future<void> _loadCustomEventTypes() async {
+    final municipalityId = _municipalityId.trim();
+    if (municipalityId.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getStringList(_eventTypePrefsKey) ?? const [];
+    if (!mounted || municipalityId != _municipalityId.trim()) return;
+    setState(() {
+      _customEventTypes
+        ..clear()
+        ..addAll(saved.where((type) => type.trim().isNotEmpty));
+    });
+  }
+
+  Future<void> _rememberEventType(String raw) async {
+    final name = LguEventService.normalizeType(raw);
+    if (name.isEmpty ||
+        name.toLowerCase() == LguEventService.typeOther.toLowerCase()) {
+      return;
+    }
+    final builtIn = LguEventService.postTypes.any(
+      (type) =>
+          type != LguEventService.typeOther &&
+          type.toLowerCase() == name.toLowerCase(),
+    );
+    if (builtIn) return;
+    final exists = _customEventTypes.any(
+      (type) => type.toLowerCase() == name.toLowerCase(),
+    );
+    if (!exists) {
+      _customEventTypes.add(name);
+      if (mounted) setState(() {});
+    }
+    final municipalityId = _municipalityId.trim();
+    if (municipalityId.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_eventTypePrefsKey, _customEventTypes);
+  }
+
+  Future<String?> _promptNewEventType(List<String> existing) async {
+    final controller = TextEditingController();
+    final entered = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('New category'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(
+            labelText: 'Category name',
+            hintText: 'e.g. Festival, Sports, Concert',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (value) => Navigator.pop(dialogContext, value.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: widget.primaryColor),
+            onPressed: () => Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    Future<void>.delayed(const Duration(milliseconds: 400), controller.dispose);
+    if (!mounted || entered == null) return null;
+    if (entered.trim().length < 2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a category name.')),
+      );
+      return null;
+    }
+    final name = LguEventService.normalizeType(entered);
+    for (final type in existing) {
+      if (type.toLowerCase() == name.toLowerCase()) return type;
+    }
+    await _rememberEventType(name);
+    return name;
+  }
+
+  String _sourceCollection(Map<String, dynamic>? event) {
+    return event?['catalogSource']?.toString() == LguEventService.eventsCollection
+        ? LguEventService.eventsCollection
+        : LguEventService.collection;
+  }
+
+  bool _isAnnouncement(Map<String, dynamic> event) {
+    return LguEventService.isAnnouncementType(event);
   }
 
   List<Map<String, dynamic>> _applyLiveFilter(
@@ -214,17 +386,36 @@ class _LguEventsPanelState extends State<LguEventsPanel>
   }
 
   List<Map<String, dynamic>> _filteredProvince() {
-    return _applyLiveFilter(
-      _allEvents.where(LguEventService.isVisibleToTourists),
+    return _sorted(
+      _applyLiveFilter(
+        _allEvents.where(
+          (event) => LguEventService.isEligibleForProvinceLive(
+            event,
+            municipalityId: _municipalityId,
+            municipalityName: widget.municipalityName ?? '',
+          ),
+        ),
+      ),
     );
+  }
+
+  List<Map<String, dynamic>> _sorted(List<Map<String, dynamic>> events) {
+    final list = List<Map<String, dynamic>>.of(events);
+    list.sort(LguEventService.compareBySchedule);
+    return list;
   }
 
   /// Calendar includes scheduled posts, not only posts that are live today.
   List<Map<String, dynamic>> _filteredCalendarPosts() {
     return _applyLiveFilter(
-      _allEvents.where(
-        (event) => LguEventService.statusOf(event) != 'rejected',
-      ),
+      _allEvents.where((event) {
+        if (LguEventService.statusOf(event) == 'rejected') return false;
+        return LguEventService.isTargetedAtLguFeed(
+          event,
+          municipalityId: _municipalityId,
+          municipalityName: widget.municipalityName ?? '',
+        );
+      }),
     );
   }
 
@@ -235,10 +426,12 @@ class _LguEventsPanelState extends State<LguEventsPanel>
   }
 
   List<Map<String, dynamic>> _myPosts() {
-    return _allEvents.where((event) {
-      if (LguEventService.statusOf(event) == 'rejected') return false;
-      return _isOwnEvent(event);
-    }).toList();
+    return _sorted(
+      _allEvents.where((event) {
+        if (LguEventService.statusOf(event) == 'rejected') return false;
+        return _isOwnEvent(event);
+      }).toList(),
+    );
   }
 
   Future<void> _load({bool silent = false}) async {
@@ -402,7 +595,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
           title: draft.title,
           content: draft.content,
           type: draft.type,
-          imageBytes: draft.preparedImage == null ? draft.imageBytes : null,
+          imageBytes: draft.imageBytes,
           imageContentType: draft.imageContentType,
           preparedImageFields: draft.preparedImage,
           startsAt: draft.startsAt,
@@ -419,7 +612,8 @@ class _LguEventsPanelState extends State<LguEventsPanel>
           title: draft.title,
           content: draft.content,
           type: draft.type,
-          imageBytes: draft.preparedImage == null ? draft.imageBytes : null,
+          sourceCollection: _sourceCollection(original),
+          imageBytes: draft.imageBytes,
           imageContentType: draft.imageContentType,
           preparedImageFields: draft.preparedImage,
           removeImage: draft.removeImage,
@@ -430,6 +624,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
           galleryBytes: draft.galleryBytes,
         );
       }
+      unawaited(_rememberEventType(draft.type));
       LguEventService.invalidateEventsCache();
       if (mounted) {
         setState(() => _upsertLocal({...optimistic, _kPendingKey: false}));
@@ -438,10 +633,12 @@ class _LguEventsPanelState extends State<LguEventsPanel>
         SnackBar(
           content: Text(
             draft.isNew
-                ? (draft.liveNow
-                    ? 'Published (${draft.type}). Tourists, LGUs, and Governor are notified.'
-                    : 'Scheduled (${draft.type}). It goes live automatically at the start time (Asia/Manila).')
-                : 'Updated (${draft.type}).',
+                ? 'Event published successfully.'
+                : (draft.imageBytes != null
+                    ? 'Photo saved.'
+                    : draft.removeImage
+                        ? 'Photo removed.'
+                        : 'Updated (${draft.type}).'),
           ),
           behavior: SnackBarBehavior.floating,
         ),
@@ -457,9 +654,15 @@ class _LguEventsPanelState extends State<LguEventsPanel>
           }
         });
       }
+      final rawError = e is StateError ? e.message : e.toString();
+      final photoFailed = rawError.contains('Photo upload failed');
       messenger.showSnackBar(
         SnackBar(
-          content: Text('Could not save "${draft.title}": $e'),
+          content: Text(
+            photoFailed
+                ? 'Photo upload failed. Please retry.'
+                : 'Could not save "${draft.title}": $rawError',
+          ),
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 8),
           action: SnackBarAction(
@@ -478,7 +681,10 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     }
   }
 
-  Future<void> _showEventDialog({Map<String, dynamic>? existing}) async {
+  Future<void> _showEventDialog({
+    Map<String, dynamic>? existing,
+    bool scheduleOnly = false,
+  }) async {
     final municipalityId = _municipalityId;
     final titleController = TextEditingController(
       text: existing?['title']?.toString() ?? '',
@@ -492,22 +698,24 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     String? pickedContentType;
     Future<Map<String, dynamic>>? preparedImage;
     var photoUpload = _PhotoUploadState.none;
+    var photoMessage = '';
     var dialogOpen = true;
     bool removeImage = false;
     final existingImage = LguEventService.resolveDisplayImage(existing);
-    const builtInTypes = {
-      LguEventService.typeEvent,
-      LguEventService.typePromo,
-      LguEventService.typeAlert,
-      LguEventService.typeGeneral,
-    };
-    final rawType = existing?['type']?.toString().trim() ?? '';
-    var selectedType = builtInTypes.contains(rawType)
-        ? rawType
-        : (rawType.isEmpty ? LguEventService.typeEvent : LguEventService.typeOther);
-    final customTypeController = TextEditingController(
-      text: selectedType == LguEventService.typeOther ? rawType : '',
-    );
+    final typeChoices = _eventTypeChoices();
+    final rawType = LguEventService.normalizeType(existing?['type']?.toString());
+    var selectedType = LguEventService.typeEvent;
+    for (final type in typeChoices) {
+      if (type.toLowerCase() == rawType.toLowerCase()) {
+        selectedType = type;
+        break;
+      }
+    }
+    if (rawType.isNotEmpty &&
+        !typeChoices.any((type) => type.toLowerCase() == rawType.toLowerCase())) {
+      typeChoices.add(rawType);
+      selectedType = rawType;
+    }
     final existingStart = existing == null
         ? LguEventService.manilaNow()
         : (LguEventService.eventStart(existing) ?? LguEventService.manilaNow());
@@ -548,7 +756,11 @@ class _LguEventsPanelState extends State<LguEventsPanel>
         final maxW = MediaQuery.sizeOf(dialogContext).width;
         return StatefulBuilder(
           builder: (context, setDialogState) => AlertDialog(
-            title: Text(existing == null ? 'New Post' : 'Edit Post'),
+            title: Text(
+              existing == null
+                  ? 'New Post'
+                  : (scheduleOnly ? 'Reschedule' : 'Edit Post'),
+            ),
             content: SizedBox(
               width: maxW < 560 ? maxW - 48 : 460,
               child: ConstrainedBox(
@@ -560,60 +772,89 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    TextField(
-                      controller: titleController,
-                      autofocus: existing == null,
-                      textInputAction: TextInputAction.next,
-                      style: const TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
+                    if (scheduleOnly) ...[
+                      Text(
+                        'Pick a new date and time. The title, details, and photo stay the same.',
+                        style: TextStyle(
+                          color: AppTheme.unselectedMuted,
+                          fontSize: 13,
+                          height: 1.35,
+                        ),
                       ),
-                      decoration: const InputDecoration(
-                        labelText: 'Title',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'Category / Type',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: LguEventService.postTypes.map((type) {
-                        final selected = selectedType == type;
-                        return ChoiceChip(
-                          label: Text(type),
-                          selected: selected,
-                          onSelected: (_) =>
-                              setDialogState(() => selectedType = type),
-                          selectedColor: widget.primaryColor,
-                          labelStyle: TextStyle(
-                            color: selected ? Colors.white : AppTheme.textPrimary,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 12,
-                          ),
-                          checkmarkColor: Colors.white,
-                        );
-                      }).toList(),
-                    ),
-                    if (selectedType == LguEventService.typeOther) ...[
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 12),
+                    ],
+                    if (!scheduleOnly) ...[
                       TextField(
-                        controller: customTypeController,
+                        controller: titleController,
+                        autofocus: existing == null,
+                        textInputAction: TextInputAction.next,
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                        ),
                         decoration: const InputDecoration(
-                          labelText: 'Event type',
-                          hintText: 'e.g. Festival, Sports, Trade fair',
+                          labelText: 'Title',
                           border: OutlineInputBorder(),
                         ),
                       ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Category / Type',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final type in typeChoices)
+                            ChoiceChip(
+                              label: Text(type),
+                              selected: selectedType.toLowerCase() ==
+                                  type.toLowerCase(),
+                              onSelected: (_) =>
+                                  setDialogState(() => selectedType = type),
+                              selectedColor: widget.primaryColor,
+                              labelStyle: TextStyle(
+                                color: selectedType.toLowerCase() ==
+                                        type.toLowerCase()
+                                    ? Colors.white
+                                    : AppTheme.textPrimary,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 12,
+                              ),
+                              checkmarkColor: Colors.white,
+                            ),
+                          ActionChip(
+                            avatar: Icon(
+                              Icons.add_rounded,
+                              size: 16,
+                              color: widget.primaryColor,
+                            ),
+                            label: const Text('Add category'),
+                            onPressed: () async {
+                              final name = await _promptNewEventType(typeChoices);
+                              if (name == null || !dialogOpen) return;
+                              setDialogState(() {
+                                final known = typeChoices.any(
+                                  (type) =>
+                                      type.toLowerCase() == name.toLowerCase(),
+                                );
+                                if (!known) typeChoices.add(name);
+                                selectedType = typeChoices.firstWhere(
+                                  (type) =>
+                                      type.toLowerCase() == name.toLowerCase(),
+                                );
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
                     ],
-                    const SizedBox(height: 16),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       title: Text(
@@ -663,6 +904,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                         height: 1.35,
                       ),
                     ),
+                    if (!scheduleOnly) ...[
                     const SizedBox(height: 16),
                     TextField(
                       controller: contentController,
@@ -694,6 +936,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                       _PhotoUploadStatus(
                         state: photoUpload,
                         color: widget.primaryColor,
+                        failedMessage: photoMessage,
                       ),
                     ],
                     const SizedBox(height: 10),
@@ -715,6 +958,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                                 ? file.mimeType!.trim()
                                 : 'image/jpeg';
                             if (!dialogOpen) return;
+                            final previousUpload = preparedImage;
                             final upload = _service.prepareImageFields(
                               eventId: eventId,
                               municipalityId: municipalityId,
@@ -724,17 +968,21 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                             upload.then(
                               (_) {
                                 if (dialogOpen && preparedImage == upload) {
-                                  setDialogState(
-                                    () => photoUpload = _PhotoUploadState.ready,
-                                  );
+                                  setDialogState(() {
+                                    photoUpload = _PhotoUploadState.ready;
+                                    photoMessage = '';
+                                  });
                                 }
                               },
-                              onError: (Object _) {
+                              onError: (Object error) {
+                                debugPrint(
+                                  '[LguEvents] photo pre-upload failed: $error',
+                                );
                                 if (dialogOpen && preparedImage == upload) {
-                                  setDialogState(
-                                    () =>
-                                        photoUpload = _PhotoUploadState.failed,
-                                  );
+                                  setDialogState(() {
+                                    photoUpload = _PhotoUploadState.failed;
+                                    photoMessage = _photoFailureMessage(error);
+                                  });
                                 }
                               },
                             );
@@ -743,8 +991,17 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                               pickedContentType = ct;
                               preparedImage = upload;
                               photoUpload = _PhotoUploadState.uploading;
+                              photoMessage = '';
                               removeImage = false;
                             });
+                            if (previousUpload != null) {
+                              unawaited(
+                                _service.discardPreparedUpload(
+                                  eventId: eventId,
+                                  prepared: previousUpload,
+                                ),
+                              );
+                            }
                           },
                           icon: const Icon(Icons.photo_library_outlined, size: 18),
                           label: Text(
@@ -759,12 +1016,22 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                                 (existingImage?.isNotEmpty ?? false)) ||
                             pickedBytes != null)
                           TextButton(
-                            onPressed: () => setDialogState(() {
-                              pickedBytes = null;
-                              preparedImage = null;
-                              photoUpload = _PhotoUploadState.none;
-                              removeImage = true;
-                            }),
+                            onPressed: () {
+                              final pending = preparedImage;
+                              setDialogState(() {
+                                pickedBytes = null;
+                                preparedImage = null;
+                                photoUpload = _PhotoUploadState.none;
+                                photoMessage = '';
+                                removeImage = true;
+                              });
+                              unawaited(
+                                _service.discardPreparedUpload(
+                                  eventId: eventId,
+                                  prepared: pending,
+                                ),
+                              );
+                            },
                             child: const Text('Remove photo'),
                           ),
                         OutlinedButton.icon(
@@ -797,6 +1064,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                           style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
                         ),
                       ),
+                    ],
                   ],
                 ),
               ),
@@ -826,12 +1094,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                     );
                     return;
                   }
-                  final customType = customTypeController.text.trim();
-                  final resolvedType = selectedType == LguEventService.typeOther
-                      ? (customType.isEmpty
-                          ? LguEventService.typeEvent
-                          : customType)
-                      : selectedType;
+                  final resolvedType = LguEventService.normalizeType(selectedType);
                   final scheduleError = LguEventService.validateSchedule(
                     startDate: startDate,
                     endDate: endDate,
@@ -890,7 +1153,11 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                   existing == null ? Icons.send_rounded : Icons.check_rounded,
                   size: 18,
                 ),
-                label: Text(existing == null ? 'Publish' : 'Save'),
+                label: Text(
+                  existing == null
+                      ? 'Publish'
+                      : (scheduleOnly ? 'Save schedule' : 'Save'),
+                ),
               ),
             ],
           ),
@@ -903,12 +1170,29 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     Future<void>.delayed(const Duration(milliseconds: 600), () {
       titleController.dispose();
       contentController.dispose();
-      customTypeController.dispose();
     });
 
     if (draft != null && mounted) {
       unawaited(_submitDraft(draft, original: existing));
+    } else {
+      unawaited(
+        _service.discardPreparedUpload(
+          eventId: eventId,
+          prepared: preparedImage,
+        ),
+      );
     }
+  }
+
+  String _photoFailureMessage(Object error) {
+    final raw = error is StateError ? error.message : error.toString();
+    final message = raw.replaceFirst('Bad state: ', '').trim();
+    if (message.startsWith('Photo must be') ||
+        message.startsWith('Use a JPG') ||
+        message.startsWith('That image file')) {
+      return message;
+    }
+    return 'Photo upload failed. Please retry.';
   }
 
   String _scheduleHint({
@@ -1116,6 +1400,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
       await _service.deleteEvent(
         id,
         municipalityId: _municipalityId,
+        sourceCollection: _sourceCollection(event),
       );
       LguEventService.invalidateEventsCache();
       await _load(silent: false);
@@ -1390,10 +1675,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
         header,
         const SizedBox(height: 12),
       ],
-      for (var i = 0; i < events.length; i++) ...[
-        if (i > 0) const SizedBox(height: 12),
-        _buildPreviewCard(events[i]),
-      ],
+      _eventCardGrid(events),
       const SizedBox(height: 24),
     ]);
   }
@@ -1506,9 +1788,11 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     final posts = _filteredCalendarPosts();
     final hits = selected == null
         ? const <Map<String, dynamic>>[]
-        : posts
-            .where((event) => LguEventService.occursOnDay(event, selected))
-            .toList();
+        : _sorted(
+            posts
+                .where((event) => LguEventService.occursOnDay(event, selected))
+                .toList(),
+          );
 
     final calendar = LguEventsCalendar(
       month: _calendarMonth,
@@ -1609,166 +1893,190 @@ class _LguEventsPanelState extends State<LguEventsPanel>
           ),
         )
       else
-        for (var i = 0; i < hits.length; i++) ...[
-          if (i > 0) const SizedBox(height: 12),
-          _buildHorizontalEventCard(hits[i]),
-        ],
+        _calendarAnnouncementCards(hits),
       const SizedBox(height: 24),
     ]);
   }
 
-  // ── horizontal event card (calendar Events & Announcements section) ─────────
+  /// Selected-day cards. Width stays compact so the photo is not a thin strip
+  /// beside a long empty row. Order is the list already sorted by schedule.
+  Widget _calendarAnnouncementCards(List<Map<String, dynamic>> hits) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth.isFinite ? constraints.maxWidth : 720.0;
+        final columns = width >= 960 && hits.length > 1 ? 2 : 1;
+        const gap = 12.0;
+        if (columns == 1) {
+          final cardWidth = width > 680 ? 680.0 : width;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var i = 0; i < hits.length; i++) ...[
+                if (i > 0) const SizedBox(height: gap),
+                SizedBox(
+                  width: cardWidth,
+                  child: _buildCalendarAnnouncementCard(hits[i]),
+                ),
+              ],
+            ],
+          );
+        }
+        final cardWidth = (width - gap) / 2;
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: [
+            for (final event in hits)
+              SizedBox(
+                width: cardWidth,
+                child: _buildCalendarAnnouncementCard(event),
+              ),
+          ],
+        );
+      },
+    );
+  }
 
-  Widget _buildHorizontalEventCard(Map<String, dynamic> event) {
+  Widget _buildCalendarAnnouncementCard(Map<String, dynamic> event) {
     final photos = _photoSources(event);
     final status = LguEventService.displayStatus(event);
     final statusColor = _statusColor(status);
     final type = LguEventService.normalizeType(event['type']?.toString());
     final typeColor = _typeColor(type);
     final title = event['title']?.toString().trim();
-    final content = event['content']?.toString().trim() ?? '';
-    final isOwn = _isOwnEvent(event);
+    final content = _postBody(event);
     final pending = event[_kPendingKey] == true;
     final place = event['location']?.toString().trim().isNotEmpty == true
         ? event['location']!.toString().trim()
         : LguEventService.sourceMunicipalityLabel(event);
-    final canManage =
-        isOwn && !widget.readOnly && event['catalogSource'] != 'events';
+    final canManage = _canManageEvent(event);
     final startDt = LguEventService.eventStart(event);
     final isAllDay = LguEventService.isAllDay(event);
 
-    // Gradient placeholder when no photo
-    Widget placeholder({double? width}) => Container(
+    Widget photo({
+      required double height,
+      double? width,
+      BorderRadius? radius,
+    }) {
+      if (photos.isEmpty) {
+        return SizedBox(
           width: width,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                widget.primaryColor.withValues(alpha: 0.14),
-                const Color(0xFFFFF7ED),
-              ],
+          height: height,
+          child: const ColoredBox(
+            color: Color(0xFFFFF7ED),
+            child: Icon(Icons.image_outlined, color: Color(0xFFFF6B00)),
+          ),
+        );
+      }
+      final cover = _gridPhoto(
+        photos.first,
+        maxHeight: height,
+        borderRadius: radius,
+      );
+      if (width == null) return cover;
+      return SizedBox(width: width, child: cover);
+    }
+
+    final details = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: _feedChips(
+            event,
+            type: type,
+            typeColor: typeColor,
+            status: status,
+            statusColor: statusColor,
+            pending: pending,
+          ),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          (title == null || title.isEmpty) ? 'Untitled' : title,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: Color(0xFF1F2937),
+            fontWeight: FontWeight.w700,
+            fontSize: 16,
+            height: 1.25,
+            letterSpacing: -0.2,
+          ),
+        ),
+        if (startDt != null) ...[
+          const SizedBox(height: 8),
+          _infoRow(Icons.calendar_today_rounded, _longDate(startDt), expand: true),
+          if (!isAllDay) ...[
+            const SizedBox(height: 4),
+            _infoRow(Icons.schedule_rounded, _timeLabel(event), expand: true),
+          ],
+        ],
+        if (place.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          _infoRow(Icons.place_rounded, place, expand: true),
+        ],
+        if (content.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          EventDescriptionText(
+            text: content,
+            maxLines: 4,
+            style: const TextStyle(
+              color: Color(0xFF374151),
+              fontSize: 13,
+              height: 1.4,
+              fontWeight: FontWeight.w400,
             ),
           ),
-          child: Icon(Icons.image_outlined,
-              color: widget.primaryColor.withValues(alpha: 0.45), size: 34),
-        );
-
-    Widget details() => Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Wrap(
-              spacing: 6,
-              runSpacing: 4,
-              children: [
-                _metaChip(type, typeColor),
-                _metaChip(
-                  pending ? 'Publishing…' : status,
-                  pending ? widget.primaryColor : statusColor,
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              (title == null || title.isEmpty) ? 'Untitled' : title,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Color(0xFF1F2937),
-                fontWeight: FontWeight.w800,
-                fontSize: 17,
-                height: 1.25,
-                letterSpacing: -0.2,
-              ),
-            ),
-            if (startDt != null) ...[
-              const SizedBox(height: 6),
-              _infoRow(Icons.calendar_today_rounded, _longDate(startDt)),
-              if (!isAllDay) ...[
-                const SizedBox(height: 3),
-                _infoRow(Icons.schedule_rounded, _timeLabel(event)),
-              ],
-            ],
-            if (place.isNotEmpty) ...[
-              const SizedBox(height: 3),
-              _infoRow(Icons.place_rounded, place, expand: true),
-            ],
-            if (content.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(
-                content,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    color: Color(0xFF374151), fontSize: 13, height: 1.45),
-              ),
-            ],
-          ],
-        );
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x08000000),
-              blurRadius: 12,
-              offset: Offset(0, 2)),
         ],
-      ),
-      padding: const EdgeInsets.all(14),
+      ],
+    );
+
+    return _MyPostCardFrame(
+      onTap: () => _openEventDetails(event),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 560;
-          if (wide) {
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: SizedBox(
-                    width: 200,
-                    height: 130,
-                    child: photos.isEmpty
-                        ? placeholder(width: 200)
-                        : _cardPhoto(photos.first, 200, 130),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(child: details()),
-                if (canManage) ...[
-                  const SizedBox(width: 4),
-                  _threeDotMenu(event, pending),
-                ],
-              ],
-            );
-          } else {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: SizedBox(
-                    height: 160,
-                    child: photos.isEmpty
-                        ? placeholder()
-                        : _cardPhoto(photos.first, double.infinity, 160),
-                  ),
-                ),
-                const SizedBox(height: 12),
+          final sideBySide = constraints.maxWidth >= 420;
+          final imageWidth = constraints.maxWidth >= 560 ? 228.0 : 200.0;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (sideBySide)
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(child: details()),
-                    if (canManage) _threeDotMenu(event, pending),
+                    photo(
+                      width: imageWidth,
+                      height: 210,
+                      radius: const BorderRadius.only(
+                        topLeft: Radius.circular(11),
+                      ),
+                    ),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 4),
+                        child: details,
+                      ),
+                    ),
                   ],
+                )
+              else ...[
+                photo(height: 200),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 4),
+                  child: details,
                 ),
               ],
-            );
-          }
+              if (canManage)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
+                  child: _previewActions(event, pending, rowAt: 280),
+                )
+              else
+                const SizedBox(height: 12),
+            ],
+          );
         },
       ),
     );
@@ -1794,33 +2102,10 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     );
   }
 
-  Widget _cardPhoto(Object source, double w, double h) {
-    if (source is Uint8List) {
-      return Image.memory(source,
-          fit: BoxFit.cover,
-          width: w,
-          height: h,
-          gaplessPlayback: true,
-          filterQuality: FilterQuality.medium);
-    }
-    final url = source.toString();
-    if (url.startsWith('data:image')) {
-      final cached = _decodedPhotoCache[url];
-      if (cached != null) {
-        return Image.memory(cached,
-            fit: BoxFit.cover, width: w, height: h, gaplessPlayback: true);
-      }
-      final comma = url.indexOf(',');
-      if (comma >= 0) {
-        try {
-          final bytes = base64Decode(url.substring(comma + 1));
-          _decodedPhotoCache[url] = bytes;
-          return Image.memory(bytes,
-              fit: BoxFit.cover, width: w, height: h, gaplessPlayback: true);
-        } catch (_) {}
-      }
-    }
-    return SpotImage(imageUrl: url, fit: BoxFit.cover, width: w, height: h);
+  static const _eventPhotoBg = Color(0xFFF3F4F6);
+
+  Widget _containedPhoto(Widget image) {
+    return ColoredBox(color: _eventPhotoBg, child: image);
   }
 
   String _timeLabel(Map<String, dynamic> event) {
@@ -1845,62 +2130,29 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     return names[day.weekday - 1];
   }
 
-  Widget _threeDotMenu(Map<String, dynamic> event, bool pending) {
-    return PopupMenuButton<String>(
-      icon: Icon(Icons.more_vert_rounded,
-          color: AppTheme.unselectedMuted, size: 20),
-      tooltip: 'More options',
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      onSelected: (value) {
-        if (value == 'edit' && !pending) _showEventDialog(existing: event);
-        if (value == 'delete' && !pending) _deleteEvent(event);
-      },
-      itemBuilder: (_) => [
-        const PopupMenuItem(
-          value: 'edit',
-          child: Row(children: [
-            Icon(Icons.edit_outlined, size: 16),
-            SizedBox(width: 8),
-            Text('Edit'),
-          ]),
-        ),
-        const PopupMenuItem(
-          value: 'delete',
-          child: Row(children: [
-            Icon(Icons.delete_outline, size: 16, color: Color(0xFFDC2626)),
-            SizedBox(width: 8),
-            Text('Delete',
-                style: TextStyle(color: Color(0xFFDC2626))),
-          ]),
-        ),
-      ],
-    );
-  }
-
   Widget _eventCardGrid(List<Map<String, dynamic>> hits) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth.isFinite ? constraints.maxWidth : 960.0;
-        final columns = width >= 1080 ? 3 : (width >= 680 ? 2 : 1);
         const gap = 16.0;
-        return Column(
+        const maxCardWidth = 450.0;
+        final columns = width >= (400 * 3 + gap * 2)
+            ? 3
+            : width >= (360 * 2 + gap)
+                ? 2
+                : 1;
+        final slot = (width - gap * (columns - 1)) / columns;
+        final cardWidth = slot > maxCardWidth ? maxCardWidth : slot;
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          alignment: WrapAlignment.start,
           children: [
-            for (var i = 0; i < hits.length; i += columns) ...[
-              if (i > 0) const SizedBox(height: gap),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (var column = 0; column < columns; column++) ...[
-                    if (column > 0) const SizedBox(width: gap),
-                    Expanded(
-                      child: i + column < hits.length
-                          ? _buildGridCard(hits[i + column])
-                          : const SizedBox.shrink(),
-                    ),
-                  ],
-                ],
+            for (final event in hits)
+              SizedBox(
+                width: cardWidth,
+                child: _buildGridCard(event),
               ),
-            ],
           ],
         );
       },
@@ -1931,145 +2183,83 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     final type = LguEventService.normalizeType(event['type']?.toString());
     final typeColor = _typeColor(type);
     final title = event['title']?.toString().trim();
-    final content = event['content']?.toString().trim() ?? '';
-    final isOwn = _isOwnEvent(event);
+    final content = _postBody(event);
     final pending = event[_kPendingKey] == true;
     final place = event['location']?.toString().trim().isNotEmpty == true
         ? event['location'].toString().trim()
         : LguEventService.sourceMunicipalityLabel(event);
     final photos = _photoSources(event);
-    final canManage = isOwn && !widget.readOnly && event['catalogSource'] != 'events';
+    final canManage = _canManageEvent(event);
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: AppTheme.cardBackground,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppTheme.border),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 16,
-            offset: const Offset(0, 8),
+    return _MyPostCardFrame(
+      onTap: () => _openEventDetails(event),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (photos.isNotEmpty)
+            _gridPhoto(photos.first, maxHeight: 220),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: _feedChips(
+                    event,
+                    type: type,
+                    typeColor: typeColor,
+                    status: status,
+                    statusColor: statusColor,
+                    pending: pending,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  (title == null || title.isEmpty) ? 'Untitled' : title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                    height: 1.25,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '${_scheduleLine(event)} · $place',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: AppTheme.unselectedMuted,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    height: 1.3,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                if (content.isNotEmpty)
+                  EventDescriptionText(
+                    text: content,
+                    maxLines: 3,
+                    style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 13,
+                      height: 1.35,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                if (canManage) ...[
+                  const SizedBox(height: 10),
+                  _previewActions(event, pending),
+                ],
+              ],
+            ),
           ),
         ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(18),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: () => _openEventDetails(event),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SizedBox(
-                height: 168,
-                width: double.infinity,
-                child: photos.isEmpty
-                    ? DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              widget.primaryColor.withValues(alpha: 0.16),
-                              const Color(0xFFFFF7ED),
-                            ],
-                          ),
-                        ),
-                        child: Icon(
-                          Icons.image_outlined,
-                          color: widget.primaryColor.withValues(alpha: 0.7),
-                        ),
-                      )
-                    : _gridPhoto(photos.first),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
-                      children: [
-                        _metaChip(type, typeColor),
-                        _metaChip(
-                          pending ? 'Publishing…' : status,
-                          pending ? widget.primaryColor : statusColor,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    SizedBox(
-                      height: 40,
-                      child: Text(
-                        (title == null || title.isEmpty) ? 'Untitled' : title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: AppTheme.textPrimary,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 16,
-                          height: 1.25,
-                          letterSpacing: -0.2,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    SizedBox(
-                      height: 34,
-                      child: Text(
-                        '${_scheduleLine(event)} · $place',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: AppTheme.unselectedMuted,
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w600,
-                          height: 1.3,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    SizedBox(
-                      height: 55,
-                      child: Text(
-                        content,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: AppTheme.textPrimary,
-                          fontSize: 13,
-                          height: 1.4,
-                        ),
-                      ),
-                    ),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton(
-                        onPressed: () => _openEventDetails(event),
-                        style: TextButton.styleFrom(
-                          foregroundColor: widget.primaryColor,
-                          padding: EdgeInsets.zero,
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        child: const Text(
-                          'Read More',
-                          style: TextStyle(fontWeight: FontWeight.w800),
-                        ),
-                      ),
-                    ),
-                    if (canManage) ...[
-                      const SizedBox(height: 4),
-                      _previewActions(event, pending),
-                    ],
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }
@@ -2167,8 +2357,32 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     final photos = <Object>[];
     final local = event[_kLocalImageKey];
     if (local is Uint8List && local.isNotEmpty) photos.add(local);
-    photos.addAll(LguEventService.imageUrlsOf(event));
+    final embedded = _embeddedPhotoBytes(event);
+    if (embedded != null &&
+        !photos.any((item) => item is Uint8List && item == embedded)) {
+      photos.add(embedded);
+    }
+    for (final url in LguEventService.imageUrlsOf(event)) {
+      if (url.startsWith('data:image')) continue;
+      if (!photos.contains(url)) photos.add(url);
+    }
     return photos;
+  }
+
+  Uint8List? _embeddedPhotoBytes(Map<String, dynamic> event) {
+    final raw = event['imageBase64'] ?? event['image_base64'];
+    if (raw is Uint8List && raw.isNotEmpty) return raw;
+    final text = raw?.toString().trim() ?? '';
+    if (text.isEmpty) return null;
+    try {
+      final payload = text.startsWith('data:image')
+          ? text.substring(text.indexOf(',') + 1)
+          : text;
+      final bytes = base64Decode(payload);
+      return bytes.isEmpty ? null : bytes;
+    } catch (_) {
+      return null;
+    }
   }
 
   Widget _buildPreviewCard(
@@ -2181,8 +2395,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     final type = LguEventService.normalizeType(event['type']?.toString());
     final typeColor = _typeColor(type);
     final title = event['title']?.toString().trim();
-    final content = event['content']?.toString().trim() ?? '';
-    final isOwn = _isOwnEvent(event);
+    final content = _postBody(event);
     final pending = event[_kPendingKey] == true;
     final place = event['location']?.toString().trim().isNotEmpty == true
         ? event['location'].toString().trim()
@@ -2209,18 +2422,30 @@ class _LguEventsPanelState extends State<LguEventsPanel>
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _heroBanner(
+          if (forceExpanded && photos.isNotEmpty)
+            _gridPhoto(photos.first, maxHeight: 480)
+          else
+            _heroBanner(
             event,
             photos: photos,
             chips: Wrap(
               spacing: 6,
               runSpacing: 6,
               children: [
-                _metaChip(type, typeColor, onDark: photos.isNotEmpty),
-                _metaChip(isOwn ? 'From your LGU' : 'From $place', widget.primaryColor, onDark: photos.isNotEmpty),
+                ..._feedChips(
+                  event,
+                  type: type,
+                  typeColor: typeColor,
+                  status: status,
+                  statusColor: statusColor,
+                  pending: pending,
+                  onDark: photos.isNotEmpty,
+                ),
                 _metaChip(
-                  pending ? 'Publishing…' : status,
-                  pending ? widget.primaryColor : statusColor,
+                  _isOwnEvent(event)
+                      ? 'From your LGU'
+                      : 'From $place',
+                  widget.primaryColor,
                   onDark: photos.isNotEmpty,
                 ),
               ],
@@ -2235,9 +2460,9 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                   (title == null || title.isEmpty) ? 'Untitled' : title,
                   style: TextStyle(
                     color: AppTheme.textPrimary,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 20,
-                    height: 1.2,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                    height: 1.25,
                     letterSpacing: -0.2,
                   ),
                 ),
@@ -2260,14 +2485,16 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                 ),
                 if (content.isNotEmpty) ...[
                   const SizedBox(height: 10),
-                  Text(
-                    content,
+                  EventDescriptionText(
+                    text: content,
                     maxLines: expanded ? null : 3,
                     overflow: expanded ? TextOverflow.visible : TextOverflow.ellipsis,
+                    selectable: expanded,
                     style: TextStyle(
                       color: AppTheme.textPrimary,
                       fontSize: 13.5,
                       height: 1.45,
+                      fontWeight: FontWeight.w400,
                     ),
                   ),
                   if (long && !forceExpanded)
@@ -2287,7 +2514,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                       child: Text(expanded ? 'Show less' : 'Read more'),
                     ),
                 ],
-                if (isOwn && !widget.readOnly && event['catalogSource'] != 'events') ...[
+                if (_canManageEvent(event)) ...[
                   const SizedBox(height: 12),
                   _previewActions(event, pending),
                 ],
@@ -2373,58 +2600,88 @@ class _LguEventsPanelState extends State<LguEventsPanel>
 
   final Map<String, Uint8List> _decodedPhotoCache = {};
 
-  Widget _memoryPhoto(Uint8List bytes) {
-    return Image.memory(
-      bytes,
-      fit: BoxFit.cover,
-      cacheWidth: 480,
-      gaplessPlayback: true,
-      filterQuality: FilterQuality.low,
-    );
-  }
-
-  Widget _gridPhoto(Object source) {
-    if (source is Uint8List) {
-      return Image.memory(
+  Widget _gridPhoto(
+    Object source, {
+    double? maxHeight,
+    BorderRadius? borderRadius,
+  }) {
+    return _MyPostCover(
+      maxHeight: maxHeight,
+      borderRadius: borderRadius,
+      imageBuilder: (fit, width, height) => _eventPhoto(
         source,
-        fit: BoxFit.cover,
-        width: double.infinity,
-        height: 168,
-        gaplessPlayback: true,
-      );
-    }
-    return SpotImage(
-      imageUrl: source.toString(),
-      fit: BoxFit.cover,
-      width: double.infinity,
-      height: 168,
+        fit: fit,
+        width: width,
+        height: height,
+      ),
     );
   }
 
   Widget _photoImage(Object source) {
-    if (source is Uint8List) return _memoryPhoto(source);
+    return _containedPhoto(
+      _eventPhoto(source, width: double.infinity, height: double.infinity),
+    );
+  }
+
+  Widget _eventPhoto(
+    Object source, {
+    BoxFit fit = BoxFit.contain,
+    double? width,
+    double? height,
+  }) {
+    if (source is Uint8List) {
+      return Image.memory(
+        source,
+        fit: fit,
+        alignment: Alignment.center,
+        width: width,
+        height: height,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
+      );
+    }
     final url = source.toString();
     if (url.startsWith('data:image')) {
       final cached = _decodedPhotoCache[url];
-      if (cached != null) return _memoryPhoto(cached);
+      if (cached != null) {
+        return Image.memory(
+          cached,
+          fit: fit,
+          alignment: Alignment.center,
+          width: width,
+          height: height,
+          gaplessPlayback: true,
+        );
+      }
       final comma = url.indexOf(',');
       if (comma >= 0) {
         try {
           final bytes = base64Decode(url.substring(comma + 1));
           _decodedPhotoCache[url] = bytes;
-          return _memoryPhoto(bytes);
+          return Image.memory(
+            bytes,
+            fit: fit,
+            alignment: Alignment.center,
+            width: width,
+            height: height,
+            gaplessPlayback: true,
+          );
         } catch (_) {}
       }
     }
     return SpotImage(
       imageUrl: url,
-      fit: BoxFit.cover,
-      width: 168,
-      height: 118,
+      fit: fit,
+      width: width,
+      height: height,
     );
   }
 
-  Widget _previewActions(Map<String, dynamic> event, bool pending) {
+  Widget _previewActions(
+    Map<String, dynamic> event,
+    bool pending, {
+    double rowAt = 460,
+  }) {
     Widget button({
       required IconData icon,
       required String label,
@@ -2447,7 +2704,9 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     final reschedule = button(
       icon: Icons.event_repeat_outlined,
       label: 'Reschedule',
-      onPressed: pending ? null : () => _showEventDialog(existing: event),
+      onPressed: pending
+          ? null
+          : () => _showEventDialog(existing: event, scheduleOnly: true),
     );
     final delete = button(
       icon: Icons.delete_outline,
@@ -2458,7 +2717,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (constraints.maxWidth < 460) {
+        if (constraints.maxWidth < rowAt) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -2551,8 +2810,10 @@ class _LguEventsPanelState extends State<LguEventsPanel>
         foregroundColor: color,
         disabledBackgroundColor: AppTheme.surfaceMuted,
         visualDensity: VisualDensity.compact,
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        minimumSize: const Size(0, 40),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     );
   }
@@ -2642,10 +2903,15 @@ class _PostDraft {
 }
 
 class _PhotoUploadStatus extends StatelessWidget {
-  const _PhotoUploadStatus({required this.state, required this.color});
+  const _PhotoUploadStatus({
+    required this.state,
+    required this.color,
+    this.failedMessage = '',
+  });
 
   final _PhotoUploadState state;
   final Color color;
+  final String failedMessage;
 
   @override
   Widget build(BuildContext context) {
@@ -2656,7 +2922,7 @@ class _PhotoUploadStatus extends StatelessWidget {
             height: 12,
             child: CircularProgressIndicator(strokeWidth: 2, color: color),
           ),
-          'Uploading photo while you type…',
+          'Uploading photo...',
           color,
         ),
       _PhotoUploadState.ready => (
@@ -2667,7 +2933,9 @@ class _PhotoUploadStatus extends StatelessWidget {
         ),
       _PhotoUploadState.failed => (
           const Icon(Icons.refresh_rounded, size: 14, color: Color(0xFFD97706)),
-          'Upload interrupted — it will retry when you publish',
+          failedMessage.trim().isEmpty
+              ? 'Photo upload failed. Please retry.'
+              : failedMessage.trim(),
           const Color(0xFFD97706),
         ),
       _PhotoUploadState.none => (const SizedBox.shrink(), '', color),
@@ -2713,6 +2981,111 @@ class _EventPhotoFrame extends StatelessWidget {
             child: Center(child: child),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _MyPostCardFrame extends StatefulWidget {
+  const _MyPostCardFrame({required this.onTap, required this.child});
+
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  State<_MyPostCardFrame> createState() => _MyPostCardFrameState();
+}
+
+class _MyPostCardFrameState extends State<_MyPostCardFrame> {
+  static const _orange = Color(0xFFFF6B00);
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: _hover ? const Color(0xFFE85D00) : _orange,
+            width: 2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: _orange.withValues(alpha: _hover ? 0.22 : 0.10),
+              blurRadius: _hover ? 16 : 10,
+              offset: Offset(0, _hover ? 6 : 3),
+            ),
+          ],
+        ),
+        child: Material(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: widget.onTap,
+            borderRadius: BorderRadius.circular(12),
+            child: widget.child,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact My Posts cover. The sharp poster stays fully visible in the center.
+/// Side gaps use a blurred cover of the same image.
+class _MyPostCover extends StatelessWidget {
+  const _MyPostCover({
+    required this.imageBuilder,
+    this.maxHeight,
+    this.borderRadius,
+  });
+
+  final Widget Function(BoxFit fit, double width, double height) imageBuilder;
+  final double? maxHeight;
+  final BorderRadius? borderRadius;
+
+  static const double _coverHeight = 220;
+
+  @override
+  Widget build(BuildContext context) {
+    final height = maxHeight ?? _coverHeight;
+    return ClipRRect(
+      borderRadius: borderRadius ??
+          const BorderRadius.vertical(top: Radius.circular(10)),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final width = constraints.maxWidth.isFinite ? constraints.maxWidth : 320.0;
+          return SizedBox(
+            width: width,
+            height: height,
+            child: Stack(
+              fit: StackFit.expand,
+              alignment: Alignment.center,
+              children: [
+                ImageFiltered(
+                  imageFilter: ImageFilter.blur(
+                    sigmaX: 22,
+                    sigmaY: 22,
+                    tileMode: TileMode.decal,
+                  ),
+                  child: Transform.scale(
+                    scale: 1.22,
+                    child: imageBuilder(BoxFit.cover, width, height),
+                  ),
+                ),
+                const ColoredBox(color: Color(0x59FFF7ED)),
+                imageBuilder(BoxFit.contain, width, height),
+              ],
+            ),
+          );
+        },
       ),
     );
   }

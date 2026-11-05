@@ -1,10 +1,8 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import 'data.dart';
 import 'firestore_loader.dart';
-import 'services/admin_live_collections.dart';
-import 'theme/tourism_app_theme.dart';
-import 'widgets/optaca_portal_ui.dart';
 
 /// Governor portal: live table of documents in the Firestore `tourists` collection.
 class TouristRegistryTab extends StatefulWidget {
@@ -23,8 +21,8 @@ class _TouristRegistryTabState extends State<TouristRegistryTab> {
     super.dispose();
   }
 
-  static const _accent = OptacaAdminTheme.primary;
-  static const _tableBorder = OptacaAdminTheme.border;
+  static const _accent = Color(0xFFFF6B00);
+  static const _tableBorder = Color(0xFF1C1C1C);
 
   void _showDetails(
     BuildContext context,
@@ -90,38 +88,64 @@ class _TouristRegistryTabState extends State<TouristRegistryTab> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
       child: Container(
-        decoration: OptacaAdminTheme.cardDecoration,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
-                'Registered tourists',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
-                  color: OptacaAdminTheme.text,
-                ),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: _search,
-                style: const TextStyle(fontSize: 13),
-                onChanged: (_) => setState(() {}),
-                decoration: OptacaPortalUi.searchDecoration(
-                  hint: 'Search tourists...',
-                  suffixIcon: IconButton(
-                    tooltip: 'Voice search',
-                    icon: const Icon(Icons.mic_none_rounded, size: 20),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Voice search is not configured.'),
-                        ),
-                      );
-                    },
+              Material(
+                elevation: 2,
+                shadowColor: Colors.black26,
+                borderRadius: BorderRadius.circular(22),
+                color: Colors.white,
+                child: TextField(
+                  controller: _search,
+                  style: const TextStyle(fontSize: 13),
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    hintText: 'Search tourists...',
+                    hintStyle: TextStyle(
+                      color: AppColors.textGrey.withValues(alpha: 0.75),
+                      fontSize: 13,
+                    ),
+                    prefixIcon: Icon(
+                      Icons.search_rounded,
+                      size: 20,
+                      color: AppColors.textGrey.withValues(alpha: 0.85),
+                    ),
+                    suffixIcon: IconButton(
+                      tooltip: 'Voice search',
+                      icon: Icon(
+                        Icons.mic_none_rounded,
+                        size: 20,
+                        color: AppColors.textGrey.withValues(alpha: 0.85),
+                      ),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Voice search is not configured.'),
+                          ),
+                        );
+                      },
+                    ),
+                    border: InputBorder.none,
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 10,
+                    ),
                   ),
                 ),
               ),
@@ -137,26 +161,37 @@ class _TouristRegistryTabState extends State<TouristRegistryTab> {
                         ? kTableMinScrollWidth
                         : available;
 
-                    return AdminLiveDataBuilder(
-                      builder: (context, live) {
-                        if (live.touristsError != null &&
-                            live.touristsReady &&
-                            live.tourists.isEmpty) {
-                          return OptacaLoadError(
-                            title: 'Could not load tourists',
-                            message: '${live.touristsError}',
-                            onRetry: live.retry,
+                    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                      stream: FirebaseFirestore.instance
+                          .collection('qr_checkins')
+                          .snapshots(),
+                      builder: (context, visitsSnap) {
+                        final visitCounts = visitsSnap.hasData
+                            ? touristVisitCountsFromVisitsSnapshot(
+                                visitsSnap.data!,
+                              )
+                            : const <String, int>{};
+
+                        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                      stream: FirebaseFirestore.instance
+                          .collection(kTouristCollection)
+                          .snapshots(),
+                      builder: (context, snap) {
+                        if (snap.hasError) {
+                          return Center(
+                            child: Text(
+                              'Could not load tourists.\n${snap.error}',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.redAccent),
+                            ),
                           );
                         }
-                        if (!live.touristsReady) {
+                        if (!snap.hasData) {
                           return const Center(
                               child: CircularProgressIndicator());
                         }
-                        final visitCounts = live.checkInsReady
-                            ? touristVisitCountsFromCheckInDocs(live.checkIns)
-                            : const <String, int>{};
 
-                        final entries = live.tourists
+                        final entries = snap.data!.docs
                             .map(touristRegistryEntryFromDoc)
                             .toList()
                           ..sort((a, b) => b.sortKey.compareTo(a.sortKey));
@@ -175,19 +210,27 @@ class _TouristRegistryTabState extends State<TouristRegistryTab> {
                             .toList();
 
                         if (entries.isEmpty) {
-                          return const OptacaEmptyState(
-                            icon: Icons.people_outline_rounded,
-                            title: 'No tourists yet',
-                            message:
-                                'Add documents to the Firestore tourists collection.',
+                          return const Center(
+                            child: Text(
+                              'No tourists yet.\nAdd documents to the Firestore `tourists` collection.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: AppColors.textGrey,
+                                fontSize: 15,
+                              ),
+                            ),
                           );
                         }
 
                         if (filtered.isEmpty) {
-                          return const OptacaEmptyState(
-                            icon: Icons.search_off_outlined,
-                            title: 'No matching tourists',
-                            message: 'No rows match your search.',
+                          return const Center(
+                            child: Text(
+                              'No rows match your search.',
+                              style: TextStyle(
+                                color: AppColors.textGrey,
+                                fontSize: 15,
+                              ),
+                            ),
                           );
                         }
 
@@ -233,8 +276,8 @@ class _TouristRegistryTabState extends State<TouristRegistryTab> {
                               },
                               children: [
                                 TableRow(
-                                  decoration: const BoxDecoration(
-                                    color: OptacaAdminTheme.lightOrange,
+                                  decoration: BoxDecoration(
+                                    color: Colors.grey.shade100,
                                   ),
                                   children: [
                                     _th('Name'),
@@ -261,6 +304,8 @@ class _TouristRegistryTabState extends State<TouristRegistryTab> {
                           ),
                         ),
                       );
+                      },
+                    );
                       },
                     );
                   },

@@ -2,6 +2,7 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/services/lgu_event_service.dart';
+import 'package:atmos_trs_system/widgets/event_description_text.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:atmos_trs_system/widgets/ui_skeleton.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -428,11 +429,13 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
                             ),
                           ),
                           const SizedBox(height: 10),
-                          SelectableText(
-                            content.isEmpty ? 'No details provided.' : content,
+                          EventDescriptionText(
+                            text: content.isEmpty ? 'No details provided.' : content,
+                            selectable: true,
                             style: TextStyle(
                               fontSize: 15.5,
                               height: 1.6,
+                              fontWeight: FontWeight.w400,
                               color: content.isEmpty
                                   ? Colors.grey.shade500
                                   : const Color(0xFF334155),

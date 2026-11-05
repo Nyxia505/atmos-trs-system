@@ -137,7 +137,15 @@ class Dae1b2TemplateFill {
       if (xml != null) files[name] = edit(xml);
     }
 
+    var countStyles = const _CountStyles();
+    patch('xl/styles.xml', (xml) {
+      final next = _addCompactNumberStyles(xml);
+      countStyles = next.$2;
+      return next.$1;
+    });
+
     patch('xl/worksheets/sheet1.xml', (xml) {
+      xml = _widenNarrowCountColumns(xml);
       xml = _header(
         xml,
         monthCell: 'S4',
@@ -158,6 +166,7 @@ class Dae1b2TemplateFill {
         columns: {
           for (final e in focus.byDay.entries) _col(2 + e.key): e.value,
         },
+        styles: countStyles,
       );
       xml = _indicators(
         xml,
@@ -166,12 +175,14 @@ class Dae1b2TemplateFill {
         alosRow: 163,
         maleRow: 165,
         femaleRow: 166,
+        styles: countStyles,
       );
       return xml;
     });
 
     final monthlyName = withAeSheet ? 'xl/worksheets/sheet3.xml' : 'xl/worksheets/sheet2.xml';
     patch(monthlyName, (xml) {
+      xml = _widenNarrowCountColumns(xml);
       xml = _header(
         xml,
         monthCell: '',
@@ -193,6 +204,7 @@ class Dae1b2TemplateFill {
           for (final e in monthTotals.entries)
             if (e.key >= 1 && e.key <= 12) _col(2 + e.key): e.value.regions,
         },
+        styles: countStyles,
       );
       xml = _indicators(
         xml,
@@ -204,6 +216,7 @@ class Dae1b2TemplateFill {
         alosRow: 162,
         maleRow: 164,
         femaleRow: 165,
+        styles: countStyles,
       );
       return xml;
     });
@@ -211,6 +224,7 @@ class Dae1b2TemplateFill {
     if (withAeSheet) {
       final shown = aes.take(31).toList();
       patch('xl/worksheets/sheet2.xml', (xml) {
+        xml = _widenNarrowCountColumns(xml);
         xml = _header(
           xml,
           monthCell: 'S4',
@@ -234,6 +248,7 @@ class Dae1b2TemplateFill {
           columns: {
             for (var i = 0; i < shown.length; i++) _col(3 + i): shown[i].regions,
           },
+          styles: countStyles,
         );
         xml = _indicators(
           xml,
@@ -244,6 +259,7 @@ class Dae1b2TemplateFill {
           alosRow: 163,
           maleRow: 165,
           femaleRow: 166,
+          styles: countStyles,
         );
         return xml;
       });
@@ -404,17 +420,18 @@ class Dae1b2TemplateFill {
     required int? Function(String key) rowOf,
     required int nirLeaf,
     required Map<String, Map<String, int>> columns,
+    _CountStyles styles = const _CountStyles(),
   }) {
     for (final col in columns.entries) {
       for (final region in col.value.entries) {
         if (region.value == 0) continue;
         if (region.key == _nirKey) {
-          xml = _setNumber(xml, '${col.key}$nirLeaf', region.value);
+          xml = _setNumber(xml, '${col.key}$nirLeaf', region.value, styles: styles);
           continue;
         }
         final row = rowOf(region.key);
         if (row == null) continue;
-        xml = _setNumber(xml, '${col.key}$row', region.value);
+        xml = _setNumber(xml, '${col.key}$row', region.value, styles: styles);
       }
     }
     return xml;
@@ -427,16 +444,19 @@ class Dae1b2TemplateFill {
     required int alosRow,
     required int maleRow,
     required int femaleRow,
+    _CountStyles styles = const _CountStyles(),
   }) {
     for (final e in columns.entries) {
       final s = e.value;
-      if (s.domesticNights > 0) xml = _setNumber(xml, '${e.key}$nightsRow', s.domesticNights);
+      if (s.domesticNights > 0) {
+        xml = _setNumber(xml, '${e.key}$nightsRow', s.domesticNights, styles: styles);
+      }
       if (s.domesticArrivals > 0 && s.domesticNights > 0) {
         final alos = s.domesticNights / s.domesticArrivals;
-        xml = _setNumber(xml, '${e.key}$alosRow', alos, places: 2);
+        xml = _setNumber(xml, '${e.key}$alosRow', alos, places: 2, styles: styles);
       }
-      if (s.male > 0) xml = _setNumber(xml, '${e.key}$maleRow', s.male);
-      if (s.female > 0) xml = _setNumber(xml, '${e.key}$femaleRow', s.female);
+      if (s.male > 0) xml = _setNumber(xml, '${e.key}$maleRow', s.male, styles: styles);
+      if (s.female > 0) xml = _setNumber(xml, '${e.key}$femaleRow', s.female, styles: styles);
     }
     return xml;
   }
@@ -462,9 +482,21 @@ class Dae1b2TemplateFill {
     return xml;
   }
 
-  static String _setNumber(String xml, String ref, num value, {int places = 0}) {
+  static String _setNumber(
+    String xml,
+    String ref,
+    num value, {
+    int places = 0,
+    _CountStyles styles = const _CountStyles(),
+  }) {
     final text = places == 0 ? value.round().toString() : value.toStringAsFixed(places);
-    return _replaceCell(xml, ref, (style) => '<c r="$ref"$style><v>$text</v></c>');
+    return _replaceCell(xml, ref, (styleId) {
+      final mapped = places == 0 ? styles.integer[styleId] : styles.decimal[styleId];
+      final style = mapped != null
+          ? ' s="$mapped"'
+          : (styleId == null ? '' : ' s="$styleId"');
+      return '<c r="$ref"$style t="n"><v>$text</v></c>';
+    });
   }
 
   static String _setText(String xml, String ref, String text) {
@@ -475,18 +507,83 @@ class Dae1b2TemplateFill {
     return _replaceCell(
       xml,
       ref,
-      (style) =>
-          '<c r="$ref"$style t="inlineStr"><is><t xml:space="preserve">$safe</t></is></c>',
+      (styleId) {
+        final style = styleId == null ? '' : ' s="$styleId"';
+        return '<c r="$ref"$style t="inlineStr"><is><t xml:space="preserve">$safe</t></is></c>';
+      },
     );
   }
 
-  static String _replaceCell(String xml, String ref, String Function(String style) build) {
+  static String _replaceCell(
+    String xml,
+    String ref,
+    String Function(int? styleId) build,
+  ) {
     final re = RegExp('<c r="${RegExp.escape(ref)}"(?:[^>/]*/>|[^>]*>.*?</c>)', dotAll: true);
     final match = re.firstMatch(xml);
     if (match == null) return xml;
     final styleMatch = RegExp(' s="(\\d+)"').firstMatch(match.group(0)!);
-    final style = styleMatch == null ? '' : ' s="${styleMatch.group(1)}"';
-    return xml.replaceFirst(re, build(style));
+    final styleId = styleMatch == null ? null : int.tryParse(styleMatch.group(1)!);
+    return xml.replaceFirst(re, build(styleId));
+  }
+
+  /// Accounting formats (`#,##0.00` with `_-*` padding) render as `###` in the
+  /// official daily day-columns (~4.6 wide). Clone those xfs to compact `0` / `0.00`.
+  static (String, _CountStyles) _addCompactNumberStyles(String xml) {
+    final blockRe = RegExp(r'<cellXfs([^>]*)>(.*?)</cellXfs>', dotAll: true);
+    final block = blockRe.firstMatch(xml);
+    if (block == null) return (xml, const _CountStyles());
+    final xfRe = RegExp(r'<xf\b[^>]*?(?:/>|>.*?</xf>)', dotAll: true);
+    final xfs = xfRe.allMatches(block.group(2)!).map((m) => m.group(0)!).toList();
+    final integer = <int, int>{};
+    final decimal = <int, int>{};
+    final extra = StringBuffer();
+    var next = xfs.length;
+
+    String clone(String xf, String numFmtId) {
+      var out = xf.replaceFirst(RegExp(r'numFmtId="\d+"'), 'numFmtId="$numFmtId"');
+      if (RegExp(r'applyNumberFormat="\d+"').hasMatch(out)) {
+        out = out.replaceFirst(
+          RegExp(r'applyNumberFormat="\d+"'),
+          'applyNumberFormat="1"',
+        );
+      } else {
+        out = out.replaceFirst('<xf ', '<xf applyNumberFormat="1" ');
+      }
+      return out;
+    }
+
+    for (var i = 0; i < xfs.length; i++) {
+      final xf = xfs[i];
+      final fmt = RegExp(r'numFmtId="(\d+)"').firstMatch(xf)?.group(1);
+      if (fmt != '43' && fmt != '164') continue;
+      extra.write(clone(xf, '1'));
+      integer[i] = next++;
+      extra.write(clone(xf, '2'));
+      decimal[i] = next++;
+    }
+    if (extra.isEmpty) return (xml, const _CountStyles());
+    final updated = xml.replaceFirstMapped(
+      blockRe,
+      (m) => '<cellXfs count="$next">${m.group(2)!}$extra</cellXfs>',
+    );
+    return (updated, _CountStyles(integer: integer, decimal: decimal));
+  }
+
+  /// Day columns on the official daily sheet are ~4.66 wide — too narrow for
+  /// accounting-padded numbers. Keep the 31-day layout; give counts room.
+  static String _widenNarrowCountColumns(String xml) {
+    return xml.replaceAllMapped(
+      RegExp(r'(<col min="(\d+)" max="(\d+)" width=")([0-9.]+)(")'),
+      (m) {
+        final min = int.parse(m[2]!);
+        final width = double.parse(m[4]!);
+        if (min >= 3 && width < 8) {
+          return '${m[1]}8${m[5]}';
+        }
+        return m[0]!;
+      },
+    );
   }
 
   static String _gapsSheet(List<String> gaps) {
@@ -585,4 +682,14 @@ class _AeCol {
   final String name;
   final _Slice slice;
   Map<String, int> get regions => slice.regions;
+}
+
+class _CountStyles {
+  const _CountStyles({
+    this.integer = const {},
+    this.decimal = const {},
+  });
+
+  final Map<int, int> integer;
+  final Map<int, int> decimal;
 }

@@ -1,7 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:atmos_trs_system/config/ae_register_schema.dart';
+import 'package:atmos_trs_system/services/ae_type_suggestion_service.dart';
 import 'package:atmos_trs_system/widgets/establishment_dash_tokens.dart';
 import 'package:atmos_trs_system/widgets/establishment_dashboard_components.dart';
 import 'package:atmos_trs_system/widgets/establishment_location_capture.dart';
@@ -17,22 +20,29 @@ class EstablishmentReportingProfileCard extends StatefulWidget {
     required this.totalRooms,
     required this.aeType,
     required this.classificationCode,
+    this.customAeTypes = const [],
     required this.hostsMice,
     required this.saving,
     required this.onSave,
+    this.establishmentId = '',
+    this.businessName = '',
   });
 
   final bool tracksRooms;
   final int totalRooms;
   final String aeType;
   final String classificationCode;
+  final List<String> customAeTypes;
   final bool hostsMice;
   final bool saving;
+  final String establishmentId;
+  final String businessName;
   final void Function({
     required int totalRooms,
     required String aeType,
     required String classificationCode,
     required bool hostsMice,
+    List<String> customAeTypes,
   }) onSave;
 
   @override
@@ -43,28 +53,63 @@ class _EstablishmentReportingProfileCardState extends State<EstablishmentReporti
   late final TextEditingController _rooms;
   late final TextEditingController _code;
   late String _type;
+  late List<String> _customTypes;
   late bool _hostsMice;
+  List<String> _approvedExtras = const [];
+  AeTypeSuggestion? _suggestion;
+
+  List<String> get _typeOptions => AeTypeCatalog.dropdownOptions(
+        current: _type,
+        extras: [..._approvedExtras, ..._customTypes],
+      );
 
   @override
   void initState() {
     super.initState();
     _hostsMice = widget.hostsMice;
     _rooms = TextEditingController(text: '${widget.totalRooms}');
-    _type = AeTypeCatalog.types.containsKey(widget.aeType) ? widget.aeType : 'Others';
+    _customTypes = List<String>.from(widget.customAeTypes);
+    final saved = widget.aeType.trim();
+    _type = saved.isNotEmpty
+        ? (AeTypeCatalog.officialName(saved) ?? saved)
+        : AeTypeCatalog.others;
     _code = TextEditingController(
-      text: widget.classificationCode.isNotEmpty ? widget.classificationCode : AeTypeCatalog.codeFor(_type),
+      text: widget.classificationCode.isNotEmpty
+          ? widget.classificationCode
+          : AeTypeCatalog.codeFor(_type),
     );
+    _loadTypeMeta();
+  }
+
+  Future<void> _loadTypeMeta() async {
+    final extras = await AeTypeSuggestionService.loadApprovedExtras();
+    AeTypeSuggestion? suggestion;
+    final id = widget.establishmentId.trim();
+    if (id.isNotEmpty) {
+      suggestion = await AeTypeSuggestionService.latestForEstablishment(id);
+    }
+    if (!mounted) return;
+    setState(() {
+      _approvedExtras = extras;
+      _suggestion = suggestion;
+    });
   }
 
   @override
   void didUpdateWidget(covariant EstablishmentReportingProfileCard old) {
     super.didUpdateWidget(old);
     if (old.totalRooms != widget.totalRooms) _rooms.text = '${widget.totalRooms}';
-    if (old.aeType != widget.aeType && AeTypeCatalog.types.containsKey(widget.aeType)) _type = widget.aeType;
+    if (old.aeType != widget.aeType && widget.aeType.trim().isNotEmpty) {
+      _type = AeTypeCatalog.officialName(widget.aeType) ?? widget.aeType.trim();
+    }
     if (old.classificationCode != widget.classificationCode && widget.classificationCode.isNotEmpty) {
       _code.text = widget.classificationCode;
     }
+    if (old.customAeTypes != widget.customAeTypes) {
+      _customTypes = List<String>.from(widget.customAeTypes);
+    }
     if (old.hostsMice != widget.hostsMice) _hostsMice = widget.hostsMice;
+    if (old.establishmentId != widget.establishmentId) _loadTypeMeta();
   }
 
   @override
@@ -85,8 +130,72 @@ class _EstablishmentReportingProfileCardState extends State<EstablishmentReporti
     widget.onSave(
       totalRooms: rooms ?? 0,
       aeType: _type,
-      classificationCode: _code.text.trim().isEmpty ? AeTypeCatalog.codeFor(_type) : _code.text.trim().toUpperCase(),
+      classificationCode: _code.text.trim().isEmpty
+          ? AeTypeCatalog.codeFor(_type)
+          : _code.text.trim().toUpperCase(),
       hostsMice: _hostsMice,
+      customAeTypes: AeTypeCatalog.parseExtras([
+        ..._customTypes,
+        if (!AeTypeCatalog.isOfficial(_type) &&
+            !_approvedExtras.any((e) => e.toLowerCase() == _type.toLowerCase()))
+          _type,
+      ]),
+    );
+  }
+
+  Future<void> _addType() async {
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted) return;
+    final result = await showDialog<({String name, bool submitted})>(
+      context: context,
+      useRootNavigator: true,
+      barrierDismissible: false,
+      builder: (ctx) => _AddAeTypeDialog(
+        official: [
+          ...AeTypeCatalog.types.keys,
+          ..._approvedExtras,
+        ],
+        alreadyPending: _suggestion?.isPending == true ? _suggestion!.name : null,
+        establishmentId: widget.establishmentId,
+        businessName: widget.businessName,
+      ),
+    );
+    if (result == null || !mounted) return;
+    final cleaned = result.name.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (cleaned.isEmpty) return;
+
+    // Existing official / already-approved types: select immediately (no suggestion).
+    if (!result.submitted) {
+      final official = AeTypeCatalog.officialName(cleaned);
+      if (official != null) {
+        setState(() {
+          _type = official;
+          _code.text = AeTypeCatalog.codeFor(official);
+        });
+        return;
+      }
+      for (final e in _approvedExtras) {
+        if (e.toLowerCase() == cleaned.toLowerCase()) {
+          setState(() {
+            _type = e;
+            _code.text = AeTypeCatalog.codeFor(e);
+          });
+          return;
+        }
+      }
+      return;
+    }
+
+    await _loadTypeMeta();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '"$cleaned" submitted for OPTACA review. '
+          'Your current type is unchanged until it is approved.',
+        ),
+        behavior: SnackBarBehavior.floating,
+      ),
     );
   }
 
@@ -115,18 +224,37 @@ class _EstablishmentReportingProfileCardState extends State<EstablishmentReporti
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           decoration: dec('Total available rooms', Icons.bed_rounded),
         ),
-      DropdownButtonFormField<String>(
-        initialValue: _type,
-        isExpanded: true,
-        decoration: dec('Type of accommodation', Icons.apartment_rounded),
-        items: [for (final t in AeTypeCatalog.types.keys) DropdownMenuItem(value: t, child: Text(t))],
-        onChanged: (v) {
-          if (v == null) return;
-          setState(() {
-            _type = v;
-            _code.text = AeTypeCatalog.codeFor(v);
-          });
-        },
+      InputDecorator(
+        decoration: dec('Type of accommodation', Icons.apartment_rounded).copyWith(
+          suffixIcon: IconButton(
+            tooltip: '+ Add New Type',
+            onPressed: widget.saving ? null : _addType,
+            icon: const Icon(Icons.add_circle_outline_rounded, color: AeDashTokens.accent),
+          ),
+        ),
+        child: DropdownButtonHideUnderline(
+          child: DropdownButton<String>(
+            value: _typeOptions.contains(_type) ? _type : AeTypeCatalog.others,
+            isExpanded: true,
+            isDense: true,
+            items: [
+              for (final t in _typeOptions)
+                DropdownMenuItem(
+                  value: t,
+                  child: Text(t, overflow: TextOverflow.ellipsis),
+                ),
+            ],
+            onChanged: widget.saving
+                ? null
+                : (v) {
+                    if (v == null) return;
+                    setState(() {
+                      _type = v;
+                      _code.text = AeTypeCatalog.codeFor(v);
+                    });
+                  },
+          ),
+        ),
       ),
       TextField(
         controller: _code,
@@ -134,6 +262,7 @@ class _EstablishmentReportingProfileCardState extends State<EstablishmentReporti
         decoration: dec('Classification code', Icons.tag_rounded),
       ),
     ];
+    final suggestion = _suggestion;
     return AePanelCard(
       title: 'DOT reporting profile',
       subtitle: 'Used on your DAE-2 / DAE-1B reports (items 2–4). '
@@ -155,6 +284,10 @@ class _EstablishmentReportingProfileCardState extends State<EstablishmentReporti
               ],
             ]);
           }),
+          if (suggestion != null) ...[
+            const SizedBox(height: 4),
+            _AeTypeSuggestionStatusBanner(suggestion: suggestion),
+          ],
           const SizedBox(height: 6),
           Container(
             decoration: BoxDecoration(
@@ -192,6 +325,199 @@ class _EstablishmentReportingProfileCardState extends State<EstablishmentReporti
   }
 }
 
+class _AeTypeSuggestionStatusBanner extends StatelessWidget {
+  const _AeTypeSuggestionStatusBanner({required this.suggestion});
+
+  final AeTypeSuggestion suggestion;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color color;
+    final String label;
+    if (suggestion.isPending) {
+      color = AeDashTokens.warning;
+      label = 'Pending OPTACA review: "${suggestion.name}"';
+    } else if (suggestion.isApproved) {
+      color = AeDashTokens.success;
+      label = 'Approved: "${suggestion.name}" is now in the shared type list.';
+    } else if (suggestion.isRejected) {
+      color = AeDashTokens.danger;
+      label =
+          'Rejected: "${suggestion.name}". Your current classification is unchanged.';
+    } else {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.info_outline_rounded, size: 18, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              style: AeDashTokens.body(size: 12.5, color: color, weight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AddAeTypeDialog extends StatefulWidget {
+  const _AddAeTypeDialog({
+    required this.official,
+    required this.establishmentId,
+    this.businessName = '',
+    this.alreadyPending,
+  });
+
+  final List<String> official;
+  final String establishmentId;
+  final String businessName;
+  final String? alreadyPending;
+
+  @override
+  State<_AddAeTypeDialog> createState() => _AddAeTypeDialogState();
+}
+
+class _AddAeTypeDialogState extends State<_AddAeTypeDialog> {
+  late final TextEditingController _name;
+  String? _error;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _name = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_busy) return;
+    final raw = _name.text;
+    final officialHit = AeTypeCatalog.officialName(raw.trim());
+    if (officialHit != null) {
+      Navigator.pop(context, (name: officialHit, submitted: false));
+      return;
+    }
+    for (final e in widget.official) {
+      if (e.toLowerCase() == raw.trim().toLowerCase()) {
+        Navigator.pop(context, (name: e, submitted: false));
+        return;
+      }
+    }
+
+    final err = AeTypeSuggestionService.validateSuggestion(
+      raw: raw,
+      official: widget.official,
+      alreadyPending: widget.alreadyPending,
+    );
+    if (err != null) {
+      setState(() => _error = err);
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await AeTypeSuggestionService.submitPending(
+        name: raw,
+        establishmentId: widget.establishmentId,
+        businessName: widget.businessName,
+      );
+      if (!mounted) return;
+      Navigator.pop(context, (name: raw.trim(), submitted: true));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = e.toString().replaceFirst(RegExp(r'^StateError:\s*'), '');
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    return AlertDialog(
+      title: const Text('Suggest Accommodation Type'),
+      content: SizedBox(
+        width: width < 480 ? width * 0.9 : 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'New accommodation types require OPTACA approval.',
+              style: AeDashTokens.body(size: 12.5, weight: FontWeight.w600),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Your current classification stays until OPTACA approves the suggestion.',
+              style: AeDashTokens.body(size: 12.5),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _name,
+              autofocus: true,
+              enabled: !_busy,
+              textCapitalization: TextCapitalization.words,
+              decoration: InputDecoration(
+                labelText: 'Accommodation Type Name',
+                hintText: 'e.g. Homestay, Guesthouse, Hostel',
+                errorText: _error,
+                errorMaxLines: 4,
+                filled: true,
+                fillColor: const Color(0xFFFFF7ED),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: AeDashTokens.accent, width: 1.4),
+                ),
+              ),
+              onChanged: (_) {
+                if (_error != null) setState(() => _error = null);
+              },
+              onSubmitted: (_) => _submit(),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: AeDashTokens.accent),
+          onPressed: _busy ? null : _submit,
+          child: _busy
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                )
+              : const Text('Submit Suggestion'),
+        ),
+      ],
+    );
+  }
+}
+
 /// Map pin card wrapping [EstablishmentLocationCapture] in dashboard style.
 class EstablishmentMapPinCard extends StatelessWidget {
   const EstablishmentMapPinCard({
@@ -202,6 +528,7 @@ class EstablishmentMapPinCard extends StatelessWidget {
     required this.saving,
     required this.onBusyChanged,
     required this.onChanged,
+    this.municipalityId,
   });
 
   final double? latitude;
@@ -210,6 +537,7 @@ class EstablishmentMapPinCard extends StatelessWidget {
   final bool saving;
   final ValueChanged<bool> onBusyChanged;
   final ValueChanged<({double latitude, double longitude})> onChanged;
+  final String? municipalityId;
 
   @override
   Widget build(BuildContext context) {
@@ -217,7 +545,7 @@ class EstablishmentMapPinCard extends StatelessWidget {
       title: 'Map pin',
       subtitle:
           'Tourists see your establishment on Explore after OPTACA approval. '
-          'Stand at the entrance, then tap Get location.',
+          'Search your hotel, use Get location, or adjust the pin on the map.',
       icon: Icons.location_on_rounded,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -229,6 +557,7 @@ class EstablishmentMapPinCard extends StatelessWidget {
             required: false,
             dashboardStyle: true,
             accentColor: AeDashTokens.accent,
+            municipalityId: municipalityId,
             onBusyChanged: onBusyChanged,
             onChanged: onChanged,
           ),
@@ -299,14 +628,7 @@ class EstablishmentPhotosCard extends StatelessWidget {
                 const SizedBox(width: 24),
                 Expanded(
                   flex: 4,
-                  child: IgnorePointer(
-                    child: Image.asset(
-                      collageAsset,
-                      height: 180,
-                      fit: BoxFit.contain,
-                      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                    ),
-                  ),
+                  child: _collageCta(),
                 ),
               ],
             );
@@ -325,12 +647,50 @@ class EstablishmentPhotosCard extends StatelessWidget {
     );
   }
 
+  Widget _collageCta() {
+    final canAdd = _canAdd && !busy;
+    return MouseRegion(
+      cursor: canAdd ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      child: GestureDetector(
+        onTap: canAdd ? onAdd : null,
+        child: Semantics(
+          button: true,
+          label: 'Add profile photo',
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Image.asset(
+                collageAsset,
+                height: 180,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const SizedBox(height: 180),
+              ),
+              if (busy)
+                const SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.4,
+                    color: AeDashTokens.accent,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _uploadTile({double? width, double height = 150}) {
     final canAdd = _canAdd;
     return SizedBox(
       width: width,
       height: height,
-      child: Material(
+      child: MouseRegion(
+        cursor: canAdd && !busy
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
+        child: Material(
         color: Colors.transparent,
         child: InkWell(
           onTap: (!canAdd || busy) ? null : onAdd,
@@ -384,6 +744,7 @@ class EstablishmentPhotosCard extends StatelessWidget {
             ),
           ),
         ),
+        ),
       ),
     );
   }
@@ -396,18 +757,7 @@ class EstablishmentPhotosCard extends StatelessWidget {
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(14),
-            child: Image.network(
-              urls[i],
-              width: size,
-              height: size,
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => Container(
-                width: size,
-                height: size,
-                color: const Color(0xFFE2E8F0),
-                child: const Icon(Icons.broken_image_outlined),
-              ),
-            ),
+            child: _photo(urls[i], size),
           ),
           Positioned(
             top: 6,
@@ -447,6 +797,36 @@ class EstablishmentPhotosCard extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+
+  Widget _photo(String url, double size) {
+    Widget broken() => Container(
+          width: size,
+          height: size,
+          color: const Color(0xFFE2E8F0),
+          child: const Icon(Icons.broken_image_outlined),
+        );
+    if (url.startsWith('data:image')) {
+      try {
+        final bytes = base64Decode(url.split(',').last);
+        return Image.memory(
+          bytes,
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => broken(),
+        );
+      } catch (_) {
+        return broken();
+      }
+    }
+    return Image.network(
+      url,
+      width: size,
+      height: size,
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) => broken(),
     );
   }
 }

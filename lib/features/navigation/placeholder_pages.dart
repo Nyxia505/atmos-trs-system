@@ -29,6 +29,7 @@ import 'package:atmos_trs_system/screens/spot_checkin_screen.dart';
 import 'package:atmos_trs_system/screens/lgu_checkin_screen.dart';
 import 'package:atmos_trs_system/screens/event_detail_screen.dart';
 import 'package:atmos_trs_system/services/announcement_notification_sync.dart';
+import 'package:atmos_trs_system/widgets/event_description_text.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:atmos_trs_system/services/notification_badge_notifier.dart';
 import 'package:atmos_trs_system/services/notification_firestore_service.dart';
@@ -240,7 +241,7 @@ class ScanTabPage extends StatefulWidget {
   const ScanTabPage({super.key, this.guestMode = false});
 
   /// True when launched before sign-in (e.g. from landing). Shows a back button and routes
-  /// unauthenticated scans to `/qr-welcome` instead of a dialog.
+  /// unauthenticated scans to `/qr-entry` instead of a dialog.
   final bool guestMode;
 
   @override
@@ -658,7 +659,7 @@ class _ScanTabPageState extends State<ScanTabPage> with WidgetsBindingObserver {
       Navigator.of(
         context,
         rootNavigator: true,
-      ).pushReplacementNamed('/qr-welcome');
+      ).pushReplacementNamed('/qr-entry');
       return;
     }
 
@@ -822,7 +823,7 @@ class _ScanTabPageState extends State<ScanTabPage> with WidgetsBindingObserver {
     Navigator.of(
       context,
       rootNavigator: true,
-    ).pushReplacementNamed('/qr-welcome');
+    ).pushReplacementNamed('/qr-entry');
   }
 
   /// Parses JSON tourist QR payload. Returns tourist_id if type is "tourist", else null.
@@ -2282,11 +2283,9 @@ class _NotificationCard extends StatelessWidget {
                                 item.title,
                                 style: TextStyle(
                                   color: AppTheme.textPrimary,
-                                  fontWeight: hasUnread
-                                      ? FontWeight.w700
-                                      : FontWeight.w600,
-                                  fontSize: 14,
-                                  height: 1.2,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 15,
+                                  height: 1.25,
                                 ),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
@@ -2313,15 +2312,15 @@ class _NotificationCard extends StatelessWidget {
                             if (message.isNotEmpty) ...[
                               const SizedBox(width: 6),
                               Expanded(
-                                child: Text(
-                                  message,
+                                child: EventDescriptionText(
+                                  text: message,
+                                  maxLines: 2,
                                   style: TextStyle(
                                     color: AppTheme.unselectedMuted,
                                     fontSize: 12,
                                     height: 1.25,
+                                    fontWeight: FontWeight.w400,
                                   ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ),
                             ],

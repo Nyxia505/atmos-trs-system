@@ -18,6 +18,19 @@ class SupabaseStorageUpload {
   /// `spots/` is rejected with HTTP 400 / "row-level security policy".
   static const String spotPhotoFolder = 'tourist-spots';
 
+  /// AE profile photos. `establishments/` is rejected by the same policy;
+  /// `uploads/` is already allowed for anon inserts.
+  static const String establishmentPhotoFolder = 'uploads';
+
+  /// LGU event covers. Allowed by the `tourist-images` insert policy (`events/`).
+  static const String eventPhotoFolder = 'events';
+
+  static const Set<String> eventImageTypes = {
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+  };
+
   static const Set<String> allowedImageTypes = {
     'image/jpeg',
     'image/png',
@@ -37,6 +50,37 @@ class SupabaseStorageUpload {
     }
     final stamp = DateTime.now().microsecondsSinceEpoch;
     return '$spotPhotoFolder/$safeId/photo_$stamp.$ext';
+  }
+
+  /// `events/{eventId}/photo_{time}.ext` — a new file on every upload.
+  static String eventPhotoObjectKey(String eventId, String extension) {
+    final safeId = eventId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '');
+    if (safeId.isEmpty) {
+      throw StateError('This event cannot store a photo.');
+    }
+    final ext = extension.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+    const allowed = {'jpg', 'jpeg', 'png', 'webp'};
+    if (!allowed.contains(ext)) {
+      throw StateError('Use a JPG, PNG, or WEBP photo.');
+    }
+    final normalized = ext == 'jpeg' ? 'jpg' : ext;
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+    return '$eventPhotoFolder/$safeId/photo_$stamp.$normalized';
+  }
+
+  /// Object key that matches the storage policy:
+  /// `uploads/establishments/{uid}/photo_{time}.ext`.
+  static String establishmentPhotoObjectKey(String uid, String extension) {
+    final safeId = uid.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '');
+    if (safeId.isEmpty) {
+      throw StateError('Sign in to upload photos.');
+    }
+    final ext = extension.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+    if (ext.isEmpty) {
+      throw StateError('Unsupported photo type. Use JPG, PNG, or WEBP.');
+    }
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+    return '$establishmentPhotoFolder/establishments/$safeId/photo_$stamp.$ext';
   }
 
   /// Reads the real image type from file bytes. Flutter Web file names are often wrong.
@@ -197,6 +241,57 @@ class SupabaseStorageUpload {
     }
     onProgress?.call(1);
     return SupabaseStorageConfig.publicUrlForObjectKey(key);
+  }
+
+  /// LGU event cover: JPG, PNG, or WEBP, at most 8 MB.
+  /// Returns the persistent public URL. Does not delete any previous file.
+  static Future<String> uploadEventPhoto({
+    required String eventId,
+    required Uint8List bytes,
+    String? contentType,
+    void Function(double progress)? onProgress,
+  }) async {
+    if (bytes.isEmpty) {
+      throw StateError('That image file is empty.');
+    }
+    if (bytes.length > maxImageBytes) {
+      throw StateError('Photo must be 8 MB or smaller.');
+    }
+    final detected = contentTypeForImageBytes(bytes);
+    final hinted = contentType?.trim().toLowerCase();
+    final type = detected ??
+        ((hinted != null && eventImageTypes.contains(hinted)) ? hinted : null);
+    if (type == null || !eventImageTypes.contains(type)) {
+      throw StateError('Use a JPG, PNG, or WEBP photo.');
+    }
+    final url = await uploadBytes(
+      objectKey: eventPhotoObjectKey(eventId, extensionForContentType(type)),
+      bytes: bytes,
+      contentType: type,
+      upsert: false,
+      onProgress: onProgress,
+    );
+    debugPrint('[SupabaseUpload] event photo stored: $url');
+    return url;
+  }
+
+  /// True only for a photo uploaded under this event's folder.
+  static bool ownsEventPhoto(String publicUrl, String eventId) {
+    final key = _objectKeyFromPublicUrl(publicUrl);
+    if (key == null) return false;
+    final safeId = eventId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '');
+    if (safeId.isEmpty) return false;
+    return key.startsWith('$eventPhotoFolder/$safeId/');
+  }
+
+  /// Deletes one event photo after the Firestore record no longer points at it.
+  /// Firebase Storage URLs and other buckets are left untouched.
+  static Future<void> deleteEventPhotoIfOwned(
+    String publicUrl,
+    String eventId,
+  ) async {
+    if (!ownsEventPhoto(publicUrl, eventId)) return;
+    await deletePublicUrl(publicUrl);
   }
 
   /// Spot photo upload: JPG, PNG, WEBP, or GIF, at most 8 MB.

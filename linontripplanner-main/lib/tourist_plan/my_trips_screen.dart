@@ -120,6 +120,15 @@ class _MyTripsScreenState extends State<MyTripsScreen> {
                               color: AppColors.textDark,
                             ),
                           ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Finish a plan in Plan my trip and it will show up here.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: AppColors.textGrey.withValues(alpha: 0.95),
+                              height: 1.4,
+                            ),
+                          ),
                         ],
                       ),
                     ),
