@@ -13,8 +13,9 @@ abstract final class OptacaPortalUi {
       borderRadius: BorderRadius.circular(radius),
       border: Border.all(
         color: selected
-            ? OptacaAdminTheme.primary.withValues(alpha: 0.35)
+            ? OptacaAdminTheme.primary.withValues(alpha: 0.45)
             : OptacaAdminTheme.border,
+        width: selected ? 1.4 : 1.2,
       ),
       boxShadow: OptacaAdminTheme.cardShadow,
     );
@@ -70,6 +71,15 @@ class OptacaSectionHeader extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Container(
+                width: 28,
+                height: 3,
+                margin: const EdgeInsets.only(bottom: 8),
+                decoration: BoxDecoration(
+                  color: OptacaAdminTheme.primary,
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
               Text(
                 title,
                 style: const TextStyle(

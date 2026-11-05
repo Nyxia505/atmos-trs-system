@@ -34,9 +34,11 @@ import 'theme/tourism_app_theme.dart';
 import 'trip_plan_host_bridge.dart';
 import 'utils/spot_coordinates.dart';
 import 'widgets/admin_bulk_selection_bar.dart';
+import 'widgets/admin_featured_spot_picker.dart';
 import 'widgets/admin_high_rating_spots_map.dart';
 import 'widgets/admin_spot_location_picker.dart';
 import 'widgets/municipality_image.dart';
+import 'widgets/optaca_accounts_panel.dart';
 import 'widgets/optaca_portal_ui.dart';
 import 'widgets/responsive_layout.dart';
 import 'widgets/tourism_events_calendar.dart';
@@ -63,9 +65,9 @@ const _kGovernorNavItems = [
   (icon: Icons.grid_on_outlined, label: 'Matrix Fares'),
   (icon: Icons.campaign_outlined, label: 'Events & Announcements'),
   (icon: Icons.storefront_outlined, label: 'Establishments'),
-  (icon: Icons.insights_outlined, label: 'Tourism Insights'),
   (icon: Icons.assessment_outlined, label: 'DOT Reports'),
   (icon: Icons.warning_amber_rounded, label: 'Alerts & Quality'),
+  (icon: Icons.manage_accounts_rounded, label: 'LGU Account Management'),
   (icon: Icons.settings_outlined, label: 'Settings'),
 ];
 
@@ -73,8 +75,8 @@ const _kNavSections = <({String? title, List<int> indices})>[
   (title: null, indices: [0]),
   (title: 'Visitors', indices: [1, 5, 6]),
   (title: 'Places', indices: [2, 3, 4, 8, 9]),
-  (title: 'Reports', indices: [7, 10, 11, 12]),
-  (title: 'System', indices: [13]),
+  (title: 'Reports', indices: [7, 10, 11]),
+  (title: 'System', indices: [12, 13]),
 ];
 
 String _portalPageTitle(int selected) {
@@ -140,13 +142,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       case 9:
         return const _PortalEstablishmentsTab();
       case 10:
-        return _AnalyticsTab(onChanged: _onGovernorDataChanged);
-      case 11:
         return AdminReportsTab(
           onOpenMatrixFares: () => _tabIndex.value = 7,
         );
-      case 12:
+      case 11:
         return const _AlertsQualityTab();
+      case 12:
+        return const _LguAccountManagementTab();
       case 13:
         return _AdminSettingsTab(
           onOpenBusStops: () => _tabIndex.value = 14,
@@ -437,9 +439,25 @@ class _GovernorSidebar extends StatelessWidget {
       duration: const Duration(milliseconds: 220),
       curve: Curves.easeOutCubic,
       width: fullWidth ? double.infinity : (collapsed ? 84 : 276),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: OptacaAdminTheme.sidebarGradient,
+        borderRadius: fullWidth
+            ? BorderRadius.zero
+            : const BorderRadius.only(
+                topRight: Radius.circular(18),
+                bottomRight: Radius.circular(18),
+              ),
+        boxShadow: fullWidth
+            ? null
+            : [
+                BoxShadow(
+                  color: OptacaAdminTheme.primary.withValues(alpha: 0.28),
+                  blurRadius: 22,
+                  offset: const Offset(4, 0),
+                ),
+              ],
       ),
+      clipBehavior: Clip.antiAlias,
       child: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -492,7 +510,7 @@ class _GovernorSidebar extends StatelessWidget {
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
                                   fontSize: 11.5,
-                                  color: Color(0xFFFFD7B0),
+                                  color: Colors.white,
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
@@ -517,14 +535,21 @@ class _GovernorSidebar extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.08),
+                    color: Colors.white.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.08),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
                   ),
                   child: const Text(
                     'Misamis Occidental',
                     style: TextStyle(
-                      color: Color(0xFFFFE4C8),
+                      color: Colors.white,
                       fontSize: 11.5,
                       fontWeight: FontWeight.w600,
                     ),
@@ -538,13 +563,13 @@ class _GovernorSidebar extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.08),
+                    color: Colors.white.withValues(alpha: 0.16),
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.22)),
                   ),
                   child: const Row(
                     children: [
-                      Icon(Icons.verified_outlined, color: Color(0xFFFFD7B0), size: 18),
+                      Icon(Icons.verified_outlined, color: Colors.white, size: 18),
                       SizedBox(width: 8),
                       Expanded(
                         child: Text(
@@ -565,18 +590,26 @@ class _GovernorSidebar extends StatelessWidget {
               child: collapsed
                   ? Tooltip(
                       message: 'Logout',
-                      child: IconButton(
-                        onPressed: onLogout,
-                        icon: const Icon(Icons.logout_rounded, color: Colors.white),
+                      child: Material(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        child: IconButton(
+                          onPressed: onLogout,
+                          icon: const Icon(
+                            Icons.logout_rounded,
+                            color: OptacaAdminTheme.primary,
+                          ),
+                        ),
                       ),
                     )
                   : FilledButton.icon(
                       onPressed: onLogout,
                       style: FilledButton.styleFrom(
-                        backgroundColor: OptacaAdminTheme.primary,
-                        foregroundColor: Colors.white,
+                        backgroundColor: Colors.white,
+                        foregroundColor: OptacaAdminTheme.primary,
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         minimumSize: const Size.fromHeight(46),
+                        elevation: 0,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
@@ -633,7 +666,7 @@ class _GovernorSidebar extends StatelessWidget {
               child: Text(
                 section.title!.toUpperCase(),
                 style: TextStyle(
-                  color: const Color(0xFFFFD7B0).withValues(alpha: 0.85),
+                  color: Colors.white.withValues(alpha: 0.78),
                   fontSize: 10.5,
                   fontWeight: FontWeight.w700,
                   letterSpacing: 1.4,
@@ -643,7 +676,7 @@ class _GovernorSidebar extends StatelessWidget {
           else if (collapsed && section.title != null)
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 10, 8, 6),
-              child: Divider(color: Colors.white.withValues(alpha: 0.22), height: 1),
+              child: Divider(color: Colors.white.withValues(alpha: 0.28), height: 1),
             ),
           for (final index in section.indices) _navTile(index),
         ],
@@ -661,11 +694,9 @@ class _GovernorSidebar extends StatelessWidget {
         child: InkWell(
           onTap: () => onSelect(index),
           borderRadius: BorderRadius.circular(12),
-          hoverColor: selected
-              ? Colors.white.withValues(alpha: 0.08)
-              : Colors.white.withValues(alpha: 0.08),
-          splashColor: Colors.white.withValues(alpha: 0.2),
-          highlightColor: Colors.white.withValues(alpha: 0.08),
+          hoverColor: Colors.white.withValues(alpha: selected ? 0.12 : 0.14),
+          splashColor: Colors.white.withValues(alpha: 0.22),
+          highlightColor: Colors.white.withValues(alpha: 0.10),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
             curve: Curves.easeOut,
@@ -674,14 +705,12 @@ class _GovernorSidebar extends StatelessWidget {
               vertical: collapsed ? 11 : 12,
             ),
             decoration: BoxDecoration(
-              color: selected
-                  ? OptacaAdminTheme.primary
-                  : Colors.white.withValues(alpha: 0.0),
+              color: selected ? Colors.white : Colors.transparent,
               borderRadius: BorderRadius.circular(12),
               boxShadow: selected
                   ? [
                       BoxShadow(
-                        color: OptacaAdminTheme.primary.withValues(alpha: 0.35),
+                        color: Colors.black.withValues(alpha: 0.12),
                         blurRadius: 12,
                         offset: const Offset(0, 4),
                       ),
@@ -689,12 +718,15 @@ class _GovernorSidebar extends StatelessWidget {
                   : null,
             ),
             child: Row(
-              mainAxisAlignment: collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
+              mainAxisAlignment:
+                  collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
               children: [
                 Icon(
                   item.icon,
                   size: 21,
-                  color: selected ? Colors.white : const Color(0xFFFFE4C8),
+                  color: selected
+                      ? OptacaAdminTheme.primary
+                      : Colors.white.withValues(alpha: 0.95),
                 ),
                 if (!collapsed) ...[
                   const SizedBox(width: 12),
@@ -706,8 +738,10 @@ class _GovernorSidebar extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 13.5,
                         height: 1.2,
-                        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                        color: selected ? Colors.white : Colors.white.withValues(alpha: 0.88),
+                        fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
+                        color: selected
+                            ? OptacaAdminTheme.primary
+                            : Colors.white.withValues(alpha: 0.95),
                       ),
                     ),
                   ),
@@ -719,7 +753,11 @@ class _GovernorSidebar extends StatelessWidget {
       ),
     );
     if (!collapsed) return tile;
-    return Tooltip(message: item.label, waitDuration: const Duration(milliseconds: 250), child: tile);
+    return Tooltip(
+      message: item.label,
+      waitDuration: const Duration(milliseconds: 250),
+      child: tile,
+    );
   }
 }
 
@@ -735,17 +773,17 @@ class _GovernorPageHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: OptacaAdminTheme.card,
+      color: OptacaAdminTheme.lightOrange,
       elevation: 0,
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.fromLTRB(28, 14, 28, 12),
+        padding: const EdgeInsets.fromLTRB(28, 16, 28, 14),
         decoration: BoxDecoration(
-          color: OptacaAdminTheme.card,
+          color: OptacaAdminTheme.lightOrange,
           border: const Border(bottom: BorderSide(color: OptacaAdminTheme.border)),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF2A1810).withValues(alpha: 0.04),
+              color: OptacaAdminTheme.primary.withValues(alpha: 0.06),
               blurRadius: 12,
               offset: const Offset(0, 4),
             ),
@@ -758,9 +796,9 @@ class _GovernorPageHeader extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  width: 36,
+                  width: 40,
                   height: 4,
-                  margin: const EdgeInsets.only(bottom: 8),
+                  margin: const EdgeInsets.only(bottom: 10),
                   decoration: BoxDecoration(
                     color: OptacaAdminTheme.primary,
                     borderRadius: BorderRadius.circular(4),
@@ -1050,6 +1088,19 @@ class _PortalEstablishmentsTabState extends State<_PortalEstablishmentsTab> {
   }
 }
 
+class _LguAccountManagementTab extends StatelessWidget {
+  const _LguAccountManagementTab();
+
+  @override
+  Widget build(BuildContext context) {
+    // Prefer ATMOS-injected panel when hosted inside ATMOS; otherwise use the
+    // Trip Planner built-in panel (same Cloud Function + Firestore fallback).
+    final host = TripPlanHostBridge.lguAccountManagementPanel;
+    if (host != null) return host(context);
+    return const OptacaAccountsPanel();
+  }
+}
+
 class _AlertsQualityTab extends StatelessWidget {
   const _AlertsQualityTab();
 
@@ -1215,7 +1266,7 @@ class _OverviewHeroBanner extends StatelessWidget {
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
             color: OptacaAdminTheme.primary.withValues(alpha: 0.28),
@@ -1225,15 +1276,15 @@ class _OverviewHeroBanner extends StatelessWidget {
         ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(18),
         child: LayoutBuilder(
           builder: (context, constraints) {
             final width = constraints.maxWidth;
             final textMax = width < 560
                 ? width * 0.92
                 : width < 900
-                    ? width * 0.60
-                    : width * 0.50;
+                    ? width * 0.58
+                    : width * 0.48;
             final fade = _fade(width);
             final imageWidth = width < 560
                 ? width * 0.58
@@ -1278,6 +1329,13 @@ class _OverviewHeroBanner extends StatelessWidget {
                       ),
                     ),
                   ),
+                  Positioned.fill(
+                    child: CustomPaint(
+                      painter: _OrangeWaveOverlayPainter(
+                        color: OptacaAdminTheme.primary.withValues(alpha: 0.22),
+                      ),
+                    ),
+                  ),
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Padding(
@@ -1302,7 +1360,7 @@ class _OverviewHeroBanner extends StatelessWidget {
                             Text(
                               '${_monthLabels[now.month - 1]} ${now.day}, ${now.year}',
                               style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.9),
+                                color: Colors.white.withValues(alpha: 0.92),
                                 fontSize: 13.5,
                                 height: 1.35,
                               ),
@@ -1320,6 +1378,82 @@ class _OverviewHeroBanner extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Soft wave shapes for the provincial banner (visual only).
+class _OrangeWaveOverlayPainter extends CustomPainter {
+  const _OrangeWaveOverlayPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = color;
+    final path = Path()
+      ..moveTo(size.width * 0.38, 0)
+      ..cubicTo(
+        size.width * 0.48,
+        size.height * 0.18,
+        size.width * 0.42,
+        size.height * 0.42,
+        size.width * 0.52,
+        size.height * 0.55,
+      )
+      ..cubicTo(
+        size.width * 0.62,
+        size.height * 0.70,
+        size.width * 0.56,
+        size.height * 0.88,
+        size.width * 0.68,
+        size.height,
+      )
+      ..lineTo(size.width * 0.42, size.height)
+      ..cubicTo(
+        size.width * 0.34,
+        size.height * 0.78,
+        size.width * 0.36,
+        size.height * 0.45,
+        size.width * 0.28,
+        size.height * 0.22,
+      )
+      ..close();
+    canvas.drawPath(path, paint);
+
+    final paint2 = Paint()..color = color.withValues(alpha: 0.55);
+    final path2 = Path()
+      ..moveTo(size.width * 0.50, 0)
+      ..cubicTo(
+        size.width * 0.58,
+        size.height * 0.25,
+        size.width * 0.54,
+        size.height * 0.55,
+        size.width * 0.64,
+        size.height * 0.72,
+      )
+      ..cubicTo(
+        size.width * 0.72,
+        size.height * 0.86,
+        size.width * 0.70,
+        size.height * 0.96,
+        size.width * 0.78,
+        size.height,
+      )
+      ..lineTo(size.width * 0.55, size.height)
+      ..cubicTo(
+        size.width * 0.48,
+        size.height * 0.80,
+        size.width * 0.48,
+        size.height * 0.40,
+        size.width * 0.42,
+        0,
+      )
+      ..close();
+    canvas.drawPath(path2, paint2);
+  }
+
+  @override
+  bool shouldRepaint(covariant _OrangeWaveOverlayPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 class _OverviewTab extends StatefulWidget {
@@ -1483,37 +1617,27 @@ class _OverviewTabState extends State<_OverviewTab> {
                   title: 'Registered Tourists',
                   value: totalTourists,
                   icon: Icons.groups_2_outlined,
-                  iconBg: AppColors.primary.withValues(alpha: 0.12),
-                  iconColor: AppColors.primary,
                 ),
                 _PortalStatCard(
-                  title: 'Tourists today',
+                  title: 'Tourists Today',
                   value: touristsToday,
                   subtitle: 'Unique (1 per person across all LGUs)',
                   icon: Icons.qr_code_2_rounded,
-                  iconBg: _kPortalIconBlue.withValues(alpha: 0.15),
-                  iconColor: _kPortalIconBlue,
                 ),
                 _PortalStatCard(
                   title: 'Total Check-ins',
                   value: totalCheckins,
                   icon: Icons.touch_app_outlined,
-                  iconBg: AppColors.primary.withValues(alpha: 0.12),
-                  iconColor: AppColors.primary,
                 ),
                 _PortalStatCard(
                   title: 'Active Tourist Spots',
                   value: activeSpots,
                   icon: Icons.location_on_outlined,
-                  iconBg: AppColors.primary.withValues(alpha: 0.12),
-                  iconColor: AppColors.primary,
                 ),
                 _PortalStatCard(
                   title: 'Upcoming Events',
                   value: upcomingEvents,
                   icon: Icons.event_outlined,
-                  iconBg: _kTrendGreen.withValues(alpha: 0.15),
-                  iconColor: _kTrendGreen,
                 ),
               ];
               if (cols >= 5) {
@@ -1606,8 +1730,8 @@ class _OverviewTabState extends State<_OverviewTab> {
                 (index: 1, icon: Icons.people_outline_rounded, label: 'Tourist Monitoring'),
                 (index: 5, icon: Icons.location_city_outlined, label: 'Municipality Performance'),
                 (index: 6, icon: Icons.route_outlined, label: 'Trip Planner Analytics'),
-                (index: 11, icon: Icons.assessment_outlined, label: 'DOT Reports'),
-                (index: 12, icon: Icons.warning_amber_rounded, label: 'Alerts & Quality'),
+                (index: 10, icon: Icons.assessment_outlined, label: 'DOT Reports'),
+                (index: 11, icon: Icons.warning_amber_rounded, label: 'Alerts & Quality'),
               ];
               if (cols == 1) {
                 return Column(
@@ -1656,90 +1780,177 @@ class _OverviewTabState extends State<_OverviewTab> {
   }
 }
 
-class _PortalStatCard extends StatelessWidget {
+class _PortalStatCard extends StatefulWidget {
   final String title;
   final int value;
   final IconData icon;
-  final Color iconBg;
-  final Color iconColor;
   final String? subtitle;
 
   const _PortalStatCard({
     required this.title,
     required this.value,
     required this.icon,
-    required this.iconBg,
-    required this.iconColor,
     this.subtitle,
   });
 
   @override
+  State<_PortalStatCard> createState() => _PortalStatCardState();
+}
+
+class _PortalStatCardState extends State<_PortalStatCard> {
+  bool _hovered = false;
+
+  @override
   Widget build(BuildContext context) {
-    return Container(
-      clipBehavior: Clip.antiAlias,
-      decoration: OptacaAdminTheme.cardDecoration,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(height: 4, color: iconColor),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 16, 16, 18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        transform: Matrix4.translationValues(0, _hovered ? -3 : 0, 0),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: OptacaAdminTheme.primary
+                  .withValues(alpha: _hovered ? 0.38 : 0.26),
+              blurRadius: _hovered ? 22 : 16,
+              offset: Offset(0, _hovered ? 10 : 7),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: DecoratedBox(
+            decoration: const BoxDecoration(
+              gradient: OptacaAdminTheme.kpiGradient,
+            ),
+            child: Stack(
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  height: 42,
+                  child: CustomPaint(
+                    painter: _KpiWavePainter(
+                      color: Colors.white.withValues(alpha: 0.16),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 16, 18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              widget.title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white.withValues(alpha: 0.94),
+                                height: 1.2,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.08),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Icon(
+                              widget.icon,
+                              color: OptacaAdminTheme.primary,
+                              size: 20,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        OptacaAdminTheme.formatCount(widget.value),
                         style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: OptacaAdminTheme.textMuted,
+                          fontSize: 30,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                          height: 1,
+                          letterSpacing: -0.6,
                         ),
                       ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.all(9),
-                      decoration: BoxDecoration(
-                        color: iconBg,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(icon, color: iconColor, size: 20),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  OptacaAdminTheme.formatCount(value),
-                  style: const TextStyle(
-                    fontSize: 30,
-                    fontWeight: FontWeight.w800,
-                    color: OptacaAdminTheme.text,
-                    height: 1,
-                    letterSpacing: -0.6,
+                      if (widget.subtitle != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          widget.subtitle!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.white.withValues(alpha: 0.86),
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ] else
+                        const SizedBox(height: 16),
+                    ],
                   ),
                 ),
-                if (subtitle != null) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    subtitle!,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: OptacaAdminTheme.textMuted,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
               ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
+}
+
+class _KpiWavePainter extends CustomPainter {
+  const _KpiWavePainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = color;
+    final path = Path()
+      ..moveTo(0, size.height * 0.55)
+      ..quadraticBezierTo(
+        size.width * 0.25,
+        size.height * 0.15,
+        size.width * 0.5,
+        size.height * 0.45,
+      )
+      ..quadraticBezierTo(
+        size.width * 0.75,
+        size.height * 0.85,
+        size.width,
+        size.height * 0.35,
+      )
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _KpiWavePainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 class _TouristArrivalsCard extends StatelessWidget {
@@ -1758,16 +1969,16 @@ class _TouristArrivalsCard extends StatelessWidget {
         trailing: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
-            color: OptacaAdminTheme.background,
+            color: OptacaAdminTheme.lightOrange,
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: const Color(0xFFE0E0E0)),
+            border: Border.all(color: OptacaAdminTheme.border),
           ),
           child: const Text(
             'By month',
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: AppColors.textDark,
+              color: OptacaAdminTheme.darkOrange,
             ),
           ),
         ),
@@ -1777,7 +1988,7 @@ class _TouristArrivalsCard extends StatelessWidget {
             child: Text(
               'No arrival data yet. Tourist visit records will appear here.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: AppColors.textGrey),
+              style: TextStyle(color: OptacaAdminTheme.textMuted),
             ),
           ),
         ),
@@ -1789,16 +2000,16 @@ class _TouristArrivalsCard extends StatelessWidget {
       trailing: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: OptacaAdminTheme.background,
+          color: OptacaAdminTheme.lightOrange,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: const Color(0xFFE0E0E0)),
+          border: Border.all(color: OptacaAdminTheme.border),
         ),
         child: const Text(
           'By month',
           style: TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.w600,
-            color: AppColors.textDark,
+            color: OptacaAdminTheme.darkOrange,
           ),
         ),
       ),
@@ -1814,8 +2025,10 @@ class _TouristArrivalsCard extends StatelessWidget {
               show: true,
               drawVerticalLine: false,
               horizontalInterval: maxY > 5 ? (maxY / 5) : 1,
-              getDrawingHorizontalLine: (v) =>
-                  FlLine(color: const Color(0xFFEEEEEE), strokeWidth: 1),
+              getDrawingHorizontalLine: (v) => FlLine(
+                color: OptacaAdminTheme.border.withValues(alpha: 0.65),
+                strokeWidth: 1,
+              ),
             ),
             titlesData: FlTitlesData(
               bottomTitles: AxisTitles(
@@ -1832,7 +2045,7 @@ class _TouristArrivalsCard extends StatelessWidget {
                           _monthLabels[i],
                           style: const TextStyle(
                             fontSize: 10,
-                            color: AppColors.textGrey,
+                            color: OptacaAdminTheme.textMuted,
                           ),
                         ),
                       );
@@ -1850,7 +2063,7 @@ class _TouristArrivalsCard extends StatelessWidget {
                     v.toInt().toString(),
                     style: const TextStyle(
                       fontSize: 10,
-                      color: AppColors.textGrey,
+                      color: OptacaAdminTheme.textMuted,
                     ),
                   ),
                 ),
@@ -1871,25 +2084,37 @@ class _TouristArrivalsCard extends StatelessWidget {
                     .map((e) => FlSpot(e.key.toDouble(), e.value.toDouble()))
                     .toList(),
                 isCurved: true,
-                color: AppColors.primary,
-                barWidth: 3,
-                dotData: const FlDotData(show: false),
+                color: OptacaAdminTheme.primary,
+                barWidth: 3.2,
+                isStrokeCapRound: true,
+                dotData: FlDotData(
+                  show: true,
+                  getDotPainter: (spot, percent, bar, index) =>
+                      FlDotCirclePainter(
+                    radius: 3.2,
+                    color: Colors.white,
+                    strokeWidth: 2,
+                    strokeColor: OptacaAdminTheme.primary,
+                  ),
+                ),
                 belowBarData: BarAreaData(
                   show: true,
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      AppColors.primary.withValues(alpha: 0.35),
-                      AppColors.primary.withValues(alpha: 0.02),
+                      OptacaAdminTheme.primary.withValues(alpha: 0.34),
+                      OptacaAdminTheme.secondary.withValues(alpha: 0.12),
+                      OptacaAdminTheme.primary.withValues(alpha: 0.02),
                     ],
                   ),
                 ),
               ),
             ],
-            lineTouchData: LineTouchData(enabled: true),
+            lineTouchData: const LineTouchData(enabled: true),
           ),
-          duration: Duration.zero,
+          duration: const Duration(milliseconds: 450),
+          curve: Curves.easeOutCubic,
         ),
       ),
     );
@@ -1903,7 +2128,7 @@ Widget _chartShell({
 }) {
   return Container(
     padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-    decoration: OptacaAdminTheme.cardDecoration,
+    decoration: OptacaAdminTheme.analyticsCardDecoration,
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1954,8 +2179,8 @@ class _TopCategoriesDonutCard extends StatelessWidget {
           child: const Text(
             'View All',
             style: TextStyle(
-              color: AppColors.primary,
-              fontWeight: FontWeight.w600,
+              color: OptacaAdminTheme.primary,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ),
@@ -1964,7 +2189,7 @@ class _TopCategoriesDonutCard extends StatelessWidget {
           child: Center(
             child: Text(
               'Add tourist spots to see categories.',
-              style: TextStyle(color: AppColors.textGrey),
+              style: TextStyle(color: OptacaAdminTheme.textMuted),
             ),
           ),
         ),
@@ -1975,46 +2200,88 @@ class _TopCategoriesDonutCard extends StatelessWidget {
       ..sort((a, b) => b.value.compareTo(a.value));
     final top = entries.take(5).toList();
     final colors = [
-      AppColors.primary,
+      OptacaAdminTheme.primary,
+      OptacaAdminTheme.secondary,
       _kPortalIconBlue,
       _kTrendGreen,
       const Color(0xFFAB47BC),
-      const Color(0xFF78909C),
     ];
+    final lead = top.first;
+    final leadPct = total == 0 ? 0.0 : lead.value / total * 100;
     return _chartShell(
       title: 'Top Categories',
       trailing: TextButton(
         onPressed: () {},
         child: const Text(
           'View All',
-          style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600),
+          style: TextStyle(
+            color: OptacaAdminTheme.primary,
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final pie = SizedBox(
-            height: 180,
-            width: 180,
-            child: PieChart(
-              PieChartData(
-                sectionsSpace: 2,
-                centerSpaceRadius: 48,
-                sections: List.generate(top.length, (i) {
-                  final e = top[i];
-                  final pct = (e.value / total * 100);
-                  return PieChartSectionData(
-                    color: colors[i % colors.length],
-                    value: e.value.toDouble(),
-                    title: pct >= 8 ? '${pct.toStringAsFixed(0)}%' : '',
-                    radius: 28,
-                    titleStyle: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  );
-                }),
-              ),
+            height: 196,
+            width: 196,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                PieChart(
+                  PieChartData(
+                    sectionsSpace: 2.5,
+                    centerSpaceRadius: 54,
+                    sections: List.generate(top.length, (i) {
+                      final e = top[i];
+                      final pct = (e.value / total * 100);
+                      return PieChartSectionData(
+                        color: colors[i % colors.length],
+                        value: e.value.toDouble(),
+                        title: pct >= 10 ? '${pct.toStringAsFixed(0)}%' : '',
+                        radius: i == 0 ? 34 : 28,
+                        titleStyle: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      );
+                    }),
+                  ),
+                  duration: const Duration(milliseconds: 450),
+                  curve: Curves.easeOutCubic,
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 28),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '${leadPct.toStringAsFixed(0)}%',
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                          color: OptacaAdminTheme.primary,
+                          height: 1,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        lead.key,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                          color: OptacaAdminTheme.textMuted,
+                          height: 1.2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           );
           final legend = Column(
@@ -2022,7 +2289,7 @@ class _TopCategoriesDonutCard extends StatelessWidget {
             children: [
               for (var i = 0; i < top.length; i++)
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.only(bottom: 10),
                   child: Row(
                     children: [
                       Container(
@@ -2030,7 +2297,7 @@ class _TopCategoriesDonutCard extends StatelessWidget {
                         height: 10,
                         decoration: BoxDecoration(
                           color: colors[i % colors.length],
-                          shape: BoxShape.circle,
+                          borderRadius: BorderRadius.circular(3),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -2039,7 +2306,8 @@ class _TopCategoriesDonutCard extends StatelessWidget {
                           top[i].key,
                           style: const TextStyle(
                             fontSize: 13,
-                            color: AppColors.textDark,
+                            fontWeight: FontWeight.w600,
+                            color: OptacaAdminTheme.text,
                           ),
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -2048,8 +2316,8 @@ class _TopCategoriesDonutCard extends StatelessWidget {
                         '${(top[i].value / total * 100).toStringAsFixed(0)}%',
                         style: const TextStyle(
                           fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textGrey,
+                          fontWeight: FontWeight.w700,
+                          color: OptacaAdminTheme.textMuted,
                         ),
                       ),
                     ],
@@ -2067,7 +2335,7 @@ class _TopCategoriesDonutCard extends StatelessWidget {
             );
           }
           return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               pie,
               const SizedBox(width: 12),
@@ -2806,18 +3074,36 @@ class _HighRatingSpotsCard extends StatelessWidget {
         .toList();
 
     return Container(
-      decoration: OptacaAdminTheme.cardDecoration,
+      decoration: OptacaAdminTheme.analyticsCardDecoration,
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(18, 16, 18, 0),
+            child: Row(
+              children: [
+                Icon(Icons.star_rounded, color: OptacaAdminTheme.primary, size: 20),
+                SizedBox(width: 8),
+                Text(
+                  'Map of top-rated destinations',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: OptacaAdminTheme.text,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
           if (sortedByRating.isEmpty)
             const Padding(
               padding: EdgeInsets.all(24),
               child: Text(
                 'No tourist spots yet. Add spots in the Spots tab.',
-                style: TextStyle(fontSize: 14, color: AppColors.textGrey),
+                style: TextStyle(fontSize: 14, color: OptacaAdminTheme.textMuted),
               ),
             )
           else if (spotsWithLocation.isEmpty)
@@ -2828,7 +3114,7 @@ class _HighRatingSpotsCard extends StatelessWidget {
                 children: [
                   const Text(
                     'Add latitude & longitude to spots in the Spots tab to see them on the map.',
-                    style: TextStyle(fontSize: 14, color: AppColors.textGrey),
+                    style: TextStyle(fontSize: 14, color: OptacaAdminTheme.textMuted),
                   ),
                   const SizedBox(height: 12),
                   SizedBox(height: 200, child: _buildMap(context, [])),
@@ -4877,98 +5163,20 @@ class _AdminFeaturedFormPageState extends State<AdminFeaturedFormPage> {
                   'No registered spots yet. Add spots first in the Spots tab.',
                   style: TextStyle(color: AppColors.textGrey),
                 )
-              else
-                DropdownButtonFormField<String>(
-                  value: _selectedSpotName,
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Registered spot',
-                    hintText: 'Choose a tourist spot',
+              else ...[
+                const Text(
+                  'Choose a tourist spot',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13.5,
+                    color: AppColors.textDark,
                   ),
-                  items: _uniqueSpotOptions
-                      .map(
-                        (s) => DropdownMenuItem(
-                          value: s.name,
-                          child: Text(
-                            s.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (v) => setState(() => _selectedSpotName = v),
-                  validator: (v) =>
-                      (v == null || v.isEmpty) ? 'Please choose a spot' : null,
                 ),
-              if (_selectedSpotName != null &&
-                  _uniqueSpotOptions.any(
-                    (s) => s.name == _selectedSpotName,
-                  )) ...[
-                const SizedBox(height: 16),
-                Builder(
-                  builder: (_) {
-                    final selected = _uniqueSpotOptions.firstWhere(
-                      (s) => s.name == _selectedSpotName,
-                    );
-                    return Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                          color: AppColors.primary.withOpacity(0.25),
-                        ),
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
-                            child: SizedBox(
-                              width: 72,
-                              height: 72,
-                              child: buildTouristSpotProfileImage(
-                                selected,
-                                fallback: ColoredBox(
-                                  color: AppColors.primary.withValues(
-                                    alpha: 0.15,
-                                  ),
-                                  child: const Icon(
-                                    Icons.image_outlined,
-                                    color: AppColors.primary,
-                                    size: 32,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  selected.name,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '${selected.priceRange} · ${selected.location} · ${selected.rating.toStringAsFixed(1)}★',
-                                  style: const TextStyle(
-                                    color: AppColors.textGrey,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
+                const SizedBox(height: 8),
+                AdminFeaturedSpotPicker(
+                  spots: _uniqueSpotOptions,
+                  initialValue: _selectedSpotName,
+                  onChanged: (v) => setState(() => _selectedSpotName = v),
                 ),
               ],
               const SizedBox(height: 24),

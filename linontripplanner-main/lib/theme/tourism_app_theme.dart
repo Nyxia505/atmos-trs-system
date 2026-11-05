@@ -188,18 +188,18 @@ abstract final class TourismAppTheme {
 
 /// Visual system for the OPTACA admin portal only. Does not change behavior.
 abstract final class OptacaAdminTheme {
-  static const primary = Color(0xFFFF7900);
-  static const darkOrange = Color(0xFFE66D00);
-  static const secondary = Color(0xFFFF963F);
-  static const lightOrange = Color(0xFFFFF1E6);
-  static const background = Color(0xFFF4F1EE);
+  static const primary = Color(0xFFFF6A00);
+  static const secondary = Color(0xFFFF8C00);
+  static const darkOrange = Color(0xFFE65100);
+  static const lightOrange = Color(0xFFFFF3E8);
+  static const background = Color(0xFFFFF9F5);
   static const card = Color(0xFFFFFFFF);
-  static const text = Color(0xFF1C1410);
-  static const textMuted = Color(0xFF6B5E55);
-  static const border = Color(0xFFE8E0D8);
+  static const text = Color(0xFF1F1F1F);
+  static const textMuted = Color(0xFF6B7280);
+  static const border = Color(0xFFFFD1AD);
   static const success = Color(0xFF15803D);
-  static const sidebarTop = Color(0xFF3A2116);
-  static const sidebarBottom = Color(0xFF1A100C);
+  static const sidebarTop = Color(0xFFFF6A00);
+  static const sidebarBottom = Color(0xFFFF8C00);
 
   static const sidebarGradient = LinearGradient(
     begin: Alignment.topCenter,
@@ -208,16 +208,27 @@ abstract final class OptacaAdminTheme {
   );
 
   static const heroGradient = LinearGradient(
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+    colors: [primary, secondary, darkOrange],
+  );
+
+  static const kpiGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFFFF8A1F), primary, darkOrange],
+    colors: [Color(0xFFFF8C00), primary, darkOrange],
   );
 
   static List<BoxShadow> get cardShadow => [
         BoxShadow(
-          color: const Color(0xFF2A1810).withValues(alpha: 0.07),
-          blurRadius: 22,
+          color: primary.withValues(alpha: 0.10),
+          blurRadius: 20,
           offset: const Offset(0, 8),
+        ),
+        BoxShadow(
+          color: const Color(0xFF1F1F1F).withValues(alpha: 0.04),
+          blurRadius: 10,
+          offset: const Offset(0, 2),
         ),
       ];
 
@@ -225,6 +236,13 @@ abstract final class OptacaAdminTheme {
         color: card,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: border),
+        boxShadow: cardShadow,
+      );
+
+  static BoxDecoration get analyticsCardDecoration => BoxDecoration(
+        color: card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: border, width: 1.2),
         boxShadow: cardShadow,
       );
 
