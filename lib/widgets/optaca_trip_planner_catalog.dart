@@ -37,6 +37,8 @@ class OptacaTripPlannerCatalog extends StatefulWidget {
 
 class _OptacaTripPlannerCatalogState extends State<OptacaTripPlannerCatalog> {
   late int _section;
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _spots =
+      FirebaseFirestore.instance.collection('tourist_spots').snapshots();
 
   @override
   void initState() {
@@ -47,7 +49,7 @@ class _OptacaTripPlannerCatalogState extends State<OptacaTripPlannerCatalog> {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('tourist_spots').snapshots(),
+      stream: _spots,
       builder: (context, snap) {
         if (snap.hasError) {
           return _errorPane(

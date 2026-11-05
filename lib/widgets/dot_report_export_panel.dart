@@ -14,6 +14,11 @@ import 'package:atmos_trs_system/utils/dot_report_entity_scope.dart';
 import 'package:atmos_trs_system/utils/dot_report_export_service.dart';
 import 'package:atmos_trs_system/utils/dot_report_pdf_export.dart';
 import 'package:atmos_trs_system/utils/dot_report_preview.dart';
+import 'package:atmos_trs_system/utils/portal_summary_dot_export.dart';
+import 'package:atmos_trs_system/utils/portal_summary_dot_report.dart';
+import 'package:trip_plan/services/reports/report_format.dart';
+import 'package:trip_plan/services/reports/report_models.dart';
+import 'package:trip_plan/services/reports/reports_service.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
 import 'package:atmos_trs_system/utils/ae_register_report_query.dart';
 import 'package:atmos_trs_system/utils/mice_report_query.dart';
@@ -21,6 +26,7 @@ import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/pdf_file_download.dart';
 import 'package:atmos_trs_system/utils/xlsx_file_download.dart';
 import 'package:atmos_trs_system/widgets/atmos_table_kit.dart';
+import 'package:atmos_trs_system/widgets/dot_report_form_type_dropdown.dart';
 
 /// Shared DOT / DAE export panel for LGU (municipal) and Governor (provincial).
 class DotReportExportPanel extends StatefulWidget {
@@ -68,11 +74,13 @@ class DotReportExportPanel extends StatefulWidget {
   /// Restricts the form list (catalog ids). Null = full catalog.
   final Set<String>? allowedFormIds;
 
-  /// OPTACA portal: optional Events / Matrix Fares fill UI inside entity scope.
+  /// OPTACA portal: Events & Announcements and Matrix Fares in Fill forms for.
+  /// When null those dropdown items are hidden (LGU / hotel dashboards).
   final Widget Function(BuildContext context, DotReportEntityKind kind)?
       extraFillFormsBuilder;
 
-  /// OPTACA portal: hide helper copy that duplicates titles and cards.
+  /// OPTACA portal only: hide helper copy that duplicates titles, cards, and
+  /// preview tables. PDF / Excel still receive the same summary data.
   final bool compactChrome;
 
   @override
@@ -94,9 +102,15 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
   bool get _pdfBusy => _activeExport == _DotExportOp.pdf;
   static const _kPaperPrefKey = 'dot_report_pdf_paper_size';
   DotPdfPaperSize _paperSize = DotPdfPaperSize.a4;
+  String? _lastGapsPreview;
   DotReportPreviewTable? _preview;
+  List<DotReportPreviewTable> _previewTables = const [];
   bool _previewLoading = false;
   int _previewSeq = 0;
+  /// Last portal summary dataset used for preview. Excel and PDF reuse this
+  /// so all three outputs share the same filtered rows.
+  ReportDataset? _portalDataset;
+  String? _portalCacheKey;
 
   /// all | spot | establishment
   DotReportEntityKind _entityKind = DotReportEntityKind.all;
@@ -145,12 +159,20 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
               f,
         ],
       DotReportEntityKind.all => base,
+      DotReportEntityKind.eventsAnnouncements ||
+      DotReportEntityKind.matrixFares =>
+        PortalSummaryDotReport.formsFor(_entityKind),
     };
   }
 
   bool get _isAttractionScope =>
       _entityKind == DotReportEntityKind.spot ||
       _entityKind == DotReportEntityKind.municipalitySpots;
+
+  bool get _isExtraFillScope => _entityKind.isPortalSummary;
+
+  bool get _showExtraFillItems =>
+      !_locked && widget.extraFillFormsBuilder != null;
 
   /// Municipality id used for "all spots in municipality" / LGU filter.
   String get _resolvedMunicipalityFilter {
@@ -246,9 +268,9 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          'PDF Paper Size',
+          'PDF paper size',
           style: TextStyle(
-            fontSize: 11.5,
+            fontSize: 12,
             fontWeight: FontWeight.w600,
             color: widget.textMuted,
           ),
@@ -261,8 +283,6 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
           isDense: true,
           onChanged: _busy ? null : _onPaperSizeChanged,
           decoration: InputDecoration(
-            filled: true,
-            fillColor: Colors.white,
             prefixIcon: Icon(
               Icons.description_outlined,
               size: 18,
@@ -279,10 +299,6 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
               borderSide: BorderSide(color: widget.borderColor),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: widget.primaryColor, width: 1.4),
             ),
           ),
           items: [
@@ -473,7 +489,8 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         baseLabel: widget.scopeLabel,
         kind: _entityKind,
         entity: _selectedEntity,
-        municipalityName: _entityKind == DotReportEntityKind.municipalitySpots
+        municipalityName: _entityKind == DotReportEntityKind.municipalitySpots ||
+                _isExtraFillScope
             ? _resolvedMunicipalityDisplayName
             : null,
       );
@@ -482,7 +499,8 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         baseSlug: widget.scopeSlug,
         kind: _entityKind,
         entityId: _selectedEntity?.id,
-        municipalityId: _entityKind == DotReportEntityKind.municipalitySpots
+        municipalityId: _entityKind == DotReportEntityKind.municipalitySpots ||
+                _isExtraFillScope
             ? _resolvedMunicipalityFilter
             : null,
       );
@@ -518,6 +536,44 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
     final seq = ++_previewSeq;
     setState(() => _previewLoading = true);
 
+    if (_isExtraFillScope) {
+      try {
+        _portalDataset = null;
+        _portalCacheKey = null;
+        final dataset = await PortalSummaryDotReport.buildDataset(
+          kind: _entityKind,
+          form: _selected,
+          start: _start,
+          end: _end,
+          municipalityName: _resolvedMunicipalityDisplayName,
+        );
+        _portalDataset = dataset;
+        _portalCacheKey = _currentPortalCacheKey();
+        if (!mounted || seq != _previewSeq) return;
+        final tables = PortalSummaryDotReport.previewTables(
+          dataset,
+          form: _selected,
+          matrixFares: _entityKind == DotReportEntityKind.matrixFares,
+        );
+        setState(() {
+          _previewTables = tables;
+          _preview = tables.isEmpty ? null : tables.first;
+          _previewLoading = false;
+        });
+      } catch (e) {
+        debugPrint('[DotReportExportPanel] portal preview: $e');
+        if (!mounted || seq != _previewSeq) return;
+        setState(() {
+          _preview = null;
+          _previewTables = const [];
+          _previewLoading = false;
+          _portalDataset = null;
+          _portalCacheKey = null;
+        });
+      }
+      return;
+    }
+
     try {
       final end = DateTime(_end!.year, _end!.month, _end!.day, 23, 59, 59, 999);
       final checkIns = await _resolveCheckInsForExport(
@@ -546,6 +602,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       if (!mounted || seq != _previewSeq) return;
       setState(() {
         _preview = preview;
+        _previewTables = const [];
         _previewLoading = false;
       });
     } catch (e) {
@@ -553,6 +610,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       if (!mounted || seq != _previewSeq) return;
       setState(() {
         _preview = null;
+        _previewTables = const [];
         _previewLoading = false;
       });
     }
@@ -573,6 +631,12 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       }
       _selected = form;
       _formSearchController.text = form.title;
+      _lastGapsPreview = null;
+      _preview = null;
+      _previewTables = const [];
+      _portalDataset = null;
+      _portalCacheKey = null;
+      _previewLoading = true;
       if (!_locked &&
           _selectedEntity != null &&
           _entityKind == DotReportEntityKind.establishment &&
@@ -584,13 +648,24 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
   }
 
   void _onDateChanged(DateTime d, {required bool isStart}) {
-    setState(() {
+    var start = isStart ? d : _start;
+    var end = isStart ? _end : d;
+    var invalid = false;
+    if (start != null && end != null && end.isBefore(start)) {
+      invalid = true;
       if (isStart) {
-        _start = d;
+        end = start;
       } else {
-        _end = d;
+        start = end;
       }
+    }
+    setState(() {
+      _start = start;
+      _end = end;
     });
+    if (invalid) {
+      _snack('End date must be on or after start date', Colors.orange);
+    }
     unawaited(_refreshPreview());
   }
 
@@ -602,22 +677,18 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       return widget.wrapPanel!(body);
     }
 
-    // AE dashboard already has the compact orange page header + gray canvas —
-    // float section cards directly (no outer white shell).
-    if (_locked) return body;
-
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.all(widget.isMobile ? 18 : 22),
+      padding: EdgeInsets.all(widget.isMobile ? 14 : 16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: widget.borderColor),
-        boxShadow: [
+        boxShadow: const [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
+            color: Color(0x08000000),
+            blurRadius: 12,
+            offset: Offset(0, 4),
           ),
         ],
       ),
@@ -625,216 +696,100 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
     );
   }
 
-  Widget _sectionCard({required Widget child}) {
-    final ae = _locked;
-    return Container(
-      width: double.infinity,
-      padding: EdgeInsets.all(widget.isMobile ? 14 : 16),
-      decoration: BoxDecoration(
-        color: ae ? Colors.white : const Color(0xFFFCFCFD),
-        borderRadius: BorderRadius.circular(ae ? 16 : 14),
-        border: Border.all(color: widget.borderColor.withValues(alpha: 0.95)),
-        boxShadow: ae
-            ? [
-                BoxShadow(
-                  color: const Color(0xFF0F172A).withValues(alpha: 0.05),
-                  blurRadius: 16,
-                  offset: const Offset(0, 4),
-                ),
-              ]
-            : null,
-      ),
-      child: child,
-    );
-  }
-
-  Widget _sectionHeading({
-    required IconData icon,
-    required String title,
-    String? subtitle,
-  }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 30,
-          height: 30,
-          decoration: BoxDecoration(
-            color: widget.primaryColor.withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(9),
-          ),
-          child: Icon(icon, size: 16, color: widget.primaryColor),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: TextStyle(
-                  color: widget.textDark,
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              if (subtitle != null) ...[
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    color: widget.textMuted,
-                    fontSize: 11.5,
-                    height: 1.35,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _buildBody() {
-    final scopeHint = widget.isProvincial
-        ? 'Province-wide best-effort fill: preview every form, then download Excel or PDF.'
-        : 'Search any DOT / DAE / MICE form — preview filled data, then download Excel or PDF.';
+    final extra = _isExtraFillScope;
+    final scopeHint = extra
+        ? (_entityKind == DotReportEntityKind.eventsAnnouncements
+            ? 'Scheduled events and public notices. Pick a form type and date range, then preview and download Excel or PDF.'
+            : 'Municipality transport fees and hub to tourist spot fares. Pick a form type, then preview and download Excel or PDF.')
+        : widget.isProvincial
+            ? 'Province-wide best-effort fill: preview every form, then download Excel or PDF. Gaps update as data grows.'
+            : 'Search any DOT / DAE / MICE form — preview filled data (with gaps), then download Excel or PDF.';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (widget.isProvincial) ...[
-          _buildProvincialBanner(scopeHint),
-          const SizedBox(height: 14),
-        ],
-        _sectionCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (!widget.isProvincial)
-                _sectionHeading(
-                  icon: Icons.folder_open_rounded,
-                  title: 'Official Forms',
-                  subtitle: scopeHint,
-                )
-              else
-                _sectionHeading(
-                  icon: Icons.description_rounded,
-                  title: 'Form Type',
-                  subtitle: 'Select the DOT form to generate and export.',
-                ),
-              SizedBox(height: widget.isProvincial ? 12 : 14),
-              if (!widget.isProvincial) ...[
-                Text(
-                  'Form type',
-                  style: TextStyle(
-                    color: widget.textDark,
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 8),
-              ],
-              _buildFormTypeDropdown(),
-              const SizedBox(height: 10),
-              _buildSelectedFormMeta(),
-            ],
+        Text(
+          widget.isProvincial
+              ? 'DOT templates (province-wide)'
+              : 'Official forms',
+          style: TextStyle(
+            color: widget.textDark,
+            fontSize: widget.isProvincial ? 14.5 : 13.5,
+            fontWeight: FontWeight.w700,
           ),
         ),
-        const SizedBox(height: 12),
-        if (_locked)
-          _aeRegisterSourceStrip()
-        else
-          _sectionCard(
-            child: widget.isProvincial
-                ? Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _sectionHeading(
-                        icon: Icons.place_rounded,
-                        title: 'Scope (Spot / Establishment)',
-                        subtitle:
-                            'OPTACA / Governor: pick one spot, all spots in an LGU, or one establishment.',
-                      ),
-                      const SizedBox(height: 12),
-                      _buildEntityScopeFields(),
-                    ],
-                  )
-                : _buildEntityScopeSection(),
+        if (!widget.compactChrome) ...[
+          const SizedBox(height: 4),
+          Text(
+            scopeHint,
+            style: TextStyle(
+              color: widget.textMuted,
+              fontSize: 12,
+              height: 1.35,
+            ),
           ),
-        if (_isCus) ...[
-          const SizedBox(height: 12),
-          _sectionCard(child: _buildCusOptions()),
         ],
-        const SizedBox(height: 12),
-        _sectionCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _sectionHeading(
-                icon: Icons.calendar_month_rounded,
-                title: 'Date Range & Export',
-                subtitle:
-                    'Choose the reporting window, PDF paper size, then download.',
-              ),
-              const SizedBox(height: 14),
-              _buildExportControls(),
-            ],
-          ),
-        ),
         const SizedBox(height: 14),
-        _buildFilledPreviewSection(),
-      ],
-    );
-  }
-
-  Widget _buildProvincialBanner(String subtitle) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
-      child: Stack(
-        children: [
-          Container(
-            width: double.infinity,
-            padding: EdgeInsets.fromLTRB(
-              widget.isMobile ? 14 : 16,
-              14,
-              widget.isMobile ? 14 : 16,
-              14,
-            ),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-                colors: [
-                  const Color(0xFFFFF7ED),
-                  Color.lerp(const Color(0xFFFFEDD5), Colors.white, 0.35)!,
-                  Colors.white,
-                ],
-              ),
-              border: Border.all(
-                color: widget.primaryColor.withValues(alpha: 0.18),
-              ),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: _sectionHeading(
-              icon: Icons.folder_open_rounded,
-              title: 'DOT Templates (Province-wide)',
-              subtitle: subtitle,
-            ),
+        Text(
+          'Form type',
+          style: TextStyle(
+            color: widget.textDark,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
           ),
-          Positioned(
-            right: -10,
-            bottom: -18,
-            child: CustomPaint(
-              size: const Size(120, 70),
-              painter: _DotPanelWavePainter(
-                color: widget.primaryColor.withValues(alpha: 0.10),
-              ),
+        ),
+        const SizedBox(height: 8),
+        _buildFormTypeDropdown(),
+        if (!widget.compactChrome) ...[
+          const SizedBox(height: 10),
+          _buildSelectedFormMeta(),
+        ],
+        const SizedBox(height: 14),
+        if (_locked)
+          Text(
+            'Filled from your own register: ${widget.lockedEstablishment!.name}',
+            style: TextStyle(color: widget.textMuted, fontSize: 12),
+          )
+        else
+          _buildEntityScopeSection(),
+        if (!extra && _isCus) ...[
+          const SizedBox(height: 14),
+          _buildCusOptions(),
+        ],
+        const SizedBox(height: 14),
+        Text(
+          'Custom date range',
+          style: TextStyle(
+            color: widget.textDark,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        if (extra && _entityKind == DotReportEntityKind.matrixFares) ...[
+          const SizedBox(height: 4),
+          Text(
+            'Fare amounts are the current published matrix. The date range is written on the export header and does not change values.',
+            style: TextStyle(
+              color: widget.textMuted,
+              fontSize: 12,
+              height: 1.35,
             ),
           ),
         ],
-      ),
+        const SizedBox(height: 8),
+        widget.isMobile ? _buildControlsStacked() : _buildControlsRow(),
+        const SizedBox(height: 16),
+        _buildFilledPreviewSection(),
+        if (_preview != null && _preview!.gaps.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _buildLiveGapsCard(_preview!.gaps),
+        ],
+        if (_lastGapsPreview != null) ...[
+          const SizedBox(height: 12),
+          _buildGapsPreview(),
+        ],
+      ],
     );
   }
 
@@ -954,9 +909,24 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
   }
 
   Widget _buildEntityScopeSection() {
-    final hint = widget.isProvincial
-        ? 'OPTACA / Governor: pick one spot, all spots in an LGU, or one establishment.'
-        : 'LGU: only tourist spots and establishments under your municipality.';
+    final allLabel = widget.isProvincial
+        ? 'All municipalities (province)'
+        : 'All spots & establishments in this LGU';
+    final hint = _isExtraFillScope
+        ? 'OPTACA: pick Events & Announcements or Matrix Fares, then a form type. Optionally narrow by LGU.'
+        : widget.isProvincial
+            ? (_showExtraFillItems
+                ? 'OPTACA / Governor: pick one spot, all spots in an LGU, one establishment, events, or matrix fares.'
+                : 'OPTACA / Governor: pick one spot, all spots in an LGU, or one establishment.')
+            : 'LGU: only tourist spots and establishments under your municipality.';
+    final munSpots = _eligibleMunicipalitySpots;
+    final munName = _resolvedMunicipalityDisplayName;
+    final munFilterRequired =
+        _entityKind == DotReportEntityKind.municipalitySpots;
+    final showMunFilter = widget.isProvincial &&
+        (_isExtraFillScope ||
+            _entityKind != DotReportEntityKind.all ||
+            munFilterRequired);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -979,42 +949,13 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
           ),
         ),
         const SizedBox(height: 8),
-        _buildEntityScopeFields(),
-      ],
-    );
-  }
-
-  Widget _buildEntityScopeFields() {
-    final allLabel = widget.isProvincial
-        ? 'All municipalities (province)'
-        : 'All spots & establishments in this LGU';
-    final munSpots = _eligibleMunicipalitySpots;
-    final munName = _resolvedMunicipalityDisplayName;
-    final munFilterRequired =
-        _entityKind == DotReportEntityKind.municipalitySpots;
-    final showMunFilter = widget.isProvincial &&
-        (_entityKind != DotReportEntityKind.all || munFilterRequired);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
         DropdownButtonFormField<DotReportEntityKind>(
           key: ValueKey('fill_for_${_entityKind.name}'),
           initialValue: _entityKind,
           decoration: InputDecoration(
             labelText: 'Fill forms for',
             isDense: true,
-            filled: true,
-            fillColor: Colors.white,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: widget.borderColor),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: widget.primaryColor, width: 1.4),
-            ),
           ),
           items: [
             DropdownMenuItem(
@@ -1037,6 +978,16 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
               value: DotReportEntityKind.establishment,
               child: Text('One establishment (DAE / hotel register)'),
             ),
+            if (_showExtraFillItems) ...[
+              const DropdownMenuItem(
+                value: DotReportEntityKind.eventsAnnouncements,
+                child: Text('Events & Announcements'),
+              ),
+              const DropdownMenuItem(
+                value: DotReportEntityKind.matrixFares,
+                child: Text('Matrix Fares'),
+              ),
+            ],
           ],
           onChanged: _busy
               ? null
@@ -1056,9 +1007,11 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
             key: ValueKey('mun_filter_$_entityMunicipalityFilter'),
             initialValue: _entityMunicipalityFilter,
             decoration: InputDecoration(
-              labelText: munFilterRequired
-                  ? 'Select city / municipality'
-                  : 'Filter list by LGU (optional)',
+              labelText: _isExtraFillScope
+                  ? 'City / municipality (optional)'
+                  : munFilterRequired
+                      ? 'Select city / municipality'
+                      : 'Filter list by LGU (optional)',
               isDense: true,
               border:
                   OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
@@ -1234,176 +1187,42 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
   }
 
   Widget _buildFormTypeDropdown() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final menuWidth = constraints.maxWidth.isFinite && constraints.maxWidth > 0
-            ? constraints.maxWidth
-            : 420.0;
-        return DropdownMenu<DotFormCatalogEntry>(
-          key: ValueKey('${_entityKind.name}:${_selected.id}'),
-          controller: _formSearchController,
-          initialSelection: _selected,
-          enableFilter: true,
-          requestFocusOnTap: true,
-          width: menuWidth,
-          menuHeight: 360,
-          leadingIcon: Icon(
-            Icons.search_rounded,
-            color: widget.primaryColor,
-            size: 20,
-          ),
-          trailingIcon: Icon(
-            Icons.arrow_drop_down_rounded,
-            color: widget.textMuted,
-          ),
-          inputDecorationTheme: InputDecorationTheme(
-            isDense: true,
-            filled: true,
-            fillColor: _locked ? Colors.white : const Color(0xFFF8FAFC),
-            contentPadding: EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: _locked ? 14 : 12,
-            ),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: widget.borderColor),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: widget.borderColor),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: widget.primaryColor, width: 1.4),
-            ),
-            hintStyle: TextStyle(color: widget.textMuted, fontSize: 13),
-          ),
-          textStyle: TextStyle(
-            color: widget.textDark,
-            fontSize: 13.5,
-            fontWeight: FontWeight.w700,
-          ),
-          hintText: 'Search form type…',
-          filterCallback: (entries, filter) {
-            final q = filter.trim();
-            if (q.isEmpty || q == _selected.title) return entries;
-            return [
-              for (final e in entries)
-                if (e.value.matchesSearch(q)) e,
-            ];
-          },
-          onSelected: (form) {
-            if (form == null || _busy) return;
-            _onFormSelected(form);
-          },
-          dropdownMenuEntries: [
-            for (final form in _scopedCatalog)
-              DropdownMenuEntry<DotFormCatalogEntry>(
-                value: form,
-                label: form.title,
-                leadingIcon: Icon(
-                  Icons.auto_awesome_outlined,
-                  size: 18,
-                  color: widget.primaryColor,
-                ),
-                labelWidget: SizedBox(
-                  width: menuWidth - 72,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        form.title,
-                        style: TextStyle(
-                          color: widget.textDark,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12.5,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${form.category.label} · ${form.capabilityLabel}',
-                        style: TextStyle(
-                          color: widget.textMuted,
-                          fontSize: 11,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _aeRegisterSourceStrip() {
-    final name = widget.lockedEstablishment?.name.trim().isNotEmpty == true
-        ? widget.lockedEstablishment!.name.trim()
-        : widget.scopeLabel;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF7ED),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFFED7AA)),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.hotel_rounded, size: 18, color: widget.primaryColor),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text.rich(
-              TextSpan(
-                style: TextStyle(color: widget.textDark, fontSize: 12.5, height: 1.3),
-                children: [
-                  const TextSpan(
-                    text: 'Filled from your own register: ',
-                    style: TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  TextSpan(
-                    text: name,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: widget.textMuted,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
+    return DotReportFormTypeDropdown(
+      key: ValueKey('${_entityKind.name}:${_selected.id}'),
+      forms: _scopedCatalog,
+      selected: _selected,
+      controller: _formSearchController,
+      enabled: !_busy,
+      primaryColor: widget.primaryColor,
+      textDark: widget.textDark,
+      textMuted: widget.textMuted,
+      borderColor: widget.borderColor,
+      onSelected: _onFormSelected,
     );
   }
 
   Widget _buildSelectedFormMeta() {
-    final badge = _selected.capabilityLabel.trim().isEmpty
-        ? 'ATMOS fill'
-        : _selected.capabilityLabel.trim();
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFF7ED),
-        borderRadius: BorderRadius.circular(10),
+        color: widget.primaryColor.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: const Color(0xFFFDBA74).withValues(alpha: 0.55),
+          color: widget.primaryColor.withValues(alpha: 0.28),
         ),
       ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
-              color: widget.primaryColor.withValues(alpha: 0.12),
+              color: widget.primaryColor.withValues(alpha: 0.14),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Text(
-              badge,
+              _selected.capabilityLabel,
               style: TextStyle(
                 color: widget.primaryColor,
                 fontSize: 10.5,
@@ -1429,37 +1248,90 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
   }
 
   Widget _buildFilledPreviewSection() {
-    return _sectionCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: _sectionHeading(
-                  icon: Icons.table_chart_rounded,
-                  title: 'Filled Data Preview',
-                  subtitle: _preview?.summaryLine ??
-                      'Rows that will be written into ${_selected.title} (best effort from current data).',
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Filled data preview',
+                style: TextStyle(
+                  color: widget.textDark,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-              if (_previewLoading)
-                Padding(
-                  padding: const EdgeInsets.only(left: 8, top: 4),
-                  child: SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: widget.primaryColor,
-                    ),
-                  ),
+            ),
+            if (_previewLoading)
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: widget.primaryColor,
                 ),
-            ],
+              ),
+          ],
+        ),
+        if (!widget.compactChrome) ...[
+          const SizedBox(height: 4),
+          Text(
+            _preview?.summaryLine ??
+                (_isExtraFillScope
+                    ? 'Rows that will be written into ${_selected.title} from current Events, Announcements, or Matrix Fares data.'
+                    : 'Rows that will be written into ${_selected.title} (best effort from current data).'),
+            style: TextStyle(
+              color: widget.textMuted,
+              fontSize: 11.5,
+              height: 1.35,
+            ),
           ),
-          const SizedBox(height: 12),
-          _buildPreviewTable(),
+        ],
+        const SizedBox(height: 10),
+        _buildPreviewTable(),
+      ],
+    );
+  }
+
+  Widget _buildLiveGapsCard(List<String> gaps) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFDE68A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'ATMOS gaps (will fill as fields / hotel registers arrive)',
+            style: TextStyle(
+              color: widget.textDark,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          for (final g in gaps.take(6))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 3),
+              child: Text(
+                '• $g',
+                style: TextStyle(
+                  color: widget.textMuted,
+                  fontSize: 11.5,
+                  height: 1.35,
+                ),
+              ),
+            ),
+          if (gaps.length > 6)
+            Text(
+              '• …and ${gaps.length - 6} more',
+              style: TextStyle(color: widget.textMuted, fontSize: 11),
+            ),
         ],
       ),
     );
@@ -1472,76 +1344,53 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         height: 120,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: widget.borderColor),
+        ),
+        child: Text(
+          'Building preview…',
+          style: TextStyle(color: widget.textMuted, fontSize: 13),
+        ),
+      );
+    }
+    final tables = _previewTables.isNotEmpty
+        ? _previewTables
+        : (preview == null ? const <DotReportPreviewTable>[] : [preview]);
+    final anyRows = tables.any((t) => t.rows.isNotEmpty);
+    if (!anyRows) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 28),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF8FAFC),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: widget.borderColor),
         ),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            SizedBox(
-              width: 22,
-              height: 22,
-              child: CircularProgressIndicator(
-                strokeWidth: 2.2,
-                color: widget.primaryColor,
+            Icon(Icons.table_chart_outlined, color: widget.textMuted, size: 28),
+            const SizedBox(height: 8),
+            Text(
+              _isExtraFillScope
+                  ? 'No records for this form, date range, and municipality'
+                  : 'No check-in rows for this form and date range',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: widget.textDark,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
               ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 4),
             Text(
-              'Building preview…',
-              style: TextStyle(color: widget.textMuted, fontSize: 13),
+              _isExtraFillScope
+                  ? 'Adjust the form type, dates, or LGU filter. Empty periods stay at zero.'
+                  : 'Adjust the dates or seed visits, then preview updates automatically.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: widget.textMuted, fontSize: 12),
             ),
           ],
-        ),
-      );
-    }
-    if (preview == null || preview.isEmpty) {
-      return CustomPaint(
-        painter: _DotDashedBorderPainter(
-          color: widget.borderColor.withValues(alpha: 0.95),
-          radius: 12,
-        ),
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 30),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF8FAFC),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Column(
-            children: [
-              Container(
-                width: 54,
-                height: 54,
-                decoration: BoxDecoration(
-                  color: widget.primaryColor.withValues(alpha: 0.10),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.insert_chart_outlined_rounded,
-                  color: widget.primaryColor.withValues(alpha: 0.9),
-                  size: 26,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'No check-in records found for the selected report and date range.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: widget.textDark,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 13,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Adjust the dates or scope — the preview updates automatically.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: widget.textMuted, fontSize: 12),
-              ),
-            ],
-          ),
         ),
       );
     }
@@ -1559,80 +1408,107 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
           style: style,
         );
 
-    bool numericHeader(String h) {
-      final s = h.toLowerCase();
-      return RegExp(r'^\d{4}-\d{2}$').hasMatch(h.trim()) ||
-          s.contains('arrival') ||
-          s.contains('night') ||
-          s.contains('check') ||
-          s.contains('guest') ||
-          s.contains('room') ||
-          s.contains('occupancy') ||
-          s.contains('total') ||
-          s.contains('value') ||
-          s == 'item';
+    int previewFlex(String h) {
+      final l = h.toLowerCase();
+      if (l.contains('municipality') ||
+          l.contains('destination') ||
+          l.contains('announcement') ||
+          l.contains('details') ||
+          l.contains('venue') ||
+          l == 'event') {
+        return 2;
+      }
+      return h.length > 18 ? 2 : 1;
     }
 
-    return AtmosResponsiveTable(
-      headerColor: const Color(0xFFFFF1E7),
-      headerTextColor: widget.textDark,
-      footerColor: const Color(0xFFFFEDD5),
-      columns: [
-        for (final (i, h) in preview.headers.indexed)
-          AtmosTableColumn(
-            h,
-            flex: i == 0 ? 3 : (h.length > 14 ? 2 : 1),
-            minWidth: i == 0
-                ? 168
-                : (h.length * 7.2).clamp(96, 160).toDouble(),
-            align: i == 0 && !numericHeader(h)
-                ? Alignment.centerLeft
-                : Alignment.center,
-          ),
+    double previewMinWidth(String h) {
+      final l = h.toLowerCase();
+      if (l.contains('municipality') ||
+          l.contains('destination') ||
+          l.contains('announcement') ||
+          l.contains('details') ||
+          l == 'event') {
+        return 188;
+      }
+      if (l.contains('venue') || l.contains('starting')) return 148;
+      return (h.length * 7.2).clamp(96, 168).toDouble();
+    }
+
+    Widget tableFor(DotReportPreviewTable table) {
+      return AtmosResponsiveTable(
+        columns: [
+          for (final h in table.headers)
+            AtmosTableColumn(
+              h,
+              flex: previewFlex(h),
+              minWidth: previewMinWidth(h),
+            ),
+        ],
+        rows: [
+          for (final row in table.rows)
+            [for (final cell in row) text(cell, cellStyle)],
+        ],
+        footer: table.footer == null
+            ? null
+            : [for (final cell in table.footer!) text(cell, footerStyle)],
+      );
+    }
+
+    if (tables.length == 1) return tableFor(tables.first);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < tables.length; i++) ...[
+          if (i > 0) const SizedBox(height: 14),
+          if (tables[i].title.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                tables[i].title,
+                style: TextStyle(
+                  color: widget.textDark,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12.5,
+                ),
+              ),
+            ),
+          tableFor(tables[i]),
+        ],
       ],
-      rows: [
-        for (final row in preview.rows)
-          [for (final cell in row) text(cell, cellStyle)],
-      ],
-      footer: preview.footer == null
-          ? null
-          : [for (final cell in preview.footer!) text(cell, footerStyle)],
+    );
+  }
+
+  Widget _buildGapsPreview() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: widget.primaryColor.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: widget.primaryColor.withValues(alpha: 0.25),
+        ),
+      ),
+      child: Text(
+        _lastGapsPreview!,
+        style: TextStyle(
+          color: widget.textDark,
+          fontSize: 11.5,
+          height: 1.4,
+        ),
+      ),
     );
   }
 
   String get _excelActionLabel {
-    if (_excelBusy) return 'Generating Excel...';
+    if (_excelBusy) return 'Generating Excel…';
     return 'Download Excel';
   }
 
   String get _pdfActionLabel {
-    if (_pdfBusy) return 'Generating PDF...';
+    if (_pdfBusy) return 'Generating PDF…';
     return 'Download PDF';
-  }
-
-  ButtonStyle _primaryDownloadStyle({required bool stretch}) {
-    return ElevatedButton.styleFrom(
-      backgroundColor: widget.primaryColor,
-      foregroundColor: Colors.white,
-      disabledBackgroundColor: widget.primaryColor.withValues(alpha: 0.55),
-      disabledForegroundColor: Colors.white,
-      elevation: 0,
-      minimumSize: Size(stretch ? double.infinity : 0, 46),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-      ),
-    ).copyWith(
-      overlayColor: WidgetStateProperty.resolveWith((states) {
-        if (states.contains(WidgetState.hovered)) {
-          return Colors.white.withValues(alpha: 0.10);
-        }
-        if (states.contains(WidgetState.pressed)) {
-          return Colors.white.withValues(alpha: 0.16);
-        }
-        return null;
-      }),
-    );
   }
 
   Widget _downloadBusyIcon() {
@@ -1646,124 +1522,143 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
     );
   }
 
-  Widget _buildExportControls() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final width = constraints.maxWidth;
-        final stacked = width < 640 || widget.isMobile;
-        final wrapTwo = !stacked && width < 980;
-
-        final start = _dateField(
-          'Start Date',
-          _start,
-          (d) => _onDateChanged(d, isStart: true),
-        );
-        final end = _dateField(
-          'End Date',
-          _end,
-          (d) => _onDateChanged(d, isStart: false),
-        );
-        final paper = _paperSizeField(expand: true);
-        final excelBtn = ElevatedButton.icon(
-          // Disable while any export runs; only Excel shows Generating.
+  Widget _buildControlsRow() {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      crossAxisAlignment: WrapCrossAlignment.end,
+      children: [
+        SizedBox(
+          width: 180,
+          child: _dateField(
+            'Start',
+            _start,
+            (d) => _onDateChanged(d, isStart: true),
+          ),
+        ),
+        SizedBox(
+          width: 180,
+          child: _dateField(
+            'End',
+            _end,
+            (d) => _onDateChanged(d, isStart: false),
+          ),
+        ),
+        ElevatedButton.icon(
           onPressed: _busy ? null : _generateExcel,
           icon: _excelBusy
               ? _downloadBusyIcon()
               : const Icon(Icons.table_view_outlined, size: 18),
           label: Text(_excelActionLabel),
-          style: _primaryDownloadStyle(stretch: stacked),
-        );
-        final pdfBtn = ElevatedButton.icon(
-          // Disable while any export runs; only PDF shows Generating.
+          style: ElevatedButton.styleFrom(
+            backgroundColor: widget.primaryColor,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        ),
+        SizedBox(width: 210, child: _paperSizeField(expand: true)),
+        OutlinedButton.icon(
           onPressed: _busy ? null : _generatePdf,
           icon: _pdfBusy
-              ? _downloadBusyIcon()
+              ? SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: widget.primaryColor,
+                  ),
+                )
               : const Icon(Icons.picture_as_pdf_outlined, size: 18),
           label: Text(
             _pdfBusy
                 ? _pdfActionLabel
                 : '$_pdfActionLabel (${_paperSize.label})',
           ),
-          style: _primaryDownloadStyle(stretch: stacked),
-        );
-        final blank = Align(
-          alignment: stacked ? Alignment.center : Alignment.centerLeft,
-          child: TextButton(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: widget.primaryColor,
+            side: BorderSide(color: widget.primaryColor.withValues(alpha: 0.55)),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        ),
+        if (_selected.offersOfficialBlankSecondary)
+          TextButton(
             onPressed: _busy ? null : () => _downloadOfficialBlank(_selected),
             child: Text(
               'Official empty template',
               style: TextStyle(color: widget.textMuted, fontSize: 12),
             ),
           ),
-        );
+      ],
+    );
+  }
 
-        if (stacked) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              start,
-              const SizedBox(height: 10),
-              end,
-              const SizedBox(height: 12),
-              paper,
-              const SizedBox(height: 12),
-              excelBtn,
-              const SizedBox(height: 8),
-              pdfBtn,
-              blank,
-            ],
-          );
-        }
-
-        if (wrapTwo) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(child: start),
-                  const SizedBox(width: 12),
-                  Expanded(child: end),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(flex: 5, child: paper),
-                  const SizedBox(width: 12),
-                  Expanded(flex: 4, child: excelBtn),
-                  const SizedBox(width: 10),
-                  Expanded(flex: 4, child: pdfBtn),
-                ],
-              ),
-              blank,
-            ],
-          );
-        }
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Expanded(flex: 3, child: start),
-                const SizedBox(width: 12),
-                Expanded(flex: 3, child: end),
-                const SizedBox(width: 12),
-                Expanded(flex: 4, child: paper),
-                const SizedBox(width: 12),
-                Expanded(flex: 3, child: excelBtn),
-                const SizedBox(width: 10),
-                Expanded(flex: 3, child: pdfBtn),
-              ],
+  Widget _buildControlsStacked() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _dateField('Start', _start, (d) => _onDateChanged(d, isStart: true)),
+        const SizedBox(height: 10),
+        _dateField('End', _end, (d) => _onDateChanged(d, isStart: false)),
+        const SizedBox(height: 12),
+        ElevatedButton.icon(
+          onPressed: _busy ? null : _generateExcel,
+          icon: _excelBusy
+              ? _downloadBusyIcon()
+              : const Icon(Icons.table_view_outlined, size: 18),
+          label: Text(_excelActionLabel),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: widget.primaryColor,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
             ),
-            blank,
-          ],
-        );
-      },
+          ),
+        ),
+        const SizedBox(height: 12),
+        _paperSizeField(expand: true),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: _busy ? null : _generatePdf,
+          icon: _pdfBusy
+              ? SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: widget.primaryColor,
+                  ),
+                )
+              : const Icon(Icons.picture_as_pdf_outlined, size: 18),
+          label: Text(
+            _pdfBusy
+                ? _pdfActionLabel
+                : '$_pdfActionLabel (${_paperSize.label})',
+          ),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: widget.primaryColor,
+            side: BorderSide(color: widget.primaryColor.withValues(alpha: 0.55)),
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        ),
+        if (_selected.offersOfficialBlankSecondary)
+          TextButton(
+            onPressed: _busy ? null : () => _downloadOfficialBlank(_selected),
+            child: Text(
+              'Official empty template',
+              style: TextStyle(color: widget.textMuted, fontSize: 12),
+            ),
+          ),
+      ],
     );
   }
 
@@ -1776,62 +1671,57 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          label,
-          style: TextStyle(
-            color: widget.textMuted,
-            fontSize: 11.5,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(12),
-            onTap: _busy
-                ? null
-                : () async {
-                    final picked = await showDatePicker(
-                      context: context,
-                      initialDate: value ?? DateTime.now(),
-                      firstDate: DateTime(2020),
-                      lastDate: DateTime.now(),
-                    );
-                    if (picked != null) onSelect(picked);
-                  },
-            child: Ink(
-              height: 46,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: widget.borderColor),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      value == null
-                          ? 'Select date'
-                          : '${value.year}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}',
-                      style: TextStyle(
-                        color:
-                            value == null ? widget.textMuted : widget.textDark,
-                        fontSize: 13,
-                        fontWeight: value == null
-                            ? FontWeight.normal
-                            : FontWeight.w600,
-                      ),
+        Text(label, style: TextStyle(color: widget.textMuted, fontSize: 11)),
+        const SizedBox(height: 4),
+        InkWell(
+          onTap: _busy
+              ? null
+              : () async {
+                  final today = DateTime.now();
+                  final last = _isExtraFillScope
+                      ? DateTime(today.year + 2, 12, 31)
+                      : DateTime(today.year, today.month, today.day);
+                  var initial = value ?? today;
+                  if (initial.isAfter(last)) initial = last;
+                  if (initial.isBefore(DateTime(2020))) {
+                    initial = DateTime(2020);
+                  }
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: initial,
+                    firstDate: DateTime(2020),
+                    lastDate: last,
+                  );
+                  if (picked != null) onSelect(picked);
+                },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: widget.borderColor),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    value == null
+                        ? 'Select date'
+                        : '${value.year}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}',
+                    style: TextStyle(
+                      color: value == null ? widget.textMuted : widget.textDark,
+                      fontSize: 13,
+                      fontWeight:
+                          value == null ? FontWeight.normal : FontWeight.w600,
                     ),
                   ),
-                  Icon(
-                    Icons.calendar_today_rounded,
-                    color: widget.primaryColor,
-                    size: 16,
-                  ),
-                ],
-              ),
+                ),
+                Icon(
+                  Icons.calendar_today_rounded,
+                  color: widget.primaryColor,
+                  size: 16,
+                ),
+              ],
             ),
           ),
         ),
@@ -2034,6 +1924,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
 
   /// Returns false and snacks when spot / municipality / AE scope is incomplete.
   bool _scopeReadyForExport() {
+    if (_isExtraFillScope) return true;
     if (_entityKind == DotReportEntityKind.municipalitySpots) {
       if (widget.isProvincial && _resolvedMunicipalityFilter.isEmpty) {
         _snack('Select a city or municipality first', Colors.orange);
@@ -2054,7 +1945,6 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
   }
 
   Future<void> _generateExcel() async {
-    if (_activeExport != null) return;
     if (_start == null || _end == null) {
       _snack('Please select both start and end dates', Colors.orange);
       return;
@@ -2064,8 +1954,18 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       return;
     }
     if (!_scopeReadyForExport()) return;
+    if (_activeExport != null) return;
 
-    setState(() => _activeExport = _DotExportOp.excel);
+    if (_isExtraFillScope) {
+      await _generatePortalSummaryFile(excel: true);
+      return;
+    }
+
+    setState(() {
+      _activeExport = _DotExportOp.excel;
+      _lastGapsPreview = null;
+    });
+    await WidgetsBinding.instance.endOfFrame;
 
     try {
       final end =
@@ -2097,6 +1997,11 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       );
       await downloadXlsxFile(result.filename, result.bytes);
       if (!mounted) return;
+      setState(() {
+        _lastGapsPreview =
+            '${result.summary}\nGaps noted in ATMOS_GAPS sheet (${result.gaps.length}):\n• ${result.gaps.take(3).join('\n• ')}'
+            '${result.gaps.length > 3 ? '\n• …' : ''}';
+      });
       unawaited(_refreshPreview());
       _snack(
         xlsxDownloadUsesShareSheet
@@ -2116,7 +2021,6 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
   }
 
   Future<void> _generatePdf() async {
-    if (_activeExport != null) return;
     if (_start == null || _end == null) {
       _snack('Please select both start and end dates', Colors.orange);
       return;
@@ -2126,8 +2030,15 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       return;
     }
     if (!_scopeReadyForExport()) return;
+    if (_activeExport != null) return;
+
+    if (_isExtraFillScope) {
+      await _generatePortalSummaryFile(excel: false);
+      return;
+    }
 
     setState(() => _activeExport = _DotExportOp.pdf);
+    await WidgetsBinding.instance.endOfFrame;
     try {
       final end =
           DateTime(_end!.year, _end!.month, _end!.day, 23, 59, 59, 999);
@@ -2190,9 +2101,104 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
     }
   }
 
+  String _currentPortalCacheKey() {
+    return '${_entityKind.name}\u0001${_selected.id}\u0001'
+        '${_start?.millisecondsSinceEpoch}\u0001'
+        '${_end?.millisecondsSinceEpoch}\u0001'
+        '$_resolvedMunicipalityDisplayName';
+  }
+
+  Future<ReportDataset> _portalDatasetForExport() async {
+    if (_portalDataset != null &&
+        _portalCacheKey == _currentPortalCacheKey()) {
+      return _portalDataset!;
+    }
+    final dataset = await PortalSummaryDotReport.buildDataset(
+      kind: _entityKind,
+      form: _selected,
+      start: _start,
+      end: _end,
+      municipalityName: _resolvedMunicipalityDisplayName,
+    );
+    _portalDataset = dataset;
+    _portalCacheKey = _currentPortalCacheKey();
+    return dataset;
+  }
+
+  Future<void> _generatePortalSummaryFile({required bool excel}) async {
+    if (_activeExport != null) return;
+    setState(() {
+      _activeExport = excel ? _DotExportOp.excel : _DotExportOp.pdf;
+      _lastGapsPreview = null;
+    });
+    await WidgetsBinding.instance.endOfFrame;
+    try {
+      final dataset = await _portalDatasetForExport();
+      final start = _start ?? dataset.generatedAt;
+      final end = _end ?? dataset.generatedAt;
+      final bytes = excel
+          ? PortalSummaryDotExport.buildXlsx(
+              form: _selected,
+              dataset: dataset,
+              scopeLabel: _effectiveScopeLabel,
+            )
+          : await PortalSummaryDotExport.buildPdf(
+              form: _selected,
+              dataset: dataset,
+              scopeLabel: _effectiveScopeLabel,
+              startDate: start,
+              endDate: end,
+              paperSize: _paperSize,
+            );
+      final mun = dataset.filters.effectiveMunicipality;
+      final slug = mun == null || mun.isEmpty ? '' : '_${fileSlug(mun)}';
+      final ext = excel ? 'xlsx' : 'pdf';
+      final filename =
+          '${dataset.kind.fileStem}_${fileSlug(_selected.code)}$slug'
+          '_${formatIsoDate(dataset.generatedAt)}.$ext';
+      if (excel) {
+        await downloadXlsxFile(filename, bytes);
+      } else {
+        await downloadPdfFile(filename, bytes);
+      }
+      final tables = PortalSummaryDotReport.previewTables(
+        dataset,
+        form: _selected,
+        matrixFares: _entityKind == DotReportEntityKind.matrixFares,
+      );
+      if (!mounted) return;
+      setState(() {
+        _previewTables = tables;
+        _preview = tables.isEmpty ? null : tables.first;
+      });
+      _snack(
+        excel
+            ? (xlsxDownloadUsesShareSheet
+                ? 'Excel ready — use the share sheet to save'
+                : 'Download started: $filename')
+            : (pdfDownloadUsesShareSheet
+                ? 'PDF ready — use the share sheet to save'
+                : 'Download started: $filename'),
+        widget.primaryColor,
+      );
+    } on ReportDataException catch (e) {
+      if (!mounted) return;
+      _snack(e.message, Colors.red.shade700);
+    } catch (e) {
+      if (!mounted) return;
+      _snack(
+        excel ? 'Export failed: $e' : 'PDF export failed: $e',
+        Colors.red.shade700,
+      );
+    } finally {
+      if (mounted) setState(() => _activeExport = null);
+    }
+  }
+
   Future<void> _downloadOfficialBlank(DotFormCatalogEntry form) async {
     if (_activeExport != null) return;
     setState(() => _activeExport = _DotExportOp.blank);
+    await WidgetsBinding.instance.endOfFrame;
     try {
       final bytes = await _service.downloadCatalogBlank(form);
       await downloadXlsxFile(form.objectFilename, bytes);
@@ -2224,78 +2230,4 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       ),
     );
   }
-}
-
-class _DotPanelWavePainter extends CustomPainter {
-  const _DotPanelWavePainter({required this.color});
-
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-    final path = Path()
-      ..moveTo(0, size.height * 0.55)
-      ..quadraticBezierTo(
-        size.width * 0.3,
-        size.height * 0.15,
-        size.width * 0.55,
-        size.height * 0.48,
-      )
-      ..quadraticBezierTo(
-        size.width * 0.8,
-        size.height * 0.82,
-        size.width,
-        size.height * 0.4,
-      )
-      ..lineTo(size.width, size.height)
-      ..lineTo(0, size.height)
-      ..close();
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant _DotPanelWavePainter oldDelegate) =>
-      oldDelegate.color != color;
-}
-
-class _DotDashedBorderPainter extends CustomPainter {
-  const _DotDashedBorderPainter({
-    required this.color,
-    required this.radius,
-  });
-
-  final Color color;
-  final double radius;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.3;
-    final rrect = RRect.fromRectAndRadius(
-      Offset.zero & size,
-      Radius.circular(radius),
-    );
-    final path = Path()..addRRect(rrect);
-    const dashWidth = 5.0;
-    const dashSpace = 4.0;
-    for (final metric in path.computeMetrics()) {
-      var distance = 0.0;
-      while (distance < metric.length) {
-        final next = distance + dashWidth > metric.length
-            ? metric.length
-            : distance + dashWidth;
-        canvas.drawPath(metric.extractPath(distance, next), paint);
-        distance = next + dashSpace;
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _DotDashedBorderPainter oldDelegate) =>
-      oldDelegate.color != color || oldDelegate.radius != radius;
 }

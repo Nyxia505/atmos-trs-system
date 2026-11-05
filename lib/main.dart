@@ -42,6 +42,7 @@ import 'package:atmos_trs_system/screens/qr_tourist_basic_signup_screen.dart';
 import 'package:atmos_trs_system/navigation/guest_startup_routes.dart';
 import 'package:atmos_trs_system/navigation/post_registration_qr_navigation.dart';
 import 'package:atmos_trs_system/screens/mobile_onboarding_screen.dart';
+import 'package:trip_plan/widgets/optaca_flutter_error_shell.dart';
 import 'package:atmos_trs_system/screens/splash_screen.dart';
 import 'package:atmos_trs_system/screens/welcome_screen.dart';
 
@@ -52,6 +53,7 @@ const String _passwordResetRoute = '/forgot-password';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  installVisibleFlutterErrorHandlers();
 
   // Chrome / web must use the Web app from Firebase (appId contains ":web:").
   // Do not rely on a single generic switch for web — forces correct SDK options.

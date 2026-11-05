@@ -270,7 +270,7 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
                 _sectionTitle('Official DOT forms'),
                 const SizedBox(height: 12),
                 officialDotPanel,
-                const SizedBox(height: 24),
+                const SizedBox(height: 28),
               ],
               _sectionTitle('Analytics'),
               const SizedBox(height: 12),

@@ -1264,7 +1264,8 @@ class LguEventService {
         },
         onError: (Object e) {
           debugPrint('[LguEventService] watch announcements: $e');
-          controller.addError(e);
+          posts ??= const [];
+          emit();
         },
       );
       final catalogSub =
@@ -1278,7 +1279,8 @@ class LguEventService {
         },
         onError: (Object e) {
           debugPrint('[LguEventService] watch events: $e');
-          controller.addError(e);
+          catalog ??= const [];
+          emit();
         },
       );
       controller.onCancel = () {

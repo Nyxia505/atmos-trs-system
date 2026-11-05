@@ -7,6 +7,7 @@ class MunicipalityBusTerminal {
   final String name;
   final double latitude;
   final double longitude;
+
   /// `terminal` or `stop`.
   final String kind;
 
@@ -18,11 +19,11 @@ class MunicipalityBusTerminal {
   });
 
   Map<String, dynamic> toFirestoreMap() => {
-        'name': name,
-        'latitude': latitude,
-        'longitude': longitude,
-        'kind': kind,
-      };
+    'name': name,
+    'latitude': latitude,
+    'longitude': longitude,
+    'kind': kind,
+  };
 
   static MunicipalityBusTerminal? fromFirestoreMap(Map<String, dynamic>? raw) {
     if (raw == null || raw.isEmpty) return null;
@@ -66,8 +67,10 @@ class Municipality {
   final String imagePath;
   final String description;
   final List<TouristSpot> spots;
+
   /// From Firestore (`divisionKind`, `type`, …). Empty = infer from [name].
   final String divisionKind;
+
   /// Public bus terminal or stop for trip routing (Firestore `busTerminal`).
   final MunicipalityBusTerminal? busTerminal;
 
@@ -109,21 +112,29 @@ class TouristSpot {
   type; // 'Nature' | 'Adventure' | 'Culture' | 'Relaxation' | 'Food' (legacy: 'spot' | 'hotel')
   final double? latitude;
   final double? longitude;
+
   /// Walking time to reach or explore the spot (minutes), from Firestore.
   final int? walkingDistanceMinutes;
   final String entranceFee;
+
   /// Admin-entered food & drinks cost (saved to Firestore; not shown as price range).
   final String foodAndDrinksPrice;
+
   /// Admin-entered other souvenirs cost (included in auto price range).
   final String otherSouvenirsPrice;
+
   /// Set when loaded from Firestore so edits update the same document (avoids duplicates).
   final String? firestoreDocId;
+
   /// Firestore `category` (e.g. Mountain, Beach) when present.
   final String category;
+
   /// Firestore `visitors` / popularity counter when present.
   final int visitors;
+
   /// Explicit rating count when present (`ratingCount`, etc.); else 0.
   final int ratingCount;
+
   /// `updatedAt` millis for recent-engagement scoring (0 if unknown).
   final int updatedAtMs;
 
@@ -228,6 +239,7 @@ class AppUser {
   final String role; // e.g. tourist, admin, user
   /// Download URL, `gs://…`, or Storage path (e.g. under `profile_photos/`).
   final String profilePhotoPath;
+
   /// Used with `profile_photos/<this>` when [profilePhotoPath] is empty; usually matches Firebase Auth uid.
   final String profilePhotoLookupId;
 
@@ -248,10 +260,13 @@ class SpotRating {
   final String userName;
   final String spotName;
   final double rating;
+
   /// Optional written feedback / comment; empty when the user skips it.
   final String description;
+
   /// Firebase Auth uid when known (used to load profile photo).
   final String userId;
+
   /// Direct photo URL/path when known.
   final String profilePhotoPath;
   final DateTime? createdAt;
@@ -268,15 +283,15 @@ class SpotRating {
   });
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'userName': userName,
-        'spotName': spotName,
-        'rating': rating,
-        'description': description,
-        'userId': userId,
-        'profilePhotoPath': profilePhotoPath,
-        if (createdAt != null) 'createdAt': createdAt!.toIso8601String(),
-      };
+    'id': id,
+    'userName': userName,
+    'spotName': spotName,
+    'rating': rating,
+    'description': description,
+    'userId': userId,
+    'profilePhotoPath': profilePhotoPath,
+    if (createdAt != null) 'createdAt': createdAt!.toIso8601String(),
+  };
 
   factory SpotRating.fromJson(Map<String, dynamic> json) {
     DateTime? created;
@@ -289,7 +304,8 @@ class SpotRating {
       userName: (json['userName'] as String?)?.trim() ?? 'Traveler',
       spotName: (json['spotName'] as String?)?.trim() ?? '',
       rating: (json['rating'] as num?)?.toDouble() ?? 0,
-      description: (json['description'] as String?)?.trim() ??
+      description:
+          (json['description'] as String?)?.trim() ??
           (json['comment'] as String?)?.trim() ??
           '',
       userId: (json['userId'] as String?)?.trim() ?? '',
@@ -330,6 +346,7 @@ class TouristRegistryEntry {
   final String dateDisplay;
   final String timeDisplay;
   final int visits;
+
   /// For sorting rows (newest first when known).
   final DateTime sortKey;
 
@@ -392,11 +409,7 @@ List<String> catalogSpotCategories() {
 }
 
 /// Trip planner: transportation modes.
-const List<String> kTransportModes = [
-  'Car',
-  'Motorcycle',
-  'Public Transport',
-];
+const List<String> kTransportModes = ['Car', 'Motorcycle', 'Public Transport'];
 
 /// Budget tiers for intelligent recommendations (PHP).
 enum TripBudgetTier {
@@ -470,9 +483,9 @@ class TourismEvent {
   final DateTime? rangeEnd;
   /// Kind of event (e.g. Festival, Cultural) — shown to users.
   final String eventType;
+
   /// Optional longer text shown in detail and on cards.
   final String description;
-  /// ATMOS catalog publisher metadata (LGU / OPTACA / Governor ownership).
   final String catalogSource;
   final String createdByUid;
   final String createdBy;
@@ -596,11 +609,13 @@ class TourismAnnouncement {
   final String imagePath;
   final DateTime publishedAt;
   final String type;
+  final String municipality;
+  final String municipalityId;
+  final String venue;
   final String createdByUid;
   final String createdBy;
   final String publisherOffice;
-  final String municipalityId;
-  final String municipality;
+  final String audienceScope;
 
   const TourismAnnouncement({
     required this.id,
@@ -608,12 +623,14 @@ class TourismAnnouncement {
     this.body = '',
     this.imagePath = '',
     required this.publishedAt,
-    this.type = 'Announcement',
+    this.type = '',
+    this.municipality = '',
+    this.municipalityId = '',
+    this.venue = '',
     this.createdByUid = '',
     this.createdBy = '',
     this.publisherOffice = '',
-    this.municipalityId = '',
-    this.municipality = '',
+    this.audienceScope = '',
   });
 }
 
@@ -848,8 +865,9 @@ bool touristSpotBelongsToMunicipality(
 /// Municipalities sorted by highest-rated spot in each (for recommendations).
 List<Municipality> get recommendedMunicipalities {
   double maxRatingFor(Municipality m) {
-    final spotsInM =
-        allSpots.where((s) => touristSpotBelongsToMunicipality(s, m)).toList();
+    final spotsInM = allSpots
+        .where((s) => touristSpotBelongsToMunicipality(s, m))
+        .toList();
     if (spotsInM.isEmpty) return 0;
     return spotsInM.map((s) => s.rating).reduce((a, b) => a > b ? a : b);
   }
@@ -877,7 +895,9 @@ List<FeaturedSpot> get recommendedFeaturedForBanner {
     final list = featuredSpots.map((f) {
       var linked = allSpots
           .where(
-            (s) => normalizeTourismNameKey(s.name) == normalizeTourismNameKey(f.name),
+            (s) =>
+                normalizeTourismNameKey(s.name) ==
+                normalizeTourismNameKey(f.name),
           )
           .toList();
       if (linked.isEmpty) {
@@ -1085,6 +1105,7 @@ AppUser? findAppUserByFirebaseUid(String? uid) {
   }
   return null;
 }
+
 final List<SpotRating> spotRatings = <SpotRating>[];
 
 // ─── Shared Widgets ────────────────────────────────────────────────────
@@ -1148,10 +1169,7 @@ class InteractiveRatingBadge extends StatelessWidget {
             width: 56,
             height: 56,
             alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-            ),
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
             child: Text(
               display.toStringAsFixed(1),
               style: const TextStyle(
@@ -1207,10 +1225,13 @@ class InteractiveRatingBadge extends StatelessWidget {
 class AppColors {
   static const primary = Color(0xFFFF7A00); // main orange
   static const primaryLight = Color(0xFFFFA24C);
+
   /// Warm cream (legacy screens, event detail body).
   static const background = Color(0xFFFFF9F2);
+
   /// Your Plan / app-wide page background (soft grey-cream).
   static const planPageBg = Color(0xFFF4F5F7);
+
   /// List rows (municipalities, admin lists).
   static const listTilePeach = Color(0xFFFFF2EB);
   static const insetSurface = Color(0xFFFAFBFC);

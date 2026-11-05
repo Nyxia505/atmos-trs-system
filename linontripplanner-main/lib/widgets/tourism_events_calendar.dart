@@ -680,28 +680,30 @@ class TourismEventDetailPage extends StatelessWidget {
                     const SizedBox(height: 12),
                     _EventCategoryTag(label: e.eventType, color: accentColor),
                   ],
-                  if (e.description.trim().isNotEmpty) ...[
-                    const SizedBox(height: 18),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: AppColors.listTilePeach.withValues(alpha: 0.65),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: accentColor.withValues(alpha: 0.14),
-                        ),
-                      ),
-                      child: Text(
-                        e.description,
-                        style: const TextStyle(
-                          fontSize: 15,
-                          height: 1.55,
-                          color: AppColors.textDark,
-                        ),
+                  const SizedBox(height: 18),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: AppColors.listTilePeach.withValues(alpha: 0.65),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: accentColor.withValues(alpha: 0.14),
                       ),
                     ),
-                  ],
+                    child: Text(
+                      e.description.trim().isNotEmpty
+                          ? e.description
+                          : 'No description provided.',
+                      style: TextStyle(
+                        fontSize: 15,
+                        height: 1.55,
+                        color: e.description.trim().isNotEmpty
+                            ? AppColors.textDark
+                            : AppColors.textGrey,
+                      ),
+                    ),
+                  ),
                   const SizedBox(height: 22),
                   TourismPlanUi.sectionTitleBar(title: 'Event details'),
                   const SizedBox(height: 10),

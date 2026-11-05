@@ -20,6 +20,9 @@ final _kInk = PdfColor.fromHex('#0F172A');
 final _kMuted = PdfColor.fromHex('#64748B');
 final _kBorder = PdfColor.fromHex('#E2E8F0');
 final _kZebra = PdfColor.fromHex('#F8FAFC');
+final _kGapBg = PdfColor.fromHex('#FFFBEB');
+final _kGapLine = PdfColor.fromHex('#F59E0B');
+
 /// Bond paper sizes LGU offices print on (PH short = US Letter, long = 8.5 × 13 in).
 enum DotPdfPaperSize { a4, short, long }
 
@@ -189,6 +192,10 @@ bool _isPlaceholder(String v) {
 }
 
 /// Builds a printable PDF from the same preview table used in Analytics.
+///
+/// [additionalTables] is for multi-section OPTACA summaries (Events,
+/// Announcements, Matrix Fares). Official VAR / DAE exports leave it empty
+/// so their page layout is unchanged.
 Future<Uint8List> buildDotReportPdfBytes({
   required DotFormCatalogEntry form,
   required DotReportPreviewTable preview,
@@ -196,9 +203,12 @@ Future<Uint8List> buildDotReportPdfBytes({
   required DateTime startDate,
   required DateTime endDate,
   DotPdfPaperSize paperSize = DotPdfPaperSize.a4,
+  List<DotReportPreviewTable> additionalTables = const [],
   List<DotPdfSignOff> signOffs = const [],
   List<String> unsignedLabels = const [],
   List<DotPdfSignatory> signatories = const [],
+  bool landscape = false,
+  bool? paginateTables,
 }) async {
   final fonts = await _loadFonts();
   final logo = await _loadLogo();
@@ -215,45 +225,12 @@ Future<Uint8List> buildDotReportPdfBytes({
 
   final generatedAt = DateTime.now();
   final periodLine = '${_fmtDate(startDate)} – ${_fmtDate(endDate)}';
+  final sections = [preview, ...additionalTables];
+  final showSectionTitles = additionalTables.isNotEmpty;
+  // Portal summaries must split inside MultiPage. VAR / DAE keep the original
+  // Column-of-Tables layout when [paginateTables] is left unset.
+  final splitTables = paginateTables ?? showSectionTitles;
   final isVar2 = form.reportType == DotReportType.var2VisitorRecord;
-
-  final colCount = preview.headers.length;
-  final allRows = [
-    ...preview.rows,
-    if (preview.footer != null) preview.footer!,
-  ];
-  final numericCols = <int>{};
-  final emptyCols = <int>{};
-  for (var c = 0; c < colCount; c++) {
-    var hasValue = false;
-    var allNumeric = true;
-    for (final r in allRows) {
-      final v = c < r.length ? r[c] : '';
-      if (_isPlaceholder(v)) continue;
-      hasValue = true;
-      if (!_numericCell.hasMatch(v.trim())) {
-        allNumeric = false;
-        break;
-      }
-    }
-    if (!hasValue) {
-      emptyCols.add(c);
-    } else if (allNumeric && c > 0) {
-      numericCols.add(c);
-    }
-  }
-
-  // Portrait pages are narrower than the old landscape layout, so wide
-  // forms use a smaller type size and tighter cell padding.
-  final bodySize = colCount > 14
-      ? 6.0
-      : colCount > 10
-          ? 6.5
-          : colCount > 7
-              ? 7.5
-              : 8.5;
-  final headSize = bodySize + 0.3;
-  final cellPadH = colCount > 10 ? 2.0 : 4.0;
 
   /// Header wrap for A4 portrait. Never stacks every word on its own line
   /// (that made "PH Region of Residence" read vertically).
@@ -277,6 +254,26 @@ Future<Uint8List> buildDotReportPdfBytes({
     return '${parts.sublist(0, mid).join(' ')}\n${parts.sublist(mid).join(' ')}';
   }
 
+  /// Portal tables wrap headers onto two lines so 7-column event / fare
+  /// headers stay readable without stacking every word.
+  String headerLinesSoft(String text) {
+    final value = text.trim();
+    if (value.length <= 16) return value;
+    final slash = value.indexOf(' / ');
+    if (slash > 0) {
+      return '${value.substring(0, slash)}\n${value.substring(slash + 3)}';
+    }
+    final amp = value.indexOf(' & ');
+    if (amp > 0) {
+      return '${value.substring(0, amp)}\n${value.substring(amp + 3)}';
+    }
+    final parts = value.split(RegExp(r'\s+'));
+    if (parts.length <= 2) return parts.join('\n');
+    if (parts.length == 3) return '${parts[0]} ${parts[1]}\n${parts[2]}';
+    final mid = (parts.length / 2).ceil();
+    return '${parts.take(mid).join(' ')}\n${parts.skip(mid).join(' ')}';
+  }
+
   int longestWord(String text) {
     var longest = 0;
     for (final word in text.split(RegExp(r'\s+'))) {
@@ -285,60 +282,194 @@ Future<Uint8List> buildDotReportPdfBytes({
     return longest;
   }
 
-  pw.Widget cell(
-    String text, {
-    required int col,
-    bool header = false,
-    bool bold = false,
-    PdfColor? color,
-  }) {
-    final alignCenter =
-        header || numericCols.contains(col) || emptyCols.contains(col);
-    final shown = header ? headerLines(text, col: col) : text;
-    final headerFont = col == 0 && header
-        ? math.max(6.5, headSize - 0.4)
-        : (header ? headSize : bodySize);
-    return pw.Padding(
-      padding: pw.EdgeInsets.symmetric(
-        horizontal: col == 0 ? math.max(2.0, cellPadH - 0.5) : cellPadH,
-        vertical: header ? 5 : 3,
-      ),
-      child: pw.Text(
-        t(shown),
-        textAlign: alignCenter ? pw.TextAlign.center : pw.TextAlign.left,
-        maxLines: header && col == 0 ? 1 : 3,
-        style: pw.TextStyle(
-          fontSize: headerFont,
-          fontWeight:
-              header || bold ? pw.FontWeight.bold : pw.FontWeight.normal,
-          color: color ?? _kInk,
+  pw.Widget buildTable(DotReportPreviewTable table) {
+    final colCount = table.headers.length;
+    if (colCount == 0) return pw.SizedBox();
+    final allRows = [
+      ...table.rows,
+      if (table.footer != null) table.footer!,
+    ];
+    final numericCols = <int>{};
+    final emptyCols = <int>{};
+    for (var c = 0; c < colCount; c++) {
+      var hasValue = false;
+      var allNumeric = true;
+      for (final r in allRows) {
+        final v = c < r.length ? r[c] : '';
+        if (_isPlaceholder(v)) continue;
+        hasValue = true;
+        if (!_numericCell.hasMatch(v.trim())) {
+          allNumeric = false;
+          break;
+        }
+      }
+      if (!hasValue) {
+        emptyCols.add(c);
+      } else if (allNumeric && c > 0) {
+        numericCols.add(c);
+      }
+    }
+
+    // Portrait pages are narrower than the old landscape layout, so wide
+    // forms use a smaller type size and tighter cell padding.
+    final bodySize = colCount > 14
+        ? 6.0
+        : colCount > 10
+            ? 6.5
+            : colCount > 7
+                ? 7.5
+                : 8.5;
+    final headSize = bodySize + 0.3;
+    final cellPadH = colCount > 10 ? 2.0 : 4.0;
+
+    pw.Widget cell(
+      String text, {
+      required int col,
+      bool header = false,
+      bool bold = false,
+      PdfColor? color,
+    }) {
+      final alignCenter =
+          header || numericCols.contains(col) || emptyCols.contains(col);
+      final shown = header
+          ? (splitTables
+              ? headerLinesSoft(text)
+              : headerLines(text, col: col))
+          : text;
+      final headerFont = !splitTables && col == 0 && header
+          ? math.max(6.5, headSize - 0.4)
+          : (header ? headSize : bodySize);
+      return pw.Padding(
+        padding: pw.EdgeInsets.symmetric(
+          horizontal: !splitTables && col == 0
+              ? math.max(2.0, cellPadH - 0.5)
+              : cellPadH,
+          vertical: header ? (splitTables ? 6 : 5) : 3,
         ),
-      ),
-    );
-  }
+        child: pw.Text(
+          t(shown),
+          textAlign: alignCenter ? pw.TextAlign.center : pw.TextAlign.left,
+          maxLines: !splitTables && header && col == 0 ? 1 : 3,
+          style: pw.TextStyle(
+            fontSize: headerFont,
+            fontWeight:
+                header || bold ? pw.FontWeight.bold : pw.FontWeight.normal,
+            color: color ?? _kInk,
+          ),
+        ),
+      );
+    }
 
-  List<String> padRow(List<String> r) => [
-        for (var c = 0; c < colCount; c++) c < r.length ? r[c] : '',
-      ];
+    List<String> padRow(List<String> r) => [
+          for (var c = 0; c < colCount; c++) c < r.length ? r[c] : '',
+        ];
 
-  // Widen the first (label) column so "PH Region of Residence" fits horizontally.
-  final firstHeader = colCount > 0 ? preview.headers.first : '';
-  final firstFlex = firstHeader.toLowerCase().contains('region')
-      ? 3.6
-      : (firstHeader.length >= 18 ? 3.2 : 2.6);
+    double flexFor(int c) {
+      final h = table.headers[c].toLowerCase();
+      if (h.contains('destination') ||
+          h.contains('announcement') ||
+          h.contains('details')) {
+        return 2.8;
+      }
+      if (h == 'event' || h.contains('starting')) return 2.2;
+      if (h.contains('municipality') || h.contains('venue')) return 2.1;
+      if (h.contains('transportation') || h.contains('date')) return 1.6;
+      if (h.contains('estimated') || h.contains('travel time')) return 1.5;
+      if (c == 0) return 2.6;
+      if (numericCols.contains(c) || emptyCols.contains(c)) {
+        return longestWord(table.headers[c]) >= 8 ? 1.7 : 1.15;
+      }
+      return 1.7;
+    }
 
-  final columnWidths = <int, pw.TableColumnWidth>{
-    for (var c = 0; c < colCount; c++)
-      c: pw.FlexColumnWidth(
-        c == 0
-            ? firstFlex
-            : numericCols.contains(c) || emptyCols.contains(c)
-                ? (longestWord(preview.headers[c]) >= 8 ? 1.55 : 1.1)
-                : 1.6,
-      ),
-  };
+    // Widen the first (label) column so "PH Region of Residence" fits
+    // horizontally on VAR / DAE portrait pages.
+    final firstHeader = colCount > 0 ? table.headers.first : '';
+    final firstFlex = firstHeader.toLowerCase().contains('region')
+        ? 3.6
+        : (firstHeader.length >= 18 ? 3.2 : 2.6);
 
-  pw.Widget buildTable() {
+    final columnWidths = <int, pw.TableColumnWidth>{
+      for (var c = 0; c < colCount; c++)
+        c: pw.FlexColumnWidth(
+          splitTables
+              ? flexFor(c)
+              : (c == 0
+                  ? firstFlex
+                  : numericCols.contains(c) || emptyCols.contains(c)
+                      ? (longestWord(table.headers[c]) >= 8 ? 1.55 : 1.1)
+                      : 1.6),
+        ),
+    };
+
+    if (table.rows.isEmpty) {
+      return pw.Container(
+        width: double.infinity,
+        padding: const pw.EdgeInsets.all(12),
+        decoration: pw.BoxDecoration(
+          color: _kZebra,
+          borderRadius: pw.BorderRadius.circular(6),
+          border: pw.Border.all(color: _kBorder, width: 0.6),
+        ),
+        child: pw.Text(
+          t('No data rows for this range.'),
+          style: pw.TextStyle(fontSize: 9, color: _kMuted),
+        ),
+      );
+    }
+
+    // One Table (not a Column of Tables) so MultiPage can split rows and
+    // repeat the orange header. TableHelper uses verticalAlignment.full,
+    // which overflows 7-column fare rows off the page.
+    if (splitTables) {
+      return pw.Table(
+        tableWidth: pw.TableWidth.max,
+        defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
+        columnWidths: columnWidths,
+        border: pw.TableBorder(
+          horizontalInside: pw.BorderSide(color: _kBorder, width: 0.5),
+          bottom: pw.BorderSide(color: _kBorder, width: 0.5),
+          verticalInside: const pw.BorderSide(color: PdfColors.white, width: 0.9),
+        ),
+        children: [
+          pw.TableRow(
+            repeat: true,
+            decoration: pw.BoxDecoration(color: _kAccent),
+            children: [
+              for (var c = 0; c < colCount; c++)
+                cell(
+                  table.headers[c],
+                  col: c,
+                  header: true,
+                  color: PdfColors.white,
+                ),
+            ],
+          ),
+          for (var i = 0; i < table.rows.length; i++)
+            pw.TableRow(
+              decoration: i.isOdd ? pw.BoxDecoration(color: _kZebra) : null,
+              children: [
+                for (final (c, v) in padRow(table.rows[i]).indexed)
+                  cell(v, col: c),
+              ],
+            ),
+          if (table.footer != null)
+            pw.TableRow(
+              decoration: pw.BoxDecoration(
+                color: _kAccentSoft,
+                border: pw.Border(
+                  top: pw.BorderSide(color: _kAccentLine, width: 1),
+                ),
+              ),
+              children: [
+                for (final (c, v) in padRow(table.footer!).indexed)
+                  cell(v, col: c, bold: true),
+              ],
+            ),
+        ],
+      );
+    }
+
     return pw.Column(
       children: [
         pw.Table(
@@ -353,7 +484,7 @@ Future<Uint8List> buildDotReportPdfBytes({
               children: [
                 for (var c = 0; c < colCount; c++)
                   cell(
-                    preview.headers[c],
+                    table.headers[c],
                     col: c,
                     header: true,
                     color: PdfColors.white,
@@ -373,15 +504,15 @@ Future<Uint8List> buildDotReportPdfBytes({
           defaultVerticalAlignment: pw.TableCellVerticalAlignment.middle,
           columnWidths: columnWidths,
           children: [
-            for (var i = 0; i < preview.rows.length; i++)
+            for (var i = 0; i < table.rows.length; i++)
               pw.TableRow(
                 decoration: i.isOdd ? pw.BoxDecoration(color: _kZebra) : null,
                 children: [
-                  for (final (c, v) in padRow(preview.rows[i]).indexed)
+                  for (final (c, v) in padRow(table.rows[i]).indexed)
                     cell(v, col: c),
                 ],
               ),
-            if (preview.footer != null)
+            if (table.footer != null)
               pw.TableRow(
                 decoration: pw.BoxDecoration(
                   color: _kAccentSoft,
@@ -390,13 +521,28 @@ Future<Uint8List> buildDotReportPdfBytes({
                   ),
                 ),
                 children: [
-                  for (final (c, v) in padRow(preview.footer!).indexed)
+                  for (final (c, v) in padRow(table.footer!).indexed)
                     cell(v, col: c, bold: true),
                 ],
               ),
           ],
         ),
       ],
+    );
+  }
+
+  pw.Widget sectionHeading(String title) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(bottom: 8),
+      child: pw.Text(
+        t(title.toUpperCase()),
+        style: pw.TextStyle(
+          fontSize: 9,
+          color: _kMuted,
+          fontWeight: pw.FontWeight.bold,
+          letterSpacing: 0.6,
+        ),
+      ),
     );
   }
 
@@ -549,22 +695,52 @@ Future<Uint8List> buildDotReportPdfBytes({
     );
   }
 
-  // Pin "Prepared and Certified By" (establishment manager sign-off) into the
-  // MultiPage footer on the last page so short tables don't leave the block
-  // floating under the grid. CUS officer/mayor lines stay in the body.
-  final pinPreparedCertified =
-      signOffs.isNotEmpty || unsignedLabels.isNotEmpty;
+  // DAE-1A Manual Tally: clean manager block bottom-left on the last page.
+  final isDae1aManual =
+      form.id == 'dae1a_manual' || form.code.toUpperCase().contains('DAE-1A');
+  final showDae1aSignOff =
+      isDae1aManual && (signOffs.isNotEmpty || unsignedLabels.isNotEmpty);
+
+  pw.Widget pageChromeFooter(pw.Context context) {
+    return pw.Container(
+      margin: const pw.EdgeInsets.only(top: 10),
+      padding: const pw.EdgeInsets.only(top: 5),
+      decoration: pw.BoxDecoration(
+        border: pw.Border(top: pw.BorderSide(color: _kBorder, width: 0.6)),
+      ),
+      child: pw.Row(
+        children: [
+          pw.Expanded(
+            child: pw.Text(
+              t(
+                'Generated by ATMOS TRS — best-effort fill from current data. '
+                'Not a blank official template.',
+              ),
+              style: pw.TextStyle(fontSize: 7, color: _kMuted),
+            ),
+          ),
+          pw.Text(
+            t('Page ${context.pageNumber} of ${context.pagesCount}'),
+            style: pw.TextStyle(
+              fontSize: 7,
+              color: _kMuted,
+              fontWeight: pw.FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   pw.Widget preparedAndCertifiedSection() {
     return pw.Align(
       alignment: pw.Alignment.centerLeft,
       child: pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.start,
-        mainAxisSize: pw.MainAxisSize.min,
         children: [
           if (signOffs.isNotEmpty) ...[
             pw.Text(
-              t('Prepared and Certified By'),
+              t('Prepared and certified by'),
               style: pw.TextStyle(
                 fontSize: 9,
                 color: _kInk,
@@ -592,22 +768,27 @@ Future<Uint8List> buildDotReportPdfBytes({
 
   doc.addPage(
     pw.MultiPage(
-      pageFormat: paperSize.pageFormat,
+      pageFormat: landscape
+          ? paperSize.pageFormat.landscape
+          : paperSize.pageFormat,
       margin: const pw.EdgeInsets.fromLTRB(30, 26, 30, 22),
       header: (context) =>
           context.pageNumber == 1 ? firstPageHeader() : continuationHeader(),
-      // No disclaimer / page-number chrome. Last page only reserves space for
-      // Prepared and Certified By when a manager sign-off is present.
-      footer: pinPreparedCertified
-          ? (context) {
-              if (context.pageNumber != context.pagesCount) {
-                return pw.SizedBox(height: 0);
-              }
-              return preparedAndCertifiedSection();
-            }
-          : null,
+      footer: (context) {
+        // Pin DAE-1A signatures to the bottom-left of the last page.
+        if (showDae1aSignOff && context.pageNumber == context.pagesCount) {
+          return pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              preparedAndCertifiedSection(),
+              pageChromeFooter(context),
+            ],
+          );
+        }
+        return pageChromeFooter(context);
+      },
       build: (context) => [
-        if (preview.rows.isEmpty)
+        if (!showSectionTitles && preview.rows.isEmpty)
           pw.Container(
             padding: const pw.EdgeInsets.all(16),
             decoration: pw.BoxDecoration(
@@ -616,14 +797,79 @@ Future<Uint8List> buildDotReportPdfBytes({
               border: pw.Border.all(color: _kBorder, width: 0.6),
             ),
             child: pw.Text(
-              t('No data rows for this reporting period.'),
+              t(
+                'No data rows for this range. Gaps below explain what ATMOS still needs.',
+              ),
               style: pw.TextStyle(fontSize: 10, color: _kMuted),
             ),
-          )
-        else
-          buildTable(),
-        // Prepared/Certified is rendered in the last-page footer (not here).
-        // CUS blank officer/mayor lines remain in the body when present.
+          ),
+        if (showSectionTitles || preview.rows.isNotEmpty) ...[
+          for (var i = 0; i < sections.length; i++) ...[
+            if (i > 0 && splitTables)
+              pw.NewPage()
+            else if (i > 0)
+              pw.SizedBox(height: 16),
+            if (showSectionTitles && sections[i].title.trim().isNotEmpty)
+              sectionHeading(sections[i].title),
+            buildTable(sections[i]),
+          ],
+        ],
+        if (!isVar2 && preview.gaps.isNotEmpty) ...[
+          pw.SizedBox(height: 16),
+          pw.Container(
+            padding: const pw.EdgeInsets.fromLTRB(12, 10, 12, 8),
+            decoration: pw.BoxDecoration(
+              color: _kGapBg,
+              border: pw.Border(
+                left: pw.BorderSide(color: _kGapLine, width: 3),
+              ),
+            ),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text(
+                  t('ATMOS gaps — not yet derivable from current data'),
+                  style: pw.TextStyle(
+                    fontSize: 9.5,
+                    color: _kInk,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                pw.SizedBox(height: 6),
+                for (final g in preview.gaps)
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.only(bottom: 3),
+                    child: pw.Row(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Container(
+                          width: 3.5,
+                          height: 3.5,
+                          margin: const pw.EdgeInsets.only(top: 4, right: 7),
+                          decoration: pw.BoxDecoration(
+                            color: _kGapLine,
+                            shape: pw.BoxShape.circle,
+                          ),
+                        ),
+                        pw.Expanded(
+                          child: pw.Text(
+                            t(g),
+                            style: pw.TextStyle(fontSize: 8.5, color: _kInk),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+        // Non–DAE-1A forms keep sign-offs in the body (same formal layout).
+        if (!isDae1aManual &&
+            (signOffs.isNotEmpty || unsignedLabels.isNotEmpty)) ...[
+          pw.SizedBox(height: 20),
+          preparedAndCertifiedSection(),
+        ],
         if (signatories.isNotEmpty) ...[
           pw.SizedBox(height: 24),
           pw.Row(
@@ -728,19 +974,21 @@ pw.Widget _managerSignOffBlock(DotPdfSignOff s, String Function(String) t) {
     mainAxisSize: pw.MainAxisSize.min,
     children: [
       if (png != null)
-        // Width-driven size so trimmed ink sits flush above the name
-        // (no fixed-height box leaving empty space above the strokes).
         pw.ConstrainedBox(
-          constraints: const pw.BoxConstraints(maxWidth: 150, maxHeight: 30),
+          // ~25% larger than prior 130×28 cap.
+          constraints: const pw.BoxConstraints(
+            maxWidth: 162,
+            maxHeight: 35,
+          ),
           child: pw.Image(
             pw.MemoryImage(png),
             fit: pw.BoxFit.contain,
             alignment: pw.Alignment.bottomCenter,
           ),
         ),
-      // ~3–6pt between visible strokes and the bold name (no overlap).
-      if (png != null) pw.SizedBox(height: 5),
-      // Underline width follows the printed name only (not full column).
+      // ~2–4pt gap between visible strokes and the bold name.
+      if (png != null) pw.SizedBox(height: 3),
+      // Underline width follows the printed name only.
       pw.Container(
         decoration: pw.BoxDecoration(
           border: pw.Border(
@@ -760,7 +1008,6 @@ pw.Widget _managerSignOffBlock(DotPdfSignOff s, String Function(String) t) {
       pw.SizedBox(height: 3),
       pw.Text(
         t('Manager'),
-        textAlign: pw.TextAlign.center,
         style: pw.TextStyle(fontSize: 8.5, color: _kInk),
       ),
     ],

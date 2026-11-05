@@ -82,6 +82,53 @@ void main() {
         'All tourist spots: Oroquieta City · Misamis Occidental (OPTACA)',
       );
     });
+
+    test('portal summaries use dedicated slug and label', () {
+      expect(
+        DotReportEntityScope.slugFor(
+          baseSlug: 'misamis_occidental_optaca',
+          kind: DotReportEntityKind.eventsAnnouncements,
+        ),
+        'misamis_occidental_optaca_events',
+      );
+      expect(
+        DotReportEntityScope.slugFor(
+          baseSlug: 'misamis_occidental_optaca',
+          kind: DotReportEntityKind.matrixFares,
+        ),
+        'misamis_occidental_optaca_matrix_fares',
+      );
+      expect(
+        DotReportEntityScope.labelFor(
+          baseLabel: 'Misamis Occidental (OPTACA)',
+          kind: DotReportEntityKind.eventsAnnouncements,
+        ),
+        'Events & Announcements · Misamis Occidental (OPTACA)',
+      );
+      expect(
+        DotReportEntityScope.labelFor(
+          baseLabel: 'Misamis Occidental (OPTACA)',
+          kind: DotReportEntityKind.matrixFares,
+        ),
+        'Matrix Fares · Misamis Occidental (OPTACA)',
+      );
+      expect(
+        DotReportEntityScope.slugFor(
+          baseSlug: 'misamis_occidental_optaca',
+          kind: DotReportEntityKind.eventsAnnouncements,
+          municipalityId: 'ozamiz',
+        ),
+        'misamis_occidental_optaca_events_ozamiz',
+      );
+      expect(
+        DotReportEntityScope.labelFor(
+          baseLabel: 'Misamis Occidental (OPTACA)',
+          kind: DotReportEntityKind.matrixFares,
+          municipalityName: 'Ozamiz City',
+        ),
+        'Matrix Fares · Ozamiz City · Misamis Occidental (OPTACA)',
+      );
+    });
   });
 
   group('filterCheckInsForMunicipality', () {

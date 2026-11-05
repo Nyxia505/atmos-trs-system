@@ -14,6 +14,19 @@ enum DotReportEntityKind {
 
   /// One accommodation establishment (DAE family).
   establishment,
+
+  /// OPTACA Events & Announcements summary (not a VAR/DAE workbook).
+  eventsAnnouncements,
+
+  /// OPTACA Matrix Fares summary (not a VAR/DAE workbook).
+  matrixFares,
+}
+
+extension DotReportEntityKindX on DotReportEntityKind {
+  /// Trip-planner summaries hosted in the Fill-forms-for dropdown.
+  bool get isPortalSummary =>
+      this == DotReportEntityKind.eventsAnnouncements ||
+      this == DotReportEntityKind.matrixFares;
 }
 
 /// Selectable spot or establishment for form fill / download.
@@ -185,7 +198,18 @@ abstract final class DotReportEntityScope {
       if (mun.isEmpty) return '${base}_mun_spots';
       return '${base}_mun_spots_$mun';
     }
+    if (kind == DotReportEntityKind.eventsAnnouncements) {
+      final mun = _safeSlugPart(municipalityId ?? '');
+      return mun.isEmpty ? '${base}_events' : '${base}_events_$mun';
+    }
+    if (kind == DotReportEntityKind.matrixFares) {
+      final mun = _safeSlugPart(municipalityId ?? '');
+      return mun.isEmpty
+          ? '${base}_matrix_fares'
+          : '${base}_matrix_fares_$mun';
+    }
     if (kind == DotReportEntityKind.all ||
+        kind.isPortalSummary ||
         entityId == null ||
         entityId.trim().isEmpty) {
       return base;
@@ -206,7 +230,21 @@ abstract final class DotReportEntityScope {
       if (mun.isEmpty) return 'All tourist spots · $baseLabel';
       return 'All tourist spots: $mun · $baseLabel';
     }
-    if (kind == DotReportEntityKind.all || entity == null) return baseLabel;
+    if (kind == DotReportEntityKind.eventsAnnouncements) {
+      final mun = (municipalityName ?? '').trim();
+      if (mun.isEmpty) return 'Events & Announcements · $baseLabel';
+      return 'Events & Announcements · $mun · $baseLabel';
+    }
+    if (kind == DotReportEntityKind.matrixFares) {
+      final mun = (municipalityName ?? '').trim();
+      if (mun.isEmpty) return 'Matrix Fares · $baseLabel';
+      return 'Matrix Fares · $mun · $baseLabel';
+    }
+    if (kind == DotReportEntityKind.all ||
+        kind.isPortalSummary ||
+        entity == null) {
+      return baseLabel;
+    }
     final kindLabel =
         kind == DotReportEntityKind.spot ? 'Spot' : 'Establishment';
     return '$kindLabel: ${entity.name} · $baseLabel';

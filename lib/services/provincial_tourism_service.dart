@@ -191,17 +191,17 @@ class ProvincialTourismService {
       'updatedAt': FieldValue.serverTimestamp(),
     };
     try {
-      if (id == null || id.isEmpty) {
+      final docId = (id == null || id.trim().isEmpty)
+          ? _firestore.collection('provincial_campaigns').doc().id
+          : id.trim();
+      if (id == null || id.trim().isEmpty) {
         payload['createdAt'] = FieldValue.serverTimestamp();
-        final ref =
-            await _firestore.collection('provincial_campaigns').add(payload);
-        return ref.id;
       }
-      await _firestore.collection('provincial_campaigns').doc(id).set(
+      await _firestore.collection('provincial_campaigns').doc(docId).set(
             payload,
             SetOptions(merge: true),
           );
-      return id;
+      return docId;
     } catch (e) {
       debugPrint('[ProvincialTourism] saveCampaign: $e');
       return null;

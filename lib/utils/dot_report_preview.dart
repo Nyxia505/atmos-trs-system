@@ -16,6 +16,7 @@ class DotReportPreviewTable {
     required this.headers,
     required this.rows,
     required this.summaryLine,
+    this.title = '',
     this.footer,
     this.gaps = const [],
   });
@@ -23,6 +24,7 @@ class DotReportPreviewTable {
   final List<String> headers;
   final List<List<String>> rows;
   final String summaryLine;
+  final String title;
   final List<String>? footer;
 
   /// Field / policy gaps vs full official DOT annex.

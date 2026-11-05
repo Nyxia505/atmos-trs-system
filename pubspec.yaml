@@ -140,9 +140,11 @@ flutter:
     - assets/images/Amorap.png
     - assets/images/Tudela Village.webp
     - assets/images/capitol.webp
+    - linontripplanner-main/assets/images/capitolni.jpg
     - assets/images/el triunfo.png
     - assets/images/lumantas river side garden.webp
     - assets/images/tripplan.png
+    - assets/images/app_icon.png
     - assets/mockup/
     - assets/Onboarding_screen/
     # Unicode-capable font embedded in DOT report PDFs (default Helvetica lacks — – ’ • →).

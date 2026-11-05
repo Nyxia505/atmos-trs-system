@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:trip_plan/widgets/trip_plan_app_icon.dart';
 
 /// Trip Planner mark used on login and tourist signup opened from Itinerary.
 class TripPlanAuthBrand extends StatelessWidget {
@@ -24,13 +25,9 @@ class TripPlanAuthBrand extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Image.asset(
-          'assets/images/tripplan.png',
-          package: 'trip_plan',
+        TripPlanAppIcon(
           width: compact ? 72 : logoSize,
           height: compact ? 72 : logoSize,
-          fit: BoxFit.contain,
-          filterQuality: FilterQuality.high,
         ),
         SizedBox(height: compact ? 6 : 8),
         Text(
