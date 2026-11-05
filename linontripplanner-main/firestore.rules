@@ -177,7 +177,8 @@ service cloud.firestore {
     function isKnownStaffEmail() {
       return authEmailLower() != ''
         && (
-          authEmailLower().matches('^governor\\.atmos@misocc-demo\\.ph$')
+          authEmailLower().matches('^optaca@gmail\\.com$')
+          || authEmailLower().matches('^governor\\.atmos@misocc-demo\\.ph$')
           || authEmailLower().matches('^tourismoffice\\.atmos@misocc-demo\\.ph$')
           || authEmailLower().matches('^provincial\\.tourism@misocc-demo\\.ph$')
           || authEmailLower().matches('^tourism@gmail\\.com$')
@@ -187,6 +188,12 @@ service cloud.firestore {
           || authEmailLower().matches('^.*\\.tourism@.+$')
           || authEmailLower().matches('^.*(tourism|governor|misocc|atmos).*@.+$')
         );
+    }
+
+    /// Trip Planner OPTACA portal reader (same mailbox as ATMOS provincial).
+    function isOptacaPortalReader() {
+      return isSignedIn()
+        && authEmailLower().matches('^optaca@gmail\\.com$');
     }
 
     function lguMunicipalityId() {
@@ -641,6 +648,12 @@ service cloud.firestore {
         && request.resource.data.touristId == request.auth.uid;
       allow delete: if (isSignedIn() && resource.data.touristId == request.auth.uid)
         || isLguStaff();
+    }
+
+    /// OPTACA account audit trail. Writes only via Admin SDK / Cloud Functions.
+    match /account_activity_logs/{logId} {
+      allow read: if isProvincialStaff() || isOptacaPortalReader();
+      allow create, update, delete: if false;
     }
 
     // Deny anything else.

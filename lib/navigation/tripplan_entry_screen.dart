@@ -9,6 +9,8 @@ import 'package:atmos_trs_system/models/tourist_spot.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
 import 'package:atmos_trs_system/widgets/lgu_debug_data_dialogs.dart';
 import 'package:atmos_trs_system/widgets/optaca_alerts_quality_panel.dart';
+import 'package:atmos_trs_system/widgets/optaca_accounts_panel.dart';
+import 'package:atmos_trs_system/utils/dot_report_entity_scope.dart';
 import 'package:atmos_trs_system/widgets/optaca_portal_dot_reports.dart';
 import 'package:flutter/material.dart';
 import 'package:trip_plan/admin_dashboard_screen.dart';
@@ -57,8 +59,7 @@ class _TripPlanEntryScreenState extends State<TripPlanEntryScreen> {
         // Sync hint for AdminAccessGate while users/{uid} is still loading.
         return true;
       };
-      AdminReportsTab.dotReportsBuilder = (context, _) =>
-          const OptacaPortalDotReports();
+      _bindOfficialDotReports();
       TripPlanHostBridge.openDebugDataHub = (ctx) {
         LguDebugDataDialogs.openHub(
           context: ctx,
@@ -125,6 +126,8 @@ class _TripPlanEntryScreenState extends State<TripPlanEntryScreen> {
     TripPlanHostBridge.mergeKnownVrDestinations = mergeKnownVrDestinations;
     TripPlanHostBridge.alertsQualityPanel =
         (context) => const OptacaAlertsQualityPanel();
+    TripPlanHostBridge.lguAccountManagementPanel =
+        (context) => const OptacaAccountsPanel();
     unawaited(_bootstrap());
   }
 
@@ -134,10 +137,24 @@ class _TripPlanEntryScreenState extends State<TripPlanEntryScreen> {
     if (mounted) setState(() => _ready = true);
   }
 
+  void _bindOfficialDotReports() {
+    // Non-null flag: Fill forms for lists Events & Announcements and Matrix
+    // Fares. Those categories now use the same Form Type / date / Excel / PDF
+    // / preview controls as the other DOT forms — not AdminFillFormsExtraPanel.
+    Widget extraFill(BuildContext _, DotReportEntityKind __) =>
+        const SizedBox.shrink();
+
+    AdminReportsTab.dotReportsBuilder = (context, _) => OptacaPortalDotReports(
+          extraFillFormsBuilder: extraFill,
+        );
+    TripPlanHostBridge.officialDotReports = (context) => OptacaPortalDotReports(
+          extraFillFormsBuilder: extraFill,
+        );
+  }
+
   @override
   void dispose() {
     TripPlanHostBridge.embeddedInAtmos = false;
-    AdminReportsTab.dotReportsBuilder = null;
     TripPlanHostBridge.openDebugDataHub = null;
     TripPlanHostBridge.onSignedOut = null;
     TripPlanHostBridge.openSharedLogin = null;
@@ -146,12 +163,16 @@ class _TripPlanEntryScreenState extends State<TripPlanEntryScreen> {
     TripPlanHostBridge.openVrPreview = null;
     TripPlanHostBridge.mergeKnownVrDestinations = null;
     TripPlanHostBridge.alertsQualityPanel = null;
+    TripPlanHostBridge.lguAccountManagementPanel = null;
     TripPlanHostBridge.isHostCatalogAdmin = null;
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    if (widget.adminDashboard) {
+      _bindOfficialDotReports();
+    }
     return Theme(
       data: TourismAppTheme.light,
       child: _ready

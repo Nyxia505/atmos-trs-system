@@ -39,6 +39,15 @@ class TripPlanHostBridge {
   /// OPTACA Alerts & Quality panel (live Firestore audit) from ATMOS host.
   static WidgetBuilder? alertsQualityPanel;
 
+  /// OPTACA LGU & User Account Management panel from ATMOS host.
+  static WidgetBuilder? lguAccountManagementPanel;
+
+  /// Official DOT Excel/PDF forms panel from ATMOS host.
+  static WidgetBuilder? officialDotReports;
+
+  /// Opens the Matrix Fares tab from Official DOT forms → Fill forms for.
+  static VoidCallback? openMatrixFaresTab;
+
   /// True while ATMOS has already authorized this user as a catalog admin
   /// (avoids Access Denied flash before Trip Planner `users` cache loads).
   static bool Function()? isHostCatalogAdmin;
