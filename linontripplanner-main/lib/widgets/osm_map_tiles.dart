@@ -36,6 +36,8 @@ class _OsmBasemapTileLayerState extends State<OsmBasemapTileLayer> {
           _useFallback ? kOsmBasemapFallbackTileUrl : kOsmBasemapTileUrl,
       userAgentPackageName: kOsmUserAgentPackageName,
       maxNativeZoom: 19,
+      keepBuffer: 4,
+      panBuffer: 2,
       errorTileCallback: (tile, error, stackTrace) {
         if (_useFallback || !mounted) return;
         WidgetsBinding.instance.addPostFrameCallback((_) {

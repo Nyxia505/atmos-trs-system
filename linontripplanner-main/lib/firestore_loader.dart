@@ -16,6 +16,9 @@ import 'services/supabase_image_library.dart'
     show applyCuratedTouristSpotImageUrls;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'catalog_lgu_compat.dart';
+import 'catalog_publisher.dart';
+import 'catalog_targeting.dart';
 import 'data.dart';
 import 'event_schedule.dart';
 import 'municipality_bus_terminals.dart';
@@ -778,6 +781,15 @@ TourismEvent _tourismEventFromDoc(String id, Map<String, dynamic> d) {
         _str(d, 'content') ??
         _str(d, 'body') ??
         '',
+    catalogSource: isAnnouncementMirrorId(id) ? 'announcements' : 'events',
+    createdByUid: _catalogOwnershipFromDoc(d)['createdByUid'] ?? '',
+    createdBy: _catalogOwnershipFromDoc(d)['createdBy'] ?? '',
+    publisherOffice: _catalogOwnershipFromDoc(d)['publisherOffice'] ?? '',
+    municipalityId: (_catalogOwnershipFromDoc(d)['municipalityId'] ?? '').isNotEmpty
+        ? _catalogOwnershipFromDoc(d)['municipalityId']!
+        : (_str(d, 'municipalityId') ?? ''),
+    audienceScope: _str(d, 'audienceScope') ?? _str(d, 'targetScope') ?? '',
+    isAnnouncementMirror: isAnnouncementMirrorId(id),
   );
 }
 
@@ -808,6 +820,95 @@ DateTime? _eventDateFromDoc(Map<String, dynamic> d) {
   return null;
 }
 
+
+Map<String, String> _catalogOwnershipFromDoc(Map<String, dynamic> data) {
+  return {
+    'createdByUid': _str(data, 'createdByUid') ?? '',
+    'createdBy': _str(data, 'createdBy') ?? '',
+    'publisherOffice':
+        _str(data, 'publisherOffice') ??
+        _str(data, 'ownerOffice') ??
+        _str(data, 'publisher') ??
+        '',
+    'municipalityId': _str(data, 'municipalityId') ?? '',
+  };
+}
+
+Map<String, dynamic> _catalogOwnershipWrite({required bool isNew}) {
+  if (!isNew) return const <String, dynamic>{};
+  final user = FirebaseAuth.instance.currentUser;
+  var kind = publisherKindFromRole(
+    role: findAppUserByFirebaseUid(user?.uid)?.role ?? '',
+    email: user?.email ?? '',
+  );
+  if (kind != CatalogPublisherKind.governor &&
+      AuthRoles.isGovernorPortalUser()) {
+    kind = CatalogPublisherKind.governor;
+  }
+  final office = switch (kind) {
+    CatalogPublisherKind.governor => 'governor',
+    CatalogPublisherKind.optaca => 'optaca',
+    CatalogPublisherKind.lgu => 'lgu',
+    CatalogPublisherKind.unknown => '',
+  };
+  return <String, dynamic>{
+    if (office.isNotEmpty) 'publisherOffice': office,
+    if (office.isNotEmpty) 'publisherRole': office,
+    if (user != null) 'createdByUid': user.uid,
+    if (kind == CatalogPublisherKind.governor) 'createdBy': 'Governor',
+    if (kind == CatalogPublisherKind.optaca) 'createdBy': 'optaca',
+  };
+}
+
+Future<void> _assertGovernorMayMutate({
+  required String collection,
+  required String id,
+  DocumentSnapshot<Map<String, dynamic>>? snapshot,
+}) async {
+  if (isAnnouncementMirrorId(id)) {
+    throw FirebaseException(
+      plugin: 'cloud_firestore',
+      code: 'permission-denied',
+      message:
+          'This record is a view of an announcement and cannot be changed here.',
+    );
+  }
+  if (!AuthRoles.isGovernorPortalUser()) return;
+  final snap = snapshot ??
+      await FirebaseFirestore.instance.collection(collection).doc(id).get();
+  if (!snap.exists) return;
+  final data = snap.data() ?? const <String, dynamic>{};
+  final ownership = _catalogOwnershipFromDoc(data);
+  final actor = CatalogActor(
+    uid: FirebaseAuth.instance.currentUser?.uid ?? '',
+    kind: CatalogPublisherKind.governor,
+  );
+  final publisher = resolveCatalogPublisher(
+    publisherOffice: ownership['publisherOffice'] ?? '',
+    createdBy: ownership['createdBy'] ?? '',
+    createdByUid: ownership['createdByUid'] ?? '',
+    municipalityId: ownership['municipalityId'] ?? '',
+    municipalityName:
+        _str(data, 'municipalityName') ?? _str(data, 'municipality') ?? '',
+    actorUid: actor.uid,
+    actorKind: actor.kind,
+  );
+  if (!canManageCatalogRecord(
+    publisher: publisher,
+    actor: actor,
+    manageOwnedOnly: true,
+    createdByUid: ownership['createdByUid'] ?? '',
+    isMirror: false,
+  )) {
+    throw FirebaseException(
+      plugin: 'cloud_firestore',
+      code: 'permission-denied',
+      message:
+          'The Governor portal can only edit or delete Governor-owned records.',
+    );
+  }
+}
+
 /// ATMOS LGU events live in `announcements`. Show them beside `events`
 /// without copying documents into another collection.
 Future<void> _appendAnnouncementEvents(List<TourismEvent> loaded) async {
@@ -816,9 +917,17 @@ Future<void> _appendAnnouncementEvents(List<TourismEvent> loaded) async {
         await fetchPublicFirestoreCollection(kAnnouncementsCollection);
     final seen = loaded.map((event) => event.id).toSet();
     for (final doc in snapshot.docs) {
+      final data = doc.data();
+      final type = _str(data, 'type') ?? _str(data, 'eventType') ?? '';
+      final municipalityId = _str(data, 'municipalityId') ?? '';
+      if (!announcementDocBelongsOnEventsFeed(
+        type: type,
+        municipalityId: municipalityId,
+      )) {
+        continue;
+      }
       final id = 'announcement_${doc.id}';
       if (!seen.add(id)) continue;
-      final data = doc.data();
       if (_eventTitleFromDoc(data) == null) continue;
       loaded.add(_tourismEventFromDoc(id, data));
     }
@@ -938,9 +1047,25 @@ Future<void> loadEventsFromFirestore() async {
 
 Future<void> upsertTourismEventToFirestore(TourismEvent e) async {
   await ensurePermanentStaffRoleForCatalogWrite();
+  if (e.isAnnouncementMirror || isAnnouncementMirrorId(e.id)) {
+    throw FirebaseException(
+      plugin: 'cloud_firestore',
+      code: 'permission-denied',
+      message:
+          'LGU announcement records cannot be rewritten as catalog events.',
+    );
+  }
   final col = FirebaseFirestore.instance.collection(kEventsCollection);
   final docRef = e.id.trim().isEmpty ? col.doc() : col.doc(e.id.trim());
   await _coalesceCatalogWrite('$kEventsCollection/${docRef.id}', () async {
+    final existing = await docRef.get();
+    if (existing.exists) {
+      await _assertGovernorMayMutate(
+        collection: kEventsCollection,
+        id: docRef.id,
+        snapshot: existing,
+      );
+    }
     final imageUrl = e.imagePath.trim();
     final created = await FirebaseFirestore.instance.runTransaction<bool>((tx) async {
       final snap = await tx.get(docRef);
@@ -969,6 +1094,13 @@ Future<void> upsertTourismEventToFirestore(TourismEvent e) async {
         'clientSaveId': docRef.id,
         'updatedAt': FieldValue.serverTimestamp(),
         if (isNew) 'createdAt': FieldValue.serverTimestamp(),
+        'audienceScope': e.audienceScope.trim().isEmpty
+            ? (isProvinceWideTarget(municipality: municipalityField)
+                ? kProvinceWideScope
+                : kMunicipalityScope)
+            : e.audienceScope,
+        ...eventLguCompatFields(event: e),
+        ..._catalogOwnershipWrite(isNew: isNew),
       };
       if (e.dateMode == TourismEventDateMode.multiple) {
         payload['eventDates'] = [
@@ -1098,10 +1230,15 @@ Future<void> deleteTourismEventFromFirestore(String id) async {
   if (isAnnouncementBackedEventId(trimmed)) {
     final announcementId = announcementIdFromEventId(trimmed);
     if (announcementId.isEmpty) return;
+    await _assertGovernorMayMutate(
+      collection: kAnnouncementsCollection,
+      id: announcementId,
+    );
     await _deleteFirestoreDoc(kAnnouncementsCollection, announcementId);
     pruneTourismEventsFromMemory({trimmed});
     return;
   }
+  await _assertGovernorMayMutate(collection: kEventsCollection, id: trimmed);
   await _deleteFirestoreDoc(kEventsCollection, trimmed);
   pruneTourismEventsFromMemory({trimmed});
 }
@@ -1129,6 +1266,15 @@ Future<CatalogBulkDeleteResult> deleteTourismEventsByIds(
     } else {
       eventIds.add(id);
     }
+  }
+  for (final id in eventIds) {
+    await _assertGovernorMayMutate(collection: kEventsCollection, id: id);
+  }
+  for (final id in announcementIds) {
+    await _assertGovernorMayMutate(
+      collection: kAnnouncementsCollection,
+      id: id,
+    );
   }
   final eventResult = await _deleteFirestoreDocsInBatches(
     kEventsCollection,
@@ -1191,13 +1337,28 @@ Future<void> loadAnnouncementsFromFirestore() async {
     if (p is Timestamp) {
       published = p.toDate();
     }
+    final ownership = _catalogOwnershipFromDoc(d);
     loaded.add(
       TourismAnnouncement(
         id: doc.id,
         title: title,
-        body: _str(d, 'body') ?? _str(d, 'message') ?? '',
+        body: _str(d, 'body') ??
+            _str(d, 'message') ??
+            _str(d, 'content') ??
+            _str(d, 'description') ??
+            '',
         imagePath: _eventOrAnnouncementImagePathFromFirestore(d),
         publishedAt: published,
+        type: _str(d, 'type') ?? _str(d, 'eventType') ?? '',
+        municipality:
+            _str(d, 'municipalityName') ?? _str(d, 'municipality') ?? '',
+        municipalityId: ownership['municipalityId'] ?? '',
+        venue: _str(d, 'venue') ?? _str(d, 'location') ?? '',
+        createdByUid: ownership['createdByUid'] ?? '',
+        createdBy: ownership['createdBy'] ?? '',
+        publisherOffice: ownership['publisherOffice'] ?? '',
+        audienceScope:
+            _str(d, 'audienceScope') ?? _str(d, 'targetScope') ?? '',
       ),
     );
   }
@@ -1220,6 +1381,14 @@ Future<void> upsertTourismAnnouncementToFirestore(TourismAnnouncement a) async {
   final col = FirebaseFirestore.instance.collection(kAnnouncementsCollection);
   final docRef = a.id.trim().isEmpty ? col.doc() : col.doc(a.id.trim());
   await _coalesceCatalogWrite('$kAnnouncementsCollection/${docRef.id}', () async {
+    final existing = await docRef.get();
+    if (existing.exists) {
+      await _assertGovernorMayMutate(
+        collection: kAnnouncementsCollection,
+        id: docRef.id,
+        snapshot: existing,
+      );
+    }
     final imageUrl = a.imagePath.trim();
     await FirebaseFirestore.instance.runTransaction((tx) async {
       final snap = await tx.get(docRef);
@@ -1237,6 +1406,10 @@ Future<void> upsertTourismAnnouncementToFirestore(TourismAnnouncement a) async {
           'clientSaveId': docRef.id,
           'updatedAt': FieldValue.serverTimestamp(),
           if (isNew) 'createdAt': FieldValue.serverTimestamp(),
+          if (isNew)
+            'type': a.type.trim().isEmpty ? 'Announcement' : a.type.trim(),
+          ...announcementLguCompatFields(announcement: a),
+          ..._catalogOwnershipWrite(isNew: isNew),
         },
         SetOptions(merge: true),
       );
@@ -1248,6 +1421,10 @@ Future<void> deleteTourismAnnouncementFromFirestore(String id) async {
   final trimmed = id.trim();
   if (trimmed.isEmpty) return;
   await ensurePermanentStaffRoleForCatalogWrite();
+  await _assertGovernorMayMutate(
+    collection: kAnnouncementsCollection,
+    id: trimmed,
+  );
   await _deleteFirestoreDoc(kAnnouncementsCollection, trimmed);
   pruneTourismAnnouncementsFromMemory({trimmed});
 }

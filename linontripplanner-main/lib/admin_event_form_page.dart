@@ -7,11 +7,13 @@ import 'package:image_picker/image_picker.dart';
 import 'catalog_targeting.dart';
 import 'data.dart';
 import 'event_datetime_format.dart';
+import 'event_schedule.dart';
 import 'firestore_loader.dart';
 import 'services/auth_roles.dart';
 import 'services/governor_event_types_store.dart';
 import 'services/storage_image_upload.dart';
 import 'widgets/catalog_image_preview.dart';
+import 'widgets/event_date_schedule_picker.dart';
 
 String _folderSlug(String name) {
   return name
@@ -39,6 +41,8 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
   late DateTime _dateTime;
   late String _eventType;
   String? _municipality;
+  late DateTime _rangeStart;
+  late DateTime _rangeEnd;
   bool _uploadingImage = false;
   bool _saving = false;
   Uint8List? _previewBytes;
@@ -71,6 +75,15 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
       municipalityId: widget.existing?.municipalityId ?? '',
     );
     _docId = widget.existing?.id ?? '';
+    final existingDays = widget.existing == null
+        ? <DateTime>[eventCalendarDay(_dateTime)]
+        : eventExpandedCalendarDays(widget.existing!);
+    _rangeStart = existingDays.isEmpty
+        ? eventCalendarDay(_dateTime)
+        : eventCalendarDay(existingDays.first);
+    _rangeEnd = existingDays.isEmpty
+        ? eventCalendarDay(_dateTime)
+        : eventCalendarDay(existingDays.last);
     _loadCustomEventTypes();
   }
 
@@ -110,6 +123,8 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
           _dateTime.hour,
           _dateTime.minute,
         );
+        _rangeStart = eventCalendarDay(_dateTime);
+        _rangeEnd = _rangeStart;
       });
     }
   }
@@ -251,16 +266,36 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
       }
     }
 
+    var rangeStart = eventCalendarDay(_rangeStart);
+    var rangeEnd = eventCalendarDay(_rangeEnd);
+    if (rangeEnd.isBefore(rangeStart)) {
+      final swap = rangeStart;
+      rangeStart = rangeEnd;
+      rangeEnd = swap;
+    }
+    final oneDay = rangeStart == rangeEnd;
+    final municipalityName = catalogMunicipalityForSelection(_municipality);
+    final provinceWide = _municipality == kProvinceWideValue;
     final ev = TourismEvent(
       id: _docId,
       title: _titleController.text.trim(),
       imagePath: _imageController.text.trim(),
       venue: _venueController.text.trim(),
-      municipality: catalogMunicipalityForSelection(_municipality),
-      dateTime: _dateTime,
+      municipality: municipalityName,
+      municipalities: provinceWide || municipalityName.isEmpty
+          ? const []
+          : [municipalityName],
+      dateTime: combineEventDateAndTime(rangeStart, _dateTime),
+      dateMode: oneDay
+          ? TourismEventDateMode.single
+          : TourismEventDateMode.range,
+      eventDates: const [],
+      rangeStart: oneDay ? null : rangeStart,
+      rangeEnd: oneDay ? null : rangeEnd,
       eventType: _eventType,
       description: _descriptionController.text.trim(),
       audienceScope: catalogAudienceScopeForSelection(_municipality),
+      municipalityId: provinceWide ? 'province' : '',
     );
     try {
       await upsertTourismEventToFirestore(ev);
@@ -534,6 +569,32 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
                   const SizedBox(height: 22),
                   _section('Schedule'),
                   _scheduleButtons(),
+                  const SizedBox(height: 12),
+                  EventDateSchedulePicker(
+                    timeSource: _dateTime,
+                    rangeStart: _rangeStart,
+                    rangeEnd: _rangeEnd,
+                    onTimeChanged: (t) => setState(() {
+                      _dateTime = DateTime(
+                        _dateTime.year,
+                        _dateTime.month,
+                        _dateTime.day,
+                        t.hour,
+                        t.minute,
+                      );
+                    }),
+                    onRangeChanged: (start, end) => setState(() {
+                      _rangeStart = start;
+                      _rangeEnd = end;
+                      _dateTime = DateTime(
+                        start.year,
+                        start.month,
+                        start.day,
+                        _dateTime.hour,
+                        _dateTime.minute,
+                      );
+                    }),
+                  ),
                   const SizedBox(height: 8),
                   Text(
                     'Selected: ${formatEventDateTimeDisplay(_dateTime)}',
@@ -625,4 +686,31 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
       ),
     );
   }
+}
+
+Future<bool> openAdminEventForm(
+  BuildContext context, {
+  TourismEvent? existing,
+}) async {
+  final size = MediaQuery.sizeOf(context);
+  final saved = await showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: SizedBox(
+        width: size.width < 640 ? size.width : 560,
+        height: size.height * 0.9,
+        child: AdminEventFormPage(existing: existing),
+      ),
+    ),
+  );
+  if (saved == true && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Event saved successfully!')),
+    );
+  }
+  return saved == true;
 }

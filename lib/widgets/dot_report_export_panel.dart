@@ -1397,6 +1397,8 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
     );
     Widget text(String value, TextStyle style) => Text(
           value,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
           style: style,
         );
 

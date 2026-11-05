@@ -8,6 +8,7 @@ import '../municipality_coordinates.dart'
     show getMunicipalityCoordinates, misamisOccidentalCenter;
 import '../spot_detail_screen.dart';
 import '../trip_planner_utils.dart';
+import 'osm_map_glyph.dart';
 import 'osm_map_tiles.dart';
 import 'trip_route_style.dart';
 
@@ -334,11 +335,10 @@ class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
       alignment: Alignment.topCenter,
       child: Tooltip(
         message: message,
-        child: const Icon(
-          Icons.location_on,
+        child: const OsmMapGlyph(
+          icon: Icons.location_on,
           color: Color(0xFFEA4335),
           size: 40,
-          shadows: [Shadow(blurRadius: 4, color: Colors.black45)],
         ),
       ),
     );
@@ -419,13 +419,10 @@ class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
                   ],
                 ),
               ),
-              Icon(
-                Icons.location_on,
+              OsmMapGlyph(
+                icon: Icons.location_on,
                 color: color,
                 size: 40,
-                shadows: const [
-                  Shadow(blurRadius: 4, color: Colors.black45),
-                ],
               ),
             ],
           ),
@@ -482,11 +479,10 @@ class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
               },
         child: Tooltip(
           message: '$title\n$detail',
-          child: Icon(
-            icon,
+          child: OsmMapGlyph(
+            icon: icon,
             color: color,
             size: 36,
-            shadows: const [Shadow(blurRadius: 4, color: Colors.black38)],
           ),
         ),
       ),
@@ -507,7 +503,11 @@ class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
         onTap: onTap,
         child: Tooltip(
           message: label,
-          child: Icon(Icons.location_on, color: color, size: 36),
+          child: OsmMapGlyph(
+            icon: Icons.location_on,
+            color: color,
+            size: 36,
+          ),
         ),
       ),
     );

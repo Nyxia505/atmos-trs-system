@@ -10,6 +10,7 @@ import 'widgets/reports/report_analytics_view.dart';
 import 'widgets/reports/report_export_dialog.dart';
 import 'widgets/reports/report_preview_page.dart';
 import 'widgets/tourism_plan_ui.dart';
+import 'trip_plan_host_bridge.dart';
 
 /// Supplies the province-wide DOT Excel / PDF panel. The trip planner package
 /// cannot import that panel, so the host app sets this before the portal opens.
@@ -290,12 +291,16 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
       builder: (context, constraints) {
         final pad = constraints.maxWidth < 620 ? 14.0 : 20.0;
         final dotReports = AdminReportsTab.dotReportsBuilder;
+        final hostDotReports = TripPlanHostBridge.officialDotReports;
+        final officialDotPanel = dotReports != null
+            ? dotReports(context, _filters)
+            : hostDotReports?.call(context);
         return SingleChildScrollView(
           padding: EdgeInsets.fromLTRB(pad, 20, pad, 36),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (dotReports != null) ...[
+              if (officialDotPanel != null) ...[
                 _sectionTitle('Official DOT forms'),
                 const SizedBox(height: 6),
                 const Text(
@@ -307,7 +312,7 @@ class _AdminReportsTabState extends State<AdminReportsTab> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                dotReports(context, _filters),
+                officialDotPanel,
                 const SizedBox(height: 28),
               ],
               _sectionTitle('Exports & summaries'),

@@ -120,7 +120,6 @@ class MunicipalityDetailScreen extends StatelessWidget {
                         ),
                     ],
                   ),
-                  if (municipality.description.trim().isNotEmpty) ...[
                     const SizedBox(height: 16),
                     Container(
                       width: double.infinity,
@@ -162,7 +161,9 @@ class MunicipalityDetailScreen extends StatelessWidget {
                           ),
                           const SizedBox(height: 10),
                           Text(
-                            municipality.description,
+                            municipality.description.trim().isEmpty
+                                ? 'No description yet.'
+                                : municipality.description,
                             style: const TextStyle(
                               fontSize: 14.5,
                               color: AppColors.textGrey,
@@ -172,7 +173,6 @@ class MunicipalityDetailScreen extends StatelessWidget {
                         ],
                       ),
                     ),
-                  ],
 
                   const SizedBox(height: 16),
                   if (busTerminalForMap(municipality) != null)
