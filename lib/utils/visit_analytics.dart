@@ -70,6 +70,9 @@ class VisitAnalyticsSnapshot {
     final clock = now ?? DateTime.now();
     final readTime = parseTime ?? parseCheckInTimestamp;
     final profiles = _profilesByUid(tourists);
+    // Seed rows from a prior UTC/Manila month still count in This Month charts.
+    final scopedCheckIns =
+        remapSeedCheckInsForCurrentManilaMonth(checkIns, clock);
 
     var male = 0;
     var female = 0;
@@ -87,7 +90,7 @@ class VisitAnalyticsSnapshot {
     final days = <DateTime>{};
     var visitors = 0;
 
-    for (final raw in checkIns) {
+    for (final raw in scopedCheckIns) {
       final checkIn = _withProfile(raw, profiles);
       final units = expandCheckInVisitors(checkIn);
       final weight = units.isEmpty ? checkInVisitorCount(checkIn) : units.length;
@@ -145,7 +148,8 @@ class VisitAnalyticsSnapshot {
           origins[origin] = (origins[origin] ?? 0) + 1;
         }
 
-        final age = _ageYears(_profileForAge(unit, profiles), clock);
+        final ageAsOf = when != null ? manilaWallClock(when) : manilaNow(clock);
+        final age = _ageYears(_profileForAge(unit, profiles), ageAsOf);
         final bucket = _ageBucket(age);
         if (bucket == null || sex == null) continue;
         final current = ages[bucket]!;
@@ -172,7 +176,7 @@ class VisitAnalyticsSnapshot {
     }
 
     final span = _daySpan(days);
-    final trend = buildArrivalTrend(checkIns, readTime, range, clock);
+    final trend = buildArrivalTrend(scopedCheckIns, readTime, range, clock);
     return VisitAnalyticsSnapshot(
       dailyAverage: span == 0 ? 0 : (visitors / span).round(),
       peakHour: _peakHour(hours),

@@ -72,11 +72,30 @@ function dateOfBirth(index, now) {
   return `${birth.getFullYear()}-${month}-${day}`;
 }
 
+function manilaParts(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+  }).formatToParts(now);
+  const num = (type) => Number(parts.find((p) => p.type === type)?.value || 0);
+  return {year: num('year'), month: num('month'), day: num('day')};
+}
+
+/** Manila wall Y-M-D as a UTC Date representing that Manila midnight+hour. */
+function manilaWallDate(year, month1to12, day, hour = 12, minute = 0) {
+  return new Date(Date.UTC(year, month1to12 - 1, day, hour - 8, minute, 0));
+}
+
 function lastNDays(now, n) {
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const {year, month, day} = manilaParts(now);
+  const today = manilaWallDate(year, month, day, 12, 0);
   const days = [];
   for (let i = n - 1; i >= 0; i--) {
-    days.push(new Date(today.getFullYear(), today.getMonth(), today.getDate() - i));
+    const d = new Date(today.getTime() - i * 86400000);
+    const p = manilaParts(d);
+    days.push(manilaWallDate(p.year, p.month, p.day, 12, 0));
   }
   return days;
 }
@@ -202,15 +221,16 @@ async function seedOnClient(authApp, {
       for (let j = 0; j < checkInsPerTourist; j++) {
         const dayDate = recentDays[j % recentDays.length];
         const spot = spots[(i + j) % spots.length];
-        const eventDate = new Date(
-          dayDate.getFullYear(),
-          dayDate.getMonth(),
-          dayDate.getDate(),
+        const dayParts = manilaParts(dayDate);
+        const eventDate = manilaWallDate(
+          dayParts.year,
+          dayParts.month,
+          dayParts.day,
           9 + ((i + j) % 9),
           (i * 7 + j * 11) % 60,
         );
         const checkinId =
-          `${uid}_${spot.id}_${dayDate.getFullYear()}_m${dayDate.getMonth() + 1}_d${dayDate.getDate()}_v${j + 1}`;
+          `${uid}_${spot.id}_${dayParts.year}_m${dayParts.month}_d${dayParts.day}_v${j + 1}`;
         const ts = Timestamp.fromDate(eventDate);
         const femaleCount = sex === 'Female' ? 1 : 0;
         const maleCount = sex === 'Male' ? 1 : 0;

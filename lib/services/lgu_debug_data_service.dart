@@ -5,6 +5,7 @@ import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
 import 'package:atmos_trs_system/services/ae_register_service.dart';
 import 'package:atmos_trs_system/services/establishment_approval_service.dart';
 import 'package:atmos_trs_system/services/establishment_demo_seed_service.dart';
+import 'package:atmos_trs_system/utils/checkin_time.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
@@ -479,8 +480,9 @@ class LguDebugDataService {
     var seededTourists = 0;
     var seededCheckIns = 0;
     final touristTotal = localCount + foreignCount;
+    // Asia/Manila calendar — matches Governor / LGU "This Month" filters.
     final now = DateTime.now();
-    // Spread visits across the last 7 local days so "Visitors · 7 days" matches seed counts.
+    // Spread visits across the last 7 Manila days so period charts match seed counts.
     final recentDays = _lastNCalendarDays(now, 7);
 
     WriteBatch? batch;
@@ -623,12 +625,15 @@ class LguDebugDataService {
           const partySize = 1;
           final femaleCount = sex == 'Female' ? 1 : 0;
           final maleCount = sex == 'Male' ? 1 : 0;
-          final eventDate = DateTime(
-            dayDate.year,
-            dayDate.month,
-            dayDate.day,
-            9 + ((i + j) % 9),
-            (i * 7 + j * 11) % 60,
+          // dayDate is a Manila Y-M-D; convert to a real UTC instant.
+          final eventDate = manilaUtcInstant(
+            DateTime(
+              dayDate.year,
+              dayDate.month,
+              dayDate.day,
+              9 + ((i + j) % 9),
+              (i * 7 + j * 11) % 60,
+            ),
           );
           final checkinId =
               '${uid}_${spot.id}_${dayDate.year}_'
@@ -704,7 +709,9 @@ class LguDebugDataService {
         final lead = members.first;
         final spot = spots[g % spots.length];
         final ts = Timestamp.fromDate(
-          DateTime(groupDay.year, groupDay.month, groupDay.day, 10 + g, 15),
+          manilaUtcInstant(
+            DateTime(groupDay.year, groupDay.month, groupDay.day, 10 + g, 15),
+          ),
         );
         final profiles = [for (final m in members) m.profile];
         final females = profiles.where((p) => p['sex'] == 'Female').length;
@@ -869,9 +876,9 @@ class LguDebugDataService {
     return '${municipalityId[0].toUpperCase()}${municipalityId.substring(1)}';
   }
 
-  /// Oldest → newest calendar days ending today (length [n], min 1).
+  /// Oldest → newest Asia/Manila calendar days ending today (length [n], min 1).
   static List<DateTime> _lastNCalendarDays(DateTime now, int n) {
-    final today = DateTime(now.year, now.month, now.day);
+    final today = manilaCalendarDate(now);
     final count = n < 1 ? 1 : n;
     return [
       for (var i = count - 1; i >= 0; i--)

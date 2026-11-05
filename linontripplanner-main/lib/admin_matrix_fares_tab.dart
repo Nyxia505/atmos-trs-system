@@ -285,14 +285,6 @@ class _AdminMatrixFaresTabState extends State<AdminMatrixFaresTab> {
                 onChanged: _onSearchChanged,
               ),
             ),
-            const SizedBox(height: 16),
-            Text(
-              'Add, edit, or delete fares. Changes save to Firestore (admin/staff only).',
-              style: TextStyle(
-                fontSize: 12,
-                color: AppColors.textGrey.withValues(alpha: 0.9),
-              ),
-            ),
             const SizedBox(height: 12),
             _sectionHeader(
               title: 'Transportation fees (between municipalities)',

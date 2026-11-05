@@ -83,10 +83,10 @@ class AuthRoles {
   /// ATMOS staff who manage the trip-planner catalog. Their Firestore role
   /// stays unchanged so ATMOS routing is not rewritten to `admin`.
   static bool isAtmosStaffAdminRole(String? raw) {
-    final role = (raw ?? '').trim().toLowerCase().replaceAll(
-      RegExp(r'[\s-]+'),
-      '_',
-    );
+    final role = (raw ?? '')
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[\s-]+'), '_');
     const roles = {
       'governor',
       'provincial_tourism',
@@ -101,32 +101,10 @@ class AuthRoles {
     return roles.contains(role);
   }
 
-  static User? _currentUserOrNull() {
-    try {
-      return FirebaseAuth.instance.currentUser;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Signed-in Governor's Office identity (role or demo email).
-  static bool isGovernorPortalUser([AppUser? user]) {
-    final resolved =
-        user ?? findAppUserByFirebaseUid(_currentUserOrNull()?.uid);
-    final role = (resolved?.role ?? '').trim().toLowerCase().replaceAll(
-      RegExp(r'[\s-]+'),
-      '_',
-    );
-    if (role == 'governor') return true;
-    final email = (_currentUserOrNull()?.email ?? '').trim().toLowerCase();
-    return email == 'governor.atmos@misocc-demo.ph';
-  }
-
   /// Governor portal + full content management.
   static bool canAccessAdminDashboard([AppUser? user]) {
     final resolved =
-        user ??
-        findAppUserByFirebaseUid(FirebaseAuth.instance.currentUser?.uid);
+        user ?? findAppUserByFirebaseUid(FirebaseAuth.instance.currentUser?.uid);
     final role = roleForUser(resolved);
     if (role == AppRole.admin || role == AppRole.municipalManager) {
       return true;
@@ -141,18 +119,16 @@ class AuthRoles {
   /// Used for VR view-only gating; tourist spot catalog edits are allowed.
   static bool isOptacaDestinationViewer([AppUser? user]) {
     final resolved =
-        user ??
-        findAppUserByFirebaseUid(FirebaseAuth.instance.currentUser?.uid);
-    final role = (resolved?.role ?? '').trim().toLowerCase().replaceAll(
-      RegExp(r'[\s-]+'),
-      '_',
-    );
+        user ?? findAppUserByFirebaseUid(FirebaseAuth.instance.currentUser?.uid);
+    final role = (resolved?.role ?? '')
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[\s-]+'), '_');
     if (role == 'provincial_tourism' || role == 'tourism_province') {
       return true;
     }
-    final email = (FirebaseAuth.instance.currentUser?.email ?? '')
-        .trim()
-        .toLowerCase();
+    final email =
+        (FirebaseAuth.instance.currentUser?.email ?? '').trim().toLowerCase();
     return email == 'optaca@gmail.com' ||
         email == 'tourism@gmail.com' ||
         email == 'provincial.tourism@misocc-demo.ph';

@@ -3,13 +3,18 @@ import 'package:flutter/material.dart';
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/features/governor/theme/governor_dashboard_tokens.dart';
 import 'package:atmos_trs_system/services/provincial_tourism_service.dart';
+import 'package:atmos_trs_system/utils/dot_report_entity_scope.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
 import 'package:atmos_trs_system/widgets/dot_report_export_panel.dart';
 
 /// Province-wide DOT Excel and PDF forms for the OPTACA Portal Reports tab.
 /// Same panel as Provincial Tourism → DOT Reports.
 class OptacaPortalDotReports extends StatefulWidget {
-  const OptacaPortalDotReports({super.key});
+  const OptacaPortalDotReports({super.key, this.extraFillFormsBuilder});
+
+  /// Events & Announcements and Matrix Fares inside Fill forms for.
+  final Widget Function(BuildContext context, DotReportEntityKind kind)?
+      extraFillFormsBuilder;
 
   @override
   State<OptacaPortalDotReports> createState() => _OptacaPortalDotReportsState();
@@ -79,6 +84,8 @@ class _OptacaPortalDotReportsState extends State<OptacaPortalDotReports> {
     ];
     final width = MediaQuery.sizeOf(context).width;
     return DotReportExportPanel(
+          compactChrome: true,
+          extraFillFormsBuilder: widget.extraFillFormsBuilder,
           primaryColor: AppTheme.brandOrange,
           textDark: GovernorDashboardTokens.text,
           textMuted: GovernorDashboardTokens.subtitle,

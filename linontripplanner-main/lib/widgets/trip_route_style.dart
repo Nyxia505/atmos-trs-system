@@ -14,9 +14,6 @@ abstract final class TripRouteStyle {
   static int routeCasingWidth({required bool compact}) =>
       compact ? 7 : 9;
 
-  /// Google Maps walking route uses large blue dots, not a solid stroke.
-  static int walkingDotWidth({required bool compact}) => compact ? 9 : 11;
-
   /// Road-following route (Directions API) — thick solid blue like Google Maps.
   static Set<Polyline> googleRoadPolylines(
     List<LatLng> points, {

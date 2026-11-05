@@ -1,17 +1,20 @@
 import 'dart:async' show unawaited;
 
-import 'package:atmos_trs_system/config/vr_tour_config.dart';
 import 'package:atmos_trs_system/config/module_shell_prefs.dart';
+import 'package:atmos_trs_system/config/session_storage.dart';
+import 'package:atmos_trs_system/config/vr_tour_config.dart';
 import 'package:atmos_trs_system/navigation/login_route_args.dart';
 import 'package:atmos_trs_system/navigation/post_logout_navigation.dart';
 import 'package:atmos_trs_system/navigation/shared_module_logout.dart';
 import 'package:atmos_trs_system/models/tourist_spot.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
+import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/widgets/lgu_debug_data_dialogs.dart';
 import 'package:atmos_trs_system/widgets/optaca_alerts_quality_panel.dart';
 import 'package:atmos_trs_system/widgets/optaca_accounts_panel.dart';
 import 'package:atmos_trs_system/utils/dot_report_entity_scope.dart';
 import 'package:atmos_trs_system/widgets/optaca_portal_dot_reports.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:trip_plan/admin_dashboard_screen.dart';
 import 'package:trip_plan/admin_reports_tab.dart';
@@ -107,6 +110,9 @@ class _TripPlanEntryScreenState extends State<TripPlanEntryScreen> {
     TripPlanHostBridge.leaveToHost = (ctx) {
       navigateAfterLogout(ctx);
     };
+    if (widget.adminDashboard) {
+      TripPlanHostBridge.openAtmosStaffModule = _openAtmosStaffModule;
+    }
     TripPlanHostBridge.openVrPreview = (
       ctx, {
       required String spotId,
@@ -160,12 +166,66 @@ class _TripPlanEntryScreenState extends State<TripPlanEntryScreen> {
     TripPlanHostBridge.openSharedLogin = null;
     TripPlanHostBridge.openSharedSignup = null;
     TripPlanHostBridge.leaveToHost = null;
+    TripPlanHostBridge.openAtmosStaffModule = null;
     TripPlanHostBridge.openVrPreview = null;
     TripPlanHostBridge.mergeKnownVrDestinations = null;
     TripPlanHostBridge.alertsQualityPanel = null;
     TripPlanHostBridge.lguAccountManagementPanel = null;
     TripPlanHostBridge.isHostCatalogAdmin = null;
     super.dispose();
+  }
+
+  Future<void> _openAtmosStaffModule(BuildContext context) async {
+    final user = FirebaseAuth.instance.currentUser;
+    final email = (user?.email ?? '').trim();
+    var role = email.isNotEmpty
+        ? SessionStorage.getRoleFromEmail(email)
+        : UserRole.tourist;
+
+    if (role == UserRole.tourist && user != null) {
+      final profile = await UserDirectoryService.getProfileByUid(
+        user.uid,
+        preferServer: false,
+      );
+      if (profile != null) {
+        if (profile.isGovernor) {
+          role = UserRole.governor;
+        } else if (profile.isProvincialTourism) {
+          role = UserRole.provincialTourism;
+        } else if (profile.isTourismOffice) {
+          role = UserRole.tourism;
+        }
+      } else {
+        role = await SessionStorage.getStoredRole();
+      }
+    }
+
+    final String route;
+    switch (role) {
+      case UserRole.governor:
+        route = '/governor-dashboard';
+      case UserRole.tourism:
+        route = '/lgu-dashboard';
+      case UserRole.provincialTourism:
+        await ModuleShellPrefs.setActiveShell(
+          ModuleShellPrefs.provincialTourism,
+        );
+        route = '/provincial-tourism-dashboard';
+      default:
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No ATMOS TRS staff module is available for this account.',
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+    }
+
+    if (!context.mounted) return;
+    Navigator.of(context).pushNamedAndRemoveUntil(route, (_) => false);
   }
 
   @override

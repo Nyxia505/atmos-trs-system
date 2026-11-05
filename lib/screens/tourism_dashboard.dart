@@ -1995,15 +1995,15 @@ class _LguDashboardState extends State<LguDashboard>
   String get _lguAnalyticsPeakHour => _lguVisitAnalytics.peakHour;
 
   String get _lguAnalyticsTopOrigin {
-    final origin = _lguVisitAnalytics.topOrigin;
-    if (origin == '—') return '?';
+    final origin = _lguVisitAnalytics.topOrigin.trim();
+    if (origin.isEmpty || origin == '—' || origin == '?') return 'No data';
     return _compactOriginForAnalyticsCard(origin);
   }
 
   /// Short label for analytics cards (avoids overflow on long addresses).
   String _compactOriginForAnalyticsCard(String origin) {
     final trimmed = origin.trim();
-    if (trimmed.isEmpty || trimmed == '?') return '?';
+    if (trimmed.isEmpty || trimmed == '?' || trimmed == '—') return 'No data';
     final parts = trimmed
         .split(',')
         .map((p) => p.trim())
@@ -8361,26 +8361,59 @@ class _LguDashboardState extends State<LguDashboard>
       physics: const AlwaysScrollableScrollPhysics(),
       padding: EdgeInsets.fromLTRB(
         _isMobile ? 16 : 24,
-        16,
+        12,
         _isMobile ? 16 : 24,
         28,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            'Municipal DOT exports',
-            style: GoogleFonts.poppins(
-              color: _textDark,
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-              letterSpacing: -0.2,
-            ),
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            'Preview filled rows from your LGU check-ins, then download official Excel',
-            style: TextStyle(color: _textMuted, fontSize: 12.5, height: 1.35),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF1E6),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: _primaryOrange.withValues(alpha: 0.22),
+                  ),
+                ),
+                child: const Icon(
+                  Icons.description_rounded,
+                  color: Color(0xFFEA580C),
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Municipal DOT Exports',
+                      style: GoogleFonts.poppins(
+                        color: _textDark,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.25,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    const Text(
+                      'Preview tourism reports and download Excel or PDF files.',
+                      style: TextStyle(
+                        color: _textMuted,
+                        fontSize: 12.5,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 14),
           _buildLguDotReportExports(),
@@ -8529,83 +8562,111 @@ class _LguDashboardState extends State<LguDashboard>
       tourists: _tourists,
       catalogSpots: catalog,
       parseTimestamp: _parseCheckInTimestamp,
-      wrapPanel: (child) => _wrapTourismPanel(child),
+      wrapPanel: (child) => _wrapTourismPanel(
+        child,
+        padding: EdgeInsets.all(_isMobile ? 18 : 22),
+      ),
     );
   }
 
   Widget _buildLguAnalyticsCards() {
-    final cards = [
-      (
+    final peakRaw = _lguAnalyticsPeakHour.trim();
+    final peakDisplay =
+        peakRaw.isEmpty || peakRaw == '—' || peakRaw == '?' ? '—' : peakRaw;
+    final cards = <_LguInsightCardSpec>[
+      _LguInsightCardSpec(
         title: 'Daily average',
         subtitle: 'Check-ins per active day',
         value: '$_lguAnalyticsDailyAvg',
         icon: Icons.calendar_today_rounded,
-        accent: const Color(0xFF2563EB),
+        accent: const Color(0xFF3B82F6),
+        gradientTop: const Color(0xFFEFF6FF),
+        gradientBottom: const Color(0xFFDBEAFE),
+        border: const Color(0xFF93C5FD),
       ),
-      (
+      _LguInsightCardSpec(
         title: 'Peak hour',
         subtitle: 'Busiest QR scan window',
-        value: _lguAnalyticsPeakHour,
+        value: peakDisplay,
         icon: Icons.access_time_rounded,
-        accent: _primaryOrange,
+        accent: const Color(0xFFF97316),
+        gradientTop: const Color(0xFFFFF7ED),
+        gradientBottom: const Color(0xFFFED7AA),
+        border: const Color(0xFFFDBA74),
       ),
-      (
+      _LguInsightCardSpec(
         title: 'Top origin',
         subtitle: 'Most common registration source',
         value: _lguAnalyticsTopOrigin,
-        icon: Icons.flight_takeoff_rounded,
-        accent: const Color(0xFF059669),
+        icon: Icons.flight_land_rounded,
+        accent: const Color(0xFF10B981),
+        gradientTop: const Color(0xFFECFDF5),
+        gradientBottom: const Color(0xFFA7F3D0),
+        border: const Color(0xFF6EE7B7),
       ),
-      (
+      _LguInsightCardSpec(
         title: 'Active spots',
         subtitle: 'Tourist spots currently active',
-        value:
-            '${_touristSpots.where((s) => s.status == 'Active').length}',
+        value: '$_activeSpots',
         icon: Icons.place_rounded,
-        accent: const Color(0xFF0F766E),
+        accent: const Color(0xFF8B5CF6),
+        gradientTop: const Color(0xFFF5F3FF),
+        gradientBottom: const Color(0xFFDDD6FE),
+        border: const Color(0xFFC4B5FD),
       ),
     ];
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final wide = constraints.maxWidth >= 900;
-        if (wide) {
-          return Row(
+        final width = constraints.maxWidth;
+        final columns = width >= 980
+            ? 4
+            : width >= 640
+                ? 2
+                : 1;
+        final gap = width >= 900 ? 14.0 : 12.0;
+
+        if (columns == 4) {
+          return IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var i = 0; i < cards.length; i++) ...[
+                  if (i > 0) SizedBox(width: gap),
+                  Expanded(child: _buildLguAnalyticsCard(cards[i])),
+                ],
+              ],
+            ),
+          );
+        }
+
+        if (columns == 1) {
+          return Column(
             children: [
               for (var i = 0; i < cards.length; i++) ...[
-                if (i > 0) const SizedBox(width: 12),
-                Expanded(
-                  child: _buildLguAnalyticsCard(
-                    title: cards[i].title,
-                    subtitle: cards[i].subtitle,
-                    value: cards[i].value,
-                    icon: cards[i].icon,
-                    accent: cards[i].accent,
-                  ),
-                ),
+                if (i > 0) SizedBox(height: gap),
+                _buildLguAnalyticsCard(cards[i]),
               ],
             ],
           );
         }
+
         return Column(
           children: [
             for (var row = 0; row < 2; row++) ...[
-              if (row > 0) const SizedBox(height: 10),
-              Row(
-                children: [
-                  for (var col = 0; col < 2; col++) ...[
-                    if (col > 0) const SizedBox(width: 10),
-                    Expanded(
-                      child: _buildLguAnalyticsCard(
-                        title: cards[row * 2 + col].title,
-                        subtitle: cards[row * 2 + col].subtitle,
-                        value: cards[row * 2 + col].value,
-                        icon: cards[row * 2 + col].icon,
-                        accent: cards[row * 2 + col].accent,
+              if (row > 0) SizedBox(height: gap),
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (var col = 0; col < 2; col++) ...[
+                      if (col > 0) SizedBox(width: gap),
+                      Expanded(
+                        child: _buildLguAnalyticsCard(cards[row * 2 + col]),
                       ),
-                    ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ],
           ],
@@ -8614,76 +8675,131 @@ class _LguDashboardState extends State<LguDashboard>
     );
   }
 
-  Widget _buildLguAnalyticsCard({
-    required String title,
-    required String subtitle,
-    required String value,
-    required IconData icon,
-    required Color accent,
-  }) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _kAnalyticsSurfaceBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildLguAnalyticsCard(_LguInsightCardSpec spec) {
+    final value = spec.value.trim().isEmpty ? '—' : spec.value.trim();
+    final multiLine = value.contains('\n') || value.length > 18;
+    final emptyLabel = value == '—' ||
+        value.toLowerCase() == 'no data' ||
+        value == '?';
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: Stack(
         children: [
-          Row(
-            children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: accent.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(11),
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    spec.gradientTop,
+                    Color.lerp(spec.gradientTop, Colors.white, 0.55)!,
+                    spec.gradientBottom.withValues(alpha: 0.55),
+                  ],
                 ),
-                child: Icon(icon, color: accent, size: 18),
-              ),
-              const Spacer(),
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: accent,
-                  shape: BoxShape.circle,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: spec.border.withValues(alpha: 0.9),
+                  width: 1.25,
                 ),
+                boxShadow: [
+                  BoxShadow(
+                    color: spec.accent.withValues(alpha: 0.10),
+                    blurRadius: 18,
+                    offset: const Offset(0, 8),
+                  ),
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.03),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Text(
-            value,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: _textDark,
-              fontSize: value.contains('\n') || value.length > 16 ? 17 : 24,
-              fontWeight: FontWeight.w800,
-              height: 1.12,
-              letterSpacing: -0.4,
             ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            title,
-            style: const TextStyle(
-              color: _textDark,
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
+          Positioned(
+            right: -18,
+            bottom: -28,
+            child: CustomPaint(
+              size: const Size(118, 78),
+              painter: _LguInsightWavePainter(
+                color: spec.accent.withValues(alpha: 0.14),
+              ),
             ),
           ),
-          const SizedBox(height: 2),
-          Text(
-            subtitle,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: _textMuted,
-              fontSize: 11.5,
-              height: 1.3,
+          Positioned(
+            right: 8,
+            bottom: -8,
+            child: CustomPaint(
+              size: const Size(86, 52),
+              painter: _LguInsightWavePainter(
+                color: spec.accent.withValues(alpha: 0.10),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.78),
+                    borderRadius: BorderRadius.circular(13),
+                    border: Border.all(
+                      color: spec.accent.withValues(alpha: 0.18),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: spec.accent.withValues(alpha: 0.08),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Icon(spec.icon, color: spec.accent, size: 22),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  value,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: const Color(0xFF0F172A),
+                    fontSize: emptyLabel
+                        ? 22
+                        : (multiLine ? 18 : 28),
+                    fontWeight: FontWeight.w800,
+                    height: 1.12,
+                    letterSpacing: -0.45,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  spec.title,
+                  style: const TextStyle(
+                    color: Color(0xFF1E293B),
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    height: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  spec.subtitle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: const Color(0xFF64748B).withValues(alpha: 0.95),
+                    fontSize: 11.5,
+                    height: 1.35,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -9920,6 +10036,63 @@ class _LguDashboardState extends State<LguDashboard>
       ),
     );
   }
+}
+
+class _LguInsightCardSpec {
+  const _LguInsightCardSpec({
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.icon,
+    required this.accent,
+    required this.gradientTop,
+    required this.gradientBottom,
+    required this.border,
+  });
+
+  final String title;
+  final String subtitle;
+  final String value;
+  final IconData icon;
+  final Color accent;
+  final Color gradientTop;
+  final Color gradientBottom;
+  final Color border;
+}
+
+class _LguInsightWavePainter extends CustomPainter {
+  const _LguInsightWavePainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    final path = Path()
+      ..moveTo(0, size.height * 0.55)
+      ..quadraticBezierTo(
+        size.width * 0.28,
+        size.height * 0.18,
+        size.width * 0.52,
+        size.height * 0.48,
+      )
+      ..quadraticBezierTo(
+        size.width * 0.78,
+        size.height * 0.82,
+        size.width,
+        size.height * 0.42,
+      )
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _LguInsightWavePainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 /// Visitor trend chart with Y-axis gutter, X labels, and hover readout.

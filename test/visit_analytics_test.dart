@@ -262,6 +262,125 @@ void main() {
     expect(month.arrivalPeriodLabel, contains('Nov 2026'));
   });
 
+  test('prior-month seed check-ins remap into current Manila month for charts', () {
+    final now = DateTime.utc(2026, 11, 3, 4); // 12:00 Asia/Manila 3 Nov
+    final stats = VisitAnalyticsSnapshot.build(
+      now: now,
+      range: 'This Month',
+      categoryBySpotId: const {'spot_a': 'Beach'},
+      tourists: const [
+        {
+          'id': 'seed_tourist_oroquieta_001',
+          'sex': 'Male',
+          'dateOfBirth': '1995-02-01',
+          'isLocal': true,
+          'localOrForeign': 'Local',
+          'country': 'Philippines',
+          'nationality': 'Filipino',
+          'city': 'Oroquieta City',
+        },
+      ],
+      checkIns: [
+        {
+          'id': 'seed_tourist_oroquieta_001_spot_a_m10_d15_1',
+          'userId': 'seed_tourist_oroquieta_001',
+          'seedTag': 'lgu_analytics_debug_v1',
+          'spotId': 'spot_a',
+          'municipality': 'Oroquieta City',
+          // 15 Oct 2026 10:00 Manila — outside November until remapped
+          'timestamp': DateTime.utc(2026, 10, 15, 2),
+          'visitorCount': 2,
+          'maleCount': 2,
+          'femaleCount': 0,
+          'touristSex': 'Male',
+          'touristIsLocal': true,
+          'touristLocalOrForeign': 'Local',
+          'touristCountry': 'Philippines',
+          'touristDateOfBirth': '1995-02-01',
+        },
+      ],
+    );
+
+    expect(stats.periodVisitorCount, 2);
+    expect(stats.arrivals[14], 2); // 15 Nov after remap
+    expect(stats.male, 2);
+    expect(stats.local, 2);
+    expect(stats.categories.first.name, 'Beach');
+    expect(stats.municipalities.first.name, 'Oroquieta City');
+  });
+
+  test('live (non-seed) check-ins outside the month stay excluded', () {
+    final stats = VisitAnalyticsSnapshot.build(
+      now: DateTime.utc(2026, 11, 3, 4),
+      range: 'This Month',
+      checkIns: [
+        {
+          'userId': 'real_tourist_1',
+          'timestamp': DateTime.utc(2026, 10, 15, 2),
+          'visitorCount': 4,
+          'municipality': 'Ozamis City',
+        },
+      ],
+    );
+    expect(stats.periodVisitorCount, 0);
+  });
+
+  test('November 2026 This Month counts seed-style Manila check-ins with demographics', () {
+    final now = DateTime.utc(2026, 11, 3, 4); // 12:00 Asia/Manila 3 Nov
+    final stats = VisitAnalyticsSnapshot.build(
+      now: now,
+      range: 'This Month',
+      tourists: const [
+        {
+          'id': 'seed_tourist_oroquieta_001',
+          'sex': 'Female',
+          'dateOfBirth': '1998-05-10',
+          'isLocal': true,
+          'localOrForeign': 'Local',
+          'country': 'Philippines',
+          'nationality': 'Filipino',
+          'city': 'Oroquieta City',
+        },
+      ],
+      categoryBySpotId: const {'spot_beach': 'Beach'},
+      checkIns: [
+        {
+          'userId': 'seed_tourist_oroquieta_001',
+          'spotId': 'spot_beach',
+          'municipality': 'Oroquieta City',
+          'municipalityId': 'oroquieta',
+          // Nov 1 09:00 Manila
+          'timestamp': DateTime.utc(2026, 11, 1, 1),
+          'visitorCount': 1,
+          'touristSex': 'Female',
+          'touristIsLocal': true,
+          'touristLocalOrForeign': 'Local',
+          'touristCountry': 'Philippines',
+          'touristNationality': 'Filipino',
+          'touristDateOfBirth': '1998-05-10',
+        },
+        {
+          // Live scan (not seed) — must stay excluded from November.
+          'userId': 'real_tourist_ozamiz_002',
+          'spotId': 'spot_beach',
+          'municipality': 'Ozamis City',
+          // Oct 31 10:00 Manila — outside November
+          'timestamp': DateTime.utc(2026, 10, 31, 2),
+          'visitorCount': 5,
+          'touristSex': 'Male',
+        },
+      ],
+    );
+
+    expect(stats.periodVisitorCount, 1);
+    expect(stats.arrivals[0], 1);
+    expect(stats.female, 1);
+    expect(stats.local, 1);
+    expect(stats.categories.first.name, 'Beach');
+    expect(stats.municipalities.first.name, 'Oroquieta City');
+    expect(stats.ageSeries.firstWhere((r) => r.label == '25-34').female, 1);
+  });
+
   test('This Month includes every day of a 31-day month and December-January', () {
     final october = VisitAnalyticsSnapshot.build(
       now: DateTime.utc(2026, 10, 16, 4),

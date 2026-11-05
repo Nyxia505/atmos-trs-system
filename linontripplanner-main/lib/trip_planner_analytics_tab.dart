@@ -1,16 +1,17 @@
-import 'dart:typed_data';
+import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:excel/excel.dart' hide Border;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
 
 import 'data.dart';
-import 'services/reports/report_file_saver.dart';
+import 'services/admin_live_collections.dart';
 import 'services/saved_trip_store.dart';
-import 'widgets/tourism_plan_ui.dart';
+import 'theme/tourism_app_theme.dart';
+import 'utils/trip_planner_analytics.dart';
+import 'widgets/optaca_portal_ui.dart';
+import 'widgets/reports/trip_analytics_period_pickers.dart';
 
 /// Read-only OPTACA view of saved Plan-my-trip itineraries.
 ///
@@ -23,317 +24,198 @@ class TripPlannerAnalyticsTab extends StatefulWidget {
       _TripPlannerAnalyticsTabState();
 }
 
-enum _TrendGrain { daily, weekly, monthly, yearly }
-
 class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
-  static const _durationOptions = <String>[
-    'Any duration',
-    '1-day trips',
-    '2-day trips',
-    '3-day trips',
-    '4–5-day trips',
-    '6–7-day trips',
-    '8 or more days',
-  ];
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _sub;
+  List<AnalyticTripPlan> _plans = const [];
+  bool _loading = true;
+  Object? _error;
+  int _seq = 0;
 
-  late final Stream<QuerySnapshot<Map<String, dynamic>>> _trips =
-      FirebaseFirestore.instance
-          .collection(kTouristTripCollection)
-          .limit(500)
-          .snapshots();
+  TripTrendGrain _grain = TripTrendGrain.monthly;
+  TripTrendWindow _window = TripTrendWindow.current(TripTrendGrain.monthly);
 
-  DateTimeRange? _range;
-  String? _municipality;
-  String? _startMunicipality;
-  String? _endMunicipality;
-  String _duration = _durationOptions.first;
-  String _routeType = 'Any route type';
-  _TrendGrain _grain = _TrendGrain.monthly;
-  bool _exporting = false;
+  @override
+  void initState() {
+    super.initState();
+    _listen();
+  }
 
-  void _resetFilters() {
+  void _listen() {
+    _sub?.cancel();
+    _sub = FirebaseFirestore.instance
+        .collection(kTouristTripCollection)
+        .snapshots()
+        .listen(_onSnapshot, onError: _onError);
+  }
+
+  void _retry() {
+    if (!mounted) return;
     setState(() {
-      _range = null;
-      _municipality = null;
-      _startMunicipality = null;
-      _endMunicipality = null;
-      _duration = _durationOptions.first;
-      _routeType = 'Any route type';
+      _loading = true;
+      _error = null;
+    });
+    _listen();
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  void _onSnapshot(QuerySnapshot<Map<String, dynamic>> snap) {
+    final seq = ++_seq;
+    final seen = <String>{};
+    final plans = <AnalyticTripPlan>[];
+    for (final doc in snap.docs) {
+      final raw = doc.data();
+      final id = (raw['id']?.toString() ?? doc.id).trim();
+      if (id.isEmpty || !seen.add(id)) continue;
+      final json = _normalizeTrip(raw, id);
+      plans.add(
+        AnalyticTripPlan(
+          plan: SavedTripPlan.fromJson(json),
+          savedAt: _parseSavedAt(raw['createdAt'] ?? json['createdAt']),
+        ),
+      );
+    }
+    if (!mounted || seq != _seq) return;
+    _plans = plans;
+    _loading = false;
+    _error = null;
+    if (!optacaTabIsActive(context)) return;
+    setState(() {});
+  }
+
+  void _onError(Object error) {
+    debugPrint('TripPlannerAnalyticsTab: $error');
+    if (!mounted) return;
+    _loading = false;
+    _error = error;
+    if (!optacaTabIsActive(context)) return;
+    setState(() {});
+  }
+
+  Future<void> _onGrainPressed(TripTrendGrain grain) async {
+    final picked = await pickTripAnalyticsPeriod(
+      context: context,
+      grain: grain,
+      current: _window,
+    );
+    if (!mounted) return;
+    if (picked != null) {
+      setState(() {
+        _grain = grain;
+        _window = picked;
+      });
+      return;
+    }
+    if (grain == _grain) return;
+    setState(() {
+      _grain = grain;
+      _window = _window.withGrain(grain);
     });
   }
 
-  Future<void> _pickRange() async {
-    final now = DateTime.now();
-    final picked = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(2020),
-      lastDate: DateTime(now.year + 1, 12, 31),
-      initialDateRange: _range,
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: ColorScheme.light(primary: AppColors.primary),
-          ),
-          child: child ?? const SizedBox.shrink(),
-        );
-      },
+  Widget _grainChip(TripTrendGrain grain, String label) {
+    final selected = _grain == grain;
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      selectedColor: const Color(0xFFFFE2C7),
+      labelStyle: TextStyle(
+        color: const Color(0xFF1F2937),
+        fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+      ),
+      side: BorderSide(
+        color: selected ? OptacaAdminTheme.primary : OptacaAdminTheme.border,
+      ),
+      avatar: Icon(
+        switch (grain) {
+          TripTrendGrain.daily => Icons.calendar_today_outlined,
+          TripTrendGrain.weekly => Icons.date_range_outlined,
+          TripTrendGrain.monthly => Icons.calendar_month_outlined,
+          TripTrendGrain.yearly => Icons.event_outlined,
+        },
+        size: 16,
+        color: selected ? OptacaAdminTheme.primary : AppColors.textGrey,
+      ),
+      showCheckmark: false,
+      onSelected: (_) => _onGrainPressed(grain),
     );
-    if (picked != null) setState(() => _range = picked);
   }
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _trips,
-      builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting &&
-            !snap.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snap.hasError) {
-          return const _Message(
-            title: 'Trip plans could not be read with this account.',
-            body:
-                'OPTACA admins can read saved itineraries for analytics. '
-                'Tourists can still open only their own plans, and the '
-                'collection is not public. Reload this page after the '
-                'updated access rules are deployed.',
-          );
-        }
-        final plans = [
-          for (final doc in snap.data?.docs ?? const [])
-            SavedTripPlan.fromJson(_normalizeTrip(doc.data(), doc.id)),
-        ];
-        if (plans.isEmpty) {
-          return const _Message(
-            title: 'No saved trip plans yet.',
-            body:
-                'When tourists finish a plan, the totals here update from '
-                'those records. Nothing is shown until a plan is saved.',
-          );
-        }
-        final stats = _TripStats.compute(
-          plans,
-          range: _range,
-          municipality: _municipality,
-          startMunicipality: _startMunicipality,
-          endMunicipality: _endMunicipality,
-          duration: _duration == _durationOptions.first ? null : _duration,
-          routeType: switch (_routeType) {
-            'Coastal' => 'coastal',
-            'Highland' => 'highland',
-            'Not recorded' => '',
-            _ => null,
-          },
-        );
-        final capped = (snap.data?.docs.length ?? 0) >= 500;
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
-          children: [
-            _filters(stats.municipalityChoices),
-            if (capped)
-              const Padding(
-                padding: EdgeInsets.only(top: 8),
-                child: Text(
-                  'Showing 500 saved plans. Older plans are not included in this view.',
-                  style: TextStyle(color: AppColors.textGrey, fontSize: 12),
-                ),
-              ),
-            const SizedBox(height: 16),
-            if (stats.plans.isEmpty)
-              const _Message(
-                title: 'No trip plans match these filters.',
-                body: 'Reset the filters to see every saved itinerary.',
-              )
-            else ...[
-              _summary(stats),
-              const SizedBox(height: 16),
-              _trends(stats),
-              const SizedBox(height: 16),
-              _twoColumn(
-                _rankedCard(
-                  title: 'Popular tourist destinations',
-                  subtitle:
-                      'Planned spots. Each spot is counted once per itinerary, not as a confirmed visit.',
-                  rows: stats.destinations,
-                ),
-                _rankedCard(
-                  title: 'Municipality analytics',
-                  subtitle:
-                      'Itineraries that include the municipality as a start, end, or planned spot.',
-                  rows: stats.municipalityRanks,
-                  showPercentOf: stats.plans.length,
-                ),
-              ),
-              const SizedBox(height: 16),
-              _twoColumn(_durationCard(stats), _routesCard(stats)),
-            ],
-          ],
-        );
-      },
-    );
-  }
+    if (_loading && _plans.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null && _plans.isEmpty) {
+      return OptacaLoadError(
+        title: 'Trip plans could not be read with this account.',
+        message:
+            'OPTACA admins can read saved itineraries for analytics. '
+            'Tourists can still open only their own plans, and the '
+            'collection is not public. Retry after the updated access '
+            'rules are deployed.',
+        onRetry: _retry,
+      );
+    }
+    if (_plans.isEmpty) {
+      return const _Message(
+        title: 'No saved trip plans yet.',
+        body:
+            'When tourists finish a plan, the totals here update from '
+            'those records. Nothing is shown until a plan is saved.',
+      );
+    }
 
-  Widget _filters(List<String> municipalities) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: TourismPlanUi.planCardDecoration(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Planned itineraries',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-                ),
-              ),
-              PopupMenuButton<String>(
-                tooltip: 'Generate report',
-                onSelected: (format) => _export(format),
-                enabled: !_exporting,
-                itemBuilder: (context) => const [
-                  PopupMenuItem(value: 'pdf', child: Text('PDF')),
-                  PopupMenuItem(value: 'xlsx', child: Text('Excel (.xlsx)')),
-                ],
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    _exporting ? 'Preparing…' : 'Generate report',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            'These numbers are planned trips, not tourist arrivals or QR check-ins.',
-            style: TextStyle(color: AppColors.textGrey, fontSize: 12),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              OutlinedButton.icon(
-                onPressed: _pickRange,
-                icon: const Icon(Icons.date_range_outlined, size: 18),
-                label: Text(_range == null ? 'All dates' : _rangeLabel(_range!)),
-              ),
-              _menu(
-                'Municipality',
-                _municipality,
-                municipalities,
-                (v) => setState(() => _municipality = v),
-              ),
-              _menu(
-                'Starting municipality',
-                _startMunicipality,
-                municipalities,
-                (v) => setState(() => _startMunicipality = v),
-              ),
-              _menu(
-                'Ending municipality',
-                _endMunicipality,
-                municipalities,
-                (v) => setState(() => _endMunicipality = v),
-              ),
-              _choice(
-                _duration,
-                _durationOptions,
-                (v) => setState(() => _duration = v),
-              ),
-              _choice(
-                _routeType,
-                const [
-                  'Any route type',
-                  'Coastal',
-                  'Highland',
-                  'Not recorded',
-                ],
-                (v) => setState(() => _routeType = v),
-              ),
-              TextButton(onPressed: _resetFilters, child: const Text('Reset filters')),
-            ],
+    final stats = TripPlannerAnalyticsSnapshot.compute(
+      plans: _plans,
+      window: _window,
+    );
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+      children: [
+        _summary(stats),
+        if (stats.skippedMissingTimestamp > 0) ...[
+          const SizedBox(height: 10),
+          Text(
+            '${stats.skippedMissingTimestamp} '
+            '${stats.skippedMissingTimestamp == 1 ? 'plan has' : 'plans have'} '
+            'no saved date and ${stats.skippedMissingTimestamp == 1 ? 'is' : 'are'} '
+            'omitted from this period.',
+            style: const TextStyle(color: AppColors.textGrey, fontSize: 12),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _menu(
-    String label,
-    String? value,
-    List<String> options,
-    ValueChanged<String?> onChanged,
-  ) {
-    return SizedBox(
-      width: 220,
-      child: DropdownButtonFormField<String?>(
-        value: options.contains(value) ? value : null,
-        isExpanded: true,
-        decoration: InputDecoration(
-          labelText: label,
-          isDense: true,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        const SizedBox(height: 16),
+        _trends(stats),
+        const SizedBox(height: 16),
+        _twoColumn(
+          _rankedCard(
+            title: 'Popular tourist destinations',
+            rows: stats.destinations,
+            totalPlans: stats.planCount,
+          ),
+          _rankedCard(
+            title: 'Municipality analytics',
+            rows: stats.municipalityRanks,
+            totalPlans: stats.planCount,
+          ),
         ),
-        items: [
-          const DropdownMenuItem<String?>(value: null, child: Text('All')),
-          for (final name in options)
-            DropdownMenuItem<String?>(
-              value: name,
-              child: Text(name, overflow: TextOverflow.ellipsis),
-            ),
-        ],
-        onChanged: onChanged,
-      ),
+        const SizedBox(height: 16),
+        _twoColumn(_durationCard(stats), _routesCard(stats)),
+      ],
     );
   }
 
-  Widget _choice(
-    String value,
-    List<String> options,
-    ValueChanged<String> onChanged,
-  ) {
-    return SizedBox(
-      width: 180,
-      child: DropdownButtonFormField<String>(
-        value: value,
-        isExpanded: true,
-        decoration: InputDecoration(
-          isDense: true,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-        items: [
-          for (final option in options)
-            DropdownMenuItem(value: option, child: Text(option)),
-        ],
-        onChanged: (next) {
-          if (next != null) onChanged(next);
-        },
-      ),
-    );
-  }
-
-  Widget _summary(_TripStats stats) {
+  Widget _summary(TripPlannerAnalyticsSnapshot stats) {
     final cards = [
       _StatCard(
         icon: Icons.map_outlined,
         label: 'Total trip plans',
-        value: '${stats.plans.length}',
+        value: '${stats.planCount}',
       ),
       _StatCard(
         icon: Icons.place_outlined,
@@ -390,107 +272,152 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
     );
   }
 
-  Widget _trends(_TripStats stats) {
-    final series = stats.trend(_grain);
+  Widget _trends(TripPlannerAnalyticsSnapshot stats) {
+    const lineColor = Color(0xFFFF7900);
+    const fillColor = Color(0xFFFFE2C7);
+    const axisText = Color(0xFF1F2937);
+
+    final series = stats.series;
+    final maxCount = series.fold<int>(0, (m, p) => math.max(m, p.count));
+    final maxY = math.max(1, maxCount + (maxCount < 6 ? 1 : 0)).toDouble();
+    final yInterval = math.max(1, (maxY / 4).ceil()).toDouble();
+    final showEveryX = series.length <= 12
+        ? 1
+        : series.length <= 16
+            ? 2
+            : series.length <= 31
+                ? 5
+                : 30;
+    final peak = peakSeriesIndex(series);
+
     return _card(
-      title: 'Monthly trip trends',
-      subtitle: 'Itineraries grouped by the date they were saved.',
-      trailing: SegmentedButton<_TrendGrain>(
-        segments: const [
-          ButtonSegment(value: _TrendGrain.daily, label: Text('Daily')),
-          ButtonSegment(value: _TrendGrain.weekly, label: Text('Weekly')),
-          ButtonSegment(value: _TrendGrain.monthly, label: Text('Monthly')),
-          ButtonSegment(value: _TrendGrain.yearly, label: Text('Yearly')),
-        ],
-        selected: {_grain},
-        onSelectionChanged: (next) => setState(() => _grain = next.first),
-      ),
-      child: series.isEmpty
-          ? const Text(
-              'No saved dates in this selection.',
-              style: TextStyle(color: AppColors.textGrey),
-            )
-          : SizedBox(
-              height: 220,
-              child: LineChart(
-                LineChartData(
-                  minY: 0,
-                  gridData: const FlGridData(drawVerticalLine: false),
-                  borderData: FlBorderData(show: false),
-                  titlesData: FlTitlesData(
-                    topTitles: const AxisTitles(),
-                    rightTitles: const AxisTitles(),
-                    leftTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        reservedSize: 28,
-                        getTitlesWidget: (value, meta) => Text(
-                          value == value.roundToDouble()
-                              ? '${value.toInt()}'
-                              : '',
-                          style: const TextStyle(fontSize: 10),
+      title: 'Trip Planner Trends',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              _grainChip(TripTrendGrain.daily, 'Daily'),
+              _grainChip(TripTrendGrain.weekly, 'Weekly'),
+              _grainChip(TripTrendGrain.monthly, 'Monthly'),
+              _grainChip(TripTrendGrain.yearly, 'Yearly'),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              IconButton(
+                tooltip: 'Previous period',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => setState(() {
+                  _window = _window.previous();
+                }),
+                icon: const Icon(Icons.chevron_left_rounded),
+              ),
+              InkWell(
+                onTap: () => _onGrainPressed(_grain),
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 4,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.calendar_today_outlined,
+                        size: 14,
+                        color: axisText,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        _window.label,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 14,
+                          color: axisText,
                         ),
                       ),
-                    ),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        reservedSize: 28,
-                        interval: series.length > 8
-                            ? (series.length / 6).ceilToDouble()
-                            : 1,
-                        getTitlesWidget: (value, meta) {
-                          final i = value.toInt();
-                          if (i < 0 || i >= series.length) {
-                            return const SizedBox.shrink();
-                          }
-                          return Text(
-                            series[i].label,
-                            style: const TextStyle(fontSize: 10),
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                  lineBarsData: [
-                    LineChartBarData(
-                      spots: [
-                        for (var i = 0; i < series.length; i++)
-                          FlSpot(i.toDouble(), series[i].count.toDouble()),
-                      ],
-                      isCurved: series.length > 2,
-                      color: AppColors.primary,
-                      barWidth: 3,
-                      dotData: const FlDotData(show: true),
-                      belowBarData: BarAreaData(
-                        show: true,
-                        color: AppColors.primary.withValues(alpha: 0.12),
-                      ),
-                    ),
-                  ],
-                  lineTouchData: LineTouchData(
-                    touchTooltipData: LineTouchTooltipData(
-                      getTooltipItems: (spots) => [
-                        for (final spot in spots)
-                          LineTooltipItem(
-                            '${series[spot.x.toInt()].label}\n${spot.y.toInt()} plans',
-                            const TextStyle(color: Colors.white, fontSize: 12),
-                          ),
-                      ],
-                    ),
+                    ],
                   ),
                 ),
               ),
+              IconButton(
+                tooltip: 'Next period',
+                visualDensity: VisualDensity.compact,
+                onPressed: _window.canGoNext
+                    ? () => setState(() {
+                          _window = _window.next();
+                        })
+                    : null,
+                icon: const Icon(Icons.chevron_right_rounded),
+              ),
+              if (_window.preset == TripDatePreset.custom)
+                Text(
+                  '${_window.selectedDayCount} '
+                  '${_window.selectedDayCount == 1 ? 'day' : 'days'}',
+                  style: const TextStyle(
+                    color: AppColors.textGrey,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              if (peak != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: fillColor,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    'Peak: ${series[peak].count} trip '
+                    '${series[peak].count == 1 ? 'plan' : 'plans'}',
+                    style: const TextStyle(
+                      color: lineColor,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (series.isEmpty)
+            const Text(
+              'No saved dates in this selection.',
+              style: TextStyle(color: AppColors.textGrey),
+            )
+          else
+            _TripTrendLineChart(
+              key: ValueKey(
+                '${_window.start.toIso8601String()}-'
+                '${_window.end.toIso8601String()}-${_grain.name}',
+              ),
+              series: series,
+              peakIndex: peak,
+              maxY: maxY,
+              yInterval: yInterval,
+              showEveryX: showEveryX,
             ),
+        ],
+      ),
     );
   }
 
-  Widget _durationCard(_TripStats stats) {
+  Widget _durationCard(TripPlannerAnalyticsSnapshot stats) {
     final rows = stats.durations.where((row) => row.count > 0).toList();
     final total = rows.fold<int>(0, (total, row) => total + row.count);
     return _card(
       title: 'Travel duration',
-      subtitle: 'Days selected on the itinerary. Unlimited day counts stay in the last group.',
       child: rows.isEmpty
           ? const Text(
               'No itineraries in this selection have a travel-day count.',
@@ -539,7 +466,9 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
                   ],
                 );
                 if (c.maxWidth < 420) {
-                  return Column(children: [pie, const SizedBox(height: 12), legend]);
+                  return Column(
+                    children: [pie, const SizedBox(height: 12), legend],
+                  );
                 }
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -554,21 +483,18 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
     );
   }
 
-  Widget _routesCard(_TripStats stats) {
+  Widget _routesCard(TripPlannerAnalyticsSnapshot stats) {
     final recorded = stats.coastal + stats.highland;
     return _card(
       title: 'Route analytics',
-      subtitle:
-          'Start, end, and route type are taken from the saved plan. '
-          'A coastal or highland label is shown only when that choice was stored.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             recorded == 0
-                ? 'No saved plan in this selection has a coastal or highland choice recorded.'
+                ? 'No coastal or highland route recorded.'
                 : 'Coastal ${stats.coastal} · Highland ${stats.highland}'
-                    '${recorded == 0 ? '' : ' · ${stats.coastalPercent}% coastal, ${stats.highlandPercent}% highland among plans that stored a route type.'}',
+                    ' · ${stats.coastalPercent}% / ${stats.highlandPercent}%',
             style: const TextStyle(fontSize: 13),
           ),
           if (stats.routeTypeMissing > 0)
@@ -580,22 +506,34 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
               ),
             ),
           const SizedBox(height: 12),
-          const Text('Starting municipalities', style: TextStyle(fontWeight: FontWeight.w700)),
+          const Text(
+            'Starting municipalities',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
           _miniList(stats.starts),
           const SizedBox(height: 8),
-          const Text('Ending municipalities', style: TextStyle(fontWeight: FontWeight.w700)),
+          const Text(
+            'Ending municipalities',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
           _miniList(stats.ends),
           const SizedBox(height: 8),
-          const Text('Municipality routes', style: TextStyle(fontWeight: FontWeight.w700)),
+          const Text(
+            'Municipality routes',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
           _miniList(stats.routes),
         ],
       ),
     );
   }
 
-  Widget _miniList(List<_RankRow> rows) {
+  Widget _miniList(List<TripRankRow> rows) {
     if (rows.isEmpty) {
-      return const Text('None recorded.', style: TextStyle(color: AppColors.textGrey));
+      return const Text(
+        'None recorded.',
+        style: TextStyle(color: AppColors.textGrey),
+      );
     }
     return Column(
       children: [
@@ -604,7 +542,9 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
             padding: const EdgeInsets.only(top: 4),
             child: Row(
               children: [
-                Expanded(child: Text(row.label, overflow: TextOverflow.ellipsis)),
+                Expanded(
+                  child: Text(row.label, overflow: TextOverflow.ellipsis),
+                ),
                 Text('${row.count}'),
               ],
             ),
@@ -615,16 +555,16 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
 
   Widget _rankedCard({
     required String title,
-    required String subtitle,
-    required List<_RankRow> rows,
-    int? showPercentOf,
+    required List<TripRankRow> rows,
+    required int totalPlans,
   }) {
-    final max = rows.isEmpty ? 0 : rows.first.count;
     return _card(
       title: title,
-      subtitle: subtitle,
       child: rows.isEmpty
-          ? const Text('Nothing to rank in this selection.', style: TextStyle(color: AppColors.textGrey))
+          ? const Text(
+              'Nothing to rank in this selection.',
+              style: TextStyle(color: AppColors.textGrey),
+            )
           : Column(
               children: [
                 for (final row in rows.take(10))
@@ -645,9 +585,8 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
                               ),
                             ),
                             Text(
-                              showPercentOf == null || showPercentOf == 0
-                                  ? '${row.count}'
-                                  : '${row.count} · ${(row.count / showPercentOf * 100).round()}%',
+                              '${row.count} ${row.count == 1 ? 'plan' : 'plans'} '
+                              '(${row.percentOf(totalPlans)}%)',
                               style: const TextStyle(fontWeight: FontWeight.w700),
                             ),
                           ],
@@ -656,7 +595,7 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
                         ClipRRect(
                           borderRadius: BorderRadius.circular(6),
                           child: LinearProgressIndicator(
-                            value: max == 0 ? 0 : row.count / max,
+                            value: row.barOf(totalPlans),
                             minHeight: 8,
                             backgroundColor: const Color(0xFFFFEDD5),
                             color: AppColors.primary,
@@ -674,7 +613,9 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
     return LayoutBuilder(
       builder: (context, c) {
         if (c.maxWidth < 900) {
-          return Column(children: [left, const SizedBox(height: 16), right]);
+          return Column(
+            children: [left, const SizedBox(height: 16), right],
+          );
         }
         return Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -690,14 +631,13 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
 
   Widget _card({
     required String title,
-    required String subtitle,
     required Widget child,
     Widget? trailing,
   }) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
-      decoration: TourismPlanUi.planCardDecoration(),
+      decoration: OptacaAdminTheme.cardDecoration,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -706,56 +646,270 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
             runSpacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-              if (trailing != null) trailing,
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              ?trailing,
             ],
           ),
-          const SizedBox(height: 4),
-          Text(subtitle, style: const TextStyle(color: AppColors.textGrey, fontSize: 12)),
           const SizedBox(height: 12),
           child,
         ],
       ),
     );
   }
-
-  Future<void> _export(String format) async {
-    final stats = _shownStats;
-    if (stats == null || _exporting) return;
-    setState(() => _exporting = true);
-    try {
-      final now = DateTime.now();
-      final stamp =
-          '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
-      final bytes = format == 'pdf'
-          ? await _pdfBytes(stats, now)
-          : Uint8List.fromList(_xlsxBytes(stats, now));
-      final name = format == 'pdf'
-          ? 'optaca_trip_planner_analytics_$stamp.pdf'
-          : 'optaca_trip_planner_analytics_$stamp.xlsx';
-      final where = await saveReportFile(
-        fileName: name,
-        bytes: bytes,
-        mimeType: format == 'pdf'
-            ? 'application/pdf'
-            : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Report saved to $where')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('The report could not be saved. $e')),
-      );
-    } finally {
-      if (mounted) setState(() => _exporting = false);
-    }
-  }
 }
 
-_TripStats? _shownStats;
+class _TripTrendLineChart extends StatefulWidget {
+  const _TripTrendLineChart({
+    super.key,
+    required this.series,
+    required this.peakIndex,
+    required this.maxY,
+    required this.yInterval,
+    required this.showEveryX,
+  });
+
+  final List<TripTrendPoint> series;
+  final int? peakIndex;
+  final double maxY;
+  final double yInterval;
+  final int showEveryX;
+
+  @override
+  State<_TripTrendLineChart> createState() => _TripTrendLineChartState();
+}
+
+class _TripTrendLineChartState extends State<_TripTrendLineChart> {
+  static const _line = Color(0xFFFF7900);
+  static const _highlight = Color(0xFFFF8C24);
+  static const _fill = Color(0xFFFFE2C7);
+  static const _grid = Color(0xFFE5E7EB);
+  static const _axis = Color(0xFF1F2937);
+
+  int? _touchedSpot;
+
+  int? get _active {
+    final touched = _touchedSpot;
+    if (touched != null &&
+        touched >= 0 &&
+        touched < widget.series.length) {
+      return touched;
+    }
+    return widget.peakIndex;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final series = widget.series;
+    final maxY = widget.maxY;
+    final yInterval = widget.yInterval;
+    final showEveryX = widget.showEveryX;
+    final touched = _active;
+
+    return SizedBox(
+      height: 268,
+      child: LineChart(
+        LineChartData(
+          minX: 0,
+          maxX: math.max(0, series.length - 1).toDouble(),
+          minY: 0,
+          maxY: maxY,
+          clipData: const FlClipData.none(),
+          gridData: FlGridData(
+            drawVerticalLine: false,
+            horizontalInterval: yInterval,
+            getDrawingHorizontalLine: (value) => const FlLine(
+              color: _grid,
+              strokeWidth: 1,
+            ),
+          ),
+          borderData: FlBorderData(show: false),
+          extraLinesData: ExtraLinesData(
+            verticalLines: [
+              if (touched != null)
+                VerticalLine(
+                  x: touched.toDouble(),
+                  color: _highlight.withValues(alpha: 0.35),
+                  strokeWidth: 1,
+                  dashArray: const [5, 4],
+                ),
+            ],
+          ),
+          titlesData: FlTitlesData(
+            topTitles: const AxisTitles(),
+            rightTitles: const AxisTitles(),
+            leftTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 28,
+                interval: yInterval,
+                getTitlesWidget: (value, meta) {
+                  if (value < 0 || value > maxY + 0.01) {
+                    return const SizedBox.shrink();
+                  }
+                  if ((value - value.roundToDouble()).abs() > 0.01) {
+                    return const SizedBox.shrink();
+                  }
+                  return Text(
+                    '${value.round()}',
+                    style: const TextStyle(
+                      fontSize: 10,
+                      color: AppColors.textGrey,
+                    ),
+                  );
+                },
+              ),
+            ),
+            bottomTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 32,
+                interval: 1,
+                getTitlesWidget: (value, meta) {
+                  final i = value.round();
+                  if (i < 0 || i >= series.length) {
+                    return const SizedBox.shrink();
+                  }
+                  if ((value - i).abs() > 0.01) {
+                    return const SizedBox.shrink();
+                  }
+                  if (i % showEveryX != 0 && i != series.length - 1) {
+                    return const SizedBox.shrink();
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      series[i].label,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight:
+                            i == touched ? FontWeight.w800 : FontWeight.w500,
+                        color: i == touched ? _axis : AppColors.textGrey,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+          lineBarsData: [
+            LineChartBarData(
+              spots: [
+                for (var i = 0; i < series.length; i++)
+                  FlSpot(i.toDouble(), series[i].count.toDouble()),
+              ],
+              isCurved: series.length > 1,
+              preventCurveOverShooting: true,
+              preventCurveOvershootingThreshold: 0,
+              curveSmoothness: 0.28,
+              color: _line,
+              barWidth: 3,
+              isStrokeCapRound: true,
+              dotData: FlDotData(
+                show: true,
+                getDotPainter: (spot, percent, bar, index) {
+                  final selected = index == touched;
+                  return FlDotCirclePainter(
+                    radius: selected ? 6 : 3.2,
+                    color: selected ? Colors.white : _line,
+                    strokeWidth: selected ? 3 : 0,
+                    strokeColor: _line,
+                  );
+                },
+              ),
+              belowBarData: BarAreaData(
+                show: true,
+                cutOffY: 0,
+                applyCutOffY: true,
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    _highlight.withValues(alpha: 0.38),
+                    _fill.withValues(alpha: 0.22),
+                    _fill.withValues(alpha: 0.0),
+                  ],
+                  stops: const [0, 0.45, 1],
+                ),
+              ),
+            ),
+          ],
+          lineTouchData: LineTouchData(
+            handleBuiltInTouches: true,
+            getTouchedSpotIndicator: (bar, indexes) => [
+              for (final _ in indexes)
+                TouchedSpotIndicatorData(
+                  const FlLine(
+                    color: _highlight,
+                    strokeWidth: 1,
+                    dashArray: [5, 4],
+                  ),
+                  FlDotData(
+                    getDotPainter: (spot, percent, bar, _) =>
+                        FlDotCirclePainter(
+                      radius: 6,
+                      color: Colors.white,
+                      strokeWidth: 3,
+                      strokeColor: _line,
+                    ),
+                  ),
+                ),
+            ],
+            touchTooltipData: LineTouchTooltipData(
+              getTooltipColor: (_) => const Color(0xFF1C1410),
+              tooltipRoundedRadius: 12,
+              tooltipPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 8,
+              ),
+              fitInsideHorizontally: true,
+              fitInsideVertically: true,
+              getTooltipItems: (spots) => [
+                for (final spot in spots)
+                  if (spot.x.round() >= 0 &&
+                      spot.x.round() < series.length)
+                    LineTooltipItem(
+                      '${series[spot.x.round()].tooltipLabel}\n',
+                      const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      children: [
+                        TextSpan(
+                          text:
+                              '${spot.y.round()} saved trip '
+                              '${spot.y.round() == 1 ? 'plan' : 'plans'}',
+                          style: const TextStyle(
+                            color: Color(0xFFFFB46A),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+              ],
+            ),
+            touchCallback: (event, response) {
+              final spots = response?.lineBarSpots;
+              if (spots == null || spots.isEmpty) return;
+              final index = spots.first.x.round();
+              if (index == _touchedSpot) return;
+              setState(() => _touchedSpot = index);
+            },
+          ),
+        ),
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+      ),
+    );
+  }
+}
 
 const _sliceColors = <Color>[
   Color(0xFFF97316),
@@ -781,16 +935,16 @@ class _StatCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: TourismPlanUi.planCardDecoration(),
+      decoration: OptacaAdminTheme.cardDecoration,
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.12),
-              shape: BoxShape.circle,
+              color: OptacaAdminTheme.lightOrange,
+              borderRadius: BorderRadius.circular(12),
             ),
-            child: Icon(icon, color: AppColors.primary),
+            child: Icon(icon, color: OptacaAdminTheme.primary),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -799,11 +953,17 @@ class _StatCard extends StatelessWidget {
               children: [
                 Text(
                   value,
-                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
                 Text(
                   label,
-                  style: const TextStyle(color: AppColors.textGrey, fontSize: 12),
+                  style: const TextStyle(
+                    color: AppColors.textGrey,
+                    fontSize: 12,
+                  ),
                 ),
               ],
             ),
@@ -833,7 +993,10 @@ class _Message extends StatelessWidget {
               Text(
                 title,
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               const SizedBox(height: 8),
               Text(
@@ -849,420 +1012,33 @@ class _Message extends StatelessWidget {
   }
 }
 
-class _RankRow {
-  const _RankRow(this.label, this.count, {this.detail = ''});
-  final String label;
-  final String detail;
-  final int count;
-}
-
-class _TrendPoint {
-  const _TrendPoint(this.label, this.count);
-  final String label;
-  final int count;
-}
-
-class _TripStats {
-  _TripStats(this.plans);
-
-  final List<SavedTripPlan> plans;
-  late final List<_RankRow> destinations;
-  late final List<_RankRow> municipalityRanks;
-  late final List<_RankRow> starts;
-  late final List<_RankRow> ends;
-  late final List<_RankRow> routes;
-  late final List<_RankRow> durations;
-  late final int distinctDestinations;
-  late final int distinctMunicipalities;
-  late final double? averageDays;
-  late final int coastal;
-  late final int highland;
-  late final int routeTypeMissing;
-  late final List<String> municipalityChoices;
-
-  int get coastalPercent =>
-      coastal + highland == 0 ? 0 : (coastal / (coastal + highland) * 100).round();
-  int get highlandPercent =>
-      coastal + highland == 0 ? 0 : (highland / (coastal + highland) * 100).round();
-
-  static _TripStats compute(
-    List<SavedTripPlan> all, {
-    required DateTimeRange? range,
-    required String? municipality,
-    required String? startMunicipality,
-    required String? endMunicipality,
-    required String? duration,
-    required String? routeType,
-  }) {
-    final filtered = all.where((plan) {
-      if (range != null) {
-        final day = DateTime(plan.createdAt.year, plan.createdAt.month, plan.createdAt.day);
-        final start = DateTime(range.start.year, range.start.month, range.start.day);
-        final end = DateTime(range.end.year, range.end.month, range.end.day);
-        if (day.isBefore(start) || day.isAfter(end)) return false;
-      }
-      if (municipality != null &&
-          !_municipalitiesOf(plan).any((name) => _same(name, municipality))) {
-        return false;
-      }
-      if (startMunicipality != null &&
-          !_same(_municipalityOfName(plan.startName), startMunicipality) &&
-          !_same(plan.startName, startMunicipality)) {
-        return false;
-      }
-      if (endMunicipality != null &&
-          !_same(_municipalityOfName(plan.endName), endMunicipality) &&
-          !_same(plan.endName, endMunicipality)) {
-        return false;
-      }
-      if (duration != null && _durationLabel(plan) != duration) return false;
-      if (routeType != null && plan.routeType != routeType) return false;
-      return true;
-    }).toList();
-    final stats = _TripStats(filtered).._fill();
-    _shownStats = stats;
-    return stats;
-  }
-
-  void _fill() {
-    final destCounts = <String, int>{};
-    final destMuni = <String, String>{};
-    final muniCounts = <String, int>{};
-    final startCounts = <String, int>{};
-    final endCounts = <String, int>{};
-    final routeCounts = <String, int>{};
-    final durationCounts = <String, int>{
-      for (final label in const [
-        '1-day trips',
-        '2-day trips',
-        '3-day trips',
-        '4–5-day trips',
-        '6–7-day trips',
-        '8 or more days',
-      ])
-        label: 0,
-    };
-    final allMunis = <String>{};
-    var daySum = 0;
-    var dayPlans = 0;
-    var coastalCount = 0;
-    var highlandCount = 0;
-    var missingRoute = 0;
-    final choices = <String>{
-      for (final m in municipalities) m.name,
-    };
-
-    for (final plan in plans) {
-      final spots = <String>{};
-      for (final day in plan.daySpotNames) {
-        for (final raw in day) {
-          final name = raw.trim();
-          if (name.isEmpty) continue;
-          spots.add(name.toLowerCase());
-          destMuni.putIfAbsent(name.toLowerCase(), () => name);
-        }
-      }
-      for (final key in spots) {
-        destCounts[key] = (destCounts[key] ?? 0) + 1;
-      }
-      final munis = _municipalitiesOf(plan);
-      allMunis.addAll(munis);
-      choices.addAll(munis);
-      for (final muni in munis) {
-        muniCounts[muni] = (muniCounts[muni] ?? 0) + 1;
-      }
-      final start = plan.startName.trim();
-      final end = plan.endName.trim();
-      if (start.isNotEmpty) startCounts[start] = (startCounts[start] ?? 0) + 1;
-      if (end.isNotEmpty) endCounts[end] = (endCounts[end] ?? 0) + 1;
-      if (start.isNotEmpty && end.isNotEmpty) {
-        final pair = '$start → $end';
-        routeCounts[pair] = (routeCounts[pair] ?? 0) + 1;
-      }
-      final label = _durationLabel(plan);
-      if (label != null) {
-        durationCounts[label] = (durationCounts[label] ?? 0) + 1;
-        daySum += _dayCount(plan);
-        dayPlans++;
-      }
-      if (plan.routeType == 'coastal') {
-        coastalCount++;
-      } else if (plan.routeType == 'highland') {
-        highlandCount++;
-      } else {
-        missingRoute++;
-      }
-    }
-
-    distinctDestinations = destCounts.length;
-    distinctMunicipalities = allMunis.length;
-    averageDays = dayPlans == 0 ? null : daySum / dayPlans;
-    coastal = coastalCount;
-    highland = highlandCount;
-    routeTypeMissing = missingRoute;
-    destinations = _rank(destCounts, (key) {
-      final muni = _municipalityOfName(destMuni[key] ?? key);
-      return (destMuni[key] ?? key, muni);
-    });
-    municipalityRanks = _rank(muniCounts, (key) => (key, ''));
-    starts = _rank(startCounts, (key) => (key, ''));
-    ends = _rank(endCounts, (key) => (key, ''));
-    routes = _rank(routeCounts, (key) => (key, ''));
-    durations = [
-      for (final entry in durationCounts.entries)
-        _RankRow(entry.key, entry.value),
-    ];
-    municipalityChoices = choices.toList()..sort();
-  }
-
-  List<_TrendPoint> trend(_TrendGrain grain) {
-    final counts = <String, int>{};
-    final labels = <String, String>{};
-    for (final plan in plans) {
-      final at = plan.createdAt.toLocal();
-      final String key;
-      final String label;
-      switch (grain) {
-        case _TrendGrain.daily:
-          key = '${at.year}-${at.month}-${at.day}';
-          label = '${at.month}/${at.day}';
-        case _TrendGrain.weekly:
-          final start = at.subtract(Duration(days: at.weekday - 1));
-          key = '${start.year}-${start.month}-${start.day}';
-          label = '${start.month}/${start.day}';
-        case _TrendGrain.monthly:
-          key = '${at.year}-${at.month}';
-          label = '${_month(at.month)} ${at.year}';
-        case _TrendGrain.yearly:
-          key = '${at.year}';
-          label = '${at.year}';
-      }
-      counts[key] = (counts[key] ?? 0) + 1;
-      labels[key] = label;
-    }
-    final keys = counts.keys.toList()..sort();
-    return [for (final key in keys) _TrendPoint(labels[key] ?? key, counts[key]!)];
-  }
-}
-
-List<_RankRow> _rank(
-  Map<String, int> counts,
-  (String, String) Function(String key) label,
-) {
-  final keys = counts.keys.toList()
-    ..sort((a, b) => counts[b]!.compareTo(counts[a]!));
-  return [
-    for (final key in keys)
-      _RankRow(label(key).$1, counts[key]!, detail: label(key).$2),
-  ];
-}
-
 Map<String, dynamic> _normalizeTrip(Map<String, dynamic> raw, String id) {
   final data = Map<String, dynamic>.from(raw);
   data['id'] = data['id'] ?? id;
-  final created = data['createdAt'];
-  if (created is Timestamp) {
-    data['createdAt'] = created.toDate().toIso8601String();
+  final created = _parseSavedAt(data['createdAt']);
+  if (created != null) {
+    data['createdAt'] = created.toIso8601String();
   }
   return data;
 }
 
-int _dayCount(SavedTripPlan plan) {
-  if (plan.tripDays > 0) return plan.tripDays;
-  return plan.daySpotNames.where((day) => day.isNotEmpty).length;
-}
-
-String? _durationLabel(SavedTripPlan plan) {
-  final days = _dayCount(plan);
-  if (days <= 0) return null;
-  if (days == 1) return '1-day trips';
-  if (days == 2) return '2-day trips';
-  if (days == 3) return '3-day trips';
-  if (days <= 5) return '4–5-day trips';
-  if (days <= 7) return '6–7-day trips';
-  return '8 or more days';
-}
-
-bool _same(String a, String b) => a.trim().toLowerCase() == b.trim().toLowerCase();
-
-String _municipalityOfName(String name) {
-  final trimmed = name.trim();
-  if (trimmed.isEmpty) return '';
-  for (final municipality in municipalities) {
-    if (_same(municipality.name, trimmed) || _same(municipality.shortName, trimmed)) {
-      return municipality.name;
+DateTime? _parseSavedAt(dynamic raw) {
+  if (raw == null) return null;
+  if (raw is DateTime) return raw.toLocal();
+  if (raw is Timestamp) return raw.toDate().toLocal();
+  if (raw is int) {
+    if (raw > 99999999999999) {
+      return DateTime.fromMicrosecondsSinceEpoch(raw).toLocal();
     }
-  }
-  final spot = findTouristSpotByNameFuzzy(trimmed);
-  final location = spot?.location.trim() ?? '';
-  if (location.isNotEmpty) return location;
-  return '';
-}
-
-Set<String> _municipalitiesOf(SavedTripPlan plan) {
-  final names = <String>{};
-  void add(String raw) {
-    final muni = _municipalityOfName(raw);
-    if (muni.isNotEmpty) names.add(muni);
-  }
-
-  add(plan.startName);
-  add(plan.endName);
-  for (final day in plan.daySpotNames) {
-    for (final spot in day) {
-      add(spot);
+    if (raw > 9999999999) {
+      return DateTime.fromMillisecondsSinceEpoch(raw).toLocal();
     }
+    if (raw > 999999999) {
+      return DateTime.fromMillisecondsSinceEpoch(raw * 1000).toLocal();
+    }
+    return null;
   }
-  return names;
-}
-
-String _rangeLabel(DateTimeRange range) {
-  String one(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-  return '${one(range.start)} – ${one(range.end)}';
-}
-
-String _month(int month) {
-  const names = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-  ];
-  return names[month - 1];
-}
-
-String _filterSummary() {
-  return 'Filters follow the dashboard selection. Personal tourist details are omitted.';
-}
-
-Future<pw.Document> _pdfDocument(_TripStats stats, DateTime generated) async {
-  final doc = pw.Document();
-  doc.addPage(
-    pw.MultiPage(
-      pageFormat: PdfPageFormat.a4,
-      build: (context) => [
-        pw.Text('OPTACA Portal', style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
-        pw.Text('Trip Planner Analytics'),
-        pw.Text('Generated ${generated.toLocal()}'),
-        pw.SizedBox(height: 6),
-        pw.Text(_filterSummary()),
-        pw.Text('These figures are planned itineraries, not confirmed arrivals.'),
-        pw.SizedBox(height: 12),
-        pw.Text('Summary', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-        pw.Bullet(text: 'Total trip plans: ${stats.plans.length}'),
-        pw.Bullet(text: 'Planned destinations: ${stats.distinctDestinations}'),
-        pw.Bullet(
-          text: 'Average travel duration: ${stats.averageDays == null ? '—' : stats.averageDays!.toStringAsFixed(1)} days',
-        ),
-        pw.Bullet(text: 'Municipalities covered: ${stats.distinctMunicipalities}'),
-        pw.SizedBox(height: 10),
-        _pdfTable('Popular destinations', ['Destination', 'Municipality', 'Plans'], [
-          for (final row in stats.destinations.take(10))
-            [row.label, row.detail, '${row.count}'],
-        ]),
-        _pdfTable('Municipalities', ['Municipality', 'Itineraries'], [
-          for (final row in stats.municipalityRanks) [row.label, '${row.count}'],
-        ]),
-        _pdfTable('Travel duration', ['Group', 'Plans'], [
-          for (final row in stats.durations) [row.label, '${row.count}'],
-        ]),
-        _pdfTable('Routes', ['Item', 'Plans'], [
-          ['Coastal (stored)', '${stats.coastal}'],
-          ['Highland (stored)', '${stats.highland}'],
-          ['Route type not recorded', '${stats.routeTypeMissing}'],
-          for (final row in stats.starts.take(8)) ['Start: ${row.label}', '${row.count}'],
-          for (final row in stats.ends.take(8)) ['End: ${row.label}', '${row.count}'],
-          for (final row in stats.routes.take(8)) [row.label, '${row.count}'],
-        ]),
-        _pdfTable('Saved over time', ['Period', 'Plans'], [
-          for (final point in stats.trend(_TrendGrain.monthly))
-            [point.label, '${point.count}'],
-        ]),
-      ],
-    ),
-  );
-  return doc;
-}
-
-pw.Widget _pdfTable(String title, List<String> headers, List<List<String>> rows) {
-  return pw.Column(
-    crossAxisAlignment: pw.CrossAxisAlignment.start,
-    children: [
-      pw.SizedBox(height: 10),
-      pw.Text(title, style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-      pw.SizedBox(height: 4),
-      pw.TableHelper.fromTextArray(headers: headers, data: rows.isEmpty ? [['—', '0']] : rows),
-    ],
-  );
-}
-
-Future<Uint8List> _pdfBytes(_TripStats stats, DateTime generated) async {
-  final doc = await _pdfDocument(stats, generated);
-  return doc.save();
-}
-
-List<int> _xlsxBytes(_TripStats stats, DateTime generated) {
-  final book = Excel.createExcel();
-  final defaultSheet = book.getDefaultSheet();
-  final sheet = book['Trip planner'];
-  void row(List<String> cells) {
-    sheet.appendRow([for (final cell in cells) TextCellValue(cell)]);
-  }
-
-  row(['OPTACA Portal']);
-  row(['Trip Planner Analytics']);
-  row(['Generated', generated.toLocal().toString()]);
-  row(['Note', 'Planned itineraries, not confirmed arrivals. No personal tourist data.']);
-  row([]);
-  row(['Metric', 'Value']);
-  row(['Total trip plans', '${stats.plans.length}']);
-  row(['Planned destinations', '${stats.distinctDestinations}']);
-  row([
-    'Average travel duration (days)',
-    stats.averageDays == null ? '' : stats.averageDays!.toStringAsFixed(1),
-  ]);
-  row(['Municipalities covered', '${stats.distinctMunicipalities}']);
-  row([]);
-  row(['Popular destinations', 'Municipality', 'Plans']);
-  for (final item in stats.destinations.take(10)) {
-    row([item.label, item.detail, '${item.count}']);
-  }
-  row([]);
-  row(['Municipality', 'Itineraries']);
-  for (final item in stats.municipalityRanks) {
-    row([item.label, '${item.count}']);
-  }
-  row([]);
-  row(['Travel duration', 'Plans']);
-  for (final item in stats.durations) {
-    row([item.label, '${item.count}']);
-  }
-  row([]);
-  row(['Route type', 'Plans']);
-  row(['Coastal (stored)', '${stats.coastal}']);
-  row(['Highland (stored)', '${stats.highland}']);
-  row(['Not recorded', '${stats.routeTypeMissing}']);
-  row([]);
-  row(['Starting municipality', 'Plans']);
-  for (final item in stats.starts) {
-    row([item.label, '${item.count}']);
-  }
-  row([]);
-  row(['Ending municipality', 'Plans']);
-  for (final item in stats.ends) {
-    row([item.label, '${item.count}']);
-  }
-  row([]);
-  row(['Route', 'Plans']);
-  for (final item in stats.routes) {
-    row([item.label, '${item.count}']);
-  }
-  row([]);
-  row(['Month', 'Plans']);
-  for (final point in stats.trend(_TrendGrain.monthly)) {
-    row([point.label, '${point.count}']);
-  }
-  if (defaultSheet != null && defaultSheet != 'Trip planner') {
-    book.delete(defaultSheet);
-  }
-  final encoded = book.encode();
-  return encoded ?? const <int>[];
+  final text = '$raw'.trim();
+  if (text.isEmpty || text == 'null') return null;
+  return DateTime.tryParse(text)?.toLocal();
 }

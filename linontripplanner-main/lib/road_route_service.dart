@@ -122,10 +122,33 @@ String _roadRouteCacheKey(List<LatLng> waypoints) => waypoints
 
 void _rememberRoadRoute(String key, DirectionsResult result) {
   if (result.polyline == null || result.polyline!.length < 2) return;
-  if (_roadRouteCache.length >= 80 && !_roadRouteCache.containsKey(key)) {
+  _roadRouteCache.remove(key);
+  if (_roadRouteCache.length >= 80) {
     _roadRouteCache.remove(_roadRouteCache.keys.first);
   }
   _roadRouteCache[key] = result;
+}
+
+Future<DirectionsResult> _cachedDirections(List<LatLng> waypoints) {
+  final key = _roadRouteCacheKey(waypoints);
+  final cached = _roadRouteCache[key];
+  if (cached != null) {
+    _roadRouteCache.remove(key);
+    _roadRouteCache[key] = cached;
+    return Future<DirectionsResult>.value(cached);
+  }
+  final pending = _roadRouteInFlight[key];
+  if (pending != null) return pending;
+  final future = getDirectionsRoute(waypoints);
+  _roadRouteInFlight[key] = future;
+  return future.then((result) {
+    _rememberRoadRoute(key, result);
+    return result;
+  }).whenComplete(() {
+    if (identical(_roadRouteInFlight[key], future)) {
+      _roadRouteInFlight.remove(key);
+    }
+  });
 }
 
 /// Road polyline (plus distance / time) through [stops] and every town between
@@ -135,22 +158,7 @@ Future<DirectionsResult> getRoadRouteThroughStops(
   RoadRouteDirection? direction,
 }) async {
   final waypoints = roadWaypointsForStops(stops, direction: direction);
-  final key = _roadRouteCacheKey(waypoints);
-  final cached = _roadRouteCache[key];
-  if (cached != null) return cached;
-  final pending = _roadRouteInFlight[key];
-  if (pending != null) return pending;
-  final future = getDirectionsRoute(waypoints);
-  _roadRouteInFlight[key] = future;
-  try {
-    final result = await future;
-    _rememberRoadRoute(key, result);
-    return result;
-  } finally {
-    if (identical(_roadRouteInFlight[key], future)) {
-      _roadRouteInFlight.remove(key);
-    }
-  }
+  return _cachedDirections(waypoints);
 }
 
 /// Shortest valid road path between each consecutive pair in [stops], joined
@@ -167,11 +175,6 @@ Future<DirectionsResult> getOrderedRoadRoute(
       errorMessage: 'Not enough stops for a road route.',
     );
   }
-  final merged = <LatLng>[];
-  var meters = 0.0;
-  var seconds = 0.0;
-  var haveMeters = true;
-  var haveSeconds = true;
   for (var i = 0; i < stops.length - 1; i++) {
     final from = stops[i];
     final to = stops[i + 1];
@@ -189,10 +192,23 @@ Future<DirectionsResult> getOrderedRoadRoute(
             'No valid $way road route from ${from.place} to ${to.place}.',
       );
     }
-    final leg = await getRoadRouteThroughStops(
-      [from, to],
-      direction: direction,
-    );
+  }
+  final legs = await Future.wait([
+    for (var i = 0; i < stops.length - 1; i++)
+      getRoadRouteThroughStops(
+        [stops[i], stops[i + 1]],
+        direction: direction,
+      ),
+  ]);
+  final merged = <LatLng>[];
+  var meters = 0.0;
+  var seconds = 0.0;
+  var haveMeters = true;
+  var haveSeconds = true;
+  for (var i = 0; i < legs.length; i++) {
+    final from = stops[i];
+    final to = stops[i + 1];
+    final leg = legs[i];
     final segment = leg.polyline;
     if (segment == null || segment.length < 2) {
       return DirectionsResult(
@@ -246,7 +262,7 @@ Future<RoadRoute?> fetchRoadRoute(
     endPoint,
   ];
 
-  final directions = await getDirectionsRoute(waypoints);
+  final directions = await _cachedDirections(waypoints);
   final line = directions.polyline;
   final followsRoads = line != null && line.length >= 2;
 

@@ -174,6 +174,71 @@ ManilaRange manilaPreviousRangeForFilter(String range, DateTime now) {
   }
 }
 
+/// Debug / LGU analytics seed rows (not live QR scans).
+bool isAnalyticsSeedCheckIn(Map<String, dynamic> row) {
+  final tag = row['seedTag']?.toString() ?? '';
+  if (tag.contains('lgu_analytics')) return true;
+  final uid = row['userId']?.toString().trim() ??
+      row['user_id']?.toString().trim() ??
+      row['tourist_id']?.toString().trim() ??
+      '';
+  if (uid.startsWith('seed_tourist_') || uid.startsWith('seed_group_')) {
+    return true;
+  }
+  final id = row['id']?.toString().trim() ?? '';
+  return id.startsWith('seed_tourist_') || id.startsWith('seed_group_');
+}
+
+/// In-memory only: map seed visits into the current Asia/Manila calendar month.
+///
+/// Older Cloud Function seeds used the Functions UTC calendar month, so
+/// Governor "This Month" charts stayed empty while all-time cards still
+/// counted visitors. This remaps seed rows for analytics display without
+/// writing Firestore (live scans are unchanged).
+Map<String, dynamic> remapSeedCheckInForCurrentManilaMonth(
+  Map<String, dynamic> row, [
+  DateTime? now,
+]) {
+  if (!isAnalyticsSeedCheckIn(row)) return row;
+  final when = parseCheckInTimestamp(row);
+  if (when == null) return row;
+  final today = manilaCalendarDate(now ?? DateTime.now());
+  final wall = manilaWallClock(when);
+  if (wall.year == today.year && wall.month == today.month) return row;
+
+  final lastDay = DateTime(today.year, today.month + 1, 0).day;
+  final day = wall.day < 1 ? 1 : (wall.day > lastDay ? lastDay : wall.day);
+  final remapped = manilaUtcInstant(
+    DateTime(
+      today.year,
+      today.month,
+      day,
+      wall.hour,
+      wall.minute,
+      wall.second,
+      wall.millisecond,
+    ),
+  );
+  return {
+    ...row,
+    'timestamp': remapped,
+    'createdAt': remapped,
+    'checkin_time': remapped,
+    'checkedInAt': remapped,
+    '_seedRemappedToManilaMonth': true,
+  };
+}
+
+List<Map<String, dynamic>> remapSeedCheckInsForCurrentManilaMonth(
+  List<Map<String, dynamic>> rows, [
+  DateTime? now,
+]) {
+  final clock = now ?? DateTime.now();
+  return [
+    for (final row in rows) remapSeedCheckInForCurrentManilaMonth(row, clock),
+  ];
+}
+
 bool checkInInManilaRange(
   Map<String, dynamic> checkIn,
   ManilaRange range, {

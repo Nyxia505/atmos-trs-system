@@ -21,6 +21,7 @@ class HomePersonalizationService {
   TravelHistoryProfile? _profile;
   List<CollaborativeUserProfile> _peers = [];
   int _refreshEpoch = 0;
+  Future<void>? _refreshInFlight;
 
   bool get hasPersonalization => allSpots.isNotEmpty;
 
@@ -35,7 +36,19 @@ class HomePersonalizationService {
   }
 
   /// Reloads profile, interactions, and recomputes home rankings.
-  Future<void> refresh() async {
+  Future<void> refresh() {
+    final inFlight = _refreshInFlight;
+    if (inFlight != null) return inFlight;
+    final future = _refreshBody();
+    _refreshInFlight = future;
+    return future.whenComplete(() {
+      if (identical(_refreshInFlight, future)) {
+        _refreshInFlight = null;
+      }
+    });
+  }
+
+  Future<void> _refreshBody() async {
     final epoch = ++_refreshEpoch;
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (kDebugMode) {

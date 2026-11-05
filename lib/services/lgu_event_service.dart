@@ -1423,15 +1423,33 @@ class LguEventService {
     return bestId ?? '';
   }
 
+  /// Canonical UI / merge key for a post (collection + document id).
+  ///
+  /// Prefer this over title/date so legitimate similar posts stay distinct, and
+  /// the same Firestore doc is never rendered twice when mine + province feeds
+  /// are concatenated.
+  static String canonicalKey(Map<String, dynamic> item) {
+    final id = item['id']?.toString().trim() ?? '';
+    final source = item['catalogSource']?.toString().trim().isNotEmpty == true
+        ? item['catalogSource'].toString().trim()
+        : collection;
+    if (id.isNotEmpty) return '$source:$id';
+    return '$source:${item['title']}:${item['startsAt']}';
+  }
+
+  /// Public dedupe used by the LGU Events panel when combining mine + province.
+  static List<Map<String, dynamic>> mergeUnique(
+    List<Map<String, dynamic>> items,
+  ) =>
+      _mergeById(items);
+
   static List<Map<String, dynamic>> _mergeById(
     List<Map<String, dynamic>> items,
   ) {
     final seen = <String>{};
     final out = <Map<String, dynamic>>[];
     for (final item in items) {
-      final id = item['id']?.toString() ?? '';
-      final source = item['catalogSource']?.toString() ?? 'announcements';
-      final key = id.isEmpty ? '$source:${item['title']}:${item['startsAt']}' : '$source:$id';
+      final key = canonicalKey(item);
       if (!seen.add(key)) continue;
       out.add(item);
     }

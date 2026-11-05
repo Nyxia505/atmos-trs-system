@@ -14,6 +14,8 @@ class EstablishmentSettingsPanel extends StatefulWidget {
     required this.profile,
     required this.schema,
     this.hostsMice = false,
+    this.showHero = true,
+    @Deprecated('Use showHero — flushHero no longer paints a banner.')
     this.flushHero = false,
     this.contentPadding = const EdgeInsets.only(top: 18),
   });
@@ -23,6 +25,10 @@ class EstablishmentSettingsPanel extends StatefulWidget {
 
   /// Also seeds / clears demo MICE events.
   final bool hostsMice;
+
+  /// When false (AE dashboard), skip the large decorative page banner —
+  /// the shared orange top header already names the module.
+  final bool showHero;
   final bool flushHero;
   final EdgeInsetsGeometry contentPadding;
 
@@ -130,12 +136,13 @@ class _EstablishmentSettingsPanelState extends State<EstablishmentSettingsPanel>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        AePageHero(
-          icon: Icons.settings_rounded,
-          title: 'Settings',
-          subtitle: 'Manage dashboard preferences and demo data.',
-          flush: widget.flushHero,
-        ),
+        if (widget.showHero)
+          AePageHero(
+            icon: Icons.settings_rounded,
+            title: 'Settings',
+            subtitle: 'Manage dashboard preferences and demo data.',
+            flush: widget.flushHero,
+          ),
         Padding(
           padding: widget.contentPadding,
           child: StreamBuilder<List<AeMonthlyReport>>(

@@ -43,6 +43,7 @@ class ReportExportService {
   static Future<ReportExportResult> export({
     required ReportDataset dataset,
     required ReportFormat format,
+    PdfPageFormat? pageFormat,
   }) async {
     final fileName = reportFileName(
       dataset.kind,
@@ -52,7 +53,11 @@ class ReportExportService {
     );
     final Uint8List bytes;
     try {
-      bytes = await generateBytes(dataset: dataset, format: format);
+      bytes = await generateBytes(
+        dataset: dataset,
+        format: format,
+        pageFormat: pageFormat,
+      );
     } catch (e, st) {
       debugPrint('ReportExportService.generateBytes($format): $e\n$st');
       throw const ReportExportException(
@@ -83,11 +88,12 @@ class ReportExportService {
   static Future<Uint8List> generateBytes({
     required ReportDataset dataset,
     required ReportFormat format,
+    PdfPageFormat? pageFormat,
   }) async {
     return switch (format) {
       ReportFormat.csv => _buildCsv(dataset),
       ReportFormat.xlsx => _buildXlsx(dataset),
-      ReportFormat.pdf => _buildPdf(dataset),
+      ReportFormat.pdf => _buildPdf(dataset, pageFormat: pageFormat),
     };
   }
 
@@ -265,12 +271,16 @@ class ReportExportService {
   static const _pdfGrey = PdfColor.fromInt(0xFF666666);
   static const _pdfTint = PdfColor.fromInt(0xFFFFF2EB);
 
-  static Future<Uint8List> _buildPdf(ReportDataset dataset) async {
+  static Future<Uint8List> _buildPdf(
+    ReportDataset dataset, {
+    PdfPageFormat? pageFormat,
+  }) async {
     final doc = pw.Document(title: dataset.title, author: _brand);
+    final format = (pageFormat ?? PdfPageFormat.a4).landscape;
 
     doc.addPage(
       pw.MultiPage(
-        pageFormat: PdfPageFormat.a4.landscape,
+        pageFormat: format,
         margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 36),
         header: (context) => context.pageNumber == 1
             ? pw.SizedBox()
@@ -438,16 +448,20 @@ class ReportExportService {
         for (final row in table.rows) [for (final cell in row) _pdfSafe(cell)],
       ],
       headerStyle: pw.TextStyle(
-        fontSize: 8,
+        fontSize: 7.5,
         color: PdfColors.white,
         fontWeight: pw.FontWeight.bold,
       ),
       headerDecoration: const pw.BoxDecoration(color: _pdfOrange),
-      cellStyle: const pw.TextStyle(fontSize: 8, color: _pdfInk),
+      cellStyle: const pw.TextStyle(fontSize: 7.5, color: _pdfInk),
       oddRowDecoration: const pw.BoxDecoration(color: _pdfTint),
-      cellHeight: 14,
+      cellPadding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 3),
       headerAlignment: pw.Alignment.centerLeft,
       cellAlignment: pw.Alignment.centerLeft,
+      columnWidths: {
+        for (var i = 0; i < table.columns.length; i++)
+          i: const pw.FlexColumnWidth(),
+      },
       border: pw.TableBorder.all(color: _pdfGrey, width: 0.2),
     );
   }

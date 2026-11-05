@@ -571,8 +571,26 @@ service cloud.firestore {
 
       match /rows/{rowId} {
         allow read: if ownsAeReport(reportId) || isLguStaff() || isOptacaPortalReader();
-        allow create, update: if ownsAeReport(reportId)
-          || (isLguStaff() && request.resource.data.get('seed', '') == 'demo');
+        // Female + Male must equal Total Guests; amounts must be non-negative.
+        allow create, update: if (
+            ownsAeReport(reportId)
+            || (isLguStaff() && request.resource.data.get('seed', '') == 'demo')
+          )
+          && request.resource.data.get('guests', 0) is number
+          && request.resource.data.get('female', 0) is number
+          && request.resource.data.get('male', 0) is number
+          && request.resource.data.get('guests', 0) >= 1
+          && request.resource.data.get('female', 0) >= 0
+          && request.resource.data.get('male', 0) >= 0
+          && request.resource.data.get('female', 0)
+              + request.resource.data.get('male', 0)
+              == request.resource.data.get('guests', 0)
+          && request.resource.data.get('rate', 0) is number
+          && request.resource.data.get('rate', 0) >= 0
+          && request.resource.data.get('chargesA', 0) is number
+          && request.resource.data.get('chargesA', 0) >= 0
+          && request.resource.data.get('chargesB', 0) is number
+          && request.resource.data.get('chargesB', 0) >= 0;
         allow delete: if ownsAeReport(reportId) || isLguStaff();
       }
     }

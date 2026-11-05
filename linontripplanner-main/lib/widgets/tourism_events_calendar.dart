@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data.dart';
 import '../event_datetime_format.dart';
+import '../event_schedule.dart';
 import 'municipality_image.dart';
 import 'tourism_plan_ui.dart';
 
@@ -72,9 +73,14 @@ class _TourismEventsCalendarState extends State<TourismEventsCalendar> {
   Map<DateTime, List<TourismEvent>> _eventsByDay() {
     final map = <DateTime, List<TourismEvent>>{};
     for (final e in widget.events) {
-      final d = e.dateTime;
-      final key = DateTime(d.year, d.month, d.day);
-      (map[key] ??= []).add(e);
+      final seenDays = <String>{};
+      for (final d in eventExpandedCalendarDays(e)) {
+        final key = eventCalendarDay(d);
+        if (!seenDays.add(formatEventCalendarDateKey(key))) continue;
+        final list = map[key] ??= [];
+        if (list.any((existing) => existing.id == e.id)) continue;
+        list.add(e);
+      }
     }
     for (final list in map.values) {
       list.sort((a, b) => a.dateTime.compareTo(b.dateTime));
@@ -476,8 +482,8 @@ class _DayAgenda extends StatelessWidget {
                                 [
                                   formatEventTime12(e.dateTime),
                                   if (e.venue.trim().isNotEmpty) e.venue.trim(),
-                                  if (e.municipality.trim().isNotEmpty)
-                                    e.municipality.trim(),
+                                  if (formatEventListLocationLine(e).isNotEmpty)
+                                    formatEventListLocationLine(e),
                                 ].join(' · '),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
@@ -565,22 +571,29 @@ class TourismEventDetailPage extends StatelessWidget {
     final topPad = MediaQuery.paddingOf(context).top;
     final bannerHeight = MediaQuery.sizeOf(context).height * 0.34;
 
+    final locationSummary = formatEventListLocationLine(e);
     final detailRows = <_EventDetailRowData>[
       _EventDetailRowData(
         icon: Icons.calendar_today_outlined,
-        label: 'Date',
-        value: formatEventDateWords(e.dateTime),
+        label: e.dateMode == TourismEventDateMode.range
+            ? 'Date range'
+            : e.dateMode == TourismEventDateMode.multiple
+                ? 'Dates'
+                : 'Date',
+        value: formatEventDatesSummary(e),
       ),
       _EventDetailRowData(
         icon: Icons.access_time_rounded,
         label: 'Time',
         value: formatEventTime12(e.dateTime),
       ),
-      if (e.municipality.isNotEmpty)
+      if (locationSummary.isNotEmpty)
         _EventDetailRowData(
           icon: Icons.business_outlined,
-          label: 'Municipality',
-          value: e.municipality,
+          label: e.locationNames.length > 1
+              ? 'Municipalities & cities'
+              : 'Municipality',
+          value: locationSummary,
         ),
       if (e.venue.isNotEmpty)
         _EventDetailRowData(
@@ -667,30 +680,28 @@ class TourismEventDetailPage extends StatelessWidget {
                     const SizedBox(height: 12),
                     _EventCategoryTag(label: e.eventType, color: accentColor),
                   ],
-                  const SizedBox(height: 18),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: AppColors.listTilePeach.withValues(alpha: 0.65),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: accentColor.withValues(alpha: 0.14),
+                  if (e.description.trim().isNotEmpty) ...[
+                    const SizedBox(height: 18),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: AppColors.listTilePeach.withValues(alpha: 0.65),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: accentColor.withValues(alpha: 0.14),
+                        ),
+                      ),
+                      child: Text(
+                        e.description,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          height: 1.55,
+                          color: AppColors.textDark,
+                        ),
                       ),
                     ),
-                    child: Text(
-                      e.description.isNotEmpty
-                          ? e.description
-                          : 'No description provided.',
-                      style: TextStyle(
-                        fontSize: 15,
-                        height: 1.55,
-                        color: e.description.isNotEmpty
-                            ? AppColors.textDark
-                            : AppColors.textGrey,
-                      ),
-                    ),
-                  ),
+                  ],
                   const SizedBox(height: 22),
                   TourismPlanUi.sectionTitleBar(title: 'Event details'),
                   const SizedBox(height: 10),
@@ -718,6 +729,39 @@ class TourismEventDetailPage extends StatelessWidget {
                       ],
                     ),
                   ),
+                  if (e.locationNames.length > 1) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                      decoration: TourismPlanUi.planCardDecoration(),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Selected locations',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textGrey,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              for (final name in e.locationNames)
+                                Chip(
+                                  label: Text(name),
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   if (onEdit != null || onDelete != null) ...[
                     const SizedBox(height: 28),
                     if (onEdit != null)
@@ -923,11 +967,17 @@ class TourismEventTitlesList extends StatelessWidget {
     required this.events,
     this.accentColor = AppColors.primary,
     this.onEventTap,
+    this.selectedIds,
+    this.onToggleSelect,
+    this.selectableIds,
   });
 
   final List<TourismEvent> events;
   final Color accentColor;
   final void Function(TourismEvent event)? onEventTap;
+  final Set<String>? selectedIds;
+  final ValueChanged<TourismEvent>? onToggleSelect;
+  final Set<String>? selectableIds;
 
   @override
   Widget build(BuildContext context) {
@@ -937,7 +987,7 @@ class TourismEventTitlesList extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(18, 20, 18, 20),
         decoration: TourismPlanUi.planCardDecoration(),
         child: Text(
-          'No events yet. Posted events will be listed here.',
+          'No events yet.',
           style: TextStyle(
             fontSize: 13.5,
             height: 1.4,
@@ -966,95 +1016,126 @@ class TourismEventTitlesList extends StatelessWidget {
       children: [
         for (var i = 0; i < events.length; i++) ...[
           if (i > 0) const SizedBox(height: 10),
-          Material(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(16),
-              onTap: onEventTap == null ? null : () => onEventTap!(events[i]),
-              child: Ink(
-                decoration: TourismPlanUi.planCardDecoration(),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 12, 10, 12),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 52,
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        decoration: BoxDecoration(
-                          color: AppColors.listTilePeach,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Column(
-                          children: [
-                            Text(
-                              '${events[i].dateTime.day}',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w800,
-                                height: 1,
-                                color: accentColor,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              monthNames[events[i].dateTime.month - 1],
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                color: accentColor.withValues(alpha: 0.85),
-                              ),
-                            ),
-                          ],
-                        ),
+          Builder(
+            builder: (context) {
+              final event = events[i];
+              final canSelect = onToggleSelect != null &&
+                  (selectableIds == null || selectableIds!.contains(event.id));
+              final selected = selectedIds?.contains(event.id) ?? false;
+              final locationLine = formatEventListLocationLine(event);
+              return Material(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  hoverColor: AppColors.primary.withValues(alpha: 0.04),
+                  onTap: onEventTap == null ? null : () => onEventTap!(event),
+                  child: Ink(
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? const Color(0xFFFFF1E6)
+                          : Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: selected
+                            ? AppColors.primary.withValues(alpha: 0.35)
+                            : const Color(0xFFE2E8F0),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              events[i].title,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.textDark,
-                                height: 1.25,
-                              ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF0F172A).withValues(alpha: 0.04),
+                          blurRadius: 16,
+                          offset: const Offset(0, 6),
+                        ),
+                      ],
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 12, 10, 12),
+                      child: Row(
+                        children: [
+                          if (canSelect)
+                            Checkbox(
+                              value: selected,
+                              onChanged: (_) => onToggleSelect!(event),
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              [
-                                formatEventTime12(events[i].dateTime),
-                                if (events[i].venue.trim().isNotEmpty)
-                                  events[i].venue.trim(),
-                                if (events[i].municipality.trim().isNotEmpty)
-                                  events[i].municipality.trim(),
-                              ].join(' · '),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                color: AppColors.textGrey.withValues(
-                                  alpha: 0.95,
+                          Container(
+                            width: 52,
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            decoration: BoxDecoration(
+                              color: AppColors.listTilePeach,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              children: [
+                                Text(
+                                  '${event.dateTime.day}',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w800,
+                                    height: 1,
+                                    color: accentColor,
+                                  ),
                                 ),
-                              ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  monthNames[event.dateTime.month - 1],
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: accentColor.withValues(alpha: 0.85),
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  event.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.textDark,
+                                    height: 1.25,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  [
+                                    formatEventScheduleSubtitle(event),
+                                    if (event.venue.trim().isNotEmpty)
+                                      event.venue.trim(),
+                                    if (locationLine.isNotEmpty) locationLine,
+                                  ].join(' · '),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    color: AppColors.textGrey.withValues(
+                                      alpha: 0.95,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Icon(
+                            Icons.chevron_right_rounded,
+                            size: 24,
+                            color: accentColor,
+                          ),
+                        ],
                       ),
-                      Icon(
-                        Icons.chevron_right_rounded,
-                        size: 24,
-                        color: accentColor,
-                      ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
-            ),
+              );
+            },
           ),
         ],
       ],

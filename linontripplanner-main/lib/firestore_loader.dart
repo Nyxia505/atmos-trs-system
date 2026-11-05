@@ -16,10 +16,8 @@ import 'services/supabase_image_library.dart'
     show applyCuratedTouristSpotImageUrls;
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'catalog_lgu_compat.dart';
-import 'catalog_publisher.dart';
-import 'catalog_targeting.dart';
 import 'data.dart';
+import 'event_schedule.dart';
 import 'municipality_bus_terminals.dart';
 import 'config/supabase_config.dart';
 import 'services/admin_accounts_service.dart';
@@ -34,7 +32,34 @@ const String kTouristSpotsCollection = 'tourist_spots';
 const String kMunicipalitiesCollection = 'municipalities';
 const String kFeaturedSpotsCollection = 'featured_spots';
 const String kEventsCollection = 'events';
+const String kAnnouncementsCollection = 'announcements';
 const String _kCachedEventsPrefsKey = 'tourism_events_cache_v1';
+
+/// In-flight catalog writes keyed by `collection/docId`. Rapid Save clicks
+/// (and retries after an uncertain timeout) join the same write instead of
+/// creating extra documents.
+final Map<String, Future<void>> _catalogWriteInFlight = {};
+
+String newTourismEventDocId() =>
+    FirebaseFirestore.instance.collection(kEventsCollection).doc().id;
+
+String newTourismAnnouncementDocId() =>
+    FirebaseFirestore.instance.collection(kAnnouncementsCollection).doc().id;
+
+Future<void> _coalesceCatalogWrite(
+  String key,
+  Future<void> Function() write,
+) {
+  final pending = _catalogWriteInFlight[key];
+  if (pending != null) return pending;
+  final future = write();
+  _catalogWriteInFlight[key] = future;
+  return future.whenComplete(() {
+    if (identical(_catalogWriteInFlight[key], future)) {
+      _catalogWriteInFlight.remove(key);
+    }
+  });
+}
 
 Future<void> _persistEventsCache(List<TourismEvent> events) async {
   try {
@@ -57,7 +82,8 @@ Future<List<TourismEvent>> _loadEventsCache() async {
     if (list is! List) return const [];
     return [
       for (final item in list)
-        if (item is Map) TourismEvent.fromJson(Map<String, dynamic>.from(item)),
+        if (item is Map)
+          TourismEvent.fromJson(Map<String, dynamic>.from(item)),
     ];
   } catch (e) {
     debugPrint('load events cache failed: $e');
@@ -67,14 +93,10 @@ Future<List<TourismEvent>> _loadEventsCache() async {
 
 /// Bumped after [loadEventsFromFirestore] so Events / Notifications UIs can rebuild.
 final ValueNotifier<int> tourismEventsRevision = ValueNotifier<int>(0);
-const String kAnnouncementsCollection = 'announcements';
-
 /// Tourist spot reviews (rating + optional comment) from the app.
 const String kSpotRatingsCollection = 'spot_ratings';
-
 /// Same collection as mobile/auth app: `fullName`, `email`, `role`, `firebaseUid`, …
 const String kUsersCollection = 'users';
-
 /// Registered tourists / visits (Governor portal table). Use plural to match
 /// typical Firestore collection naming; `tourist` (singular) is also allowed in rules.
 const String kTouristCollection = 'tourists';
@@ -83,12 +105,14 @@ const String kTouristCollection = 'tourists';
 /// `touristId`, `touristID`, `touristDocumentId` (matches [TouristRegistryEntry.docId]
 /// or the business id on the `tourists` doc).
 const String kTouristVisitsCollection = 'tourist_visits';
-
 /// Public anonymized profiles for on-device collaborative filtering.
 const String kRecommendationProfilesCollection = 'recommendation_profiles';
 
 /// Builds a [TouristSpot] from one `tourist_spots` document.
-TouristSpot? touristSpotFromFirestoreDoc(String docId, Map<String, dynamic> d) {
+TouristSpot? touristSpotFromFirestoreDoc(
+  String docId,
+  Map<String, dynamic> d,
+) {
   final name = _str(d, 'name') ?? docId;
   if (name.isEmpty) return null;
 
@@ -98,12 +122,12 @@ TouristSpot? touristSpotFromFirestoreDoc(String docId, Map<String, dynamic> d) {
 
   String location = '';
   for (final key in <String>[
-    'location',
-    'locationName',
-    'location_name',
     'municipality',
     'municipalityName',
     'municipality_name',
+    'location',
+    'locationName',
+    'location_name',
   ]) {
     final v = _str(d, key);
     if (v != null && v.trim().isNotEmpty) {
@@ -122,32 +146,31 @@ TouristSpot? touristSpotFromFirestoreDoc(String docId, Map<String, dynamic> d) {
     type: _str(d, 'type') ?? 'spot',
     latitude: lat,
     longitude: lng,
-    walkingDistanceMinutes:
-        _intOrNull(d, 'walkingDistanceMinutes') ??
+    walkingDistanceMinutes: _intOrNull(
+          d,
+          'walkingDistanceMinutes',
+        ) ??
         _intOrNull(d, 'walking_distance_minutes'),
     entranceFee: _str(d, 'entranceFee') ?? _str(d, 'entrance_fee') ?? '',
-    foodAndDrinksPrice:
-        _str(d, 'foodAndDrinksPrice') ?? _str(d, 'food_and_drinks_price') ?? '',
-    otherSouvenirsPrice:
-        _str(d, 'otherSouvenirsPrice') ??
+    foodAndDrinksPrice: _str(d, 'foodAndDrinksPrice') ??
+        _str(d, 'food_and_drinks_price') ??
+        '',
+    otherSouvenirsPrice: _str(d, 'otherSouvenirsPrice') ??
         _str(d, 'other_souvenirs_price') ??
         '',
     firestoreDocId: docId,
     category: _str(d, 'category') ?? '',
-    visitors:
-        _intOrNull(d, 'visitors') ??
+    visitors: _intOrNull(d, 'visitors') ??
         _intOrNull(d, 'visitorCount') ??
         _intOrNull(d, 'visitor_count') ??
         0,
-    ratingCount:
-        _intOrNull(d, 'ratingCount') ??
+    ratingCount: _intOrNull(d, 'ratingCount') ??
         _intOrNull(d, 'rating_count') ??
         _intOrNull(d, 'ratingsCount') ??
         _intOrNull(d, 'numberOfRatings') ??
         _intOrNull(d, 'number_of_ratings') ??
         0,
-    updatedAtMs:
-        _timestampMillis(d, 'updatedAt') ??
+    updatedAtMs: _timestampMillis(d, 'updatedAt') ??
         _timestampMillis(d, 'updated_at') ??
         0,
   );
@@ -157,38 +180,37 @@ TouristSpot? touristSpotFromFirestoreDoc(String docId, Map<String, dynamic> d) {
 /// Safe to call multiple times; replaces existing spots each time.
 Future<void> loadTouristSpotsFromFirestore() async {
   return runFirestore(() async {
-    try {
-      final snapshot = await fetchPublicFirestoreCollection(
-        kTouristSpotsCollection,
-      );
+  try {
+  final snapshot =
+      await fetchPublicFirestoreCollection(kTouristSpotsCollection);
 
-      final List<TouristSpot> loaded = [];
-      for (final doc in snapshot.docs) {
-        final spot = touristSpotFromFirestoreDoc(doc.id, doc.data());
-        if (spot != null) loaded.add(spot);
-      }
+  final List<TouristSpot> loaded = [];
+  for (final doc in snapshot.docs) {
+    final spot = touristSpotFromFirestoreDoc(doc.id, doc.data());
+    if (spot != null) loaded.add(spot);
+  }
 
-      allSpots
-        ..clear()
-        ..addAll(loaded);
-      // Lock curated files (Piduan Falls, Panaon Seaside, …) and drop duplicates.
-      applyCuratedTouristSpotImageUrls();
-      touristSpotCatalogGeneration++;
-      if (kDebugMode) {
-        debugPrint(
-          'loadTouristSpotsFromFirestore ${DateTime.now().toIso8601String()} '
-          'collection=tourist_spots count=${allSpots.length} '
-          'gen=$touristSpotCatalogGeneration '
-          'ids=${allSpots.take(12).map((s) => s.firestoreDocId).join(',')}',
-        );
-      }
-    } catch (e) {
-      if (_isNonPermissionRecoverableFirestoreError(e)) {
-        logRecoverableFirestoreLoad('loadTouristSpotsFromFirestore', e);
-        return;
-      }
-      rethrow;
+  allSpots
+    ..clear()
+    ..addAll(loaded);
+  // Lock curated files (Piduan Falls, Panaon Seaside, …) and drop duplicates.
+  applyCuratedTouristSpotImageUrls();
+  touristSpotCatalogGeneration++;
+  if (kDebugMode) {
+    debugPrint(
+      'loadTouristSpotsFromFirestore ${DateTime.now().toIso8601String()} '
+      'collection=tourist_spots count=${allSpots.length} '
+      'gen=$touristSpotCatalogGeneration '
+      'ids=${allSpots.take(12).map((s) => s.firestoreDocId).join(',')}',
+    );
+  }
+  } catch (e) {
+    if (_isNonPermissionRecoverableFirestoreError(e)) {
+      logRecoverableFirestoreLoad('loadTouristSpotsFromFirestore', e);
+      return;
     }
+    rethrow;
+  }
   });
 }
 
@@ -202,6 +224,10 @@ List<String> municipalityLocationQueryValues(Municipality municipality) {
 
   add(municipality.name);
   add(municipality.shortName);
+  if (normalizeMunicipalityKey(municipality.name) == 'ozamiz') {
+    add('Ozamis City');
+    add('Ozamis');
+  }
   return out.toList(growable: false);
 }
 
@@ -285,9 +311,8 @@ Future<int> deleteTouristSpotsWithNoPictureAndDuplicatesFromFirestore() async {
       keptByName[name] = doc.id;
     } else {
       final keptDoc = snapshot.docs.firstWhere((x) => x.id == keptId);
-      final keptHasImage = _touristSpotImagePathFromFirestore(
-        keptDoc.data(),
-      ).isNotEmpty;
+      final keptHasImage =
+          _touristSpotImagePathFromFirestore(keptDoc.data()).isNotEmpty;
       if (hasImage && !keptHasImage) {
         keptByName[name] = doc.id;
         idsToDelete.add(keptId);
@@ -340,121 +365,116 @@ String _municipalityKey(String name) {
 /// Matching is by slug (doc id). Keeps existing list order and names.
 Future<void> loadMunicipalitiesFromFirestore() async {
   return runFirestore(() async {
-    try {
-      final snapshot = await fetchPublicFirestoreCollection(
-        kMunicipalitiesCollection,
+  try {
+  final snapshot =
+      await fetchPublicFirestoreCollection(kMunicipalitiesCollection);
+
+  for (final doc in snapshot.docs) {
+    final d = doc.data();
+    final slug = doc.id;
+    final name = (_str(d, 'name') ?? '').trim();
+    final shortName = (_str(d, 'shortName') ?? name).trim();
+    final imagePath = (_str(d, 'imagePath') ?? _str(d, 'image_path') ?? '')
+        .trim();
+    final description = _str(d, 'description') ?? '';
+
+    final docKey = _municipalityKey(name);
+    final idx = municipalities.indexWhere((m) {
+      if (_slug(m.name) == slug) return true;
+      if (name.isNotEmpty && _municipalityKey(m.name) == docKey) return true;
+      if (name.isNotEmpty && _municipalityKey(m.shortName) == docKey) {
+        return true;
+      }
+      if (shortName.isNotEmpty &&
+          _municipalityKey(m.name) == _municipalityKey(shortName)) {
+        return true;
+      }
+      return false;
+    });
+    final divisionKind = (_str(d, 'divisionKind') ??
+            _str(d, 'division_kind') ??
+            _str(d, 'adminType') ??
+            _str(d, 'admin_type') ??
+            _str(d, 'type') ??
+            '')
+        .trim();
+
+    final busTerminal = idx >= 0
+        ? defaultBusTerminalFor(municipalities[idx])
+        : null;
+
+    if (idx >= 0) {
+      final existing = municipalities[idx];
+      municipalities[idx] = Municipality(
+        name: existing.name,
+        shortName: existing.shortName,
+        imagePath: imagePath.isNotEmpty ? imagePath : existing.imagePath,
+        description: description.isNotEmpty
+            ? description
+            : existing.description,
+        spots: existing.spots,
+        divisionKind:
+            divisionKind.isNotEmpty ? divisionKind : existing.divisionKind,
+        busTerminal: busTerminal ?? existing.busTerminal,
       );
-
-      for (final doc in snapshot.docs) {
-        final d = doc.data();
-        final slug = doc.id;
-        final name = (_str(d, 'name') ?? '').trim();
-        final shortName = (_str(d, 'shortName') ?? name).trim();
-        final imagePath = (_str(d, 'imagePath') ?? _str(d, 'image_path') ?? '')
-            .trim();
-        final description = _str(d, 'description') ?? '';
-
-        final docKey = _municipalityKey(name);
-        final idx = municipalities.indexWhere((m) {
-          if (_slug(m.name) == slug) return true;
-          if (name.isNotEmpty && _municipalityKey(m.name) == docKey)
-            return true;
-          if (name.isNotEmpty && _municipalityKey(m.shortName) == docKey) {
-            return true;
-          }
-          if (shortName.isNotEmpty &&
-              _municipalityKey(m.name) == _municipalityKey(shortName)) {
-            return true;
-          }
-          return false;
-        });
-        final divisionKind =
-            (_str(d, 'divisionKind') ??
-                    _str(d, 'division_kind') ??
-                    _str(d, 'adminType') ??
-                    _str(d, 'admin_type') ??
-                    _str(d, 'type') ??
-                    '')
-                .trim();
-
-        final busTerminal = idx >= 0
-            ? defaultBusTerminalFor(municipalities[idx])
-            : null;
-
-        if (idx >= 0) {
-          final existing = municipalities[idx];
-          municipalities[idx] = Municipality(
-            name: existing.name,
-            shortName: existing.shortName,
-            imagePath: imagePath.isNotEmpty ? imagePath : existing.imagePath,
-            description: description.isNotEmpty
-                ? description
-                : existing.description,
-            spots: existing.spots,
-            divisionKind: divisionKind.isNotEmpty
-                ? divisionKind
-                : existing.divisionKind,
-            busTerminal: busTerminal ?? existing.busTerminal,
-          );
-        } else if (name.isNotEmpty) {
-          municipalities.add(
-            Municipality(
-              name: name,
-              shortName: shortName,
-              imagePath: imagePath,
-              description: description,
-              spots: const [],
-              divisionKind: divisionKind,
-              busTerminal: busTerminal,
-            ),
-          );
-        }
-      }
-      applyDefaultMunicipalityBusTerminals();
-    } catch (e) {
-      if (_isNonPermissionRecoverableFirestoreError(e)) {
-        logRecoverableFirestoreLoad('loadMunicipalitiesFromFirestore', e);
-        return;
-      }
-      rethrow;
+    } else if (name.isNotEmpty) {
+      municipalities.add(
+        Municipality(
+          name: name,
+          shortName: shortName,
+          imagePath: imagePath,
+          description: description,
+          spots: const [],
+          divisionKind: divisionKind,
+          busTerminal: busTerminal,
+        ),
+      );
     }
+  }
+  applyDefaultMunicipalityBusTerminals();
+  } catch (e) {
+    if (_isNonPermissionRecoverableFirestoreError(e)) {
+      logRecoverableFirestoreLoad('loadMunicipalitiesFromFirestore', e);
+      return;
+    }
+    rethrow;
+  }
   });
 }
 
 /// Loads Firestore `featured_spots` into [featuredSpots].
 Future<void> loadFeaturedSpotsFromFirestore() async {
   return runFirestore(() async {
-    try {
-      final snapshot = await fetchPublicFirestoreCollection(
-        kFeaturedSpotsCollection,
-      );
+  try {
+  final snapshot =
+      await fetchPublicFirestoreCollection(kFeaturedSpotsCollection);
 
-      final loaded = <FeaturedSpot>[];
-      final seenNames = <String>{};
-      for (final doc in snapshot.docs) {
-        final d = doc.data();
-        final name = _str(d, 'name') ?? doc.id;
-        if (name.isEmpty || !seenNames.add(name)) continue;
-        loaded.add(
-          FeaturedSpot(
-            name: name,
-            priceRange: _str(d, 'priceRange') ?? _str(d, 'price_range') ?? '',
-            rating: _double(d, 'rating').clamp(0.0, 5.0),
-            imagePath: _touristSpotImagePathFromFirestore(d),
-          ),
-        );
-      }
+  final loaded = <FeaturedSpot>[];
+  final seenNames = <String>{};
+  for (final doc in snapshot.docs) {
+    final d = doc.data();
+    final name = _str(d, 'name') ?? doc.id;
+    if (name.isEmpty || !seenNames.add(name)) continue;
+    loaded.add(
+      FeaturedSpot(
+        name: name,
+        priceRange: _str(d, 'priceRange') ?? _str(d, 'price_range') ?? '',
+        rating: _double(d, 'rating').clamp(0.0, 5.0),
+        imagePath: _touristSpotImagePathFromFirestore(d),
+      ),
+    );
+  }
 
-      featuredSpots
-        ..clear()
-        ..addAll(loaded);
-    } catch (e) {
-      if (_isNonPermissionRecoverableFirestoreError(e)) {
-        logRecoverableFirestoreLoad('loadFeaturedSpotsFromFirestore', e);
-        return;
-      }
-      rethrow;
+  featuredSpots
+    ..clear()
+    ..addAll(loaded);
+  } catch (e) {
+    if (_isNonPermissionRecoverableFirestoreError(e)) {
+      logRecoverableFirestoreLoad('loadFeaturedSpotsFromFirestore', e);
+      return;
     }
+    rethrow;
+  }
   });
 }
 
@@ -631,6 +651,136 @@ String? _eventTitleFromDoc(Map<String, dynamic> d) {
   return null;
 }
 
+List<String> _eventMunicipalitiesFromDoc(Map<String, dynamic> d) {
+  final fromList = <String>[];
+  final raw = d['municipalities'] ?? d['municipalityNames'] ?? d['locations'];
+  if (raw is List) {
+    for (final item in raw) {
+      final name = item.toString().trim();
+      if (name.isNotEmpty) fromList.add(name);
+    }
+  }
+  if (fromList.isNotEmpty) return fromList;
+  final single = _str(d, 'municipalityName') ?? _str(d, 'municipality') ?? '';
+  if (single.contains(',')) {
+    return [
+      for (final part in single.split(','))
+        if (part.trim().isNotEmpty) part.trim(),
+    ];
+  }
+  return single.trim().isEmpty ? const [] : [single.trim()];
+}
+
+List<DateTime> _eventCalendarDatesFromDoc(Map<String, dynamic> d) {
+  final out = <DateTime>[];
+  final seen = <String>{};
+  void addDay(DateTime? day) {
+    if (day == null) return;
+    final key = formatEventCalendarDateKey(day);
+    if (seen.add(key)) out.add(eventCalendarDay(day));
+  }
+
+  final raw = d['eventDates'] ?? d['dates'];
+  if (raw is List) {
+    for (final item in raw) {
+      if (item is Timestamp) {
+        addDay(item.toDate());
+      } else if (item is DateTime) {
+        addDay(item);
+      } else if (item is String) {
+        addDay(parseEventCalendarDateKey(item) ?? DateTime.tryParse(item));
+      }
+    }
+  }
+  out.sort((a, b) => a.compareTo(b));
+  return out;
+}
+
+DateTime? _eventRangeBoundFromDoc(Map<String, dynamic> d, List<String> keys) {
+  for (final key in keys) {
+    final v = d[key];
+    if (v is Timestamp) return eventCalendarDay(v.toDate());
+    if (v is DateTime) return eventCalendarDay(v);
+    if (v is String && v.isNotEmpty) {
+      final parsed = parseEventCalendarDateKey(v) ?? DateTime.tryParse(v);
+      if (parsed != null) return eventCalendarDay(parsed);
+    }
+  }
+  return null;
+}
+
+int? _eventHourFromDoc(Map<String, dynamic> d) {
+  final hour = d['eventHour'] ?? d['hour'];
+  if (hour is num) return hour.toInt();
+  return null;
+}
+
+int? _eventMinuteFromDoc(Map<String, dynamic> d) {
+  final minute = d['eventMinute'] ?? d['minute'];
+  if (minute is num) return minute.toInt();
+  return null;
+}
+
+TourismEvent _tourismEventFromDoc(String id, Map<String, dynamic> d) {
+  final title = _eventTitleFromDoc(d) ?? '';
+  final fallback = _eventDateFromDoc(d) ?? DateTime.now();
+  var mode = tourismEventDateModeFromName(
+    _str(d, 'dateMode') ?? _str(d, 'date_mode'),
+  );
+  final extraDates = _eventCalendarDatesFromDoc(d);
+  final rangeStart = _eventRangeBoundFromDoc(d, const [
+    'rangeStartDate',
+    'rangeStart',
+    'range_start',
+  ]);
+  final rangeEnd = _eventRangeBoundFromDoc(d, const [
+    'rangeEndDate',
+    'rangeEnd',
+    'range_end',
+  ]);
+  if (mode == TourismEventDateMode.single && extraDates.length > 1) {
+    mode = TourismEventDateMode.multiple;
+  } else if (mode == TourismEventDateMode.single &&
+      rangeStart != null &&
+      rangeEnd != null &&
+      eventCalendarDay(rangeStart) != eventCalendarDay(rangeEnd)) {
+    mode = TourismEventDateMode.range;
+  }
+  final hour = _eventHourFromDoc(d) ?? fallback.hour;
+  final minute = _eventMinuteFromDoc(d) ?? fallback.minute;
+  DateTime primary = fallback;
+  if (mode == TourismEventDateMode.multiple && extraDates.isNotEmpty) {
+    primary = extraDates.first;
+  } else if (mode == TourismEventDateMode.range && rangeStart != null) {
+    primary = rangeStart;
+  }
+  final when = DateTime(primary.year, primary.month, primary.day, hour, minute);
+  final munis = _eventMunicipalitiesFromDoc(d);
+  return TourismEvent(
+    id: id,
+    title: title,
+    imagePath: _eventOrAnnouncementImagePathFromFirestore(d),
+    venue: _str(d, 'venue') ?? _str(d, 'location') ?? '',
+    municipality: munis.isEmpty
+        ? (_str(d, 'municipality') ?? '')
+        : (munis.length == 1 ? munis.first : munis.join(', ')),
+    municipalities: munis,
+    dateTime: when,
+    dateMode: mode,
+    eventDates: extraDates,
+    rangeStart: rangeStart,
+    rangeEnd: rangeEnd,
+    eventType: _str(d, 'type') ??
+        _str(d, 'eventType') ??
+        _str(d, 'event_type') ??
+        'General',
+    description: _str(d, 'description') ??
+        _str(d, 'content') ??
+        _str(d, 'body') ??
+        '',
+  );
+}
+
 DateTime? _eventDateFromDoc(Map<String, dynamic> d) {
   for (final key in [
     'startAt',
@@ -658,160 +808,19 @@ DateTime? _eventDateFromDoc(Map<String, dynamic> d) {
   return null;
 }
 
-Map<String, String> _catalogOwnershipFromDoc(Map<String, dynamic> data) {
-  return {
-    'createdByUid': _str(data, 'createdByUid') ?? '',
-    'createdBy': _str(data, 'createdBy') ?? '',
-    'publisherOffice':
-        _str(data, 'publisherOffice') ??
-        _str(data, 'ownerOffice') ??
-        _str(data, 'publisher') ??
-        '',
-    'municipalityId': _str(data, 'municipalityId') ?? '',
-  };
-}
-
-Map<String, dynamic> _catalogOwnershipWrite({required bool isNew}) {
-  if (!isNew) return const <String, dynamic>{};
-  final user = FirebaseAuth.instance.currentUser;
-  var kind = publisherKindFromRole(
-    role: findAppUserByFirebaseUid(user?.uid)?.role ?? '',
-    email: user?.email ?? '',
-  );
-  if (kind != CatalogPublisherKind.governor &&
-      AuthRoles.isGovernorPortalUser()) {
-    kind = CatalogPublisherKind.governor;
-  }
-  final office = switch (kind) {
-    CatalogPublisherKind.governor => 'governor',
-    CatalogPublisherKind.optaca => 'optaca',
-    CatalogPublisherKind.lgu => 'lgu',
-    CatalogPublisherKind.unknown => '',
-  };
-  return <String, dynamic>{
-    if (office.isNotEmpty) 'publisherOffice': office,
-    if (office.isNotEmpty) 'publisherRole': office,
-    if (user != null) 'createdByUid': user.uid,
-    if (kind == CatalogPublisherKind.governor) 'createdBy': 'Governor',
-    if (kind == CatalogPublisherKind.optaca) 'createdBy': 'optaca',
-  };
-}
-
-final Map<String, Future<void>> _catalogWriteLocks = <String, Future<void>>{};
-
-Future<void> _runCatalogWrite(String key, Future<void> Function() write) {
-  final existing = _catalogWriteLocks[key];
-  if (existing != null) return existing;
-  late final Future<void> future;
-  future = write().whenComplete(() {
-    if (identical(_catalogWriteLocks[key], future)) {
-      _catalogWriteLocks.remove(key);
-    }
-  });
-  _catalogWriteLocks[key] = future;
-  return future;
-}
-
-Future<void> _assertGovernorMayMutate({
-  required String collection,
-  required String id,
-  DocumentSnapshot<Map<String, dynamic>>? snapshot,
-}) async {
-  if (isAnnouncementMirrorId(id)) {
-    throw FirebaseException(
-      plugin: 'cloud_firestore',
-      code: 'permission-denied',
-      message:
-          'This record is a view of an announcement and cannot be changed here.',
-    );
-  }
-  if (!AuthRoles.isGovernorPortalUser()) return;
-  final snap = snapshot ??
-      await FirebaseFirestore.instance.collection(collection).doc(id).get();
-  if (!snap.exists) return;
-  final data = snap.data() ?? const <String, dynamic>{};
-  final ownership = _catalogOwnershipFromDoc(data);
-  final actor = CatalogActor(
-    uid: FirebaseAuth.instance.currentUser?.uid ?? '',
-    kind: CatalogPublisherKind.governor,
-  );
-  final publisher = resolveCatalogPublisher(
-    publisherOffice: ownership['publisherOffice'] ?? '',
-    createdBy: ownership['createdBy'] ?? '',
-    createdByUid: ownership['createdByUid'] ?? '',
-    municipalityId: ownership['municipalityId'] ?? '',
-    municipalityName:
-        _str(data, 'municipalityName') ?? _str(data, 'municipality') ?? '',
-    actorUid: actor.uid,
-    actorKind: actor.kind,
-  );
-  if (!canManageCatalogRecord(
-    publisher: publisher,
-    actor: actor,
-    manageOwnedOnly: true,
-    createdByUid: ownership['createdByUid'] ?? '',
-    isMirror: false,
-  )) {
-    throw FirebaseException(
-      plugin: 'cloud_firestore',
-      code: 'permission-denied',
-      message:
-          'The Governor portal can only edit or delete Governor-owned records.',
-    );
-  }
-}
-
-/// ATMOS LGU events live in `announcements`. Show scheduled events beside
-/// `events` without copying announcement notices into another collection.
+/// ATMOS LGU events live in `announcements`. Show them beside `events`
+/// without copying documents into another collection.
 Future<void> _appendAnnouncementEvents(List<TourismEvent> loaded) async {
   try {
-    final snapshot = await fetchPublicFirestoreCollection(
-      kAnnouncementsCollection,
-    );
+    final snapshot =
+        await fetchPublicFirestoreCollection(kAnnouncementsCollection);
     final seen = loaded.map((event) => event.id).toSet();
     for (final doc in snapshot.docs) {
-      final data = doc.data();
-      final type = _str(data, 'type') ?? _str(data, 'eventType') ?? '';
-      final municipalityId = _str(data, 'municipalityId') ?? '';
-      if (!announcementDocBelongsOnEventsFeed(
-        type: type,
-        municipalityId: municipalityId,
-      )) {
-        continue;
-      }
       final id = 'announcement_${doc.id}';
       if (!seen.add(id)) continue;
-      final title = _eventTitleFromDoc(data);
-      if (title == null) continue;
-      final when = _eventDateFromDoc(data) ?? DateTime.now();
-      final ownership = _catalogOwnershipFromDoc(data);
-      loaded.add(
-        TourismEvent(
-          id: id,
-          title: title,
-          imagePath: _eventOrAnnouncementImagePathFromFirestore(data),
-          venue: _str(data, 'venue') ?? _str(data, 'location') ?? '',
-          municipality:
-              _str(data, 'municipalityName') ??
-              _str(data, 'municipality') ??
-              '',
-          dateTime: when,
-          eventType: type.isEmpty ? 'Event' : type,
-          description:
-              _str(data, 'description') ??
-              _str(data, 'content') ??
-              _str(data, 'body') ??
-              '',
-          catalogSource: 'announcements',
-          createdByUid: ownership['createdByUid'] ?? '',
-          createdBy: ownership['createdBy'] ?? '',
-          publisherOffice: ownership['publisherOffice'] ?? '',
-          municipalityId: municipalityId,
-          audienceScope:
-              _str(data, 'audienceScope') ?? _str(data, 'targetScope') ?? '',
-          isAnnouncementMirror: true,
-        ),
-      );
+      final data = doc.data();
+      if (_eventTitleFromDoc(data) == null) continue;
+      loaded.add(_tourismEventFromDoc(id, data));
     }
     loaded.sort((a, b) => b.dateTime.compareTo(a.dateTime));
   } catch (e) {
@@ -823,59 +832,71 @@ Future<void> _appendAnnouncementEvents(List<TourismEvent> loaded) async {
 /// Keeps previously loaded events if the remote read fails or returns empty.
 Future<void> loadEventsFromFirestore() async {
   return runFirestore(() async {
-    Object? lastError;
-    for (var attempt = 0; attempt < 3; attempt++) {
-      try {
-        if (attempt > 0) {
-          await Future<void>.delayed(Duration(milliseconds: 500 * attempt));
-        }
-        final snapshot = await fetchPublicFirestoreCollection(
-          kEventsCollection,
-        );
+  Object? lastError;
+  for (var attempt = 0; attempt < 3; attempt++) {
+    try {
+      if (attempt > 0) {
+        await Future<void>.delayed(Duration(milliseconds: 500 * attempt));
+      }
+      final snapshot = await fetchPublicFirestoreCollection(kEventsCollection);
 
-        final loaded = <TourismEvent>[];
-        for (final doc in snapshot.docs) {
-          final d = doc.data();
-          final title = _eventTitleFromDoc(d);
-          if (title == null) continue;
-          final dt = _eventDateFromDoc(d) ?? DateTime.now();
-          final ownership = _catalogOwnershipFromDoc(d);
-          loaded.add(
-            TourismEvent(
-              id: doc.id,
-              title: title,
-              imagePath: _eventOrAnnouncementImagePathFromFirestore(d),
-              venue: _str(d, 'venue') ?? '',
-              municipality: _str(d, 'municipality') ?? '',
-              dateTime: dt,
-              eventType:
-                  _str(d, 'eventType') ?? _str(d, 'event_type') ?? 'General',
-              description: _str(d, 'description') ?? '',
-              catalogSource: 'events',
-              createdByUid: ownership['createdByUid'] ?? '',
-              createdBy: ownership['createdBy'] ?? '',
-              publisherOffice: ownership['publisherOffice'] ?? '',
-              municipalityId: ownership['municipalityId'] ?? '',
-              audienceScope:
-                  _str(d, 'audienceScope') ?? _str(d, 'targetScope') ?? '',
-            ),
+      final loaded = <TourismEvent>[];
+      for (final doc in snapshot.docs) {
+        final d = doc.data();
+        if (_eventTitleFromDoc(d) == null) continue;
+        loaded.add(_tourismEventFromDoc(doc.id, d));
+      }
+      loaded.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+      await _appendAnnouncementEvents(loaded);
+
+      // Never wipe a good in-memory list with an empty/failed catalog read.
+      if (loaded.isEmpty && tourismEvents.isNotEmpty) {
+        if (kDebugMode) {
+          debugPrint(
+            'loadEventsFromFirestore: remote empty (${snapshot.docs.length} docs) — '
+            'keeping ${tourismEvents.length} cached events',
           );
         }
-        loaded.sort((a, b) => b.dateTime.compareTo(a.dateTime));
-        await _appendAnnouncementEvents(loaded);
+        return;
+      }
 
-        // Never wipe a good in-memory list with an empty/failed catalog read.
-        if (loaded.isEmpty && tourismEvents.isNotEmpty) {
+      if (loaded.isEmpty) {
+        final cached = await _loadEventsCache();
+        if (cached.isNotEmpty) {
+          tourismEvents
+            ..clear()
+            ..addAll(cached);
+          tourismEventsRevision.value++;
           if (kDebugMode) {
             debugPrint(
-              'loadEventsFromFirestore: remote empty (${snapshot.docs.length} docs) — '
-              'keeping ${tourismEvents.length} cached events',
+              'loadEventsFromFirestore: remote empty — restored '
+              '${cached.length} events from disk cache',
             );
           }
           return;
         }
+      }
 
-        if (loaded.isEmpty) {
+      tourismEvents
+        ..clear()
+        ..addAll(loaded);
+      tourismEventsRevision.value++;
+      if (loaded.isNotEmpty) {
+        unawaited(_persistEventsCache(loaded));
+      }
+      if (kDebugMode) {
+        debugPrint(
+          'loadEventsFromFirestore: ${snapshot.docs.length} docs → '
+          '${loaded.length} events',
+        );
+      }
+      return;
+    } catch (e) {
+      lastError = e;
+      final denied = e.toString().contains('permission-denied');
+      if (_isNonPermissionRecoverableFirestoreError(e) || denied) {
+        logRecoverableFirestoreLoad('loadEventsFromFirestore', e);
+        if (tourismEvents.isEmpty) {
           final cached = await _loadEventsCache();
           if (cached.isNotEmpty) {
             tourismEvents
@@ -884,130 +905,96 @@ Future<void> loadEventsFromFirestore() async {
             tourismEventsRevision.value++;
             if (kDebugMode) {
               debugPrint(
-                'loadEventsFromFirestore: remote empty — restored '
-                '${cached.length} events from disk cache',
+                'loadEventsFromFirestore: restored ${cached.length} events '
+                'from disk after error',
               );
             }
-            return;
           }
-        }
-
-        tourismEvents
-          ..clear()
-          ..addAll(loaded);
-        tourismEventsRevision.value++;
-        if (loaded.isNotEmpty) {
-          unawaited(_persistEventsCache(loaded));
-        }
-        if (kDebugMode) {
+        } else if (kDebugMode) {
           debugPrint(
-            'loadEventsFromFirestore: ${snapshot.docs.length} docs → '
-            '${loaded.length} events',
+            'loadEventsFromFirestore: keeping ${tourismEvents.length} cached events '
+            'after load error',
           );
         }
         return;
-      } catch (e) {
-        lastError = e;
-        final denied = e.toString().contains('permission-denied');
-        if (_isNonPermissionRecoverableFirestoreError(e) || denied) {
-          logRecoverableFirestoreLoad('loadEventsFromFirestore', e);
-          if (tourismEvents.isEmpty) {
-            final cached = await _loadEventsCache();
-            if (cached.isNotEmpty) {
-              tourismEvents
-                ..clear()
-                ..addAll(cached);
-              tourismEventsRevision.value++;
-              if (kDebugMode) {
-                debugPrint(
-                  'loadEventsFromFirestore: restored ${cached.length} events '
-                  'from disk after error',
-                );
-              }
-            }
-          } else if (kDebugMode) {
-            debugPrint(
-              'loadEventsFromFirestore: keeping ${tourismEvents.length} cached events '
-              'after load error',
-            );
-          }
-          return;
-        }
-        rethrow;
+      }
+      rethrow;
+    }
+  }
+  if (lastError != null) {
+    logRecoverableFirestoreLoad('loadEventsFromFirestore', lastError);
+    if (tourismEvents.isEmpty) {
+      final cached = await _loadEventsCache();
+      if (cached.isNotEmpty) {
+        tourismEvents
+          ..clear()
+          ..addAll(cached);
+        tourismEventsRevision.value++;
       }
     }
-    if (lastError != null) {
-      logRecoverableFirestoreLoad('loadEventsFromFirestore', lastError);
-      if (tourismEvents.isEmpty) {
-        final cached = await _loadEventsCache();
-        if (cached.isNotEmpty) {
-          tourismEvents
-            ..clear()
-            ..addAll(cached);
-          tourismEventsRevision.value++;
-        }
-      }
-    }
+  }
   });
 }
 
 Future<void> upsertTourismEventToFirestore(TourismEvent e) async {
   await ensurePermanentStaffRoleForCatalogWrite();
-  if (e.isAnnouncementMirror || isAnnouncementMirrorId(e.id)) {
-    throw FirebaseException(
-      plugin: 'cloud_firestore',
-      code: 'permission-denied',
-      message:
-          'LGU announcement records cannot be rewritten as catalog events.',
-    );
-  }
   final col = FirebaseFirestore.instance.collection(kEventsCollection);
-  final idWasEmpty = e.id.isEmpty;
-  final docRef = idWasEmpty ? col.doc() : col.doc(e.id);
-  final lockKey = 'events:${docRef.id}';
-  await _runCatalogWrite(lockKey, () async {
-    DocumentSnapshot<Map<String, dynamic>>? existing;
-    var creating = idWasEmpty;
-    if (!idWasEmpty) {
-      existing = await docRef.get();
-      creating = catalogDocumentIsCreate(
-        id: docRef.id,
-        documentExists: existing.exists,
-      );
-      if (!creating) {
-        await _assertGovernorMayMutate(
-          collection: kEventsCollection,
-          id: docRef.id,
-          snapshot: existing,
-        );
-      }
-    }
+  final docRef = e.id.trim().isEmpty ? col.doc() : col.doc(e.id.trim());
+  await _coalesceCatalogWrite('$kEventsCollection/${docRef.id}', () async {
     final imageUrl = e.imagePath.trim();
-    await docRef.set({
-      'title': e.title,
-      // Binary lives in Supabase Storage; Firestore only stores the public URL.
-      'imagePath': imageUrl,
-      'image_url': imageUrl,
-      'imageUrl': imageUrl,
-      'venue': e.venue,
-      'municipality': e.municipality,
-      'audienceScope': e.audienceScope.trim().isEmpty
-          ? (isProvinceWideTarget(municipality: e.municipality)
-                ? kProvinceWideScope
-                : kMunicipalityScope)
-          : e.audienceScope,
-      'eventType': e.eventType,
-      'description': e.description,
-      'startAt': Timestamp.fromDate(e.dateTime),
-      'startsAt': Timestamp.fromDate(e.dateTime),
-      'updatedAt': FieldValue.serverTimestamp(),
-      ...eventLguCompatFields(event: e),
-      ..._catalogOwnershipWrite(isNew: creating),
-    }, SetOptions(merge: true));
+    final created = await FirebaseFirestore.instance.runTransaction<bool>((tx) async {
+      final snap = await tx.get(docRef);
+      final isNew = !snap.exists;
+      final names = e.locationNames;
+      final municipalityField = names.isEmpty
+          ? e.municipality
+          : names.length == 1
+              ? names.first
+              : names.join(', ');
+      final payload = <String, dynamic>{
+        'title': e.title,
+        // Binary lives in Supabase Storage; Firestore only stores the public URL.
+        'imagePath': imageUrl,
+        'image_url': imageUrl,
+        'imageUrl': imageUrl,
+        'venue': e.venue,
+        'municipality': municipalityField,
+        'municipalities': names,
+        'eventType': e.eventType,
+        'description': e.description,
+        'dateMode': e.dateMode.name,
+        'eventHour': e.dateTime.hour,
+        'eventMinute': e.dateTime.minute,
+        'startAt': Timestamp.fromDate(e.dateTime),
+        'clientSaveId': docRef.id,
+        'updatedAt': FieldValue.serverTimestamp(),
+        if (isNew) 'createdAt': FieldValue.serverTimestamp(),
+      };
+      if (e.dateMode == TourismEventDateMode.multiple) {
+        payload['eventDates'] = [
+          for (final d in e.eventDates) formatEventCalendarDateKey(d),
+        ];
+      } else {
+        payload['eventDates'] = FieldValue.delete();
+      }
+      if (e.dateMode == TourismEventDateMode.range) {
+        payload['rangeStartDate'] = formatEventCalendarDateKey(
+          e.rangeStart ?? e.dateTime,
+        );
+        payload['rangeEndDate'] = formatEventCalendarDateKey(
+          e.rangeEnd ?? e.rangeStart ?? e.dateTime,
+        );
+      } else {
+        payload['rangeStartDate'] = FieldValue.delete();
+        payload['rangeEndDate'] = FieldValue.delete();
+      }
+      tx.set(docRef, payload, SetOptions(merge: true));
+      return isNew;
+    });
 
     // Spark-safe push: Supabase Edge Function → FCM topic `tourism_events`.
     // Non-fatal: event is already saved if this fails.
-    if (creating) {
+    if (created) {
       try {
         await broadcastTourismEventPushViaSupabase(
           eventId: docRef.id,
@@ -1024,137 +1011,253 @@ Future<void> upsertTourismEventToFirestore(TourismEvent e) async {
   });
 }
 
-Future<void> deleteTourismEventFromFirestore(String id) async {
-  await ensurePermanentStaffRoleForCatalogWrite();
-  if (isAnnouncementMirrorId(id)) {
-    throw FirebaseException(
-      plugin: 'cloud_firestore',
-      code: 'permission-denied',
-      message: 'Delete the source announcement instead of this mirrored event.',
+class CatalogBulkDeleteResult {
+  const CatalogBulkDeleteResult({
+    required this.deletedIds,
+    required this.failedIds,
+  });
+
+  final List<String> deletedIds;
+  final List<String> failedIds;
+
+  bool get hasFailures => failedIds.isNotEmpty;
+}
+
+Future<void> _deleteFirestoreDoc(String collection, String id) {
+  return _coalesceCatalogWrite('delete/$collection/$id', () async {
+    await FirebaseFirestore.instance.collection(collection).doc(id).delete();
+  });
+}
+
+Future<CatalogBulkDeleteResult> _deleteFirestoreDocsInBatches(
+  String collection,
+  List<String> ids,
+) async {
+  final deleted = <String>[];
+  final failed = <String>[];
+  const chunkSize = 400;
+  for (var i = 0; i < ids.length; i += chunkSize) {
+    final chunk = ids.sublist(
+      i,
+      i + chunkSize > ids.length ? ids.length : i + chunkSize,
     );
+    try {
+      final batch = FirebaseFirestore.instance.batch();
+      for (final id in chunk) {
+        batch.delete(
+          FirebaseFirestore.instance.collection(collection).doc(id),
+        );
+      }
+      await batch.commit();
+      deleted.addAll(chunk);
+    } catch (e) {
+      debugPrint('bulk delete $collection failed: $e');
+      for (final id in chunk) {
+        try {
+          await _deleteFirestoreDoc(collection, id);
+          deleted.add(id);
+        } catch (err) {
+          debugPrint('delete $collection/$id failed: $err');
+          failed.add(id);
+        }
+      }
+    }
   }
-  await _assertGovernorMayMutate(collection: kEventsCollection, id: id);
-  await FirebaseFirestore.instance
-      .collection(kEventsCollection)
-      .doc(id)
-      .delete();
+  return CatalogBulkDeleteResult(deletedIds: deleted, failedIds: failed);
+}
+
+void pruneTourismEventsFromMemory(Iterable<String> ids) {
+  final remove = ids.toSet();
+  if (remove.isEmpty) return;
+  tourismEvents.removeWhere((e) => remove.contains(e.id));
+  final announcementIds = <String>{
+    for (final id in remove)
+      if (isAnnouncementBackedEventId(id)) announcementIdFromEventId(id),
+  };
+  if (announcementIds.isNotEmpty) {
+    tourismAnnouncements.removeWhere((a) => announcementIds.contains(a.id));
+  }
+  tourismEventsRevision.value++;
+}
+
+void pruneTourismAnnouncementsFromMemory(Iterable<String> ids) {
+  final remove = ids.toSet();
+  if (remove.isEmpty) return;
+  tourismAnnouncements.removeWhere((a) => remove.contains(a.id));
+  final eventIds = {for (final id in remove) 'announcement_$id'};
+  tourismEvents.removeWhere(
+    (e) => remove.contains(e.id) || eventIds.contains(e.id),
+  );
+  tourismEventsRevision.value++;
+}
+
+Future<void> deleteTourismEventFromFirestore(String id) async {
+  final trimmed = id.trim();
+  if (trimmed.isEmpty) return;
+  await ensurePermanentStaffRoleForCatalogWrite();
+  if (isAnnouncementBackedEventId(trimmed)) {
+    final announcementId = announcementIdFromEventId(trimmed);
+    if (announcementId.isEmpty) return;
+    await _deleteFirestoreDoc(kAnnouncementsCollection, announcementId);
+    pruneTourismEventsFromMemory({trimmed});
+    return;
+  }
+  await _deleteFirestoreDoc(kEventsCollection, trimmed);
+  pruneTourismEventsFromMemory({trimmed});
+}
+
+Future<CatalogBulkDeleteResult> deleteTourismEventsByIds(
+  Iterable<String> ids,
+) async {
+  final unique = <String>{
+    for (final id in ids)
+      if (id.trim().isNotEmpty) id.trim(),
+  };
+  if (unique.isEmpty) {
+    return const CatalogBulkDeleteResult(deletedIds: [], failedIds: []);
+  }
+  await ensurePermanentStaffRoleForCatalogWrite();
+  final eventIds = <String>[];
+  final announcementIds = <String>[];
+  final announcementEventIds = <String, String>{};
+  for (final id in unique) {
+    if (isAnnouncementBackedEventId(id)) {
+      final announcementId = announcementIdFromEventId(id);
+      if (announcementId.isEmpty) continue;
+      announcementIds.add(announcementId);
+      announcementEventIds[announcementId] = id;
+    } else {
+      eventIds.add(id);
+    }
+  }
+  final eventResult = await _deleteFirestoreDocsInBatches(
+    kEventsCollection,
+    eventIds,
+  );
+  final announcementResult = await _deleteFirestoreDocsInBatches(
+    kAnnouncementsCollection,
+    announcementIds,
+  );
+  final deleted = <String>[
+    ...eventResult.deletedIds,
+    for (final id in announcementResult.deletedIds)
+      announcementEventIds[id] ?? id,
+  ];
+  final failed = <String>[
+    ...eventResult.failedIds,
+    for (final id in announcementResult.failedIds)
+      announcementEventIds[id] ?? id,
+  ];
+  pruneTourismEventsFromMemory(deleted);
+  return CatalogBulkDeleteResult(deletedIds: deleted, failedIds: failed);
+}
+
+Future<CatalogBulkDeleteResult> deleteTourismAnnouncementsByIds(
+  Iterable<String> ids,
+) async {
+  final unique = <String>[
+    for (final id in {
+      for (final value in ids)
+        if (value.trim().isNotEmpty) value.trim(),
+    })
+      id,
+  ];
+  if (unique.isEmpty) {
+    return const CatalogBulkDeleteResult(deletedIds: [], failedIds: []);
+  }
+  await ensurePermanentStaffRoleForCatalogWrite();
+  final result = await _deleteFirestoreDocsInBatches(
+    kAnnouncementsCollection,
+    unique,
+  );
+  pruneTourismAnnouncementsFromMemory(result.deletedIds);
+  return result;
 }
 
 /// Loads [tourismAnnouncements] from Firestore `announcements`, newest first.
 Future<void> loadAnnouncementsFromFirestore() async {
   return runFirestore(() async {
-    try {
-      final snapshot = await fetchPublicFirestoreCollection(
-        kAnnouncementsCollection,
-      );
+  try {
+  final snapshot =
+      await fetchPublicFirestoreCollection(kAnnouncementsCollection);
 
-      final loaded = <TourismAnnouncement>[];
-      for (final doc in snapshot.docs) {
-        final d = doc.data();
-        final title = _str(d, 'title') ?? '';
-        if (title.isEmpty) continue;
-        DateTime published = DateTime.now();
-        final p = d['publishedAt'] ?? d['published_at'] ?? d['createdAt'];
-        if (p is Timestamp) {
-          published = p.toDate();
-        }
-        final ownership = _catalogOwnershipFromDoc(d);
-        loaded.add(
-          TourismAnnouncement(
-            id: doc.id,
-            title: title,
-            body:
-                _str(d, 'body') ??
-                _str(d, 'message') ??
-                _str(d, 'content') ??
-                _str(d, 'description') ??
-                '',
-            imagePath: _eventOrAnnouncementImagePathFromFirestore(d),
-            publishedAt: published,
-            type: _str(d, 'type') ?? _str(d, 'eventType') ?? '',
-            municipality:
-                _str(d, 'municipalityName') ?? _str(d, 'municipality') ?? '',
-            municipalityId: ownership['municipalityId'] ?? '',
-            venue: _str(d, 'venue') ?? _str(d, 'location') ?? '',
-            createdByUid: ownership['createdByUid'] ?? '',
-            createdBy: ownership['createdBy'] ?? '',
-            publisherOffice: ownership['publisherOffice'] ?? '',
-            audienceScope:
-                _str(d, 'audienceScope') ?? _str(d, 'targetScope') ?? '',
-          ),
-        );
-      }
-      loaded.sort((a, b) => b.publishedAt.compareTo(a.publishedAt));
-      tourismAnnouncements
-        ..clear()
-        ..addAll(loaded);
-    } catch (e) {
-      if (_isNonPermissionRecoverableFirestoreError(e)) {
-        logRecoverableFirestoreLoad('loadAnnouncementsFromFirestore', e);
-        return;
-      }
-      rethrow;
+  final loaded = <TourismAnnouncement>[];
+  for (final doc in snapshot.docs) {
+    final d = doc.data();
+    final title = _str(d, 'title') ?? '';
+    if (title.isEmpty) continue;
+    DateTime published = DateTime.now();
+    final p = d['publishedAt'] ?? d['published_at'] ?? d['createdAt'];
+    if (p is Timestamp) {
+      published = p.toDate();
     }
+    loaded.add(
+      TourismAnnouncement(
+        id: doc.id,
+        title: title,
+        body: _str(d, 'body') ?? _str(d, 'message') ?? '',
+        imagePath: _eventOrAnnouncementImagePathFromFirestore(d),
+        publishedAt: published,
+      ),
+    );
+  }
+  loaded.sort((a, b) => b.publishedAt.compareTo(a.publishedAt));
+  tourismAnnouncements
+    ..clear()
+    ..addAll(loaded);
+  } catch (e) {
+    if (_isNonPermissionRecoverableFirestoreError(e)) {
+      logRecoverableFirestoreLoad('loadAnnouncementsFromFirestore', e);
+      return;
+    }
+    rethrow;
+  }
   });
 }
 
 Future<void> upsertTourismAnnouncementToFirestore(TourismAnnouncement a) async {
   await ensurePermanentStaffRoleForCatalogWrite();
   final col = FirebaseFirestore.instance.collection(kAnnouncementsCollection);
-  final idWasEmpty = a.id.isEmpty;
-  final docRef = idWasEmpty ? col.doc() : col.doc(a.id);
-  final lockKey = 'announcements:${docRef.id}';
-  await _runCatalogWrite(lockKey, () async {
-    DocumentSnapshot<Map<String, dynamic>>? existing;
-    var creating = idWasEmpty;
-    if (!idWasEmpty) {
-      existing = await docRef.get();
-      creating = catalogDocumentIsCreate(
-        id: docRef.id,
-        documentExists: existing.exists,
-      );
-      if (!creating) {
-        await _assertGovernorMayMutate(
-          collection: kAnnouncementsCollection,
-          id: docRef.id,
-          snapshot: existing,
-        );
-      }
-    }
+  final docRef = a.id.trim().isEmpty ? col.doc() : col.doc(a.id.trim());
+  await _coalesceCatalogWrite('$kAnnouncementsCollection/${docRef.id}', () async {
     final imageUrl = a.imagePath.trim();
-    await docRef.set({
-      'title': a.title,
-      'body': a.body,
-      // Binary lives in Supabase Storage; Firestore only stores the public URL.
-      'imagePath': imageUrl,
-      'image_url': imageUrl,
-      'imageUrl': imageUrl,
-      'publishedAt': Timestamp.fromDate(a.publishedAt),
-      'updatedAt': FieldValue.serverTimestamp(),
-      if (creating)
-        'type': a.type.trim().isEmpty ? 'Announcement' : a.type.trim(),
-      ...announcementLguCompatFields(announcement: a),
-      ..._catalogOwnershipWrite(isNew: creating),
-    }, SetOptions(merge: true));
+    await FirebaseFirestore.instance.runTransaction((tx) async {
+      final snap = await tx.get(docRef);
+      final isNew = !snap.exists;
+      tx.set(
+        docRef,
+        {
+          'title': a.title,
+          'body': a.body,
+          // Binary lives in Supabase Storage; Firestore only stores the public URL.
+          'imagePath': imageUrl,
+          'image_url': imageUrl,
+          'imageUrl': imageUrl,
+          'publishedAt': Timestamp.fromDate(a.publishedAt),
+          'clientSaveId': docRef.id,
+          'updatedAt': FieldValue.serverTimestamp(),
+          if (isNew) 'createdAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    });
   });
 }
 
 Future<void> deleteTourismAnnouncementFromFirestore(String id) async {
+  final trimmed = id.trim();
+  if (trimmed.isEmpty) return;
   await ensurePermanentStaffRoleForCatalogWrite();
-  await _assertGovernorMayMutate(collection: kAnnouncementsCollection, id: id);
-  await FirebaseFirestore.instance
-      .collection(kAnnouncementsCollection)
-      .doc(id)
-      .delete();
+  await _deleteFirestoreDoc(kAnnouncementsCollection, trimmed);
+  pruneTourismAnnouncementsFromMemory({trimmed});
 }
 
 /// Loads spot reviews from Firestore `spot_ratings`.
 Future<List<SpotRating>> fetchSpotRatingsFromFirestore() async {
   return runFirestore(() async {
     try {
-      final snapshot = await fetchPublicFirestoreCollection(
-        kSpotRatingsCollection,
-      );
+      final snapshot =
+          await fetchPublicFirestoreCollection(kSpotRatingsCollection);
       final loaded = <SpotRating>[];
       for (final doc in snapshot.docs) {
         final d = doc.data();
@@ -1171,29 +1274,25 @@ Future<List<SpotRating>> fetchSpotRatingsFromFirestore() async {
         loaded.add(
           SpotRating(
             id: doc.id,
-            userName:
-                (_str(d, 'userName') ?? _str(d, 'user_name') ?? 'Traveler')
-                    .trim(),
+            userName: (_str(d, 'userName') ?? _str(d, 'user_name') ?? 'Traveler')
+                .trim(),
             spotName: spotName,
             rating: _double(d, 'rating').clamp(0.0, 5.0),
-            description:
-                (_str(d, 'description') ??
-                        _str(d, 'comment') ??
-                        _str(d, 'body') ??
-                        '')
-                    .trim(),
-            userId:
-                (_str(d, 'userId') ??
-                        _str(d, 'user_id') ??
-                        _str(d, 'firebaseUid') ??
-                        '')
-                    .trim(),
-            profilePhotoPath:
-                (_str(d, 'profilePhotoPath') ??
-                        _str(d, 'profile_photo_path') ??
-                        _str(d, 'photoURL') ??
-                        '')
-                    .trim(),
+            description: (_str(d, 'description') ??
+                    _str(d, 'comment') ??
+                    _str(d, 'body') ??
+                    '')
+                .trim(),
+            userId: (_str(d, 'userId') ??
+                    _str(d, 'user_id') ??
+                    _str(d, 'firebaseUid') ??
+                    '')
+                .trim(),
+            profilePhotoPath: (_str(d, 'profilePhotoPath') ??
+                    _str(d, 'profile_photo_path') ??
+                    _str(d, 'photoURL') ??
+                    '')
+                .trim(),
             createdAt: created,
           ),
         );
@@ -1211,9 +1310,8 @@ Future<List<SpotRating>> fetchSpotRatingsFromFirestore() async {
 Future<String> upsertSpotRatingToFirestore(SpotRating rating) async {
   return runFirestore(() async {
     final col = FirebaseFirestore.instance.collection(kSpotRatingsCollection);
-    final docRef = rating.id.trim().isEmpty
-        ? col.doc()
-        : col.doc(rating.id.trim());
+    final docRef =
+        rating.id.trim().isEmpty ? col.doc() : col.doc(rating.id.trim());
     final uid = FirebaseAuth.instance.currentUser?.uid ?? rating.userId;
     await docRef.set({
       'userName': rating.userName,
@@ -1336,86 +1434,83 @@ Future<Map<String, dynamic>?> fetchTouristFirestoreDataForFirebaseUid(
 /// Tourists may only read `users/{theirUid}` per security rules — not the whole collection.
 Future<void> loadUsersFromFirestore() async {
   return runFirestore(() async {
-    final auth = FirebaseAuth.instance.currentUser;
-    if (auth == null) {
-      users.clear();
-      return;
-    }
+  final auth = FirebaseAuth.instance.currentUser;
+  if (auth == null) {
+    users.clear();
+    return;
+  }
 
-    final col = FirebaseFirestore.instance.collection(kUsersCollection);
-    final loaded = <AppUser>[];
+  final col = FirebaseFirestore.instance.collection(kUsersCollection);
+  final loaded = <AppUser>[];
 
-    void addFromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
-      final d = doc.data();
-      if (d == null) return;
-      final fullName = _str(d, 'fullName') ?? _str(d, 'name') ?? '';
-      final email = _str(d, 'email') ?? '';
-      if (fullName.isEmpty && email.isEmpty) return;
-      final uid = _str(d, 'firebaseUid') ?? '';
-      loaded.add(
-        AppUser(
-          id: doc.id,
-          name: fullName.isNotEmpty ? fullName : email,
-          email: email,
-          role: _str(d, 'role') ?? 'user',
-          profilePhotoPath: profilePhotoSourceFromFirestoreMap(d),
-          profilePhotoLookupId: uid.isNotEmpty ? uid : doc.id,
-        ),
-      );
-    }
+  void addFromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+    final d = doc.data();
+    if (d == null) return;
+    final fullName = _str(d, 'fullName') ?? _str(d, 'name') ?? '';
+    final email = _str(d, 'email') ?? '';
+    if (fullName.isEmpty && email.isEmpty) return;
+    final uid = _str(d, 'firebaseUid') ?? '';
+    loaded.add(
+      AppUser(
+        id: doc.id,
+        name: fullName.isNotEmpty ? fullName : email,
+        email: email,
+        role: _str(d, 'role') ?? 'user',
+        profilePhotoPath: profilePhotoSourceFromFirestoreMap(d),
+        profilePhotoLookupId: uid.isNotEmpty ? uid : doc.id,
+      ),
+    );
+  }
 
-    final ownDoc = await col.doc(auth.uid).get();
-    if (ownDoc.exists) {
-      addFromDoc(ownDoc);
-    }
+  final ownDoc = await col.doc(auth.uid).get();
+  if (ownDoc.exists) {
+    addFromDoc(ownDoc);
+  }
 
-    if (loaded.isNotEmpty && loaded.first.profilePhotoPath.trim().isEmpty) {
-      try {
-        final touristData = await fetchTouristFirestoreDataForFirebaseUid(
-          auth.uid,
-        );
-        if (touristData != null) {
-          var photo = profilePhotoSourceFromFirestoreMap(touristData);
-          if (photo.isEmpty &&
-              profileImageBytesFromFirestoreMap(touristData) != null) {
-            photo = 'firestore-base64-profile';
-          }
-          if (photo.isNotEmpty) {
-            final u = loaded.first;
-            loaded[0] = AppUser(
-              id: u.id,
-              name: u.name,
-              email: u.email,
-              role: u.role,
-              profilePhotoPath: photo,
-              profilePhotoLookupId: u.profilePhotoLookupId,
-            );
-          }
+  if (loaded.isNotEmpty && loaded.first.profilePhotoPath.trim().isEmpty) {
+    try {
+      final touristData = await fetchTouristFirestoreDataForFirebaseUid(auth.uid);
+      if (touristData != null) {
+        var photo = profilePhotoSourceFromFirestoreMap(touristData);
+        if (photo.isEmpty &&
+            profileImageBytesFromFirestoreMap(touristData) != null) {
+          photo = 'firestore-base64-profile';
         }
-      } catch (_) {}
-    }
-
-    final ownRole = loaded.isEmpty ? '' : loaded.first.role;
-    final role = AppRole.fromString(ownRole);
-    // OPTACA (optaca@gmail.com) and ATMOS tourism staff must see the same
-    // seeded tourist accounts the tourism dashboard writes into `users`.
-    final staff =
-        role == AppRole.admin ||
-        role == AppRole.municipalManager ||
-        AuthRoles.isAtmosStaffAdminRole(ownRole) ||
-        AuthRoles.canAccessAdminDashboard();
-    if (staff) {
-      final snapshot = await col.get();
-      loaded.clear();
-      for (final doc in snapshot.docs) {
-        addFromDoc(doc);
+        if (photo.isNotEmpty) {
+          final u = loaded.first;
+          loaded[0] = AppUser(
+            id: u.id,
+            name: u.name,
+            email: u.email,
+            role: u.role,
+            profilePhotoPath: photo,
+            profilePhotoLookupId: u.profilePhotoLookupId,
+          );
+        }
       }
-    }
+    } catch (_) {}
+  }
 
-    loaded.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-    users
-      ..clear()
-      ..addAll(loaded);
+  final ownRole = loaded.isEmpty ? '' : loaded.first.role;
+  final role = AppRole.fromString(ownRole);
+  // OPTACA (optaca@gmail.com) and ATMOS tourism staff must see the same
+  // seeded tourist accounts the tourism dashboard writes into `users`.
+  final staff = role == AppRole.admin ||
+      role == AppRole.municipalManager ||
+      AuthRoles.isAtmosStaffAdminRole(ownRole) ||
+      AuthRoles.canAccessAdminDashboard();
+  if (staff) {
+    final snapshot = await col.get();
+    loaded.clear();
+    for (final doc in snapshot.docs) {
+      addFromDoc(doc);
+    }
+  }
+
+  loaded.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  users
+    ..clear()
+    ..addAll(loaded);
   });
 }
 
@@ -1437,9 +1532,8 @@ Future<void> syncAccountAfterLogin() async {
 
   touristData = await fetchTouristFirestoreDataForFirebaseUid(uid);
 
-  final userRef = FirebaseFirestore.instance
-      .collection(kUsersCollection)
-      .doc(uid);
+  final userRef =
+      FirebaseFirestore.instance.collection(kUsersCollection).doc(uid);
   final userSnap = await userRef.get();
   var existingUser = userSnap.data();
 
@@ -1461,14 +1555,17 @@ Future<void> syncAccountAfterLogin() async {
         await FirebaseFirestore.instance
             .collection(kTouristCollection)
             .doc(uid)
-            .set({
-              ...merged,
-              'firebaseUid': uid,
-              'touristID': uid,
-              'touristId': uid,
-              'email': email,
-              'updatedAt': FieldValue.serverTimestamp(),
-            }, SetOptions(merge: true));
+            .set(
+          {
+            ...merged,
+            'firebaseUid': uid,
+            'touristID': uid,
+            'touristId': uid,
+            'email': email,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
       }
     } catch (_) {}
   }
@@ -1496,7 +1593,9 @@ Future<void> syncAccountAfterLogin() async {
       role = AppRole.admin.firestoreValue;
     }
   }
-  if (rolePermanent && priorRole != null && priorRole.trim().isNotEmpty) {
+  if (rolePermanent &&
+      priorRole != null &&
+      priorRole.trim().isNotEmpty) {
     role = AppRole.fromString(priorRole).firestoreValue;
   } else if (priorRole != null &&
       priorRole.trim().isNotEmpty &&
@@ -1505,14 +1604,11 @@ Future<void> syncAccountAfterLogin() async {
   }
 
   final resolvedRole = AppRole.fromString(role);
-  final permanentRole =
-      resolvedRole == AppRole.admin ||
+  final permanentRole = resolvedRole == AppRole.admin ||
       resolvedRole == AppRole.municipalManager ||
-      (email.isNotEmpty &&
-          await AdminAccountsService.fetchForEmail(email) != null);
+      (email.isNotEmpty && await AdminAccountsService.fetchForEmail(email) != null);
 
-  final fullName =
-      _str(touristData, 'fullName') ??
+  final fullName = _str(touristData, 'fullName') ??
       _str(touristData, 'name') ??
       _str(existingUser, 'fullName') ??
       _str(existingUser, 'name') ??
@@ -1564,7 +1660,10 @@ Future<void> syncAccountAfterLogin() async {
     await persistLongTermStaffRoleClaims();
   } else if (resolvedRole == AppRole.admin ||
       resolvedRole == AppRole.municipalManager) {
-    await userRef.set({'rolePermanent': true}, SetOptions(merge: true));
+    await userRef.set(
+      {'rolePermanent': true},
+      SetOptions(merge: true),
+    );
     await persistLongTermStaffRoleClaims();
   } else {
     await refreshAuthRoleClaims();
@@ -1640,9 +1739,7 @@ Future<TravelHistoryProfile> fetchTravelHistoryProfile(String uid) async {
     if (hint.isEmpty) return;
     if (!pastDestinations.contains(hint)) pastDestinations.add(hint);
 
-    interestTags.addAll(
-      ContentBasedFiltering.interestsFromDestinationText(hint),
-    );
+    interestTags.addAll(ContentBasedFiltering.interestsFromDestinationText(hint));
 
     final spot = findTouristSpotByNameFuzzy(hint);
     if (spot != null) {
@@ -1653,9 +1750,7 @@ Future<TravelHistoryProfile> fetchTravelHistoryProfile(String uid) async {
     final m = matchMunicipalityByLocalityHint(hint);
     if (m != null) {
       visitedMunicipalityNames.add(m.name);
-      for (final s in allSpots.where(
-        (x) => touristSpotBelongsToMunicipality(x, m),
-      )) {
+      for (final s in allSpots.where((x) => touristSpotBelongsToMunicipality(x, m))) {
         interestTags.addAll(ContentBasedFiltering.spotInterests(s));
       }
     }
@@ -1670,9 +1765,7 @@ Future<TravelHistoryProfile> fetchTravelHistoryProfile(String uid) async {
   }
 
   final flat = _touristDocFlattened(touristSnap.data() ?? {});
-  for (final dest in registrationTravelHistoryFromMap(
-    touristSnap.data() ?? {},
-  )) {
+  for (final dest in registrationTravelHistoryFromMap(touristSnap.data() ?? {})) {
     addDestination(dest);
   }
 
@@ -1698,8 +1791,9 @@ Future<TravelHistoryProfile> fetchTravelHistoryProfile(String uid) async {
 }
 
 /// Maps [TravelHistoryProfile] to user–item and tag vectors for collaborative filtering.
-({Map<String, double> items, Map<String, double> tags})
-travelHistoryToCfVectors(TravelHistoryProfile profile) {
+({Map<String, double> items, Map<String, double> tags}) travelHistoryToCfVectors(
+  TravelHistoryProfile profile,
+) {
   final items = <String, double>{
     for (final k in profile.visitedSpotNameKeys) k: 1.0,
   };
@@ -1710,7 +1804,8 @@ travelHistoryToCfVectors(TravelHistoryProfile profile) {
     }
   }
   final tags = <String, double>{
-    for (final t in profile.interestTags) t: profile.interestWeights[t] ?? 1.0,
+    for (final t in profile.interestTags)
+      t: profile.interestWeights[t] ?? 1.0,
   };
   return (items: items, tags: tags);
 }
@@ -1726,13 +1821,13 @@ Future<void> saveRecommendationProfileForCollaborativeFiltering({
       .collection(kRecommendationProfilesCollection)
       .doc(uid)
       .set({
-        'likedSpotKeys': vectors.items.keys.toList(),
-        'itemScores': vectors.items,
-        'interestTags': vectors.tags.keys.toList(),
-        'tagScores': vectors.tags,
-        'destinationHints': profile.pastDestinations,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+    'likedSpotKeys': vectors.items.keys.toList(),
+    'itemScores': vectors.items,
+    'interestTags': vectors.tags.keys.toList(),
+    'tagScores': vectors.tags,
+    'destinationHints': profile.pastDestinations,
+    'updatedAt': FieldValue.serverTimestamp(),
+  }, SetOptions(merge: true));
 }
 
 /// Loads peer profiles for collaborative filtering (excludes [excludeUid]).
@@ -1808,9 +1903,8 @@ Future<void> saveExtendedUserRegistration({
   String? profilePhotoUrl,
   required Map<String, dynamic> questionnaire,
 }) async {
-  final docRef = FirebaseFirestore.instance
-      .collection(kUsersCollection)
-      .doc(uid);
+  final docRef =
+      FirebaseFirestore.instance.collection(kUsersCollection).doc(uid);
   final snap = await docRef.get();
   final existing = snap.data();
   var role = AppRole.tourist.firestoreValue;
@@ -1849,9 +1943,8 @@ Future<void> saveTouristRegistrationToFirestore({
   required Map<String, dynamic> registration,
 }) async {
   final now = DateTime.now();
-  final docRef = FirebaseFirestore.instance
-      .collection(kTouristCollection)
-      .doc(uid);
+  final docRef =
+      FirebaseFirestore.instance.collection(kTouristCollection).doc(uid);
 
   final dest1 = (registration['lastDestination1'] as String?)?.trim() ?? '';
   final nationality = (registration['nationality'] as String?)?.trim() ?? '';
@@ -1890,7 +1983,16 @@ Future<void> saveTouristRegistrationToFirestore({
 
 Future<void> upsertAppUserToFirestore(AppUser u) async {
   final col = FirebaseFirestore.instance.collection(kUsersCollection);
-  final docRef = u.id.isEmpty ? col.doc() : col.doc(u.id);
+  final docRef = u.id.trim().isEmpty ? col.doc() : col.doc(u.id.trim());
+  await _coalesceCatalogWrite('$kUsersCollection/${docRef.id}', () async {
+    await _writeAppUser(docRef, u);
+  });
+}
+
+Future<void> _writeAppUser(
+  DocumentReference<Map<String, dynamic>> docRef,
+  AppUser u,
+) async {
   final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
   final data = <String, dynamic>{
     'fullName': u.name,
@@ -1905,7 +2007,8 @@ Future<void> upsertAppUserToFirestore(AppUser u) async {
   } else if (u.profilePhotoLookupId.isNotEmpty) {
     data['firebaseUid'] = u.profilePhotoLookupId;
   }
-  if (u.id.isEmpty) {
+  final existing = await docRef.get();
+  if (!existing.exists) {
     data['createdAt'] = FieldValue.serverTimestamp();
     data['isVerified'] = false;
   }
@@ -1915,10 +2018,7 @@ Future<void> upsertAppUserToFirestore(AppUser u) async {
 
 Future<void> deleteAppUserFromFirestore(String id) async {
   if (id.isEmpty) return;
-  await FirebaseFirestore.instance
-      .collection(kUsersCollection)
-      .doc(id)
-      .delete();
+  await FirebaseFirestore.instance.collection(kUsersCollection).doc(id).delete();
 }
 
 String _registryDateYmd(DateTime dt) {
@@ -2013,23 +2113,16 @@ String? _touristDocName(Map<String, dynamic> d) {
   ]);
   if (direct != null) return direct;
 
-  final first =
-      (_strFirstNonEmpty(d, const ['firstName', 'first_name', 'givenName']) ??
-              '')
-          .trim();
-  final last =
-      (_strFirstNonEmpty(d, const ['lastName', 'last_name', 'familyName']) ??
-              '')
-          .trim();
+  final first = (_strFirstNonEmpty(d, const ['firstName', 'first_name', 'givenName']) ??
+          '')
+      .trim();
+  final last = (_strFirstNonEmpty(d, const ['lastName', 'last_name', 'familyName']) ??
+          '')
+      .trim();
   if (first.isNotEmpty || last.isNotEmpty) {
     return '$first $last'.trim();
   }
-  return _strFirstNonEmpty(d, const [
-    'email',
-    'phone',
-    'phoneNumber',
-    'phone_number',
-  ]);
+  return _strFirstNonEmpty(d, const ['email', 'phone', 'phoneNumber', 'phone_number']);
 }
 
 /// Merges common nested maps (`user`, `profile`, …) into a single map for field lookup.
@@ -2097,6 +2190,13 @@ int _visitCountFromTouristDoc(Map<String, dynamic> d) {
 Map<String, int> touristVisitCountsFromVisitsSnapshot(
   QuerySnapshot<Map<String, dynamic>> snap,
 ) {
+  return touristVisitCountsFromCheckInDocs(snap.docs);
+}
+
+/// Same as [touristVisitCountsFromVisitsSnapshot] for an already-loaded doc list.
+Map<String, int> touristVisitCountsFromCheckInDocs(
+  Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+) {
   final counts = <String, int>{};
   void bump(String? id) {
     final k = (id ?? '').trim();
@@ -2104,7 +2204,7 @@ Map<String, int> touristVisitCountsFromVisitsSnapshot(
     counts[k] = (counts[k] ?? 0) + 1;
   }
 
-  for (final doc in snap.docs) {
+  for (final doc in docs) {
     final d = doc.data();
     String? id;
     for (final key in const [
@@ -2183,7 +2283,9 @@ String touristDocLocalityHint(DocumentSnapshot<Map<String, dynamic>> doc) {
 Map<String, int> touristCountsPerMunicipalityFromTouristDocs(
   Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
 ) {
-  final counts = <String, int>{for (final m in sortedMunicipalities) m.name: 0};
+  final counts = <String, int>{
+    for (final m in sortedMunicipalities) m.name: 0,
+  };
   for (final doc in docs) {
     final hint = touristDocLocalityHint(doc);
     final m = matchMunicipalityByLocalityHint(hint);
@@ -2233,8 +2335,7 @@ TouristRegistryEntry touristRegistryEntryFromDoc(
   }
 
   if (dateDisplay.isEmpty || timeDisplay.isEmpty) {
-    final fallback =
-        _timestampLikeToDateTime(
+    final fallback = _timestampLikeToDateTime(
           d['registeredAt'] ?? d['createdAt'] ?? d['updatedAt'],
         ) ??
         _timestampLikeToDateTime(dateField);
@@ -2277,8 +2378,7 @@ Future<void> syncAllMunicipalitiesToFirestore() async {
       'shortName': m.shortName,
       'imagePath': m.imagePath,
       'description': m.description,
-      if (m.divisionKind.trim().isNotEmpty)
-        'divisionKind': m.divisionKind.trim(),
+      if (m.divisionKind.trim().isNotEmpty) 'divisionKind': m.divisionKind.trim(),
       if (busPayload != null) 'busTerminal': busPayload,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));

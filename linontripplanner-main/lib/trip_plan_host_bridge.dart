@@ -19,6 +19,10 @@ class TripPlanHostBridge {
   /// Leaves Trip Planner for the ATMOS post-logout route.
   static void Function(BuildContext context)? leaveToHost;
 
+  /// Opens the matching ATMOS TRS staff module (OPTACA provincial, LGU, or
+  /// Governor) while keeping the same Firebase session.
+  static Future<void> Function(BuildContext context)? openAtmosStaffModule;
+
   /// Governor Debug data hub (charts, seed, full purge) hosted by ATMOS TRS.
   static void Function(BuildContext context)? openDebugDataHub;
 

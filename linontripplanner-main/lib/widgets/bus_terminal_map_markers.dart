@@ -7,6 +7,7 @@ import '../data.dart';
 import '../municipality_bus_terminals.dart' show showsBusTerminalPin;
 import '../services/bus_location_store.dart';
 import 'google_map_pin_icons.dart';
+import 'osm_map_glyph.dart';
 
 /// [municipality]'s bus terminal or stop when it should appear on maps.
 MunicipalityBusTerminal? busTerminalForMap(Municipality municipality) {
@@ -122,13 +123,10 @@ List<Marker> buildOsmBusTerminalMarkers(
           onTap: onTap == null || m == null ? null : () => onTap(m),
           child: Tooltip(
             message: '${busTerminalMarkerTitle(terminal)}\n$label',
-            child: Icon(
-              _busMarkerIcon(terminal),
+            child: OsmMapGlyph(
+              icon: _busMarkerIcon(terminal),
               color: _osmMarkerColor(terminal),
               size: 38,
-              shadows: const [
-                Shadow(blurRadius: 4, color: Colors.black38),
-              ],
             ),
           ),
         ),
@@ -184,7 +182,7 @@ Widget buildBusTerminalMapLegend({bool compact = false}) {
         ),
         SizedBox(height: compact ? 4 : 6),
         _legendRow(
-          icon: Icons.place,
+          icon: Icons.location_on,
           color: GoogleMapPinIcons.touristSpotColor,
           label: 'Tourist spot',
           compact: compact,

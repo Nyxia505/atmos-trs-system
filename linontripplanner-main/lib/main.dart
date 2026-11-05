@@ -19,6 +19,7 @@ import 'tourist_plan/tourist_trip_planner_screen.dart';
 import 'admin_dashboard_screen.dart';
 import 'data.dart';
 import 'widgets/admin_access_gate.dart';
+import 'widgets/optaca_flutter_error_shell.dart';
 import 'maps_platform_init.dart';
 
 /// Shows [LoginScreen] until the user signs in, then [HomeScreen].
@@ -92,6 +93,34 @@ class _TourismAuthGateState extends State<TourismAuthGate> {
                 ),
               );
             }
+            if (adminSnap.hasError) {
+              return Scaffold(
+                backgroundColor: AppColors.planPageBg,
+                body: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text(
+                          'Could not open the admin session.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 12),
+                        FilledButton(
+                          onPressed: () => setState(() {
+                            _adminHomeFuture = null;
+                            _adminHomeFutureUid = null;
+                          }),
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }
             if (adminSnap.data == true) {
               return const AdminAccessGate(child: AdminDashboardScreen());
             }
@@ -105,6 +134,7 @@ class _TourismAuthGateState extends State<TourismAuthGate> {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  installVisibleFlutterErrorHandlers();
   await initMapsForPlatform();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,

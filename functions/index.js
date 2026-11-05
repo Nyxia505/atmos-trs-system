@@ -1287,9 +1287,43 @@ function municipalityDisplayName(municipalityId) {
     (key ? key.charAt(0).toUpperCase() + key.slice(1) : 'Misamis Occidental');
 }
 
-/** Days in the current calendar month (1..today) for monthly report CSV columns. */
+/**
+ * Asia/Manila wall-clock parts. Cloud Functions run in UTC; using
+ * `Date#getMonth()` / `getDate()` seeds the wrong calendar month near
+ * Manila midnight and mismatches Governor "This Month" (Manila) filters.
+ */
+function manilaParts(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  }).formatToParts(now);
+  const num = (type) =>
+    Number(parts.find((p) => p.type === type)?.value || 0);
+  // hour12:false still yields "24" for midnight on some engines.
+  let hour = num('hour');
+  if (hour === 24) hour = 0;
+  return {
+    year: num('year'),
+    month: num('month'), // 1-12
+    day: num('day'),
+    hour,
+    minute: num('minute'),
+  };
+}
+
+/** UTC Date for a Manila wall-clock Y-M-D h:m (no DST in PH). */
+function manilaWallDate(year, month1to12, day, hour = 12, minute = 0) {
+  return new Date(Date.UTC(year, month1to12 - 1, day, hour - 8, minute, 0));
+}
+
+/** Days in the current Asia/Manila calendar month (1..today) for seed columns. */
 function currentMonthCheckInDays(now = new Date()) {
-  const today = now.getDate();
+  const {day: today} = manilaParts(now);
   const candidates = [1, 2, 3, 5, 8, 10, 12, 15, 18, 20, 22, 25, 26, today];
   const days = [];
   for (const d of candidates) {
@@ -2562,6 +2596,7 @@ exports.seedLguAnalyticsData = onCall(
     const foreignProfiles = DEMO_TOURIST_PROFILES.filter((p) => !p.isLocal);
 
     const now = new Date();
+    const manila = manilaParts(now);
     const monthlyDays = currentMonthCheckInDays(now);
     let seededTourists = 0;
     let seededCheckins = 0;
@@ -2675,17 +2710,16 @@ exports.seedLguAnalyticsData = onCall(
             ? Math.ceil(partySize / 2)
             : Math.floor(partySize / 2);
           const maleCount = partySize - femaleCount;
-          const eventDate = new Date(
-            now.getFullYear(),
-            now.getMonth(),
+          const eventDate = manilaWallDate(
+            manila.year,
+            manila.month,
             day,
             9 + ((i + j) % 9),
             (i * 7 + j * 11) % 60,
-            0,
-            0,
           );
           const checkinId =
-            `${uid}_${spot.id}_m${now.getMonth() + 1}_d${day}_${j + 1}`;
+            `${uid}_${spot.id}_${manila.year}_` +
+            `m${manila.month}_d${day}_${j + 1}`;
 
           const checkInPayload = {
             userId: uid,
@@ -2697,6 +2731,13 @@ exports.seedLguAnalyticsData = onCall(
             touristEmail: email,
             touristNationality: profile.nationality,
             touristDateOfBirth: dateOfBirth,
+            touristSex: sex,
+            touristCountry: profile.country || (isLocal ? 'Philippines' : ''),
+            touristProvince:
+              profile.province || (isLocal ? 'Misamis Occidental' : ''),
+            touristCity: profile.city || (isLocal ? municipalityName : ''),
+            touristIsLocal: isLocal,
+            touristLocalOrForeign: isLocal ? 'Local' : 'Foreign',
             touristMobile: '',
             municipalityId,
             lguId: municipalityId,
@@ -2714,6 +2755,8 @@ exports.seedLguAnalyticsData = onCall(
             visitorCount: partySize,
             femaleCount,
             maleCount,
+            filipinoCount: isLocal ? partySize : 0,
+            foreignCount: isLocal ? 0 : partySize,
             timestamp: Timestamp.fromDate(eventDate),
             createdAt: Timestamp.fromDate(eventDate),
           };

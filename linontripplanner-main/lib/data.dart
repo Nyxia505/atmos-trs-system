@@ -7,7 +7,6 @@ class MunicipalityBusTerminal {
   final String name;
   final double latitude;
   final double longitude;
-
   /// `terminal` or `stop`.
   final String kind;
 
@@ -19,11 +18,11 @@ class MunicipalityBusTerminal {
   });
 
   Map<String, dynamic> toFirestoreMap() => {
-    'name': name,
-    'latitude': latitude,
-    'longitude': longitude,
-    'kind': kind,
-  };
+        'name': name,
+        'latitude': latitude,
+        'longitude': longitude,
+        'kind': kind,
+      };
 
   static MunicipalityBusTerminal? fromFirestoreMap(Map<String, dynamic>? raw) {
     if (raw == null || raw.isEmpty) return null;
@@ -67,10 +66,8 @@ class Municipality {
   final String imagePath;
   final String description;
   final List<TouristSpot> spots;
-
   /// From Firestore (`divisionKind`, `type`, …). Empty = infer from [name].
   final String divisionKind;
-
   /// Public bus terminal or stop for trip routing (Firestore `busTerminal`).
   final MunicipalityBusTerminal? busTerminal;
 
@@ -112,29 +109,21 @@ class TouristSpot {
   type; // 'Nature' | 'Adventure' | 'Culture' | 'Relaxation' | 'Food' (legacy: 'spot' | 'hotel')
   final double? latitude;
   final double? longitude;
-
   /// Walking time to reach or explore the spot (minutes), from Firestore.
   final int? walkingDistanceMinutes;
   final String entranceFee;
-
   /// Admin-entered food & drinks cost (saved to Firestore; not shown as price range).
   final String foodAndDrinksPrice;
-
   /// Admin-entered other souvenirs cost (included in auto price range).
   final String otherSouvenirsPrice;
-
   /// Set when loaded from Firestore so edits update the same document (avoids duplicates).
   final String? firestoreDocId;
-
   /// Firestore `category` (e.g. Mountain, Beach) when present.
   final String category;
-
   /// Firestore `visitors` / popularity counter when present.
   final int visitors;
-
   /// Explicit rating count when present (`ratingCount`, etc.); else 0.
   final int ratingCount;
-
   /// `updatedAt` millis for recent-engagement scoring (0 if unknown).
   final int updatedAtMs;
 
@@ -239,7 +228,6 @@ class AppUser {
   final String role; // e.g. tourist, admin, user
   /// Download URL, `gs://…`, or Storage path (e.g. under `profile_photos/`).
   final String profilePhotoPath;
-
   /// Used with `profile_photos/<this>` when [profilePhotoPath] is empty; usually matches Firebase Auth uid.
   final String profilePhotoLookupId;
 
@@ -260,13 +248,10 @@ class SpotRating {
   final String userName;
   final String spotName;
   final double rating;
-
   /// Optional written feedback / comment; empty when the user skips it.
   final String description;
-
   /// Firebase Auth uid when known (used to load profile photo).
   final String userId;
-
   /// Direct photo URL/path when known.
   final String profilePhotoPath;
   final DateTime? createdAt;
@@ -283,15 +268,15 @@ class SpotRating {
   });
 
   Map<String, dynamic> toJson() => {
-    'id': id,
-    'userName': userName,
-    'spotName': spotName,
-    'rating': rating,
-    'description': description,
-    'userId': userId,
-    'profilePhotoPath': profilePhotoPath,
-    if (createdAt != null) 'createdAt': createdAt!.toIso8601String(),
-  };
+        'id': id,
+        'userName': userName,
+        'spotName': spotName,
+        'rating': rating,
+        'description': description,
+        'userId': userId,
+        'profilePhotoPath': profilePhotoPath,
+        if (createdAt != null) 'createdAt': createdAt!.toIso8601String(),
+      };
 
   factory SpotRating.fromJson(Map<String, dynamic> json) {
     DateTime? created;
@@ -304,8 +289,7 @@ class SpotRating {
       userName: (json['userName'] as String?)?.trim() ?? 'Traveler',
       spotName: (json['spotName'] as String?)?.trim() ?? '',
       rating: (json['rating'] as num?)?.toDouble() ?? 0,
-      description:
-          (json['description'] as String?)?.trim() ??
+      description: (json['description'] as String?)?.trim() ??
           (json['comment'] as String?)?.trim() ??
           '',
       userId: (json['userId'] as String?)?.trim() ?? '',
@@ -346,7 +330,6 @@ class TouristRegistryEntry {
   final String dateDisplay;
   final String timeDisplay;
   final int visits;
-
   /// For sorting rows (newest first when known).
   final DateTime sortKey;
 
@@ -409,7 +392,11 @@ List<String> catalogSpotCategories() {
 }
 
 /// Trip planner: transportation modes.
-const List<String> kTransportModes = ['Car', 'Motorcycle', 'Public Transport'];
+const List<String> kTransportModes = [
+  'Car',
+  'Motorcycle',
+  'Public Transport',
+];
 
 /// Budget tiers for intelligent recommendations (PHP).
 enum TripBudgetTier {
@@ -451,22 +438,41 @@ const List<String> kEventTypeOptions = [
   'Other',
 ];
 
+enum TourismEventDateMode { single, multiple, range }
+
+TourismEventDateMode tourismEventDateModeFromName(String? raw) {
+  switch ((raw ?? '').trim().toLowerCase()) {
+    case 'multiple':
+      return TourismEventDateMode.multiple;
+    case 'range':
+      return TourismEventDateMode.range;
+    default:
+      return TourismEventDateMode.single;
+  }
+}
+
 /// Admin-managed tourism event (image, date, time, venue, type).
 class TourismEvent {
   final String id;
   final String title;
   final String imagePath;
   final String venue;
-
-  /// LGU where the event is held (admin pick-list).
+  /// LGU where the event is held (admin pick-list). First location for
+  /// older single-municipality records.
   final String municipality;
+  /// All selected municipalities/cities. Empty means use [municipality] only.
+  final List<String> municipalities;
   final DateTime dateTime;
-
+  final TourismEventDateMode dateMode;
+  /// Extra calendar days for [TourismEventDateMode.multiple] (date-only).
+  final List<DateTime> eventDates;
+  final DateTime? rangeStart;
+  final DateTime? rangeEnd;
   /// Kind of event (e.g. Festival, Cultural) — shown to users.
   final String eventType;
-
   /// Optional longer text shown in detail and on cards.
   final String description;
+  /// ATMOS catalog publisher metadata (LGU / OPTACA / Governor ownership).
   final String catalogSource;
   final String createdByUid;
   final String createdBy;
@@ -481,7 +487,12 @@ class TourismEvent {
     required this.imagePath,
     required this.venue,
     this.municipality = '',
+    this.municipalities = const [],
     required this.dateTime,
+    this.dateMode = TourismEventDateMode.single,
+    this.eventDates = const [],
+    this.rangeStart,
+    this.rangeEnd,
     this.eventType = 'General',
     this.description = '',
     this.catalogSource = 'events',
@@ -493,32 +504,77 @@ class TourismEvent {
     this.isAnnouncementMirror = false,
   });
 
+  /// Unique location names for this one logical event.
+  List<String> get locationNames {
+    if (municipalities.isNotEmpty) {
+      return [
+        for (final name in municipalities)
+          if (name.trim().isNotEmpty) name.trim(),
+      ];
+    }
+    final single = municipality.trim();
+    return single.isEmpty ? const [] : [single];
+  }
+
   Map<String, dynamic> toJson() => {
-    'id': id,
-    'title': title,
-    'imagePath': imagePath,
-    'venue': venue,
-    'municipality': municipality,
-    'dateTime': dateTime.toIso8601String(),
-    'eventType': eventType,
-    'description': description,
-    'catalogSource': catalogSource,
-    'createdByUid': createdByUid,
-    'createdBy': createdBy,
-    'publisherOffice': publisherOffice,
-    'municipalityId': municipalityId,
-    'audienceScope': audienceScope,
-    'isAnnouncementMirror': isAnnouncementMirror,
-  };
+        'id': id,
+        'title': title,
+        'imagePath': imagePath,
+        'venue': venue,
+        'municipality': municipality,
+        'municipalities': locationNames,
+        'dateTime': dateTime.toIso8601String(),
+        'dateMode': dateMode.name,
+        'eventDates': [
+          for (final d in eventDates) d.toIso8601String(),
+        ],
+        'rangeStart': rangeStart?.toIso8601String(),
+        'rangeEnd': rangeEnd?.toIso8601String(),
+        'eventType': eventType,
+        'description': description,
+        'catalogSource': catalogSource,
+        'createdByUid': createdByUid,
+        'createdBy': createdBy,
+        'publisherOffice': publisherOffice,
+        'municipalityId': municipalityId,
+        'audienceScope': audienceScope,
+        'isAnnouncementMirror': isAnnouncementMirror,
+      };
 
   factory TourismEvent.fromJson(Map<String, dynamic> json) {
+    DateTime? parseDt(Object? raw) {
+      if (raw is String && raw.isNotEmpty) return DateTime.tryParse(raw);
+      return null;
+    }
+
+    final extra = <DateTime>[];
+    final rawDates = json['eventDates'];
+    if (rawDates is List) {
+      for (final item in rawDates) {
+        final d = parseDt(item);
+        if (d != null) extra.add(DateTime(d.year, d.month, d.day));
+      }
+    }
+    final rawMunis = json['municipalities'];
+    final munis = <String>[];
+    if (rawMunis is List) {
+      for (final item in rawMunis) {
+        final name = '$item'.trim();
+        if (name.isNotEmpty) munis.add(name);
+      }
+    }
     return TourismEvent(
       id: '${json['id'] ?? ''}',
       title: '${json['title'] ?? ''}',
       imagePath: '${json['imagePath'] ?? ''}',
       venue: '${json['venue'] ?? ''}',
       municipality: '${json['municipality'] ?? ''}',
-      dateTime: DateTime.tryParse('${json['dateTime']}') ?? DateTime.now(),
+      municipalities: munis,
+      dateTime: parseDt(json['dateTime']) ?? DateTime.now(),
+      dateMode: tourismEventDateModeFromName('${json['dateMode'] ?? ''}'),
+      eventDates: extra,
+      rangeStart: parseDt(json['rangeStart']),
+      rangeEnd: parseDt(json['rangeEnd']),
       eventType: '${json['eventType'] ?? 'General'}',
       description: '${json['description'] ?? ''}',
       catalogSource: '${json['catalogSource'] ?? 'events'}',
@@ -540,13 +596,11 @@ class TourismAnnouncement {
   final String imagePath;
   final DateTime publishedAt;
   final String type;
-  final String municipality;
-  final String municipalityId;
-  final String venue;
   final String createdByUid;
   final String createdBy;
   final String publisherOffice;
-  final String audienceScope;
+  final String municipalityId;
+  final String municipality;
 
   const TourismAnnouncement({
     required this.id,
@@ -554,14 +608,12 @@ class TourismAnnouncement {
     this.body = '',
     this.imagePath = '',
     required this.publishedAt,
-    this.type = '',
-    this.municipality = '',
-    this.municipalityId = '',
-    this.venue = '',
+    this.type = 'Announcement',
     this.createdByUid = '',
     this.createdBy = '',
     this.publisherOffice = '',
-    this.audienceScope = '',
+    this.municipalityId = '',
+    this.municipality = '',
   });
 }
 
@@ -734,31 +786,70 @@ List<Municipality> get sortedMunicipalities {
   return list;
 }
 
-/// Same grouping as the public municipality detail screen: if [municipality.spots] is non-empty,
-/// a spot belongs when its name matches an embedded entry; otherwise [TouristSpot.location]
-/// must match [Municipality.name] or [Municipality.shortName] (trimmed, case-insensitive).
+/// Normalizes LGU names for matching: "Ozamis City" and "Ozamiz City" become
+/// the same key. Does not change stored Firestore values.
+String normalizeMunicipalityKey(String input) {
+  return input
+      .toLowerCase()
+      .replaceAll('provincial capital', ' ')
+      .replaceAll('city', ' ')
+      .replaceAll(RegExp(r'[^a-z0-9\s]'), ' ')
+      .replaceAll(RegExp(r'\bozamis\b'), 'ozamiz')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+}
+
+Set<String> municipalityMatchKeys(Municipality municipality) {
+  final keys = <String>{
+    normalizeMunicipalityKey(municipality.name),
+    normalizeMunicipalityKey(municipality.shortName),
+  };
+  keys.removeWhere((key) => key.isEmpty);
+  return keys;
+}
+
+/// True when [hint] is this LGU (exact, alias, or trailing locality).
+bool localityHintBelongsToMunicipality(
+  String hint,
+  Municipality municipality,
+) {
+  final hn = normalizeMunicipalityKey(hint);
+  if (hn.isEmpty) return false;
+  for (final alias in municipalityMatchKeys(municipality)) {
+    if (hn == alias) return true;
+    if (hn.endsWith(' $alias') || hn.startsWith('$alias ')) return true;
+  }
+  return false;
+}
+
+/// Same grouping as the public municipality detail screen: if [municipality.spots]
+/// lists this spot by name it belongs. Otherwise [TouristSpot.location] (and a
+/// trailing " – Municipality" on the name) is matched with aliases such as
+/// Ozamiz/Ozamis and optional "City" / "Provincial Capital".
 bool touristSpotBelongsToMunicipality(
   TouristSpot spot,
   Municipality municipality,
 ) {
-  if (municipality.spots.isNotEmpty) {
-    return municipality.spots.any((s) => s.name == spot.name);
+  if (municipality.spots.isNotEmpty &&
+      municipality.spots.any((s) => s.name == spot.name)) {
+    return true;
   }
-  final loc = spot.location.toLowerCase().trim();
-  if (loc.isEmpty) return false;
-  final name = municipality.name.toLowerCase().trim();
-  final short = municipality.shortName.toLowerCase().trim();
-  if (loc == name) return true;
-  if (short.isNotEmpty && loc == short) return true;
+  if (localityHintBelongsToMunicipality(spot.location, municipality)) {
+    return true;
+  }
+  final parts = spot.name.split(RegExp(r'\s[\u2013\u2014-]\s'));
+  if (parts.length >= 2 &&
+      localityHintBelongsToMunicipality(parts.last.trim(), municipality)) {
+    return true;
+  }
   return false;
 }
 
 /// Municipalities sorted by highest-rated spot in each (for recommendations).
 List<Municipality> get recommendedMunicipalities {
   double maxRatingFor(Municipality m) {
-    final spotsInM = allSpots
-        .where((s) => touristSpotBelongsToMunicipality(s, m))
-        .toList();
+    final spotsInM =
+        allSpots.where((s) => touristSpotBelongsToMunicipality(s, m)).toList();
     if (spotsInM.isEmpty) return 0;
     return spotsInM.map((s) => s.rating).reduce((a, b) => a > b ? a : b);
   }
@@ -786,9 +877,7 @@ List<FeaturedSpot> get recommendedFeaturedForBanner {
     final list = featuredSpots.map((f) {
       var linked = allSpots
           .where(
-            (s) =>
-                normalizeTourismNameKey(s.name) ==
-                normalizeTourismNameKey(f.name),
+            (s) => normalizeTourismNameKey(s.name) == normalizeTourismNameKey(f.name),
           )
           .toList();
       if (linked.isEmpty) {
@@ -996,7 +1085,6 @@ AppUser? findAppUserByFirebaseUid(String? uid) {
   }
   return null;
 }
-
 final List<SpotRating> spotRatings = <SpotRating>[];
 
 // ─── Shared Widgets ────────────────────────────────────────────────────
@@ -1060,7 +1148,10 @@ class InteractiveRatingBadge extends StatelessWidget {
             width: 56,
             height: 56,
             alignment: Alignment.center,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+            ),
             child: Text(
               display.toStringAsFixed(1),
               style: const TextStyle(
@@ -1116,13 +1207,10 @@ class InteractiveRatingBadge extends StatelessWidget {
 class AppColors {
   static const primary = Color(0xFFFF7A00); // main orange
   static const primaryLight = Color(0xFFFFA24C);
-
   /// Warm cream (legacy screens, event detail body).
   static const background = Color(0xFFFFF9F2);
-
   /// Your Plan / app-wide page background (soft grey-cream).
   static const planPageBg = Color(0xFFF4F5F7);
-
   /// List rows (municipalities, admin lists).
   static const listTilePeach = Color(0xFFFFF2EB);
   static const insetSurface = Color(0xFFFAFBFC);

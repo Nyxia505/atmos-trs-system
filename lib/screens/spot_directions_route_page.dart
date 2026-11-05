@@ -61,6 +61,7 @@ class _SpotDirectionsRoutePageState extends State<SpotDirectionsRoutePage> {
   ];
 
   final _mapKey = GlobalKey<TripRouteMapViewState>();
+  int _mapReloadToken = 0;
 
   SpotMapPoint? _dest;
   LatLng? _origin;
@@ -172,14 +173,6 @@ class _SpotDirectionsRoutePageState extends State<SpotDirectionsRoutePage> {
           chosen.shortName.isNotEmpty ? chosen.shortName : chosen.name;
       _swapped = false;
       _loadingOrigin = false;
-    });
-  }
-
-  void _onRouteUpdate(TripRouteUpdate update) {
-    if (!mounted || update.loading) return;
-    if (update.distanceKm == _routeKm) return;
-    setState(() {
-      if (update.distanceKm != null) _routeKm = update.distanceKm;
     });
   }
 
@@ -306,11 +299,8 @@ class _SpotDirectionsRoutePageState extends State<SpotDirectionsRoutePage> {
             child: dest == null
                 ? const Center(child: CircularProgressIndicator())
                 : TripRouteMapView(
-                    key: _mapKey,
-                    compact: true,
-                    interactive: true,
-                    travelMode: _travelMode,
-                    googleStyleEndpoints: true,
+                    key: ValueKey<int>(_mapReloadToken),
+                    compact: false,
                     start: origin == null
                         ? tripMunicipalityFor(
                             name: dest.municipality,
@@ -349,7 +339,6 @@ class _SpotDirectionsRoutePageState extends State<SpotDirectionsRoutePage> {
                     showTouristSpots: false,
                     showBusStops: false,
                     showBusTerminals: false,
-                    onRouteUpdate: _onRouteUpdate,
                   ),
           ),
           Positioned(
@@ -530,7 +519,7 @@ class _SpotDirectionsRoutePageState extends State<SpotDirectionsRoutePage> {
               title: const Text('Retry route'),
               onTap: () {
                 Navigator.pop(ctx);
-                _mapKey.currentState?.retryDirections();
+                setState(() => _mapReloadToken++);
               },
             ),
           ],

@@ -205,7 +205,6 @@ class _NotificationSettingsScreenState extends State<NotificationSettingsScreen>
                   children: [
                     SwitchListTile(
                       title: const Text('Trip reminders'),
-                      subtitle: const Text('Alerts about your saved plans'),
                       value: _prefs.tripReminders,
                       onChanged: (v) => _save(NotificationPrefs(
                         tripReminders: v,
@@ -215,7 +214,6 @@ class _NotificationSettingsScreenState extends State<NotificationSettingsScreen>
                     ),
                     SwitchListTile(
                       title: const Text('Spot updates'),
-                      subtitle: const Text('Changes to places you saved'),
                       value: _prefs.spotUpdates,
                       onChanged: (v) => _save(NotificationPrefs(
                         tripReminders: _prefs.tripReminders,
@@ -225,9 +223,6 @@ class _NotificationSettingsScreenState extends State<NotificationSettingsScreen>
                     ),
                     SwitchListTile(
                       title: const Text('Events'),
-                      subtitle: const Text(
-                        'Tourism event alerts. Turning this off unsubscribes this device.',
-                      ),
                       value: _prefs.events,
                       onChanged: (v) => _save(NotificationPrefs(
                         tripReminders: _prefs.tripReminders,
@@ -295,7 +290,7 @@ class _TravelHistoryScreenState extends State<TravelHistoryScreen> {
                       child: Padding(
                         padding: EdgeInsets.all(24),
                         child: Text(
-                          'No completed trips yet. Plans with a departure date still in the future stay in My Trips.',
+                          'No completed trips yet.',
                           textAlign: TextAlign.center,
                         ),
                       ),
@@ -427,7 +422,7 @@ class _MyReviewsScreenState extends State<MyReviewsScreen> {
                   child: Padding(
                     padding: EdgeInsets.all(24),
                     child: Text(
-                      'You have not written a review yet.',
+                      'No reviews yet.',
                       textAlign: TextAlign.center,
                     ),
                   ),
@@ -607,14 +602,7 @@ class AboutAppScreen extends StatelessWidget {
               Text('Version $version'),
               const SizedBox(height: 12),
               const Text(
-                'Trip Plan is the trip planner module of ATMOS TRS for Misamis Occidental. '
-                'It helps visitors plan routes, save places, and review destinations. '
-                'Municipal tourism records, check-ins, and official reports stay in ATMOS TRS.',
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'Features: plan a trip, save destinations, view maps and routes, '
-                'keep travel history, and manage your profile.',
+                'Trip planner for Misamis Occidental.',
               ),
             ],
           );

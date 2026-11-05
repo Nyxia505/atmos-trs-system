@@ -9,6 +9,7 @@ import 'services/tourism_session.dart';
 import 'spot_detail_screen.dart';
 import 'widgets/bus_terminal_map_markers.dart';
 import 'widgets/google_map_pin_icons.dart';
+import 'widgets/osm_map_glyph.dart';
 import 'widgets/osm_map_tiles.dart';
 
 class MappingScreen extends StatefulWidget {
@@ -79,13 +80,10 @@ class _MappingScreenState extends State<MappingScreen> {
               message: spot.location.isEmpty
                   ? spot.name
                   : '${spot.name}\n${spot.location}',
-              child: Icon(
-                Icons.location_on,
+              child: OsmMapGlyph(
+                icon: Icons.location_on,
                 color: GoogleMapPinIcons.touristSpotColor,
                 size: 36,
-                shadows: const [
-                  Shadow(blurRadius: 4, color: Colors.black38),
-                ],
               ),
             ),
           ),
@@ -163,7 +161,7 @@ class _MappingScreenState extends State<MappingScreen> {
                     ],
                   ),
                   child: const Text(
-                    'No mapped spots yet. Add latitude/longitude to your Firestore `tourist_spots` documents to show markers.',
+                    'No mapped spots yet.',
                     style: TextStyle(
                       color: AppColors.textGrey,
                       fontSize: 13,

@@ -8,6 +8,7 @@ import '../municipality_coordinates.dart'
     show getMunicipalityCoordinates, misamisOccidentalCenter;
 import '../spot_detail_screen.dart';
 import '../trip_planner_utils.dart';
+import 'osm_map_glyph.dart';
 import 'osm_map_tiles.dart';
 import 'trip_route_style.dart';
 
@@ -54,10 +55,6 @@ class TripRouteOsmMapView extends StatefulWidget {
   final List<LatLng> routeLinePoints;
   /// True when line follows roads (Directions API); thicker solid blue like Google Maps.
   final bool roadFollowing;
-  /// Walking mode: dotted blue route like Google Maps.
-  final bool dottedRoute;
-  /// Origin as a white circle, destination as a red pin (no name banners).
-  final bool googleStyleEndpoints;
   final LatLng? startPinPoint;
   final String startPinTitle;
   final String startPinDetail;
@@ -68,9 +65,6 @@ class TripRouteOsmMapView extends StatefulWidget {
   final bool showTouristSpots;
   final bool showBusStops;
   final bool showBusTerminals;
-  /// When true, pinch/double-tap/scroll zoom and pan are enabled even if
-  /// [compact] is true (for embedding in Tourist Spot Details).
-  final bool interactive;
 
   const TripRouteOsmMapView({
     super.key,
@@ -82,8 +76,6 @@ class TripRouteOsmMapView extends StatefulWidget {
     required this.compact,
     required this.routeLinePoints,
     this.roadFollowing = false,
-    this.dottedRoute = false,
-    this.googleStyleEndpoints = false,
     this.startPinPoint,
     this.startPinTitle = 'Starting Point',
     this.startPinDetail = '',
@@ -94,7 +86,6 @@ class TripRouteOsmMapView extends StatefulWidget {
     this.showTouristSpots = true,
     this.showBusStops = true,
     this.showBusTerminals = true,
-    this.interactive = false,
   });
 
   @override
@@ -103,7 +94,6 @@ class TripRouteOsmMapView extends StatefulWidget {
 
 class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
   final MapController _controller = MapController();
-  Size? _lastSize;
 
   @override
   void initState() {
@@ -111,73 +101,6 @@ class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) fitRouteBounds();
     });
-  }
-
-  @override
-  void didUpdateWidget(TripRouteOsmMapView oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    final lineChanged = !_sameLine(
-          oldWidget.routeLinePoints,
-          widget.routeLinePoints,
-        ) ||
-        !_sameLatLng(oldWidget.startPinPoint, widget.startPinPoint) ||
-        !_sameLatLng(oldWidget.endPinPoint, widget.endPinPoint);
-    if (lineChanged) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) fitRouteBounds();
-      });
-    }
-  }
-
-  bool _sameLatLng(LatLng? a, LatLng? b) {
-    if (a == null && b == null) return true;
-    if (a == null || b == null) return false;
-    return (a.latitude - b.latitude).abs() < 1e-5 &&
-        (a.longitude - b.longitude).abs() < 1e-5;
-  }
-
-  bool _sameLine(List<LatLng> a, List<LatLng> b) {
-    if (a.length != b.length) return false;
-    if (a.isEmpty) return true;
-    return _sameLatLng(a.first, b.first) && _sameLatLng(a.last, b.last);
-  }
-
-  ll.LatLng get _initialCenter {
-    final pts = widget.routeLinePoints;
-    if (pts.length >= 2) {
-      var lat = 0.0;
-      var lng = 0.0;
-      for (final p in pts) {
-        lat += p.latitude;
-        lng += p.longitude;
-      }
-      return ll.LatLng(lat / pts.length, lng / pts.length);
-    }
-    final end = widget.endPinPoint;
-    if (end != null) return _toOsm(end);
-    final start = widget.startPinPoint ?? getMunicipalityCoordinates(widget.start);
-    if (start != null) return _toOsm(start);
-    return _toOsm(misamisOccidentalCenter);
-  }
-
-  double get _initialZoom {
-    final pts = widget.routeLinePoints;
-    if (pts.length < 2) return widget.endPinPoint != null ? 14 : 11;
-    var minLat = pts.first.latitude;
-    var maxLat = minLat;
-    var minLng = pts.first.longitude;
-    var maxLng = minLng;
-    for (final p in pts) {
-      if (p.latitude < minLat) minLat = p.latitude;
-      if (p.latitude > maxLat) maxLat = p.latitude;
-      if (p.longitude < minLng) minLng = p.longitude;
-      if (p.longitude > maxLng) maxLng = p.longitude;
-    }
-    final span = (maxLat - minLat).abs() + (maxLng - minLng).abs();
-    if (span < 0.04) return 14;
-    if (span < 0.12) return 13;
-    if (span < 0.3) return 12;
-    return 11;
   }
 
   LatLng? get _startPosition =>
@@ -197,18 +120,12 @@ class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
               : widget.start.name)
           : widget.startPinDetail.trim();
       markers.add(
-        widget.googleStyleEndpoints
-            ? _googleOriginMarker(
-                _toOsm(start),
-                title: widget.startPinTitle,
-                detail: detail,
-              )
-            : _namedEndpointMarker(
-                _toOsm(start),
-                color: const Color(0xFF1565C0),
-                title: widget.startPinTitle,
-                detail: detail,
-              ),
+        _namedEndpointMarker(
+          _toOsm(start),
+          color: const Color(0xFF1565C0),
+          title: widget.startPinTitle,
+          detail: detail,
+        ),
       );
     }
     if (end != null) {
@@ -218,18 +135,12 @@ class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
               : widget.end.name)
           : widget.endPinDetail.trim();
       markers.add(
-        widget.googleStyleEndpoints
-            ? _googleDestinationMarker(
-                _toOsm(end),
-                title: widget.endPinTitle,
-                detail: detail,
-              )
-            : _namedEndpointMarker(
-                _toOsm(end),
-                color: const Color(0xFFE53935),
-                title: widget.endPinTitle,
-                detail: detail,
-              ),
+        _namedEndpointMarker(
+          _toOsm(end),
+          color: const Color(0xFFE53935),
+          title: widget.endPinTitle,
+          detail: detail,
+        ),
       );
     }
 
@@ -287,61 +198,6 @@ class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
   bool _same(LatLng a, LatLng b) {
     return (a.latitude - b.latitude).abs() < 1e-5 &&
         (a.longitude - b.longitude).abs() < 1e-5;
-  }
-
-  Marker _googleOriginMarker(
-    ll.LatLng point, {
-    required String title,
-    required String detail,
-  }) {
-    final message =
-        detail.isEmpty || detail == title ? title : '$title\n$detail';
-    return Marker(
-      point: point,
-      width: 22,
-      height: 22,
-      child: Tooltip(
-        message: message,
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-            border: Border.all(color: const Color(0xFF202124), width: 3),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x66000000),
-                blurRadius: 4,
-                offset: Offset(0, 1),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Marker _googleDestinationMarker(
-    ll.LatLng point, {
-    required String title,
-    required String detail,
-  }) {
-    final message =
-        detail.isEmpty || detail == title ? title : '$title\n$detail';
-    return Marker(
-      point: point,
-      width: 40,
-      height: 40,
-      alignment: Alignment.topCenter,
-      child: Tooltip(
-        message: message,
-        child: const Icon(
-          Icons.location_on,
-          color: Color(0xFFEA4335),
-          size: 40,
-          shadows: [Shadow(blurRadius: 4, color: Colors.black45)],
-        ),
-      ),
-    );
   }
 
   Marker _namedEndpointMarker(
@@ -419,13 +275,10 @@ class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
                   ],
                 ),
               ),
-              Icon(
-                Icons.location_on,
+              OsmMapGlyph(
+                icon: Icons.location_on,
                 color: color,
                 size: 40,
-                shadows: const [
-                  Shadow(blurRadius: 4, color: Colors.black45),
-                ],
               ),
             ],
           ),
@@ -482,11 +335,10 @@ class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
               },
         child: Tooltip(
           message: '$title\n$detail',
-          child: Icon(
-            icon,
+          child: OsmMapGlyph(
+            icon: icon,
             color: color,
             size: 36,
-            shadows: const [Shadow(blurRadius: 4, color: Colors.black38)],
           ),
         ),
       ),
@@ -507,43 +359,41 @@ class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
         onTap: onTap,
         child: Tooltip(
           message: label,
-          child: Icon(Icons.location_on, color: color, size: 36),
+          child: OsmMapGlyph(
+            icon: Icons.location_on,
+            color: color,
+            size: 36,
+          ),
         ),
       ),
     );
   }
 
   void fitRouteBounds() {
-    try {
-      final line = <LatLng>[
-        ...widget.routeLinePoints,
-        if (_startPosition != null) _startPosition!,
-        if (_endPosition != null) _endPosition!,
-        for (final spot in widget.spots)
-          if (spot.latitude != null && spot.longitude != null)
-            LatLng(spot.latitude!, spot.longitude!),
-      ];
-      if (line.length < 2) {
-        if (line.length == 1) {
-          _controller.move(_toOsm(line.first), 14);
-        }
-        return;
+    final line = <LatLng>[
+      ...widget.routeLinePoints,
+      if (_startPosition != null) _startPosition!,
+      if (_endPosition != null) _endPosition!,
+      for (final spot in widget.spots)
+        if (spot.latitude != null && spot.longitude != null)
+          LatLng(spot.latitude!, spot.longitude!),
+      for (final bus in widget.busMarkers) bus.point,
+    ];
+    if (line.length < 2) {
+      if (line.length == 1) {
+        _controller.move(_toOsm(line.first), 13);
+      } else {
+        _controller.move(_toOsm(misamisOccidentalCenter), 10.5);
       }
-      _controller.fitCamera(
-        CameraFit.bounds(
-          bounds: LatLngBounds.fromPoints(line.map(_toOsm).toList()),
-          padding: EdgeInsets.all(widget.compact ? 36 : 56),
-        ),
-      );
-    } catch (_) {}
-  }
-
-  void zoomBy(double delta) {
-    try {
-      final cam = _controller.camera;
-      final next = (cam.zoom + delta).clamp(8.0, 18.0);
-      _controller.move(cam.center, next);
-    } catch (_) {}
+      return;
+    }
+    final osm = line.map(_toOsm).toList();
+    _controller.fitCamera(
+      CameraFit.bounds(
+        bounds: LatLngBounds.fromPoints(osm),
+        padding: EdgeInsets.all(widget.compact ? 24 : 48),
+      ),
+    );
   }
 
   @override
@@ -551,61 +401,45 @@ class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
     final routeOsm = widget.routeLinePoints.map(_toOsm).toList();
     final polylines = <Polyline>[];
     if (routeOsm.length >= 2) {
-      if (widget.dottedRoute) {
+      final w = TripRouteStyle.routeWidth(
+        compact: widget.compact,
+        roadLine: widget.roadFollowing,
+      );
+      if (widget.roadFollowing) {
         polylines.add(
           Polyline(
             points: routeOsm,
-            color: TripRouteStyle.routeBlue,
-            strokeWidth: TripRouteStyle.walkingDotWidth(
-              compact: widget.compact,
-            ).toDouble(),
-            // flutter_map 7+: dotted strokes use StrokePattern (isDotted removed).
-            pattern: const StrokePattern.dotted(),
-            strokeCap: StrokeCap.round,
-            strokeJoin: StrokeJoin.round,
-          ),
-        );
-      } else {
-        final w = TripRouteStyle.routeWidth(
-          compact: widget.compact,
-          roadLine: widget.roadFollowing,
-        );
-        if (widget.roadFollowing) {
-          polylines.add(
-            Polyline(
-              points: routeOsm,
-              color: TripRouteStyle.routeBlueDark,
-              strokeWidth:
-                  TripRouteStyle.routeCasingWidth(compact: widget.compact)
-                      .toDouble(),
-            ),
-          );
-        }
-        polylines.add(
-          Polyline(
-            points: routeOsm,
-            color: TripRouteStyle.routeBlue,
-            strokeWidth: w.toDouble(),
-            strokeCap: StrokeCap.round,
-            strokeJoin: StrokeJoin.round,
+            color: TripRouteStyle.routeBlueDark,
+            strokeWidth:
+                TripRouteStyle.routeCasingWidth(compact: widget.compact)
+                    .toDouble(),
           ),
         );
       }
+      polylines.add(
+        Polyline(
+          points: routeOsm,
+          color: TripRouteStyle.routeBlue,
+          strokeWidth: w.toDouble(),
+          strokeCap: StrokeCap.round,
+          strokeJoin: StrokeJoin.round,
+        ),
+      );
     }
 
     final map = FlutterMap(
       mapController: _controller,
       options: MapOptions(
-        initialCenter: _initialCenter,
-        initialZoom: _initialZoom,
-        minZoom: 7,
+        initialCenter: _toOsm(misamisOccidentalCenter),
+        initialZoom: 10.5,
+        minZoom: 8,
         maxZoom: 18,
         backgroundColor: const Color(0xFFE8EEF2),
         onMapReady: fitRouteBounds,
         interactionOptions: InteractionOptions(
-          flags: widget.interactive
-              ? InteractiveFlag.all & ~InteractiveFlag.rotate
-              : InteractiveFlag.none,
+          flags: widget.compact
+              ? InteractiveFlag.none
+              : InteractiveFlag.all,
         ),
       ),
       children: [
@@ -616,26 +450,8 @@ class TripRouteOsmMapViewState extends State<TripRouteOsmMapView> {
       ],
     );
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final size = Size(constraints.maxWidth, constraints.maxHeight);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          final last = _lastSize;
-          if (last != null &&
-              (size.width - last.width).abs() < 8 &&
-              (size.height - last.height).abs() < 8) {
-            return;
-          }
-          _lastSize = size;
-          fitRouteBounds();
-        });
-        return SizedBox.expand(
-          child: RepaintBoundary(
-            child: widget.interactive ? map : IgnorePointer(child: map),
-          ),
-        );
-      },
+    return SizedBox.expand(
+      child: widget.compact ? IgnorePointer(child: map) : map,
     );
   }
 }

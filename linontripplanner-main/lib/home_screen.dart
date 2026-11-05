@@ -28,6 +28,7 @@ import 'services/spot_interaction_history.dart';
 import 'widgets/responsive_layout.dart';
 import 'widgets/tourism_plan_ui.dart';
 import 'widgets/profile_header_photo.dart';
+import 'widgets/trip_plan_app_icon.dart';
 
 
 class HomeScreen extends StatefulWidget {
@@ -42,6 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
   int _bottomIndex = 0;
+  final Set<int> _mountedTabs = {0};
   Timer? _bannerAutoPlayTimer;
   int _featuredBannerIndex = 0;
   bool _bannerPageChangeFromTimer = false;
@@ -202,11 +204,19 @@ class _HomeScreenState extends State<HomeScreen> {
     _reloadHomeDataFromFirestore();
   }
 
+  void _selectShellTab(int index) {
+    if (!mounted) return;
+    setState(() {
+      _mountedTabs.add(index);
+      _bottomIndex = index;
+    });
+  }
+
   void _onShellTabRequest() {
     final index = tourismShellTabRequest.value;
     if (index == null || !mounted) return;
     tourismShellTabRequest.value = null;
-    setState(() => _bottomIndex = index);
+    _selectShellTab(index);
     _tabNavKeys[index].currentState?.popUntil((r) => r.isFirst);
   }
 
@@ -246,16 +256,6 @@ class _HomeScreenState extends State<HomeScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _syncBannerPageWithListAndRestartAutoPlay();
       });
-
-      unawaited(
-        HomePersonalizationService.instance.refresh().then((_) {
-          if (!mounted) return;
-          setState(() {});
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _syncBannerPageWithListAndRestartAutoPlay();
-          });
-        }),
-      );
     } catch (_) {
       // Keep existing in-memory fallback if Firestore read fails.
       if (mounted) setState(() {});
@@ -330,7 +330,7 @@ class _HomeScreenState extends State<HomeScreen> {
           return;
         }
         if (_bottomIndex != 0) {
-          setState(() => _bottomIndex = 0);
+          _selectShellTab(0);
           return;
         }
         SystemNavigator.pop();
@@ -340,19 +340,19 @@ class _HomeScreenState extends State<HomeScreen> {
         body: IndexedStack(
           index: _bottomIndex,
           children: [
-            _tabNavigator(0, _buildHomeTabRoot),
-            _tabNavigator(
+            _lazyShellTab(0, _buildHomeTabRoot),
+            _lazyShellTab(
               1,
               () => const TouristSpotsScreen(embeddedInShell: true),
             ),
-            _tabNavigator(
+            _lazyShellTab(
               2,
               () => const MyTripsScreen(embeddedInShell: true),
             ),
-            _tabNavigator(_profileTab, () => const ProfileScreen()),
-            _tabNavigator(4, () => const MappingScreen()),
-            _tabNavigator(5, () => const NotificationsScreen()),
-            _tabNavigator(6, () => const EventsScreen()),
+            _lazyShellTab(_profileTab, () => const ProfileScreen()),
+            _lazyShellTab(4, () => const MappingScreen()),
+            _lazyShellTab(5, () => const NotificationsScreen()),
+            _lazyShellTab(6, () => const EventsScreen()),
           ],
         ),
         bottomNavigationBar: TourismBottomNavShell(
@@ -374,7 +374,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 }
                 return;
               }
-              setState(() => _bottomIndex = index);
+              _selectShellTab(index);
               if (index == 5 || index == 6) {
                 unawaited(_refreshEventsAndNotifications());
               }
@@ -440,6 +440,13 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _lazyShellTab(int tabIndex, Widget Function() rootBuilder) {
+    if (!_mountedTabs.contains(tabIndex)) {
+      return const SizedBox.shrink();
+    }
+    return _tabNavigator(tabIndex, rootBuilder);
+  }
+
   Widget _tabNavigator(int tabIndex, Widget Function() rootBuilder) {
     return Navigator(
       key: _tabNavKeys[tabIndex],
@@ -460,7 +467,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openBottomTab(int index) {
-    setState(() => _bottomIndex = index);
+    _selectShellTab(index);
   }
 
   Widget _buildProfileButton({required double size, required bool compact}) {
@@ -493,11 +500,8 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Image.asset(
-                'assets/images/tripplan.png',
-                package: 'trip_plan',
+              TripPlanAppIcon(
                 height: compactHeader ? 48 : 64,
-                filterQuality: FilterQuality.high,
               ),
               SizedBox(width: compactHeader ? 8 : 10),
               Column(
@@ -627,7 +631,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ] else if (!_isSearching && allSpots.isEmpty) ...[
                           const SizedBox(height: 16),
                           Text(
-                            'Tourist spots are still loading...',
+                            'Loading tourist spots…',
                             style: TextStyle(
                               color: AppColors.textGrey.withValues(alpha: 0.95),
                             ),
@@ -637,13 +641,6 @@ class _HomeScreenState extends State<HomeScreen> {
                           _buildSectionHeader(
                             'Recommended for You',
                             onTap: () => _openBottomTab(1),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Open Spots to browse all ${allSpots.length} places.',
-                            style: TextStyle(
-                              color: AppColors.textGrey.withValues(alpha: 0.95),
-                            ),
                           ),
                           const SizedBox(height: 12),
                         ],
@@ -711,8 +708,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildEmptySearchState() {
     return TourismEmptyState(
       icon: Icons.search_off_rounded,
-      message:
-          'No destinations match "${_searchQuery.trim()}".\nTry another name or municipality.',
+      message: 'No destinations match "${_searchQuery.trim()}".',
       topPadding: 24,
     );
   }

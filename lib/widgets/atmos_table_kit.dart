@@ -124,12 +124,18 @@ class AtmosResponsiveTable extends StatelessWidget {
     required this.rows,
     this.footer,
     this.empty,
+    this.headerColor = kAtmosTableHeader,
+    this.headerTextColor = kAtmosTableText,
+    this.footerColor = const Color(0xFFFFF1E7),
   });
 
   final List<AtmosTableColumn> columns;
   final List<List<Widget>> rows;
   final List<Widget>? footer;
   final Widget? empty;
+  final Color headerColor;
+  final Color headerTextColor;
+  final Color footerColor;
 
   @override
   Widget build(BuildContext context) {
@@ -187,7 +193,7 @@ class AtmosResponsiveTable extends StatelessWidget {
                 children: [
                   DecoratedBox(
                     decoration: BoxDecoration(
-                      color: kAtmosTableHeader,
+                      color: headerColor,
                       borderRadius: BorderRadius.circular(10),
                       border: Border.all(color: kAtmosTableGlow.withValues(alpha: 0.22)),
                     ),
@@ -203,10 +209,10 @@ class AtmosResponsiveTable extends StatelessWidget {
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                               textAlign: _textAlign(columns[i].align),
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 11.5,
                                 fontWeight: FontWeight.w800,
-                                color: kAtmosTableMuted,
+                                color: headerTextColor,
                                 letterSpacing: 0.2,
                               ),
                             ),
@@ -233,7 +239,7 @@ class AtmosResponsiveTable extends StatelessWidget {
                         hover: true,
                         rest: r.isOdd ? const Color(0xFFF8FAFC) : Colors.white,
                       ),
-                  if (footer != null) line(footer!, hover: false, rest: const Color(0xFFFFF7ED)),
+                  if (footer != null) line(footer!, hover: false, rest: footerColor),
                 ],
               ),
             ),

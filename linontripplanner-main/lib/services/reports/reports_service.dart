@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart' show DateTimeRange;
 
 import '../../data.dart';
+import '../../event_schedule.dart';
 import '../../firestore_loader.dart'
     show
         loadTouristSpotsForMunicipalityFromFirestore,
@@ -14,6 +15,7 @@ import '../../tourist_plan/tourist_travel_estimates.dart'
 import '../../transportation_fee.dart';
 import '../../transportation_fees_loader.dart';
 import '../../trip_planner_utils.dart' show matchMunicipalityByLocalityHint;
+import '../admin_live_collections.dart';
 import '../public_firestore_read.dart';
 import '../tourism_session.dart' show reloadAdminDashboardCatalogs;
 import 'report_check_ins.dart';
@@ -93,7 +95,10 @@ class ReportsService {
     ReportFilters filters = ReportFilters.none,
     bool refresh = false,
   }) async {
-    _validate(filters);
+    _validate(
+      filters,
+      allowFutureDates: kind == ReportKind.eventsAnnouncements,
+    );
 
     if (refresh) {
       _checkInCache = null;
@@ -142,7 +147,10 @@ class ReportsService {
     };
   }
 
-  static void _validate(ReportFilters filters) {
+  static void _validate(
+    ReportFilters filters, {
+    bool allowFutureDates = false,
+  }) {
     if (filters.needsMunicipalitySelection) {
       throw const ReportDataException(
         'Select a municipality / LGU before applying the Single Municipality filter.',
@@ -155,7 +163,8 @@ class ReportsService {
         'The start date is after the end date. Please pick a valid range.',
       );
     }
-    if (range.start.isAfter(DateTime.now().add(const Duration(days: 1)))) {
+    if (!allowFutureDates &&
+        range.start.isAfter(DateTime.now().add(const Duration(days: 1)))) {
       throw const ReportDataException(
         'The start date is in the future, so there is nothing to report yet.',
       );
@@ -213,6 +222,11 @@ class ReportsService {
     final lgu = filters.effectiveMunicipality;
     // Overall reports can reuse the full-collection cache.
     if (lgu == null) {
+      final live = AdminLiveCollections.instance;
+      if (live.checkInsReady && live.checkInsError == null) {
+        _checkInCache = live.checkInRecords;
+        return live.checkInRecords;
+      }
       final cached = _checkInCache;
       if (cached != null) return cached;
       try {
@@ -773,8 +787,8 @@ class ReportsService {
     final events =
         tourismEvents.where((e) {
           if (eventId != null && e.id != eventId) return false;
-          if (lgu != null && _municipalityOfEvent(e) != lgu) return false;
-          return filters.includesDate(e.dateTime);
+          if (lgu != null && !_eventMatchesReportLgu(e, lgu)) return false;
+          return eventExpandedCalendarDays(e).any(filters.includesDate);
         }).toList()
           ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
 
@@ -795,12 +809,9 @@ class ReportsService {
       attendance[e.id] = all.where((c) {
         final at = c.at;
         if (at == null) return false;
-        if (at.year != e.dateTime.year ||
-            at.month != e.dateTime.month ||
-            at.day != e.dateTime.day) {
-          return false;
-        }
-        if (eventLgu == null) return true;
+        if (!eventOccursOnCalendarDay(e, at)) return false;
+        if (eventMatchesLocationName(e, c.municipalityName)) return true;
+        if (eventLgu == null) return e.locationNames.isEmpty;
         return c.municipalityName == eventLgu;
       }).length;
     }
@@ -848,7 +859,7 @@ class ReportsService {
         label: 'Total check-ins on event days',
         value: formatCount(totalAttendance),
         icon: ReportKind.eventsAnnouncements.icon,
-        caption: 'estimated attendance',
+        caption: 'same-day tourist check-ins in event LGUs — not confirmed attendance',
       ),
       ReportMetric(
         label: 'Most attended event',
@@ -919,8 +930,7 @@ class ReportsService {
             [
               e.title,
               e.eventType.trim().isEmpty ? 'General' : e.eventType,
-              _municipalityOfEvent(e) ??
-                  (e.municipality.trim().isEmpty ? '—' : e.municipality),
+              _municipalityCell(e),
               e.venue.trim().isEmpty ? '—' : e.venue,
               formatReportDateTime(e.dateTime),
               e.dateTime.isAfter(now) ? 'Upcoming' : 'Completed',
@@ -983,10 +993,43 @@ class ReportsService {
     return null;
   }
 
+  static String _municipalityCell(TourismEvent e) {
+    final lgus = _municipalityLabelsOfEvent(e);
+    if (lgus.isNotEmpty) return lgus.join('; ');
+    return e.municipality.trim().isEmpty ? '—' : e.municipality;
+  }
+
   static String? _municipalityOfEvent(TourismEvent e) {
-    final direct = matchMunicipalityByLocalityHint(e.municipality);
-    if (direct != null) return direct.name;
-    return matchMunicipalityByLocalityHint(e.venue)?.name;
+    final labels = _municipalityLabelsOfEvent(e);
+    return labels.isEmpty ? null : labels.first;
+  }
+
+  /// Every catalog LGU on the event, without duplicates. Multi-city events
+  /// stay one row in the Events table; portal EVT 2 splits this list.
+  static List<String> _municipalityLabelsOfEvent(TourismEvent e) {
+    final out = <String>[];
+    final seen = <String>{};
+    void add(String raw) {
+      final t = raw.trim();
+      if (t.isEmpty) return;
+      final resolved = matchMunicipalityByLocalityHint(t)?.name ?? t;
+      if (seen.add(resolved.toLowerCase())) out.add(resolved);
+    }
+
+    for (final name in e.locationNames) {
+      add(name);
+    }
+    if (out.isEmpty) add(e.municipality);
+    if (out.isEmpty) {
+      final fromVenue = matchMunicipalityByLocalityHint(e.venue);
+      if (fromVenue != null) add(fromVenue.name);
+    }
+    return out;
+  }
+
+  static bool _eventMatchesReportLgu(TourismEvent e, String lgu) {
+    if (eventMatchesLocationName(e, lgu)) return true;
+    return _municipalityOfEvent(e) == lgu;
   }
 
   static String _excerpt(String body) {
@@ -1152,6 +1195,31 @@ class ReportsService {
               formatDistanceKm(r.distanceKm),
               formatTravelMinutes(r.travelMinutes),
             ],
+        ],
+      ),
+      ReportTable(
+        title: 'Terminal to terminal fares',
+        columns: const [
+          'Municipality',
+          'Starting point',
+          'Destination / tourist spot',
+          'Transportation type',
+          'Fare',
+          'Distance',
+          'Estimated travel time',
+        ],
+        rows: [
+          for (final r in scoped)
+            if (r.touristSpot == null)
+              [
+                r.municipality,
+                r.startingPoint,
+                r.destination,
+                formatTransportType(r.transportType),
+                r.fareLabel,
+                formatDistanceKm(r.distanceKm),
+                formatTravelMinutes(r.travelMinutes),
+              ],
         ],
       ),
       ReportTable(

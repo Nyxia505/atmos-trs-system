@@ -2453,6 +2453,31 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Text('Modules', style: GovernorDashboardTokens.sectionTitle()),
+              const SizedBox(height: 4),
+              Text(
+                'Open the Trip Planner OPTACA portal without signing out.',
+                style: GovernorDashboardTokens.body(),
+              ),
+              const SizedBox(height: 8),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.route_rounded),
+                title: const Text('Open Trip Planner portal'),
+                subtitle: const Text(
+                  'Catalog admin, analytics, fares, and DOT tools',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: _openTripPlannerPortal,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _panel(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
               Text('Debug data', style: GovernorDashboardTokens.sectionTitle()),
               const SizedBox(height: 4),
               Text(
@@ -2501,6 +2526,15 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
           ),
         ),
       ],
+    );
+  }
+
+  Future<void> _openTripPlannerPortal() async {
+    await ModuleShellPrefs.setActiveShell(ModuleShellPrefs.tripPlannerAdmin);
+    if (!mounted) return;
+    Navigator.of(context).pushNamedAndRemoveUntil(
+      '/trip-planner-admin',
+      (_) => false,
     );
   }
 

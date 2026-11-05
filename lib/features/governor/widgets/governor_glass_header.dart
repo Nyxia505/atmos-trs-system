@@ -8,6 +8,7 @@ class GovernorGlassHeader extends StatelessWidget {
     required this.title,
     this.greeting,
     this.subtitle,
+    this.titleIcon,
     this.notificationCount = 0,
     this.onNotifications,
     this.profile,
@@ -26,6 +27,10 @@ class GovernorGlassHeader extends StatelessWidget {
   final String? greeting;
 
   final String? subtitle;
+
+  /// Optional icon shown beside the page title (e.g. Fares bus).
+  final IconData? titleIcon;
+
   final int notificationCount;
   final VoidCallback? onNotifications;
   final Widget? profile;
@@ -138,6 +143,7 @@ class GovernorGlassHeader extends StatelessWidget {
             greeting: greeting,
             title: title,
             subtitle: subtitle,
+            titleIcon: titleIcon,
             compact: compact,
           ),
         ),
@@ -206,6 +212,7 @@ class GovernorGlassHeader extends StatelessWidget {
                 greeting: greeting,
                 title: title,
                 subtitle: subtitle,
+                titleIcon: titleIcon,
                 compact: true,
               ),
             ),
@@ -238,16 +245,28 @@ class _GreetingBlock extends StatelessWidget {
     required this.title,
     this.greeting,
     this.subtitle,
+    this.titleIcon,
     this.compact = false,
   });
 
   final String title;
   final String? greeting;
   final String? subtitle;
+  final IconData? titleIcon;
   final bool compact;
 
   @override
   Widget build(BuildContext context) {
+    final titleText = Text(
+      title,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: GovernorDashboardTokens.heading(
+        size: compact ? 22 : 28,
+        color: Colors.white,
+      ),
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisAlignment: MainAxisAlignment.center,
@@ -262,20 +281,33 @@ class _GreetingBlock extends StatelessWidget {
               color: Colors.white.withValues(alpha: 0.95),
             ).copyWith(fontWeight: FontWeight.w500),
           ),
-        Text(
-          title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: GovernorDashboardTokens.heading(
-            size: compact ? 22 : 28,
-            color: Colors.white,
-          ),
-        ),
+        if (titleIcon != null)
+          Row(
+            children: [
+              Container(
+                width: compact ? 34 : 40,
+                height: compact ? 34 : 40,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.95),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  titleIcon,
+                  color: const Color(0xFFEA580C),
+                  size: compact ? 18 : 22,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(child: titleText),
+            ],
+          )
+        else
+          titleText,
         if (subtitle != null && subtitle!.isNotEmpty) ...[
           const SizedBox(height: 2),
           Text(
             subtitle!,
-            maxLines: 1,
+            maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: GovernorDashboardTokens.body(
               size: compact ? 11 : 12.5,
