@@ -23,6 +23,7 @@ import 'package:atmos_trs_system/services/landing_intent_service.dart';
 import 'package:atmos_trs_system/widgets/atmos_brand_title.dart';
 import 'package:atmos_trs_system/widgets/trip_plan_auth_brand.dart';
 import 'package:atmos_trs_system/widgets/web_glass_auth_scaffold.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -282,6 +283,31 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
+      // Temporary passwords set by OPTACA must be changed before continuing.
+      try {
+        final fresh = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .get(const GetOptions(source: Source.server));
+        if (fresh.data()?['mustChangePassword'] == true) {
+          setState(() => _isLoading = false);
+          if (!mounted) return;
+          final changed = await _promptRequiredPasswordChange(
+            email: email,
+            currentPassword: password,
+          );
+          if (!changed) {
+            try {
+              await FirebaseAuth.instance.signOut();
+            } catch (_) {}
+            AuthConfig.currentUserUid = null;
+            return;
+          }
+        }
+      } catch (e) {
+        debugPrint('[Login] mustChangePassword check: $e');
+      }
+
       final route = await LoginFlowService.resolveRouteFast(
         uid: uid,
         email: email,
@@ -335,7 +361,8 @@ class _LoginScreenState extends State<LoginScreen> {
       final isStaff = route == '/governor-dashboard' ||
           route == '/lgu-dashboard' ||
           route == '/tourism-dashboard' ||
-          route == '/provincial-tourism-dashboard';
+          route == '/provincial-tourism-dashboard' ||
+          route == '/trip-planner-admin';
       if (isStaff) {
         await LoginFlowService.persistStaffSessionQuick(uid: uid, email: email);
         await PendingSpotCheckInStorage.clear();
@@ -395,6 +422,98 @@ class _LoginScreenState extends State<LoginScreen> {
           backgroundColor: Colors.redAccent,
         ),
       );
+    }
+  }
+
+  /// Forces a password change when OPTACA set a temporary password.
+  Future<bool> _promptRequiredPasswordChange({
+    required String email,
+    required String currentPassword,
+  }) async {
+    final next = TextEditingController();
+    final confirm = TextEditingController();
+    try {
+      while (mounted) {
+        final values = await showDialog<({String password})>(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Change temporary password'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Your administrator set a temporary password. Choose a new password to continue.',
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: next,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'New password',
+                    helperText: 'At least 8 characters',
+                  ),
+                ),
+                TextField(
+                  controller: confirm,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Confirm password',
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Sign out'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  if (next.text.length < 8 || next.text != confirm.text) {
+                    return;
+                  }
+                  Navigator.pop(ctx, (password: next.text));
+                },
+                child: const Text('Update password'),
+              ),
+            ],
+          ),
+        );
+        if (values == null) return false;
+        try {
+          await AuthService.reauthenticateAndUpdatePassword(
+            email: email,
+            currentPassword: currentPassword,
+            newPassword: values.password,
+          );
+          final uid = FirebaseAuth.instance.currentUser?.uid;
+          if (uid != null) {
+            await FirebaseFirestore.instance.collection('users').doc(uid).set({
+              'mustChangePassword': false,
+              'updatedAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
+          }
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Password updated.')),
+            );
+          }
+          return true;
+        } catch (e) {
+          if (!mounted) return false;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Could not update password. $e'),
+              backgroundColor: Colors.redAccent,
+            ),
+          );
+        }
+      }
+      return false;
+    } finally {
+      next.dispose();
+      confirm.dispose();
     }
   }
 

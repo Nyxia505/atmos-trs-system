@@ -2,6 +2,7 @@
 import 'package:flutter/services.dart';
 
 import '../data.dart';
+import '../firestore_loader.dart' show loadEventsFromFirestore;
 import '../municipal_road_distances.dart'
     show RoadRouteDirection, RoadRouteOption;
 import '../services/saved_trip_store.dart';
@@ -13,6 +14,8 @@ import '../widgets/municipality_image.dart';
 import '../widgets/tourism_plan_ui.dart';
 import 'tourist_travel_estimates.dart';
 import 'trip_itinerary_step.dart';
+import 'trip_travel_events_dialog.dart';
+import 'trip_travel_events_matcher.dart';
 import 'trip_wizard_controller.dart';
 
 /// Guided "Plan my trip" wizard - itinerary only after the user finishes Review.
@@ -919,11 +922,71 @@ String _fmtDate(DateTime d) {
   return '${m[d.month - 1]} ${d.day}, ${d.year}';
 }
 
-class _ReviewStep extends StatelessWidget {
+class _ReviewStep extends StatefulWidget {
   final TripWizardController wizard;
   final Color accent;
 
   const _ReviewStep({required this.wizard, required this.accent});
+
+  @override
+  State<_ReviewStep> createState() => _ReviewStepState();
+}
+
+class _ReviewStepState extends State<_ReviewStep> {
+  /// Signature last shown for this Review visit; cleared when itinerary changes.
+  String? _shownMatchSignature;
+  bool _checkingEvents = false;
+
+  TripWizardController get wizard => widget.wizard;
+  Color get accent => widget.accent;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _maybeShowTravelEventsDialog();
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReviewStep oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final nextSig = tripTravelEventsMatchSignature(wizard);
+    if (_shownMatchSignature != null && _shownMatchSignature != nextSig) {
+      _shownMatchSignature = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _maybeShowTravelEventsDialog();
+      });
+    }
+  }
+
+  Future<void> _maybeShowTravelEventsDialog() async {
+    if (!mounted || _checkingEvents) return;
+    final signature = tripTravelEventsMatchSignature(wizard);
+    if (signature.isEmpty || _shownMatchSignature == signature) return;
+
+    _checkingEvents = true;
+    try {
+      try {
+        await loadEventsFromFirestore();
+      } catch (_) {
+        // Keep cached in-memory events; never show an empty error dialog.
+      }
+      if (!mounted) return;
+
+      final matches = matchingTravelEventsForTrip(wizard);
+      _shownMatchSignature = signature;
+      if (matches.isEmpty) return;
+
+      await showTripTravelEventsDialog(
+        context,
+        events: matches,
+        accent: accent,
+      );
+    } finally {
+      _checkingEvents = false;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

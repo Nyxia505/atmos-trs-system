@@ -9,7 +9,7 @@ typedef AdminLiveDocs = List<QueryDocumentSnapshot<Map<String, dynamic>>>;
 
 /// One shared `tourists` + `qr_checkins` listener for the OPTACA portal.
 ///
-/// Overview, Tourist Monitoring, Municipality Performance, Tourism Insights,
+/// Overview, Tourist Monitoring, Municipality Performance,
 /// check-in history, and DOT reports previously each opened their own
 /// full-collection `snapshots()` when the tab was built.
 class AdminLiveCollections {

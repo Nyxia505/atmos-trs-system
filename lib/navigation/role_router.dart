@@ -1,3 +1,6 @@
+import 'dart:async' show unawaited;
+
+import 'package:atmos_trs_system/config/module_shell_prefs.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
@@ -46,7 +49,12 @@ class RoleRouter {
         role: UserRole.provincialTourism,
         email: profile.email,
       );
-      return '/provincial-tourism-dashboard';
+      // OPTACA portal (Trip Planner admin) is the default shell from landing /
+      // ATMOS TRS login and 360° Previews — not the older provincial ATMOS page.
+      unawaited(
+        ModuleShellPrefs.setActiveShell(ModuleShellPrefs.tripPlannerAdmin),
+      );
+      return '/trip-planner-admin';
     }
 
     if (profile.isTourismOffice) {
@@ -115,7 +123,7 @@ class RoleRouter {
   /// Cold start: when profile is already loaded (e.g. from [getProfileByUid]).
   static String routeForProfile(AppUserProfile profile) {
     if (profile.isGovernor) return '/governor-dashboard';
-    if (profile.isProvincialTourism) return '/provincial-tourism-dashboard';
+    if (profile.isProvincialTourism) return '/trip-planner-admin';
     if (profile.isTourismOffice) {
       if (!profile.isVerified) return '/verify-otp';
       return '/lgu-dashboard';

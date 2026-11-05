@@ -39,6 +39,9 @@ class TripPlanHostBridge {
   /// OPTACA Alerts & Quality panel (live Firestore audit) from ATMOS host.
   static WidgetBuilder? alertsQualityPanel;
 
+  /// OPTACA LGU & User Account Management panel from ATMOS host.
+  static WidgetBuilder? lguAccountManagementPanel;
+
   /// Official DOT Excel/PDF forms panel from ATMOS host.
   static WidgetBuilder? officialDotReports;
 

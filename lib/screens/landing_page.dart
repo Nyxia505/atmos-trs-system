@@ -25,6 +25,7 @@ import 'package:atmos_trs_system/widgets/hero_video_mute_control.dart';
 import 'package:atmos_trs_system/widgets/onboarding_hero_video.dart';
 import 'package:atmos_trs_system/config/app_store_links.dart';
 import 'package:atmos_trs_system/config/atmos_brand_typography.dart';
+import 'package:atmos_trs_system/config/module_shell_prefs.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/config/supabase_storage_config.dart';
 import 'package:atmos_trs_system/services/landing_intent_service.dart';
@@ -487,7 +488,8 @@ class _LandingPageState extends State<LandingPage> {
                   _headerLoginChoiceTile(
                     icon: Icons.travel_explore_rounded,
                     title: 'ATMOS TRS',
-                    subtitle: 'Tourist and establishment dashboard',
+                    subtitle:
+                        'Tourists, establishments, and OPTACA portal for admins',
                     onTap: () {
                       Navigator.pop(dialogContext);
                       unawaited(_openAtmosLogin());
@@ -497,7 +499,7 @@ class _LandingPageState extends State<LandingPage> {
                   _headerLoginChoiceTile(
                     icon: Icons.map_outlined,
                     title: 'Itinerary',
-                    subtitle: 'Trip Planner dashboard',
+                    subtitle: 'Trip Planner for tourists & OPTACA admin',
                     onTap: () {
                       Navigator.pop(dialogContext);
                       _navigateToLoginForFeature(
@@ -663,9 +665,13 @@ class _LandingPageState extends State<LandingPage> {
   }
 
   void _openVrOrLogin() {
-    // ATMOS login. Sign Up opens the account chooser, with Tourist and Establishment.
-      _navigateToLoginForFeature(returnFeature: LoginRouteArgs.featureVr);
+    // 360° Previews → ATMOS TRS login. OPTACA admins land on the OPTACA portal.
+    if (_isLoggedIn) {
+      unawaited(_openAuthorizedDashboard());
+      return;
     }
+    _navigateToLoginForFeature(returnFeature: LoginRouteArgs.featureVr);
+  }
 
   Future<void> _openAuthorizedDashboard() async {
     _pauseHeroVideoForAuthNavigation();
@@ -679,13 +685,21 @@ class _LandingPageState extends State<LandingPage> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return '/login';
     final profile = await UserDirectoryService.getProfileByUid(user.uid);
-    if (profile != null) return RoleRouter.routeForProfile(profile);
+    if (profile != null) {
+      final route = RoleRouter.routeForProfile(profile);
+      if (route == '/trip-planner-admin') {
+        unawaited(
+          ModuleShellPrefs.setActiveShell(ModuleShellPrefs.tripPlannerAdmin),
+        );
+      }
+      return route;
+    }
     final storedUid = await SessionStorage.getStoredUser();
     if (storedUid != user.uid) return '/dashboard';
     final role = await SessionStorage.getStoredRole();
     return switch (role) {
       UserRole.governor => '/governor-dashboard',
-      UserRole.provincialTourism => '/provincial-tourism-dashboard',
+      UserRole.provincialTourism => '/trip-planner-admin',
       UserRole.tourism => '/lgu-dashboard',
       UserRole.tourismEstablishment => '/establishment-dashboard',
       UserRole.tourist => '/dashboard',
@@ -2455,9 +2469,17 @@ class _LandingPageState extends State<LandingPage> {
       await _openVrTourFromLanding();
       return;
     }
+    // Staff (including OPTACA) open their role shell from 360° Previews.
+    // OPTACA → Trip Planner admin portal (same as ATMOS TRS module login).
     _pauseHeroVideoForAuthNavigation();
     if (!mounted) return;
-    Navigator.of(context).pushNamed(RoleRouter.routeForProfile(profile));
+    final route = RoleRouter.routeForProfile(profile);
+    if (route == '/trip-planner-admin') {
+      unawaited(
+        ModuleShellPrefs.setActiveShell(ModuleShellPrefs.tripPlannerAdmin),
+      );
+    }
+    Navigator.of(context).pushNamed(route);
   }
 
   void _openExperienceTripPlanner() {

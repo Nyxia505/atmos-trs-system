@@ -2,7 +2,7 @@
   "name": "atmos-trs-functions",
   "description": "Sends FCM push when governor publishes an announcement",
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "index.js",
   "dependencies": {

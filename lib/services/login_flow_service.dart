@@ -45,7 +45,7 @@ class LoginFlowService {
     final roleFromEmail = SessionStorage.getRoleFromEmail(email);
     if (roleFromEmail == UserRole.governor) return '/governor-dashboard';
     if (roleFromEmail == UserRole.provincialTourism) {
-      return '/provincial-tourism-dashboard';
+      return '/trip-planner-admin';
     }
     if (roleFromEmail == UserRole.tourism) return '/lgu-dashboard';
 

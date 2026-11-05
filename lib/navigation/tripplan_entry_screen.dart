@@ -9,6 +9,7 @@ import 'package:atmos_trs_system/models/tourist_spot.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
 import 'package:atmos_trs_system/widgets/lgu_debug_data_dialogs.dart';
 import 'package:atmos_trs_system/widgets/optaca_alerts_quality_panel.dart';
+import 'package:atmos_trs_system/widgets/optaca_accounts_panel.dart';
 import 'package:atmos_trs_system/utils/dot_report_entity_scope.dart';
 import 'package:atmos_trs_system/widgets/optaca_portal_dot_reports.dart';
 import 'package:flutter/material.dart';
@@ -125,6 +126,8 @@ class _TripPlanEntryScreenState extends State<TripPlanEntryScreen> {
     TripPlanHostBridge.mergeKnownVrDestinations = mergeKnownVrDestinations;
     TripPlanHostBridge.alertsQualityPanel =
         (context) => const OptacaAlertsQualityPanel();
+    TripPlanHostBridge.lguAccountManagementPanel =
+        (context) => const OptacaAccountsPanel();
     unawaited(_bootstrap());
   }
 
@@ -160,6 +163,7 @@ class _TripPlanEntryScreenState extends State<TripPlanEntryScreen> {
     TripPlanHostBridge.openVrPreview = null;
     TripPlanHostBridge.mergeKnownVrDestinations = null;
     TripPlanHostBridge.alertsQualityPanel = null;
+    TripPlanHostBridge.lguAccountManagementPanel = null;
     TripPlanHostBridge.isHostCatalogAdmin = null;
     super.dispose();
   }

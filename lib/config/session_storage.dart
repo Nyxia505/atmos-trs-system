@@ -41,11 +41,12 @@ class SessionStorage {
   static const String _keyProvincialTourismPassword =
       'provincial_tourism_password';
 
-  /// True for any email that maps to the Provincial Tourism Office dashboard.
+  /// True for any email that maps to the Provincial Tourism Office / OPTACA portal.
   static bool isProvincialTourismEmail(String email) {
     final normalized = email.toLowerCase().trim();
     return normalized == provincialTourismEmail.toLowerCase() ||
-        normalized == provincialTourismEmailLegacy.toLowerCase();
+        normalized == provincialTourismEmailLegacy.toLowerCase() ||
+        normalized == 'optaca@gmail.com';
   }
 
   /// Passwords accepted for provincial tourism demo accounts (prefs override first).
@@ -290,7 +291,7 @@ class SessionStorage {
       case UserRole.governor:
         return '/governor-dashboard';
       case UserRole.provincialTourism:
-        return '/provincial-tourism-dashboard';
+        return '/trip-planner-admin';
       case UserRole.tourism:
         return '/lgu-dashboard';
       case UserRole.tourismEstablishment:

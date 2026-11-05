@@ -104,9 +104,14 @@ class StartupRouteResolver {
     return _applyQrWelcomeIfNeeded(route, firebaseUser: firebaseUser);
   }
 
-  /// OPTACA / catalog admin: restore Trip Planner admin shell after refresh.
+  /// OPTACA / catalog admin: default to Trip Planner OPTACA portal; restore
+  /// ATMOS provincial only if that shell was explicitly last used.
   static Future<String> _provincialOrTripPlannerAdminRoute() async {
-    return _maybeTripPlannerAdminShell('/provincial-tourism-dashboard');
+    final shell = await ModuleShellPrefs.getActiveShell();
+    if (shell == ModuleShellPrefs.provincialTourism) {
+      return '/provincial-tourism-dashboard';
+    }
+    return '/trip-planner-admin';
   }
 
   static Future<String> _lguOrTripPlannerAdminRoute() async {

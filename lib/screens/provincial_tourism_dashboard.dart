@@ -97,7 +97,7 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
     _NavItem(Icons.route_rounded, 'Trip Planner'),
     _NavItem(Icons.assessment_rounded, 'DOT Reports'),
     _NavItem(Icons.hotel_rounded, 'Establishments'),
-    _NavItem(Icons.manage_accounts_rounded, 'Accounts'),
+    _NavItem(Icons.manage_accounts_rounded, 'LGU Account Management'),
     _NavItem(Icons.warning_amber_rounded, 'Alerts & Quality'),
     _NavItem(Icons.settings_rounded, 'Settings'),
   ];

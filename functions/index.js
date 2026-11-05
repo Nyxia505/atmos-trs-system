@@ -1573,6 +1573,9 @@ exports.sendGovernorAnnouncementPush = onDocumentWritten(
  * Publishes scheduled announcements when their Asia/Manila window opens and
  * expires them when it closes. Client feeds also hide posts outside the window,
  * so a late tick does not leave an expired post visible.
+ *
+ * Deploy note: requires Blaze + Cloud Scheduler. If billing is closed, deploy of
+ * any function that analyzes this export may fail until billing is restored.
  */
 exports.syncAnnouncementSchedule = onSchedule(
   {
@@ -3032,7 +3035,7 @@ exports.optacaManageAccount = onCall(
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Must be signed in.');
     }
-    await assertOptacaCaller(
+    const caller = await assertOptacaCaller(
       request.auth.uid,
       request.auth.token && request.auth.token.email,
     );
@@ -3041,8 +3044,38 @@ exports.optacaManageAccount = onCall(
     const action = normalizeField(data.action).toLowerCase();
     const auth = getAuth();
 
+    if (action === 'list') {
+      return listOptacaManagedAccounts(auth, data);
+    }
+    if (action === 'reconcile') {
+      return reconcileOptacaLguAccounts(auth);
+    }
+    if (action === 'listactivity') {
+      return listOptacaAccountActivity(data);
+    }
     if (action === 'create') {
-      return createOptacaStakeholderAccount(auth, request.auth.uid, data);
+      const created = await createOptacaStakeholderAccount(
+        auth,
+        request.auth.uid,
+        data,
+      );
+      try {
+        await writeAccountActivityLog({
+          actorUid: request.auth.uid,
+          actorName: caller.actorName,
+          targetUid: created.uid,
+          targetEmail: normalizeField(data.email).toLowerCase(),
+          accountType: isLguOfficeRoleValue(data.role) ? 'lgu' : 'establishment',
+          action: 'LGU Account Created',
+          result: 'success',
+          details: {
+            municipalityId: normalizeField(data.municipalityId).toLowerCase(),
+          },
+        });
+      } catch (logErr) {
+        console.error('[optacaManageAccount] activity log after create', logErr);
+      }
+      return created;
     }
 
     const uid = normalizeField(data.uid);
@@ -3061,31 +3094,119 @@ exports.optacaManageAccount = onCall(
       throw new HttpsError('not-found', 'Account was not found.');
     }
     const existing = userSnap.data() || {};
-    if (!isOptacaManageableRole(existing.role)) {
+    const accountType = classifyManagedAccountType(existing.role);
+    if (!accountType) {
       throw new HttpsError(
         'permission-denied',
-        'OPTACA can manage LGU and establishment accounts only.',
+        'OPTACA can manage LGU, establishment, and tourist accounts only.',
       );
     }
 
     if (action === 'update') {
-      return updateOptacaStakeholderAccount(auth, uid, existing, data);
-    }
-    if (action === 'setpassword') {
-      const password = String(data.password || '');
-      if (password.length < 8) {
+      if (accountType === 'tourist') {
         throw new HttpsError(
-          'invalid-argument',
-          'Password must be at least 8 characters.',
+          'permission-denied',
+          'Tourist profiles are not edited from this panel. Use password reset or status actions.',
         );
       }
-      await auth.updateUser(uid, {password});
-      return {ok: true};
+      const updated = await updateOptacaStakeholderAccount(
+        auth,
+        uid,
+        existing,
+        data,
+      );
+      await writeAccountActivityLog({
+        actorUid: request.auth.uid,
+        actorName: caller.actorName,
+        targetUid: uid,
+        targetEmail: normalizeField(data.email || existing.email).toLowerCase(),
+        accountType,
+        action: 'LGU Account Updated',
+        result: 'success',
+        details: {
+          municipalityId: normalizeField(data.municipalityId).toLowerCase(),
+        },
+      });
+      return updated;
+    }
+    if (action === 'setpassword') {
+      return resetManagedAccountPasswordDirect({
+        auth,
+        actorUid: request.auth.uid,
+        actorName: caller.actorName,
+        targetUid: uid,
+        existing,
+        accountType,
+        password: String(data.password || ''),
+      });
+    }
+    if (action === 'sendpasswordreset') {
+      const email = normalizeField(existing.email).toLowerCase();
+      if (!email.includes('@')) {
+        throw new HttpsError('failed-precondition', 'Account has no email.');
+      }
+      let emailSent = false;
+      try {
+        const generated = await auth.generatePasswordResetLink(email);
+        const oobCode = new URL(generated).searchParams.get('oobCode') || '';
+        if (oobCode) {
+          const origin = resolvePasswordResetOrigin(data.continueOrigin);
+          const resetUrl =
+            `${origin}/?mode=resetPassword&oobCode=${encodeURIComponent(oobCode)}`;
+          const displayName = normalizeField(existing.fullName) || email;
+          const content = passwordResetLinkEmailContent({displayName, resetUrl});
+          try {
+            if (await sendSmtpResetLinkIfConfigured({toEmail: email, ...content})) {
+              emailSent = true;
+            }
+          } catch (_) {
+            // fall through to EmailJS
+          }
+          if (!emailSent) {
+            await sendEmailJsResetLink({
+              toEmail: email,
+              displayName,
+              resetUrl,
+              ...content,
+            });
+            emailSent = true;
+          }
+        }
+      } catch (err) {
+        console.error('[optacaManageAccount] sendpasswordreset', err);
+      }
+      await writeAccountActivityLog({
+        actorUid: request.auth.uid,
+        actorName: caller.actorName,
+        targetUid: uid,
+        targetEmail: email,
+        accountType,
+        action: accountType === 'tourist'
+          ? 'User Password Reset Requested'
+          : 'LGU Password Reset Requested',
+        result: emailSent ? 'success' : 'email_failed',
+      });
+      if (!emailSent) {
+        throw new HttpsError(
+          'internal',
+          'Could not send the password reset email. Try again later.',
+        );
+      }
+      return {ok: true, emailSent: true, email};
     }
     if (action === 'setstatus') {
       const active = data.active === true;
+      if (!active && isProtectedOptacaAdmin(existing, uid)) {
+        throw new HttpsError(
+          'failed-precondition',
+          'This OPTACA administrator account cannot be deactivated.',
+        );
+      }
       const status = active ? 'active' : 'inactive';
       await auth.updateUser(uid, {disabled: !active});
+      if (!active) {
+        await auth.revokeRefreshTokens(uid);
+      }
       await db.collection('users').doc(uid).set({
         status,
         updatedAt: FieldValue.serverTimestamp(),
@@ -3096,12 +3217,212 @@ exports.optacaManageAccount = onCall(
           updatedAt: FieldValue.serverTimestamp(),
         }, {merge: true});
       }
+      await writeAccountActivityLog({
+        actorUid: request.auth.uid,
+        actorName: caller.actorName,
+        targetUid: uid,
+        targetEmail: normalizeField(existing.email).toLowerCase(),
+        accountType,
+        action: active
+          ? (accountType === 'tourist'
+            ? 'User Account Reactivated'
+            : 'LGU Account Reactivated')
+          : (accountType === 'tourist'
+            ? 'User Account Deactivated'
+            : 'LGU Account Deactivated'),
+        result: 'success',
+      });
       return {ok: true, status};
+    }
+    if (action === 'repairprofile') {
+      if (accountType !== 'lgu') {
+        throw new HttpsError(
+          'invalid-argument',
+          'Profile repair is only for LGU accounts.',
+        );
+      }
+      const repaired = await repairOptacaLguProfile(auth, uid, existing, data);
+      await writeAccountActivityLog({
+        actorUid: request.auth.uid,
+        actorName: caller.actorName,
+        targetUid: uid,
+        targetEmail: normalizeField(repaired.email || existing.email).toLowerCase(),
+        accountType: 'lgu',
+        action: 'LGU Account Updated',
+        result: 'success',
+        details: {repaired: true},
+      });
+      return repaired;
     }
 
     throw new HttpsError('invalid-argument', 'Unknown account action.');
   },
 );
+
+/**
+ * Direct OPTACA Super Admin password reset (no email / OTP / old password).
+ * Uses Admin SDK only. Never returns the password.
+ */
+exports.adminResetAccountPassword = onCall(
+  {region: 'asia-southeast1'},
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Must be signed in.');
+    }
+    const caller = await assertOptacaCaller(
+      request.auth.uid,
+      request.auth.token && request.auth.token.email,
+    );
+    const data = request.data || {};
+    const uid = normalizeField(data.uid);
+    if (!uid) {
+      throw new HttpsError('invalid-argument', 'uid is required.');
+    }
+    if (uid === request.auth.uid) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Use Settings to change your own OPTACA password.',
+      );
+    }
+
+    await assertAdminPasswordResetRateLimit(request.auth.uid);
+
+    const userSnap = await db.collection('users').doc(uid).get();
+    if (!userSnap.exists) {
+      throw new HttpsError('not-found', 'Account was not found.');
+    }
+    const existing = userSnap.data() || {};
+    const accountType = classifyManagedAccountType(existing.role);
+    if (!accountType) {
+      throw new HttpsError(
+        'permission-denied',
+        'OPTACA can reset passwords for LGU, establishment, and tourist accounts only.',
+      );
+    }
+    if (isProtectedOptacaAdmin(existing, uid)) {
+      throw new HttpsError(
+        'permission-denied',
+        'Protected OPTACA administrator passwords cannot be reset here.',
+      );
+    }
+
+    return resetManagedAccountPasswordDirect({
+      auth: getAuth(),
+      actorUid: request.auth.uid,
+      actorName: caller.actorName,
+      targetUid: uid,
+      existing,
+      accountType,
+      password: String(data.password || ''),
+    });
+  },
+);
+
+const ADMIN_PASSWORD_RESET_WINDOW_MS = 15 * 60 * 1000;
+const ADMIN_PASSWORD_RESET_MAX_PER_WINDOW = 12;
+
+async function assertAdminPasswordResetRateLimit(actorUid) {
+  const ref = db.collection('admin_password_reset_rate').doc(actorUid);
+  const now = Date.now();
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const data = snap.exists ? (snap.data() || {}) : {};
+    let windowStart = typeof data.windowStartMs === 'number'
+      ? data.windowStartMs
+      : 0;
+    let count = typeof data.count === 'number' ? data.count : 0;
+    if (!windowStart || now - windowStart > ADMIN_PASSWORD_RESET_WINDOW_MS) {
+      windowStart = now;
+      count = 0;
+    }
+    if (count >= ADMIN_PASSWORD_RESET_MAX_PER_WINDOW) {
+      throw new HttpsError(
+        'resource-exhausted',
+        'Too many password resets. Wait a few minutes and try again.',
+      );
+    }
+    tx.set(ref, {
+      windowStartMs: windowStart,
+      count: count + 1,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, {merge: true});
+  });
+}
+
+async function resetManagedAccountPasswordDirect({
+  auth,
+  actorUid,
+  actorName,
+  targetUid,
+  existing,
+  accountType,
+  password,
+}) {
+  validateNewPasswordStrength(password);
+  if (isProtectedOptacaAdmin(existing, targetUid)) {
+    throw new HttpsError(
+      'permission-denied',
+      'Protected OPTACA administrator passwords cannot be reset here.',
+    );
+  }
+
+  try {
+    await auth.updateUser(targetUid, {password});
+  } catch (err) {
+    const code = err && err.code ? String(err.code) : '';
+    console.error('[adminResetAccountPassword] updateUser', code);
+    if (code === 'auth/user-not-found') {
+      throw new HttpsError('not-found', 'Firebase Auth account was not found.');
+    }
+    if (code === 'auth/invalid-password' || code === 'auth/weak-password') {
+      throw new HttpsError(
+        'invalid-argument',
+        'Password must be 8+ characters with upper, lower, and a number.',
+      );
+    }
+    throw new HttpsError(
+      'internal',
+      'Could not update the account password. Try again later.',
+    );
+  }
+
+  try {
+    await auth.revokeRefreshTokens(targetUid);
+  } catch (err) {
+    console.error('[adminResetAccountPassword] revokeRefreshTokens', err);
+  }
+
+  // Do not reactivate deactivated accounts; only flag forced password change.
+  await db.collection('users').doc(targetUid).set({
+    mustChangePassword: true,
+    passwordChangedAt: FieldValue.serverTimestamp(),
+    passwordChangedByUid: actorUid,
+    updatedAt: FieldValue.serverTimestamp(),
+  }, {merge: true});
+
+  try {
+    await writeAccountActivityLog({
+      actorUid,
+      actorName,
+      targetUid,
+      targetEmail: normalizeField(existing.email).toLowerCase(),
+      accountType,
+      action: accountType === 'tourist'
+        ? 'User Password Changed by Administrator'
+        : 'LGU Password Changed by Administrator',
+      result: 'success',
+      details: {
+        method: 'adminResetAccountPassword',
+        tokensRevoked: true,
+        mustChangePassword: true,
+      },
+    });
+  } catch (logErr) {
+    console.error('[adminResetAccountPassword] activity log', logErr);
+  }
+
+  return {ok: true, mustChangePassword: true};
+}
 
 function isEstablishmentRole(role) {
   const value = normalizeField(role).toLowerCase();
@@ -3110,25 +3431,433 @@ function isEstablishmentRole(role) {
     value === 'establishment';
 }
 
-function isOptacaManageableRole(role) {
+function isLguOfficeRoleValue(role) {
   const value = normalizeField(role).toLowerCase();
   return value === 'tourism' ||
     value === 'tourism_office' ||
-    isEstablishmentRole(value);
+    value === 'lgu' ||
+    value === 'lgu_tourism' ||
+    value === 'municipal_tourism';
+}
+
+function isTouristRole(role) {
+  const value = normalizeField(role).toLowerCase();
+  return value === 'tourist' || value === 'user' || value === '';
+}
+
+function isOptacaManageableRole(role) {
+  return Boolean(classifyManagedAccountType(role));
+}
+
+function classifyManagedAccountType(role) {
+  if (isLguOfficeRoleValue(role)) return 'lgu';
+  if (isEstablishmentRole(role)) return 'establishment';
+  const value = normalizeField(role).toLowerCase();
+  if (value === 'tourist' || value === 'user') return 'tourist';
+  return null;
+}
+
+function isProtectedOptacaAdmin(existing, uid) {
+  const role = normalizeField(existing && existing.role).toLowerCase();
+  const email = normalizeField(existing && existing.email).toLowerCase();
+  return role === 'provincial_tourism' ||
+    role === 'tourism_province' ||
+    email === 'optaca@gmail.com' ||
+    email === 'provincial.tourism@misocc-demo.ph';
 }
 
 async function assertOptacaCaller(uid, email) {
   const snap = await db.collection('users').doc(uid).get();
-  const role = normalizeField(snap.data() && snap.data().role).toLowerCase();
-  const mail = normalizeField(email).toLowerCase();
-  const roleOk = role === 'provincial_tourism' || role === 'tourism_province';
-  const emailOk = mail === 'provincial.tourism@misocc-demo.ph';
-  if (!roleOk && !emailOk) {
+  const data = snap.data() || {};
+  const role = normalizeField(data.role).toLowerCase();
+  const mail = normalizeField(email || data.email).toLowerCase();
+  const status = normalizeField(data.status).toLowerCase();
+  if (status === 'inactive' || status === 'disabled' || status === 'deactivated') {
+    throw new HttpsError(
+      'permission-denied',
+      'This OPTACA account is deactivated.',
+    );
+  }
+  const roleOk = role === 'provincial_tourism' ||
+    role === 'tourism_province' ||
+    role === 'admin' ||
+    role === 'governor';
+  const emailOk = mail === 'provincial.tourism@misocc-demo.ph' ||
+    mail === 'optaca@gmail.com';
+
+  let adminAccountOk = false;
+  let adminDisplayName = '';
+  if (!roleOk && !emailOk && mail) {
+    try {
+      const adminSnap = await db.collection('admin_accounts')
+        .where('emailLower', '==', mail)
+        .limit(1)
+        .get();
+      if (!adminSnap.empty) {
+        const admin = adminSnap.docs[0].data() || {};
+        adminAccountOk = admin.active !== false;
+        adminDisplayName = normalizeField(admin.displayName);
+      }
+    } catch (err) {
+      console.warn('[assertOptacaCaller] admin_accounts lookup', err);
+    }
+  }
+
+  if (!roleOk && !emailOk && !adminAccountOk) {
     throw new HttpsError(
       'permission-denied',
       'Only the Provincial Tourism Office (OPTACA) can manage these accounts.',
     );
   }
+  return {
+    actorName: normalizeField(data.fullName) ||
+      adminDisplayName ||
+      mail ||
+      uid,
+    email: mail,
+    role: role || (adminAccountOk ? 'admin' : ''),
+  };
+}
+
+async function writeAccountActivityLog({
+  actorUid,
+  actorName,
+  targetUid,
+  targetEmail,
+  accountType,
+  action,
+  result,
+  details,
+}) {
+  await db.collection('account_activity_logs').add({
+    actorUid: actorUid || '',
+    actorName: actorName || '',
+    targetUid: targetUid || '',
+    targetEmail: targetEmail || '',
+    accountType: accountType || '',
+    action: action || '',
+    result: result || 'success',
+    details: details || {},
+    timestamp: FieldValue.serverTimestamp(),
+  });
+}
+
+function accountStatusLabel(status, authDisabled) {
+  if (authDisabled === true) return 'deactivated';
+  const value = normalizeField(status).toLowerCase();
+  if (!value || value === 'active' || value === 'approved') return 'active';
+  if (value === 'inactive' || value === 'disabled' || value === 'deactivated') {
+    return 'deactivated';
+  }
+  return value;
+}
+
+function serializeAccountDoc(doc, authInfo) {
+  const data = doc.data() || {};
+  const role = normalizeField(data.role).toLowerCase();
+  const createdAt = data.createdAt;
+  return {
+    uid: doc.id,
+    firebaseUid: data.firebaseUid || doc.id,
+    fullName: normalizeField(data.fullName) ||
+      normalizeField(data.displayName) ||
+      normalizeField(data.name),
+    email: normalizeField(data.email).toLowerCase(),
+    role: role || 'tourist',
+    municipality: normalizeField(data.municipality),
+    municipalityId: normalizeField(data.municipalityId).toLowerCase(),
+    category: normalizeField(data.category),
+    status: accountStatusLabel(data.status, authInfo && authInfo.disabled),
+    mustChangePassword: data.mustChangePassword === true,
+    createdAtMs: createdAt && typeof createdAt.toMillis === 'function'
+      ? createdAt.toMillis()
+      : 0,
+    authDisabled: Boolean(authInfo && authInfo.disabled),
+    authEmail: authInfo ? normalizeField(authInfo.email).toLowerCase() : '',
+    authExists: Boolean(authInfo),
+    reviewFlags: [],
+  };
+}
+
+async function enrichAccountsWithAuth(auth, rows) {
+  const out = [];
+  for (const row of rows) {
+    let authInfo = null;
+    try {
+      const record = await auth.getUser(row.uid);
+      authInfo = {
+        disabled: record.disabled === true,
+        email: record.email || '',
+      };
+    } catch (_) {
+      authInfo = null;
+    }
+    const enriched = {
+      ...row,
+      authDisabled: Boolean(authInfo && authInfo.disabled),
+      authEmail: authInfo ? normalizeField(authInfo.email).toLowerCase() : '',
+      authExists: Boolean(authInfo),
+      status: accountStatusLabel(row.status, authInfo && authInfo.disabled),
+      reviewFlags: [...(row.reviewFlags || [])],
+    };
+    if (!authInfo) enriched.reviewFlags.push('missing_auth');
+    if (authInfo && enriched.email && enriched.authEmail &&
+      enriched.email !== enriched.authEmail) {
+      enriched.reviewFlags.push('email_mismatch');
+    }
+    if (classifyManagedAccountType(enriched.role) === 'lgu') {
+      if (!enriched.municipalityId && !enriched.municipality) {
+        enriched.reviewFlags.push('missing_municipality');
+      }
+      if (!enriched.fullName) enriched.reviewFlags.push('missing_name');
+    }
+    out.push(enriched);
+  }
+  return out;
+}
+
+async function listOptacaManagedAccounts(auth, data) {
+  try {
+    const accountType = normalizeField(data.accountType).toLowerCase() || 'lgu';
+    const pageSize = Math.min(Math.max(Number(data.pageSize) || 50, 1), 200);
+    const statusFilter = normalizeField(data.status).toLowerCase();
+    const municipalityId = normalizeField(data.municipalityId).toLowerCase();
+    const search = normalizeField(data.search).toLowerCase();
+    const enrichAuth = data.enrichAuth !== false;
+
+    let roles = [];
+    if (accountType === 'lgu') {
+      roles = [
+        'tourism',
+        'tourism_office',
+        'lgu',
+        'lgu_tourism',
+        'municipal_tourism',
+        'Tourism',
+        'Tourism_Office',
+      ];
+    } else if (accountType === 'tourist') {
+      roles = ['tourist', 'user', 'Tourist', 'User'];
+    } else if (accountType === 'establishment') {
+      roles = [
+        'tourism_establishment',
+        'tourismestablishment',
+        'establishment',
+        'Tourism_Establishment',
+      ];
+    } else {
+      throw new HttpsError('invalid-argument', 'accountType is invalid.');
+    }
+
+    // Load by role queries first. If nothing matches (legacy docs / role drift),
+    // scan users once and classify in memory.
+    const byId = new Map();
+    for (const role of roles) {
+      try {
+        const snap = await db.collection('users').where('role', '==', role).get();
+        for (const doc of snap.docs) {
+          byId.set(doc.id, doc);
+        }
+      } catch (err) {
+        console.warn('[optacaManageAccount] role query failed', role, err);
+      }
+    }
+
+    if (byId.size === 0) {
+      const snap = await db.collection('users').get();
+      for (const doc of snap.docs) {
+        const role = normalizeField((doc.data() || {}).role);
+        const type = classifyManagedAccountType(role);
+        if (type === accountType ||
+          (accountType === 'tourist' && (type === 'tourist' || !type))) {
+          // For tourist tab, include role tourist/user only — never staff leftovers.
+          if (accountType === 'tourist') {
+            const lower = role.toLowerCase();
+            if (lower && lower !== 'tourist' && lower !== 'user') continue;
+          }
+          byId.set(doc.id, doc);
+        }
+      }
+    }
+
+    let rows = [];
+    for (const doc of byId.values()) {
+      rows.push(serializeAccountDoc(doc, null));
+    }
+
+    if (municipalityId) {
+      rows = rows.filter((row) => row.municipalityId === municipalityId ||
+        normalizeField(row.municipality).toLowerCase().includes(municipalityId));
+    }
+    if (search) {
+      rows = rows.filter((row) =>
+        String(row.fullName || '').toLowerCase().includes(search) ||
+        String(row.email || '').includes(search) ||
+        String(row.municipality || '').toLowerCase().includes(search) ||
+        String(row.municipalityId || '').includes(search) ||
+        String(row.uid || '').toLowerCase().includes(search));
+    }
+
+    // Status filter uses Firestore status first (Auth enrichment is page-scoped).
+    if (statusFilter === 'active' || statusFilter === 'deactivated') {
+      rows = rows.filter((row) =>
+        accountStatusLabel(row.status, false) === statusFilter);
+    }
+
+    rows.sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0));
+
+    const municipalitiesCovered = new Set(
+      rows
+        .map((row) => row.municipalityId || row.municipality)
+        .filter(Boolean),
+    );
+    const summary = {
+      total: rows.length,
+      active: rows.filter(
+        (row) => accountStatusLabel(row.status, false) === 'active',
+      ).length,
+      deactivated: rows.filter(
+        (row) => accountStatusLabel(row.status, false) === 'deactivated',
+      ).length,
+      municipalitiesCovered: municipalitiesCovered.size,
+      needsReview: 0,
+    };
+
+    const page = Math.max(Number(data.page) || 0, 0);
+    const start = page * pageSize;
+    let accounts = rows.slice(start, start + pageSize);
+
+    // Enrich only the current page so large tourist lists do not time out.
+    if (enrichAuth && accounts.length > 0) {
+      accounts = await enrichAccountsWithAuth(auth, accounts);
+      summary.needsReview = accounts.filter(
+        (row) => (row.reviewFlags || []).length > 0,
+      ).length;
+    }
+
+    return {
+      ok: true,
+      accounts,
+      summary,
+      page,
+      pageSize,
+      hasMore: start + pageSize < rows.length,
+    };
+  } catch (err) {
+    if (err instanceof HttpsError) throw err;
+    console.error('[optacaManageAccount] list failed', err);
+    throw new HttpsError(
+      'internal',
+      (err && err.message) || 'Could not list accounts.',
+    );
+  }
+}
+
+async function reconcileOptacaLguAccounts(auth) {
+  const listed = await listOptacaManagedAccounts(auth, {
+    accountType: 'lgu',
+    pageSize: 200,
+    page: 0,
+  });
+  const issues = (listed.accounts || []).filter(
+    (row) => (row.reviewFlags || []).length > 0,
+  );
+  return {
+    ok: true,
+    issues,
+    summary: listed.summary,
+  };
+}
+
+async function listOptacaAccountActivity(data) {
+  const pageSize = Math.min(Math.max(Number(data.pageSize) || 50, 1), 100);
+  const actionFilter = normalizeField(data.actionFilter || data.filterAction);
+  const actorFilter = normalizeField(data.actorUid);
+  let query = db.collection('account_activity_logs')
+    .orderBy('timestamp', 'desc')
+    .limit(pageSize);
+  if (actorFilter) {
+    query = db.collection('account_activity_logs')
+      .where('actorUid', '==', actorFilter)
+      .orderBy('timestamp', 'desc')
+      .limit(pageSize);
+  }
+  const snap = await query.get();
+  let logs = snap.docs.map((doc) => {
+    const d = doc.data() || {};
+    const ts = d.timestamp;
+    return {
+      id: doc.id,
+      actorUid: normalizeField(d.actorUid),
+      actorName: normalizeField(d.actorName),
+      targetUid: normalizeField(d.targetUid),
+      targetEmail: normalizeField(d.targetEmail).toLowerCase(),
+      accountType: normalizeField(d.accountType),
+      action: normalizeField(d.action),
+      result: normalizeField(d.result) || 'success',
+      timestampMs: ts && typeof ts.toMillis === 'function' ? ts.toMillis() : 0,
+    };
+  });
+  if (actionFilter) {
+    logs = logs.filter((row) =>
+      row.action.toLowerCase().includes(actionFilter.toLowerCase()));
+  }
+  return {ok: true, logs};
+}
+
+async function repairOptacaLguProfile(auth, uid, existing, data) {
+  const fullName = normalizeField(data.fullName) ||
+    normalizeField(existing.fullName);
+  const email = normalizeField(data.email || existing.email).toLowerCase();
+  const municipalityId = normalizeField(
+    data.municipalityId || existing.municipalityId,
+  ).toLowerCase();
+  if (!fullName) {
+    throw new HttpsError('invalid-argument', 'Full name is required.');
+  }
+  if (!email.includes('@')) {
+    throw new HttpsError('invalid-argument', 'A valid email is required.');
+  }
+  if (!municipalityId || !MUNICIPALITY_DISPLAY_NAMES[municipalityId]) {
+    throw new HttpsError(
+      'invalid-argument',
+      'Choose a municipality in Misamis Occidental.',
+    );
+  }
+  // Never invent/change role away from LGU without explicit confirmation.
+  const role = isLguOfficeRoleValue(existing.role) ? existing.role : 'tourism';
+  const municipality = municipalityDisplayName(municipalityId);
+  try {
+    await auth.updateUser(uid, {
+      email,
+      displayName: fullName,
+      emailVerified: true,
+    });
+  } catch (err) {
+    const code = err && err.code ? String(err.code) : '';
+    if (code === 'auth/email-already-exists') {
+      throw new HttpsError('already-exists', 'That email is already registered.');
+    }
+    if (code !== 'auth/user-not-found') {
+      throw new HttpsError(
+        'internal',
+        (err && err.message) || 'Could not update Auth profile.',
+      );
+    }
+  }
+  await db.collection('users').doc(uid).set({
+    firebaseUid: uid,
+    email,
+    fullName,
+    role,
+    municipality,
+    municipalityId,
+    status: accountStatusLabel(existing.status, false) === 'deactivated'
+      ? 'inactive'
+      : 'active',
+    updatedAt: FieldValue.serverTimestamp(),
+  }, {merge: true});
+  return {ok: true, uid, email, municipalityId};
 }
 
 async function createOptacaStakeholderAccount(auth, callerUid, data) {
@@ -3141,12 +3870,7 @@ async function createOptacaStakeholderAccount(auth, callerUid, data) {
   if (!email.includes('@')) {
     throw new HttpsError('invalid-argument', 'A valid email is required.');
   }
-  if (password.length < 8) {
-    throw new HttpsError(
-      'invalid-argument',
-      'Password must be at least 8 characters.',
-    );
-  }
+  validateNewPasswordStrength(password);
   if (!fullName) {
     throw new HttpsError('invalid-argument', 'Name is required.');
   }
@@ -3164,6 +3888,14 @@ async function createOptacaStakeholderAccount(auth, callerUid, data) {
     throw new HttpsError('invalid-argument', 'Establishment category is required.');
   }
 
+  const existingEmail = await db.collection('users')
+    .where('email', '==', email)
+    .limit(1)
+    .get();
+  if (!existingEmail.empty) {
+    throw new HttpsError('already-exists', 'That email is already registered.');
+  }
+
   let userRecord;
   try {
     userRecord = await auth.createUser({
@@ -3175,50 +3907,79 @@ async function createOptacaStakeholderAccount(auth, callerUid, data) {
     });
   } catch (err) {
     const code = err && err.code ? String(err.code) : '';
+    console.error('[optacaManageAccount] createUser', code, err);
     if (code === 'auth/email-already-exists') {
       throw new HttpsError('already-exists', 'That email is already registered.');
     }
+    if (code === 'auth/invalid-password' || code === 'auth/weak-password') {
+      throw new HttpsError(
+        'invalid-argument',
+        'Password is too weak. Use 8+ characters with upper, lower, and a number.',
+      );
+    }
+    if (code === 'auth/invalid-email') {
+      throw new HttpsError('invalid-argument', 'A valid email is required.');
+    }
     throw new HttpsError(
       'internal',
-      (err && err.message) || 'Could not create the account.',
+      (err && err.message) || `Could not create the Auth account (${code || 'unknown'}).`,
     );
   }
 
   const municipality = municipalityDisplayName(municipalityId);
-  await db.collection('users').doc(userRecord.uid).set({
-    firebaseUid: userRecord.uid,
-    email,
-    fullName,
-    role,
-    municipality,
-    municipalityId,
-    category: role === 'tourism_establishment' ? category : '',
-    status: 'active',
-    isVerified: true,
-    createdAt: FieldValue.serverTimestamp(),
-    updatedAt: FieldValue.serverTimestamp(),
-    createdByUid: callerUid,
-    createdVia: 'optacaManageAccount',
-  });
-
-  if (role === 'tourism_establishment') {
-    await db.collection('accommodation_establishments').doc(userRecord.uid).set({
-      id: userRecord.uid,
-      businessName: fullName,
-      name: fullName,
-      category,
-      type: category,
-      ownerName: fullName,
+  try {
+    await db.collection('users').doc(userRecord.uid).set({
+      firebaseUid: userRecord.uid,
       email,
+      fullName,
+      role,
       municipality,
       municipalityId,
-      ownerUid: userRecord.uid,
-      authUid: userRecord.uid,
+      category: role === 'tourism_establishment' ? category : '',
       status: 'active',
+      isVerified: true,
+      mustChangePassword: true,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
-      createdBy: 'optaca',
+      createdByUid: callerUid,
+      createdBy: callerUid,
+      createdVia: 'optacaManageAccount',
     });
+  } catch (err) {
+    console.error('[optacaManageAccount] users write failed', err);
+    try {
+      await auth.deleteUser(userRecord.uid);
+    } catch (_) {
+      // best-effort cleanup
+    }
+    throw new HttpsError(
+      'internal',
+      (err && err.message) || 'Could not save the LGU profile in Firestore.',
+    );
+  }
+
+  if (role === 'tourism_establishment') {
+    try {
+      await db.collection('accommodation_establishments').doc(userRecord.uid).set({
+        id: userRecord.uid,
+        businessName: fullName,
+        name: fullName,
+        category,
+        type: category,
+        ownerName: fullName,
+        email,
+        municipality,
+        municipalityId,
+        ownerUid: userRecord.uid,
+        authUid: userRecord.uid,
+        status: 'active',
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+        createdBy: 'optaca',
+      });
+    } catch (err) {
+      console.error('[optacaManageAccount] establishment write', err);
+    }
   }
 
   return {ok: true, uid: userRecord.uid};
@@ -3229,6 +3990,7 @@ async function updateOptacaStakeholderAccount(auth, uid, existing, data) {
   const email = normalizeField(data.email).toLowerCase();
   const municipalityId = normalizeField(data.municipalityId).toLowerCase();
   const category = normalizeField(data.category);
+  const requestedRole = normalizeField(data.role).toLowerCase();
   const authPatch = {};
   const patch = {updatedAt: FieldValue.serverTimestamp()};
 
@@ -3254,6 +4016,17 @@ async function updateOptacaStakeholderAccount(auth, uid, existing, data) {
   if (category && isEstablishmentRole(existing.role)) {
     patch.category = category;
   }
+  if (requestedRole) {
+    if (!isLguOfficeRoleValue(requestedRole) &&
+      !isEstablishmentRole(requestedRole)) {
+      throw new HttpsError(
+        'invalid-argument',
+        'Role must remain an LGU or establishment account.',
+      );
+    }
+    // Keep canonical LGU role key used across ATMOS.
+    patch.role = requestedRole === 'tourism_office' ? 'tourism' : requestedRole;
+  }
   if (Object.keys(authPatch).length > 0) {
     try {
       await auth.updateUser(uid, authPatch);
@@ -3269,7 +4042,7 @@ async function updateOptacaStakeholderAccount(auth, uid, existing, data) {
     }
   }
   await db.collection('users').doc(uid).set(patch, {merge: true});
-  if (isEstablishmentRole(existing.role)) {
+  if (isEstablishmentRole(existing.role) || isEstablishmentRole(patch.role)) {
     const estPatch = {updatedAt: FieldValue.serverTimestamp()};
     if (fullName) {
       estPatch.businessName = fullName;
