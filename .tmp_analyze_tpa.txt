@@ -1,0 +1,5 @@
+﻿Analyzing trip_planner_analytics_tab.dart...
+
+   info - trip_planner_analytics_tab.dart:428:38 - The parameter name 'sum' matches a visible type name. Try adding a name for the parameter or changing the parameter name to not match an existing type. - avoid_types_as_parameter_names
+
+1 issue found.

@@ -656,6 +656,38 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    /// Unique tourist-spot views (one doc per authenticated user per spot).
+    match /touristSpotViews/{docId} {
+      allow read: if true;
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.spotId is string
+        && request.resource.data.spotId.size() > 0
+        && docId == request.resource.data.spotId + '_' + request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    /// Denormalized unique-view totals.
+    /// Client may create/update only together with a new unique view doc
+    /// (same batch), and only by +1.
+    match /touristSpotViewCounts/{spotId} {
+      allow read: if true;
+      allow create: if isSignedIn()
+        && request.resource.data.spotId == spotId
+        && request.resource.data.count is int
+        && request.resource.data.count == 1
+        && !exists(/databases/$(database)/documents/touristSpotViews/$(spotId + '_' + request.auth.uid))
+        && existsAfter(/databases/$(database)/documents/touristSpotViews/$(spotId + '_' + request.auth.uid));
+      allow update: if isSignedIn()
+        && request.resource.data.spotId == spotId
+        && request.resource.data.count is int
+        && resource.data.count is int
+        && request.resource.data.count == resource.data.count + 1
+        && !exists(/databases/$(database)/documents/touristSpotViews/$(spotId + '_' + request.auth.uid))
+        && existsAfter(/databases/$(database)/documents/touristSpotViews/$(spotId + '_' + request.auth.uid));
+      allow delete: if false;
+    }
+
     // Deny anything else.
     match /{document=**} {
       allow read, write: if false;

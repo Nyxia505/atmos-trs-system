@@ -630,3 +630,74 @@ exports.seedDefaultAdminAccountHttp = functions.https.onRequest(async (req, res)
     res.status(500).json({ error: String(e) });
   }
 });
+
+/**
+ * Record one unique view per authenticated user per tourist spot.
+ * Doc id: touristSpotViews/{spotId_userId}
+ * Counter: touristSpotViewCounts/{spotId}.count
+ */
+exports.recordTouristSpotUniqueView = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "Sign in to record a unique view.",
+    );
+  }
+  const spotId = String((data && data.spotId) || "").trim();
+  if (!spotId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "spotId is required.",
+    );
+  }
+  // Keep document ids path-safe (no slashes).
+  if (spotId.includes("/") || spotId.length > 700) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "spotId is invalid.",
+    );
+  }
+
+  const uid = context.auth.uid;
+  const viewId = spotId + "_" + uid;
+  const db = admin.firestore();
+  const viewRef = db.collection("touristSpotViews").doc(viewId);
+  const countRef = db.collection("touristSpotViewCounts").doc(spotId);
+
+  try {
+    return await db.runTransaction(async (tx) => {
+      const viewSnap = await tx.get(viewRef);
+      const countSnap = await tx.get(countRef);
+      let count = 0;
+      if (countSnap.exists) {
+        const raw = countSnap.data() && countSnap.data().count;
+        count = typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
+      }
+      if (viewSnap.exists) {
+        return { created: false, uniqueViews: count, spotId };
+      }
+      tx.set(viewRef, {
+        spotId,
+        userId: uid,
+        viewedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      count += 1;
+      tx.set(
+        countRef,
+        {
+          spotId,
+          count,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+      return { created: true, uniqueViews: count, spotId };
+    });
+  } catch (e) {
+    console.error("recordTouristSpotUniqueView", spotId, uid, e);
+    throw new functions.https.HttpsError(
+      "internal",
+      "Could not record unique view.",
+    );
+  }
+});

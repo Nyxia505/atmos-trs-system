@@ -42,7 +42,24 @@
         ]
       },
       {
-        "source": "/downloads/**.apk",
+        "source": "/downloads/trip-planner.apk",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/vnd.android.package-archive"
+          },
+          {
+            "key": "Content-Disposition",
+            "value": "attachment; filename=\"trip-planner.apk\""
+          },
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, max-age=0, must-revalidate"
+          }
+        ]
+      },
+      {
+        "source": "/downloads/atmostrs.apk",
         "headers": [
           {
             "key": "Content-Type",
@@ -54,7 +71,24 @@
           },
           {
             "key": "Cache-Control",
-            "value": "public, max-age=3600"
+            "value": "no-cache, max-age=0, must-revalidate"
+          }
+        ]
+      },
+      {
+        "source": "/downloads/**.apk",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/vnd.android.package-archive"
+          },
+          {
+            "key": "Content-Disposition",
+            "value": "attachment"
+          },
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, max-age=0, must-revalidate"
           }
         ]
       }

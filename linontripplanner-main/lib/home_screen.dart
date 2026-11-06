@@ -25,6 +25,7 @@ import 'services/saved_trip_store.dart';
 import 'services/home_personalization_service.dart';
 import 'services/home_recommendation_service.dart';
 import 'services/spot_interaction_history.dart';
+import 'services/tourist_spot_unique_views_service.dart';
 import 'widgets/responsive_layout.dart';
 import 'widgets/tourism_plan_ui.dart';
 import 'widgets/profile_header_photo.dart';
@@ -768,6 +769,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildTouristSpotsGrid(List<TouristSpot> recommended) {
+    // Fetch missing counters (and aliases). After login the service also
+    // force-refreshes known ids so logout never leaves a stuck local zero.
+    unawaited(
+      TouristSpotUniqueViewsService.instance.prefetchForSpots(recommended),
+    );
     return LayoutBuilder(
       builder: (context, constraints) {
         final crossAxisCount =
@@ -777,7 +783,7 @@ class _HomeScreenState extends State<HomeScreen> {
           physics: const NeverScrollableScrollPhysics(),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: crossAxisCount,
-            crossAxisSpacing: 10,
+            crossAxisSpacing: 12,
             mainAxisSpacing: 14,
             childAspectRatio: 0.68,
           ),
@@ -1042,93 +1048,152 @@ class _SpotCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: TourismPlanUi.planCardDecoration(),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
       clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                buildTouristSpotProfileImage(
-                  spot,
-                  memCacheWidth: 320,
-                  memCacheHeight: 320,
-                  fallback: _spotImagePlaceholder(),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            buildTouristSpotProfileImage(
+              spot,
+              memCacheWidth: 360,
+              memCacheHeight: 480,
+              fallback: _spotImagePlaceholder(),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(10, 36, 10, 10),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.transparent,
+                      Colors.black.withValues(alpha: 0.55),
+                      Colors.black.withValues(alpha: 0.82),
+                    ],
+                    stops: const [0.0, 0.45, 1.0],
+                  ),
                 ),
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: Container(
-                    padding: const EdgeInsets.fromLTRB(10, 28, 10, 10),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          Colors.black.withValues(alpha: 0.75),
-                        ],
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          spot.displayName,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                            height: 1.2,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ValueListenableBuilder<int>(
+                      valueListenable:
+                          TouristSpotUniqueViewsService.instance.revision,
+                      builder: (context, _, child) {
+                        final views =
+                            TouristSpotUniqueViewsService.instance;
+                        final confirmed = views.hasConfirmedCountForSpot(spot);
+                        final count = views.displayCountForSpot(spot);
+                        // Never flash "0 views" while Firestore is still
+                        // loading after login/logout. Show confirmed totals
+                        // only (including a real zero).
+                        final label = confirmed && count != null
+                            ? formatUniqueViewCount(count)
+                            : '…';
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
                           ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            if (spot.priceRange.trim().isNotEmpty)
-                              Expanded(
-                                child: Text(
-                                  spot.priceRange,
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.white.withValues(alpha: 0.9),
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              )
-                            else
-                              const Spacer(),
-                            Icon(
-                              Icons.star,
-                              size: 14,
-                              color: Colors.amber.shade400,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.45),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: AppColors.primary,
+                              width: 1.2,
                             ),
-                            const SizedBox(width: 3),
-                            Text(
-                              spot.rating.toStringAsFixed(1),
-                              style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.white,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.visibility_outlined,
+                                size: 13,
+                                color: AppColors.primary,
                               ),
+                              const SizedBox(width: 4),
+                              Text(
+                                label,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  height: 1.1,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      spot.displayName,
+                      style: const TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                        height: 1.2,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        if (spot.priceRange.trim().isNotEmpty)
+                          Expanded(
+                            child: Text(
+                              spot.priceRange,
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                color: Colors.white.withValues(alpha: 0.92),
+                                fontWeight: FontWeight.w500,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                          ],
+                          )
+                        else
+                          const Spacer(),
+                        const Icon(
+                          Icons.star_rounded,
+                          size: 14,
+                          color: AppColors.primary,
+                        ),
+                        const SizedBox(width: 3),
+                        Text(
+                          spot.rating.toStringAsFixed(1),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                          ),
                         ),
                       ],
                     ),
-                  ),
+                  ],
                 ),
-              ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -22,6 +22,7 @@ import 'home_personalization_service.dart';
 import 'spot_interaction_history.dart';
 import 'spot_ratings_store.dart';
 import 'supabase_image_library.dart' show ensureSupabaseImageIndexLoaded;
+import 'tourist_spot_unique_views_service.dart';
 
 /// Signed-out — login required for profile / CF; public catalogs may still load.
 bool tourismIsGuestSession() => FirebaseAuth.instance.currentUser == null;
@@ -380,4 +381,7 @@ void clearTourismSessionOnLogout() {
   _bootstrapFuture = null;
   HomePersonalizationService.instance.clearForLogout();
   SpotInteractionHistoryStore.instance.clearMemoryForLogout();
+  // Keep global unique-view totals in memory + Firestore. Only clear
+  // per-user "already recorded this session" dedupe keys.
+  TouristSpotUniqueViewsService.instance.clearAuthSessionOnly();
 }

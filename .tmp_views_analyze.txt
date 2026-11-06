@@ -1,0 +1,10 @@
+﻿Analyzing home_screen.dart, spot_detail_screen.dart, tourist_spot_unique_views_service.dart...
+
+  error - lib\services\tourist_spot_unique_views_service.dart:164:21 - The method 'create' isn't defined for the type 'DocumentReference'. Try correcting the name to the name of an existing method, or defining a method named 'create'. - undefined_method
+warning - lib\spot_detail_screen.dart:619:10 - A value for optional parameter 'iconColor' isn't ever given. Try removing the unused parameter. - unused_element_parameter
+   info - lib\spot_detail_screen.dart:202:44 - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement. - deprecated_member_use
+   info - lib\spot_detail_screen.dart:512:54 - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement. - deprecated_member_use
+   info - lib\spot_detail_screen.dart:542:53 - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement. - deprecated_member_use
+   info - lib\spot_detail_screen.dart:545:33 - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss. Try replacing the use of the deprecated member with the replacement. - deprecated_member_use
+
+6 issues found.

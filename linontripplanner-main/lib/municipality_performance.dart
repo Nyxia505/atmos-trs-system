@@ -1093,6 +1093,9 @@ class MunicipalityComparisonPanel extends StatelessWidget {
     required this.choices,
   });
 
+  static const _blue = Color(0xFF2563EB);
+  static const _green = Color(0xFF059669);
+
   final String? left;
   final String? right;
   final int leftArrivals;
@@ -1105,126 +1108,695 @@ class MunicipalityComparisonPanel extends StatelessWidget {
   final ValueChanged<String?> onRight;
   final List<String> choices;
 
+  Municipality? _muni(String? name) {
+    if (name == null) return null;
+    for (final m in municipalities) {
+      if (m.name == name) return m;
+    }
+    return null;
+  }
+
+  void _swap() {
+    final a = left;
+    final b = right;
+    onLeft(b);
+    onRight(a);
+  }
+
+  String _insightText() {
+    final a = left;
+    final b = right;
+    if (a == null || b == null) {
+      return 'Select two municipalities to compare recorded arrivals.';
+    }
+    if (a == b) {
+      return '$a is selected on both sides. Choose a different municipality to compare.';
+    }
+    if (leftArrivals == 0 && rightArrivals == 0) {
+      return 'No recorded arrivals for $a or $b in the current data.';
+    }
+    if (leftArrivals == rightArrivals) {
+      return '$a and $b each recorded $leftArrivals arrivals for the selected period.';
+    }
+    if (leftArrivals > rightArrivals) {
+      return '$a recorded $leftArrivals arrivals, while $b recorded $rightArrivals arrivals for the selected period.';
+    }
+    return '$b recorded $rightArrivals arrivals, while $a recorded $leftArrivals arrivals for the selected period.';
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: OptacaAdminTheme.cardDecoration,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Compare municipalities',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: [
-              _picker('First', left, onLeft),
-              _picker('Second', right, onRight),
-            ],
-          ),
-          if (left != null && right != null && left != right) ...[
-            const SizedBox(height: 12),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final sideBySide = constraints.maxWidth >= 700;
-                final cards = [
-                  _side(left!, leftArrivals, spotsFor(left!), leftGrowth),
-                  _side(right!, rightArrivals, spotsFor(right!), rightGrowth),
-                ];
-                if (!sideBySide) {
-                  return Column(children: [cards[0], const SizedBox(height: 12), cards[1]]);
-                }
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+    final leftMuni = _muni(left);
+    final rightMuni = _muni(right);
+    final showCompare = left != null && right != null && left != right;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final wide = constraints.maxWidth >= 900;
+            final cards = [
+              _compareControlsCard(horizontalPickers: wide),
+              _summaryCard(
+                municipality: leftMuni,
+                name: left,
+                arrivals: leftArrivals,
+                accent: OptacaAdminTheme.primary,
+                soft: const Color(0xFFFFF1E6),
+              ),
+              _summaryCard(
+                municipality: rightMuni,
+                name: right,
+                arrivals: rightArrivals,
+                accent: _blue,
+                soft: const Color(0xFFEFF4FF),
+              ),
+            ];
+            if (wide) {
+              return IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Expanded(child: cards[0]),
+                    Expanded(flex: 5, child: cards[0]),
                     const SizedBox(width: 12),
-                    Expanded(child: cards[1]),
+                    Expanded(flex: 4, child: cards[1]),
+                    const SizedBox(width: 12),
+                    Expanded(flex: 4, child: cards[2]),
+                  ],
+                ),
+              );
+            }
+            return Column(
+              children: [
+                cards[0],
+                const SizedBox(height: 12),
+                cards[1],
+                const SizedBox(height: 12),
+                cards[2],
+              ],
+            );
+          },
+        ),
+        if (showCompare) ...[
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final sideBySide = constraints.maxWidth >= 820;
+              final chart = _monthlyChartCard();
+              final insight = _insightCard();
+              if (!sideBySide) {
+                return Column(
+                  children: [
+                    SizedBox(height: 230, child: chart),
+                    const SizedBox(height: 12),
+                    insight,
                   ],
                 );
-              },
-            ),
-            const SizedBox(height: 12),
-            const Text('Monthly recorded arrivals', style: TextStyle(fontWeight: FontWeight.w700)),
-            const SizedBox(height: 8),
-            SizedBox(
-              height: 180,
-              child: BarChart(
-                BarChartData(
-                  alignment: BarChartAlignment.spaceAround,
-                  gridData: const FlGridData(drawVerticalLine: false),
-                  borderData: FlBorderData(show: false),
-                  barGroups: [
-                    for (var i = 0; i < 12; i++)
-                      BarChartGroupData(
-                        x: i,
-                        barRods: [
-                          BarChartRodData(
-                            toY: leftMonthly[i].toDouble(),
-                            color: AppColors.primary,
-                            width: 6,
-                          ),
-                          BarChartRodData(
-                            toY: rightMonthly[i].toDouble(),
-                            color: const Color(0xFF2563EB),
-                            width: 6,
-                          ),
-                        ],
-                      ),
+              }
+              return SizedBox(
+                height: 230,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(flex: 3, child: chart),
+                    const SizedBox(width: 12),
+                    Expanded(flex: 1, child: insight),
                   ],
-                  titlesData: FlTitlesData(
-                    topTitles: const AxisTitles(),
-                    rightTitles: const AxisTitles(),
-                    leftTitles: const AxisTitles(
-                      sideTitles: SideTitles(showTitles: true, reservedSize: 28),
-                    ),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        getTitlesWidget: (value, meta) {
-                          final i = value.toInt();
-                          if (i < 0 || i > 11) return const SizedBox.shrink();
-                          return Text(_monthName(i + 1), style: const TextStyle(fontSize: 9));
-                        },
+                ),
+              );
+            },
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _compareControlsCard({required bool horizontalPickers}) {
+    final pickers = horizontalPickers
+        ? Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(child: _picker('First Municipality', left, onLeft)),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Material(
+                  color: OptacaAdminTheme.lightOrange,
+                  shape: const CircleBorder(),
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: _swap,
+                    child: const Padding(
+                      padding: EdgeInsets.all(8),
+                      child: Icon(
+                        Icons.swap_horiz_rounded,
+                        color: OptacaAdminTheme.primary,
+                        size: 20,
                       ),
                     ),
                   ),
                 ),
               ),
+              Expanded(child: _picker('Second Municipality', right, onRight)),
+            ],
+          )
+        : Column(
+            children: [
+              _picker('First Municipality', left, onLeft),
+              const SizedBox(height: 8),
+              Material(
+                color: OptacaAdminTheme.lightOrange,
+                shape: const CircleBorder(),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: _swap,
+                  child: const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Icon(
+                      Icons.swap_vert_rounded,
+                      color: OptacaAdminTheme.primary,
+                      size: 20,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              _picker('Second Municipality', right, onRight),
+            ],
+          );
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: OptacaAdminTheme.border),
+        boxShadow: OptacaAdminTheme.cardShadow,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: OptacaAdminTheme.lightOrange,
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: const Icon(
+                  Icons.balance_rounded,
+                  color: OptacaAdminTheme.primary,
+                  size: 18,
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Compare Municipalities',
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w800,
+                    color: OptacaAdminTheme.text,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          pickers,
+        ],
+      ),
+    );
+  }
+
+  Widget _summaryCard({
+    required Municipality? municipality,
+    required String? name,
+    required int arrivals,
+    required Color accent,
+    required Color soft,
+  }) {
+    final spots = name == null ? 0 : spotsFor(name);
+    final isCity = municipality?.divisionLabel == 'City';
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Colors.white, soft],
+                ),
+                border: Border.all(color: accent.withValues(alpha: 0.32)),
+                borderRadius: BorderRadius.circular(16),
+              ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              '$left is orange. $right is blue.',
-              style: const TextStyle(color: AppColors.textGrey, fontSize: 12),
+          ),
+          Positioned(
+            right: 0,
+            bottom: 0,
+            width: 120,
+            height: 70,
+            child: CustomPaint(painter: _SummaryWavePainter(accent)),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+            child: name == null
+                ? Center(
+                    child: Text(
+                      'Select a municipality',
+                      style: TextStyle(
+                        color: OptacaAdminTheme.textMuted.withValues(alpha: 0.9),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: SizedBox(
+                              width: 54,
+                              height: 54,
+                              child: municipality == null
+                                  ? ColoredBox(
+                                      color: accent.withValues(alpha: 0.12),
+                                      child: Icon(
+                                        Icons.location_city_rounded,
+                                        color: accent,
+                                      ),
+                                    )
+                                  : buildMunicipalityImageForMunicipality(
+                                      municipality,
+                                      fallback: ColoredBox(
+                                        color: accent.withValues(alpha: 0.12),
+                                        child: Icon(
+                                          isCity
+                                              ? Icons.location_city_rounded
+                                              : Icons.domain_rounded,
+                                          color: accent,
+                                        ),
+                                      ),
+                                    ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w800,
+                                    color: OptacaAdminTheme.text,
+                                  ),
+                                ),
+                                const SizedBox(height: 5),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 9,
+                                    vertical: 3,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: accent,
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    municipality?.divisionLabel ??
+                                        'Municipality',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Icon(Icons.groups_rounded, size: 16, color: accent),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              '${OptacaAdminTheme.formatCount(arrivals)} Recorded Arrivals',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w700,
+                                color: accent.withValues(alpha: 0.95),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Icon(Icons.place_rounded, size: 16, color: accent),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              '$spots Tourist Spot${spots == 1 ? '' : 's'}',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w700,
+                                color: accent.withValues(alpha: 0.95),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _monthlyChartCard() {
+    final peak = [
+      ...leftMonthly,
+      ...rightMonthly,
+    ].fold<int>(0, math.max);
+    final maxY =
+        math.max(1, peak + (peak < 8 ? 1 : (peak * 0.12).ceil())).toDouble();
+    final yInterval = math.max(1, (maxY / 4).ceil()).toDouble();
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: OptacaAdminTheme.border),
+        boxShadow: OptacaAdminTheme.cardShadow,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Monthly Recorded Arrivals',
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w800,
+                    color: OptacaAdminTheme.text,
+                  ),
+                ),
+              ),
+              _legendDot(OptacaAdminTheme.primary, left ?? 'First'),
+              const SizedBox(width: 12),
+              _legendDot(_blue, right ?? 'Second'),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final barW =
+                    ((constraints.maxWidth - 36) / 12 / 2.6).clamp(7.0, 13.0);
+                return BarChart(
+                  BarChartData(
+                    maxY: maxY,
+                    minY: 0,
+                    alignment: BarChartAlignment.spaceAround,
+                    groupsSpace: 8,
+                    barTouchData: BarTouchData(
+                      enabled: true,
+                      touchTooltipData: BarTouchTooltipData(
+                        getTooltipColor: (_) => const Color(0xFF1C1410),
+                        tooltipRoundedRadius: 10,
+                        tooltipPadding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
+                        fitInsideHorizontally: true,
+                        fitInsideVertically: true,
+                        getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                          final month = _monthName(group.x + 1);
+                          final name = rodIndex == 0
+                              ? (left ?? 'First')
+                              : (right ?? 'Second');
+                          final count = rod.toY.round();
+                          return BarTooltipItem(
+                            '$name · $month\n',
+                            const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            children: [
+                              TextSpan(
+                                text:
+                                    '$count ${count == 1 ? 'arrival' : 'arrivals'}',
+                                style: TextStyle(
+                                  color: rodIndex == 0
+                                      ? const Color(0xFFFFB46A)
+                                      : const Color(0xFF93C5FD),
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                    gridData: FlGridData(
+                      drawVerticalLine: false,
+                      horizontalInterval: yInterval,
+                      getDrawingHorizontalLine: (value) => const FlLine(
+                        color: Color(0xFFE5E7EB),
+                        strokeWidth: 1,
+                      ),
+                    ),
+                    borderData: FlBorderData(show: false),
+                    titlesData: FlTitlesData(
+                      topTitles: const AxisTitles(),
+                      rightTitles: const AxisTitles(),
+                      leftTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 30,
+                          interval: yInterval,
+                          getTitlesWidget: (value, meta) {
+                            if (value < 0 || value > maxY + 0.01) {
+                              return const SizedBox.shrink();
+                            }
+                            if ((value - value.roundToDouble()).abs() > 0.01) {
+                              return const SizedBox.shrink();
+                            }
+                            return Text(
+                              '${value.round()}',
+                              style: const TextStyle(
+                                fontSize: 10,
+                                color: OptacaAdminTheme.textMuted,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      bottomTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 22,
+                          getTitlesWidget: (value, meta) {
+                            final i = value.toInt();
+                            if ((value - i).abs() > 0.01 || i < 0 || i > 11) {
+                              return const SizedBox.shrink();
+                            }
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 6),
+                              child: Text(
+                                _monthName(i + 1),
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: OptacaAdminTheme.textMuted,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                    barGroups: [
+                      for (var i = 0; i < 12; i++)
+                        BarChartGroupData(
+                          x: i,
+                          barsSpace: 2,
+                          barRods: [
+                            BarChartRodData(
+                              toY: leftMonthly[i].toDouble(),
+                              color: OptacaAdminTheme.primary,
+                              width: barW,
+                              borderRadius: const BorderRadius.vertical(
+                                top: Radius.circular(3),
+                              ),
+                            ),
+                            BarChartRodData(
+                              toY: rightMonthly[i].toDouble(),
+                              color: _blue,
+                              width: barW,
+                              borderRadius: const BorderRadius.vertical(
+                                top: Radius.circular(3),
+                              ),
+                            ),
+                          ],
+                        ),
+                    ],
+                  ),
+                );
+              },
             ),
-          ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _legendDot(Color color, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 9,
+          height: 9,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 5),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 100),
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: OptacaAdminTheme.textMuted,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _insightCard() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFECFDF5),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _green.withValues(alpha: 0.28)),
+        boxShadow: [
+          BoxShadow(
+            color: _green.withValues(alpha: 0.08),
+            blurRadius: 12,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.trending_up_rounded,
+                  color: _green,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Performance Insight',
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w800,
+                    color: OptacaAdminTheme.text,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _insightText(),
+            style: const TextStyle(
+              fontSize: 13,
+              height: 1.45,
+              fontWeight: FontWeight.w600,
+              color: OptacaAdminTheme.text,
+            ),
+          ),
         ],
       ),
     );
   }
 
   Widget _picker(String label, String? value, ValueChanged<String?> onChanged) {
-    return SizedBox(
-      width: 240,
-      child: DropdownButtonFormField<String?>(
-        value: choices.contains(value) ? value : null,
-        isExpanded: true,
-        decoration: InputDecoration(
-          labelText: label,
-          isDense: true,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+    return DropdownButtonFormField<String?>(
+      value: choices.contains(value) ? value : null,
+      isExpanded: true,
+      decoration: InputDecoration(
+        labelText: label,
+        isDense: true,
+        filled: true,
+        fillColor: const Color(0xFFFAF7F4),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: OptacaAdminTheme.border),
         ),
-        items: [
-          const DropdownMenuItem<String?>(value: null, child: Text('Select')),
-          for (final name in choices)
-            DropdownMenuItem(value: name, child: Text(name, overflow: TextOverflow.ellipsis)),
-        ],
-        onChanged: onChanged,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: OptacaAdminTheme.border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(
+            color: OptacaAdminTheme.primary,
+            width: 1.4,
+          ),
+        ),
       ),
+      items: [
+        const DropdownMenuItem<String?>(value: null, child: Text('Select')),
+        for (final name in choices)
+          DropdownMenuItem(
+            value: name,
+            child: Text(name, overflow: TextOverflow.ellipsis),
+          ),
+      ],
+      onChanged: onChanged,
     );
   }
 
@@ -1233,21 +1805,31 @@ class MunicipalityComparisonPanel extends StatelessWidget {
     if (match.isEmpty) return 0;
     return spotsInMunicipality(match.first);
   }
+}
 
-  Widget _side(String name, int arrivals, int spots, String? growth) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(name, style: const TextStyle(fontWeight: FontWeight.w800)),
-        Text('$arrivals recorded arrivals'),
-        Text('$spots tourist spots'),
-        Text(
-          growth ?? 'No earlier period to measure growth.',
-          style: const TextStyle(color: AppColors.textGrey, fontSize: 12),
-        ),
-      ],
-    );
+class _SummaryWavePainter extends CustomPainter {
+  const _SummaryWavePainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path()
+      ..moveTo(0, size.height)
+      ..quadraticBezierTo(
+        size.width * 0.35,
+        size.height * 0.2,
+        size.width,
+        size.height * 0.45,
+      )
+      ..lineTo(size.width, size.height)
+      ..close();
+    canvas.drawPath(path, Paint()..color = color.withValues(alpha: 0.16));
   }
+
+  @override
+  bool shouldRepaint(covariant _SummaryWavePainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 List<int> monthlyArrivalCounts(List<RecordedArrival> arrivals, {DateTimeRange? range}) {

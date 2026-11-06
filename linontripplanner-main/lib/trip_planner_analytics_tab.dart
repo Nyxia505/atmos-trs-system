@@ -10,6 +10,7 @@ import 'services/admin_live_collections.dart';
 import 'services/saved_trip_store.dart';
 import 'theme/tourism_app_theme.dart';
 import 'utils/trip_planner_analytics.dart';
+import 'widgets/municipality_image.dart';
 import 'widgets/optaca_portal_ui.dart';
 import 'widgets/reports/trip_analytics_period_pickers.dart';
 
@@ -119,29 +120,32 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
 
   Widget _grainChip(TripTrendGrain grain, String label) {
     final selected = _grain == grain;
-    return ChoiceChip(
-      label: Text(label),
-      selected: selected,
-      selectedColor: const Color(0xFFFFE2C7),
-      labelStyle: TextStyle(
-        color: const Color(0xFF1F2937),
-        fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+    return Material(
+      color: selected ? OptacaAdminTheme.primary : Colors.white,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () => _onGrainPressed(grain),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: selected
+                  ? OptacaAdminTheme.primary
+                  : OptacaAdminTheme.border,
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w800,
+              color: selected ? Colors.white : OptacaAdminTheme.text,
+            ),
+          ),
+        ),
       ),
-      side: BorderSide(
-        color: selected ? OptacaAdminTheme.primary : OptacaAdminTheme.border,
-      ),
-      avatar: Icon(
-        switch (grain) {
-          TripTrendGrain.daily => Icons.calendar_today_outlined,
-          TripTrendGrain.weekly => Icons.date_range_outlined,
-          TripTrendGrain.monthly => Icons.calendar_month_outlined,
-          TripTrendGrain.yearly => Icons.event_outlined,
-        },
-        size: 16,
-        color: selected ? OptacaAdminTheme.primary : AppColors.textGrey,
-      ),
-      showCheckmark: false,
-      onSelected: (_) => _onGrainPressed(grain),
     );
   }
 
@@ -176,8 +180,10 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
     );
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
       children: [
+        const _AnalyticsPageHeader(),
+        const SizedBox(height: 14),
         _summary(stats),
         if (stats.skippedMissingTimestamp > 0) ...[
           const SizedBox(height: 10),
@@ -189,22 +195,26 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
             style: const TextStyle(color: AppColors.textGrey, fontSize: 12),
           ),
         ],
-        const SizedBox(height: 16),
+        const SizedBox(height: 14),
         _trends(stats),
-        const SizedBox(height: 16),
+        const SizedBox(height: 14),
         _twoColumn(
           _rankedCard(
-            title: 'Popular tourist destinations',
+            title: 'Popular Tourist Destinations',
+            icon: Icons.place_rounded,
             rows: stats.destinations,
             totalPlans: stats.planCount,
+            kind: _RankThumbKind.destination,
           ),
           _rankedCard(
-            title: 'Municipality analytics',
+            title: 'Municipality Analytics',
+            icon: Icons.apartment_rounded,
             rows: stats.municipalityRanks,
             totalPlans: stats.planCount,
+            kind: _RankThumbKind.municipality,
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 14),
         _twoColumn(_durationCard(stats), _routesCard(stats)),
       ],
     );
@@ -223,7 +233,7 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
         value: '${stats.distinctDestinations}',
       ),
       _StatCard(
-        icon: Icons.timelapse_outlined,
+        icon: Icons.access_time_rounded,
         label: 'Average travel duration',
         value: stats.averageDays == null
             ? '—'
@@ -290,53 +300,44 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
                 : 30;
     final peak = peakSeriesIndex(series);
 
-    return _card(
+    return _sectionCard(
+      icon: Icons.insights_rounded,
       title: 'Trip Planner Trends',
+      trailing: Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          _grainChip(TripTrendGrain.daily, 'Daily'),
+          _grainChip(TripTrendGrain.weekly, 'Weekly'),
+          _grainChip(TripTrendGrain.monthly, 'Monthly'),
+          _grainChip(TripTrendGrain.yearly, 'Yearly'),
+        ],
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
+          Column(
             children: [
-              _grainChip(TripTrendGrain.daily, 'Daily'),
-              _grainChip(TripTrendGrain.weekly, 'Weekly'),
-              _grainChip(TripTrendGrain.monthly, 'Monthly'),
-              _grainChip(TripTrendGrain.yearly, 'Yearly'),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              IconButton(
-                tooltip: 'Previous period',
-                visualDensity: VisualDensity.compact,
-                onPressed: () => setState(() {
-                  _window = _window.previous();
-                }),
-                icon: const Icon(Icons.chevron_left_rounded),
-              ),
-              InkWell(
-                onTap: () => _onGrainPressed(_grain),
-                borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 4,
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    tooltip: 'Previous period',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => setState(() {
+                      _window = _window.previous();
+                    }),
+                    icon: const Icon(Icons.chevron_left_rounded),
                   ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.calendar_today_outlined,
-                        size: 14,
-                        color: axisText,
+                  InkWell(
+                    onTap: () => _onGrainPressed(_grain),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 4,
                       ),
-                      const SizedBox(width: 6),
-                      Text(
+                      child: Text(
                         _window.label,
                         style: const TextStyle(
                           fontWeight: FontWeight.w800,
@@ -344,47 +345,64 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
                           color: axisText,
                         ),
                       ),
-                    ],
+                    ),
                   ),
-                ),
-              ),
-              IconButton(
-                tooltip: 'Next period',
-                visualDensity: VisualDensity.compact,
-                onPressed: _window.canGoNext
-                    ? () => setState(() {
-                          _window = _window.next();
-                        })
-                    : null,
-                icon: const Icon(Icons.chevron_right_rounded),
+                  IconButton(
+                    tooltip: 'Next period',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: _window.canGoNext
+                        ? () => setState(() {
+                              _window = _window.next();
+                            })
+                        : null,
+                    icon: const Icon(Icons.chevron_right_rounded),
+                  ),
+                ],
               ),
               if (_window.preset == TripDatePreset.custom)
-                Text(
-                  '${_window.selectedDayCount} '
-                  '${_window.selectedDayCount == 1 ? 'day' : 'days'}',
-                  style: const TextStyle(
-                    color: AppColors.textGrey,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    '${_window.selectedDayCount} '
+                    '${_window.selectedDayCount == 1 ? 'day' : 'days'}',
+                    style: const TextStyle(
+                      color: AppColors.textGrey,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               if (peak != null)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 5,
-                  ),
-                  decoration: BoxDecoration(
-                    color: fillColor,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    'Peak: ${series[peak].count} trip '
-                    '${series[peak].count == 1 ? 'plan' : 'plans'}',
-                    style: const TextStyle(
-                      color: lineColor,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 12,
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: fillColor,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.trending_up_rounded,
+                          size: 14,
+                          color: lineColor,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Peak: ${series[peak].count} trip '
+                          '${series[peak].count == 1 ? 'plan' : 'plans'}',
+                          style: const TextStyle(
+                            color: lineColor,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -415,9 +433,11 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
 
   Widget _durationCard(TripPlannerAnalyticsSnapshot stats) {
     final rows = stats.durations.where((row) => row.count > 0).toList();
-    final total = rows.fold<int>(0, (total, row) => total + row.count);
-    return _card(
-      title: 'Travel duration',
+    final total = rows.fold<int>(0, (acc, row) => acc + row.count);
+    return _sectionCard(
+      icon: Icons.access_time_rounded,
+      title: 'Travel Duration',
+      clipArt: true,
       child: rows.isEmpty
           ? const Text(
               'No itineraries in this selection have a travel-day count.',
@@ -426,29 +446,49 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
           : LayoutBuilder(
               builder: (context, c) {
                 final pie = SizedBox(
-                  width: 160,
-                  height: 160,
-                  child: PieChart(
-                    PieChartData(
-                      sectionsSpace: 2,
-                      centerSpaceRadius: 36,
-                      sections: [
-                        for (var i = 0; i < rows.length; i++)
-                          PieChartSectionData(
-                            color: _sliceColors[i % _sliceColors.length],
-                            value: rows[i].count.toDouble(),
-                            title: total == 0
-                                ? ''
-                                : '${(rows[i].count / total * 100).round()}%',
-                            radius: 28,
-                            titleStyle: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
+                  width: 168,
+                  height: 168,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      PieChart(
+                        PieChartData(
+                          sectionsSpace: 2,
+                          centerSpaceRadius: 46,
+                          sections: [
+                            for (var i = 0; i < rows.length; i++)
+                              PieChartSectionData(
+                                color: _sliceColors[i % _sliceColors.length],
+                                value: rows[i].count.toDouble(),
+                                title: '',
+                                radius: 28,
+                                showTitle: false,
+                              ),
+                          ],
+                        ),
+                      ),
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '$total',
+                            style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w900,
+                              color: OptacaAdminTheme.text,
                             ),
                           ),
-                      ],
-                    ),
+                          Text(
+                            total == 1 ? 'trip plan' : 'trip plans',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: OptacaAdminTheme.textMuted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 );
                 final legend = Column(
@@ -456,11 +496,29 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
                   children: [
                     for (var i = 0; i < rows.length; i++)
                       Padding(
-                        padding: const EdgeInsets.only(bottom: 6),
-                        child: Text(
-                          '${rows[i].label}: ${rows[i].count} '
-                          '(${total == 0 ? 0 : (rows[i].count / total * 100).round()}%)',
-                          style: const TextStyle(fontSize: 13),
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 10,
+                              height: 10,
+                              decoration: BoxDecoration(
+                                color: _sliceColors[i % _sliceColors.length],
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '${rows[i].label}: ${rows[i].count} '
+                                '(${total == 0 ? 0 : (rows[i].count / total * 100).round()}%)',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                   ],
@@ -471,7 +529,7 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
                   );
                 }
                 return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     pie,
                     const SizedBox(width: 16),
@@ -484,47 +542,82 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
   }
 
   Widget _routesCard(TripPlannerAnalyticsSnapshot stats) {
-    final recorded = stats.coastal + stats.highland;
-    return _card(
-      title: 'Route analytics',
+    return _sectionCard(
+      icon: Icons.alt_route_rounded,
+      title: 'Route Analytics',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            recorded == 0
-                ? 'No coastal or highland route recorded.'
-                : 'Coastal ${stats.coastal} · Highland ${stats.highland}'
-                    ' · ${stats.coastalPercent}% / ${stats.highlandPercent}%',
-            style: const TextStyle(fontSize: 13),
+          LayoutBuilder(
+            builder: (context, c) {
+              final starts = _routeEndpointBlock(
+                title: 'Starting Municipalities',
+                icon: Icons.play_arrow_rounded,
+                iconColor: const Color(0xFF16A34A),
+                rows: stats.starts,
+              );
+              final ends = _routeEndpointBlock(
+                title: 'Ending Municipalities',
+                icon: Icons.flag_rounded,
+                iconColor: const Color(0xFFDC2626),
+                rows: stats.ends,
+              );
+              if (c.maxWidth < 480) {
+                return Column(
+                  children: [starts, const SizedBox(height: 12), ends],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: starts),
+                  const SizedBox(width: 16),
+                  Expanded(child: ends),
+                ],
+              );
+            },
           ),
-          if (stats.routeTypeMissing > 0)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                '${stats.routeTypeMissing} plans have no route type stored, so they are not assigned to either route.',
-                style: const TextStyle(color: AppColors.textGrey, fontSize: 12),
-              ),
+          if (stats.routes.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Text(
+              'Municipality routes',
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
             ),
-          const SizedBox(height: 12),
-          const Text(
-            'Starting municipalities',
-            style: TextStyle(fontWeight: FontWeight.w700),
-          ),
-          _miniList(stats.starts),
-          const SizedBox(height: 8),
-          const Text(
-            'Ending municipalities',
-            style: TextStyle(fontWeight: FontWeight.w700),
-          ),
-          _miniList(stats.ends),
-          const SizedBox(height: 8),
-          const Text(
-            'Municipality routes',
-            style: TextStyle(fontWeight: FontWeight.w700),
-          ),
-          _miniList(stats.routes),
+            const SizedBox(height: 6),
+            _miniList(stats.routes),
+          ],
         ],
       ),
+    );
+  }
+
+  Widget _routeEndpointBlock({
+    required String title,
+    required IconData icon,
+    required Color iconColor,
+    required List<TripRankRow> rows,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 18, color: iconColor),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        _miniList(rows),
+      ],
     );
   }
 
@@ -543,9 +636,16 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
             child: Row(
               children: [
                 Expanded(
-                  child: Text(row.label, overflow: TextOverflow.ellipsis),
+                  child: Text(
+                    row.label,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
                 ),
-                Text('${row.count}'),
+                Text(
+                  '${row.count}',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
               ],
             ),
           ),
@@ -555,56 +655,36 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
 
   Widget _rankedCard({
     required String title,
+    required IconData icon,
     required List<TripRankRow> rows,
     required int totalPlans,
+    required _RankThumbKind kind,
   }) {
-    return _card(
+    return _sectionCard(
+      icon: icon,
       title: title,
       child: rows.isEmpty
           ? const Text(
               'Nothing to rank in this selection.',
               style: TextStyle(color: AppColors.textGrey),
             )
-          : Column(
-              children: [
-                for (final row in rows.take(10))
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                row.detail.isEmpty
-                                    ? row.label
-                                    : '${row.label} · ${row.detail}',
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            Text(
-                              '${row.count} ${row.count == 1 ? 'plan' : 'plans'} '
-                              '(${row.percentOf(totalPlans)}%)',
-                              style: const TextStyle(fontWeight: FontWeight.w700),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(6),
-                          child: LinearProgressIndicator(
-                            value: row.barOf(totalPlans),
-                            minHeight: 8,
-                            backgroundColor: const Color(0xFFFFEDD5),
-                            color: AppColors.primary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-              ],
+          : Builder(
+              builder: (context) {
+                final top = rows.take(10).toList(growable: false);
+                return Column(
+                  children: [
+                    for (var i = 0; i < top.length; i++) ...[
+                      if (i > 0) const SizedBox(height: 10),
+                      _RankRowTile(
+                        rank: i + 1,
+                        row: top[i],
+                        totalPlans: totalPlans,
+                        kind: kind,
+                      ),
+                    ],
+                  ],
+                );
+              },
             ),
     );
   }
@@ -614,14 +694,14 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
       builder: (context, c) {
         if (c.maxWidth < 900) {
           return Column(
-            children: [left, const SizedBox(height: 16), right],
+            children: [left, const SizedBox(height: 14), right],
           );
         }
         return Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(child: left),
-            const SizedBox(width: 16),
+            const SizedBox(width: 14),
             Expanded(child: right),
           ],
         );
@@ -629,39 +709,390 @@ class _TripPlannerAnalyticsTabState extends State<TripPlannerAnalyticsTab> {
     );
   }
 
-  Widget _card({
+  Widget _sectionCard({
+    required IconData icon,
     required String title,
     required Widget child,
     Widget? trailing,
+    bool clipArt = false,
   }) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: OptacaAdminTheme.cardDecoration,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Wrap(
-            spacing: 12,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: OptacaAdminTheme.border),
+        boxShadow: OptacaAdminTheme.cardShadow,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: Stack(
+          children: [
+            if (clipArt)
+              const Positioned(
+                right: 0,
+                bottom: 0,
+                width: 120,
+                height: 72,
+                child: IgnorePointer(
+                  child: CustomPaint(painter: _CardWavePainter()),
                 ),
               ),
-              ?trailing,
-            ],
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: OptacaAdminTheme.lightOrange,
+                          borderRadius: BorderRadius.circular(9),
+                        ),
+                        child: Icon(
+                          icon,
+                          color: OptacaAdminTheme.primary,
+                          size: 18,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 5),
+                          child: Text(
+                            title,
+                            style: const TextStyle(
+                              fontSize: 15.5,
+                              fontWeight: FontWeight.w800,
+                              color: OptacaAdminTheme.text,
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (trailing != null) Flexible(child: trailing),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  child,
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+enum _RankThumbKind { destination, municipality }
+
+class _RankRowTile extends StatelessWidget {
+  const _RankRowTile({
+    required this.rank,
+    required this.row,
+    required this.totalPlans,
+    required this.kind,
+  });
+
+  final int rank;
+  final TripRankRow row;
+  final int totalPlans;
+  final _RankThumbKind kind;
+
+  TouristSpot? get _spot {
+    for (final spot in allSpots) {
+      final docId = (spot.firestoreDocId ?? '').trim();
+      if (docId.isNotEmpty && docId == row.id) return spot;
+    }
+    return findTouristSpotByNameFuzzy(row.label);
+  }
+
+  Municipality? get _municipality {
+    bool matches(Municipality m, String raw) {
+      final value = raw.trim();
+      if (value.isEmpty) return false;
+      if (m.name == value || m.shortName == value) return true;
+      final lower = value.toLowerCase();
+      if (m.name.toLowerCase() == lower || m.shortName.toLowerCase() == lower) {
+        return true;
+      }
+      return normalizeTourismNameKey(m.name) == value ||
+          normalizeTourismNameKey(m.shortName) == value;
+    }
+
+    for (final m in municipalities) {
+      if (matches(m, row.label) || matches(m, row.id)) return m;
+    }
+    final resolved =
+        resolveMunicipality(row.label) ?? resolveMunicipality(row.id);
+    if (resolved == null) return null;
+    for (final m in municipalities) {
+      if (matches(m, resolved.label) ||
+          normalizeTourismNameKey(m.name) == resolved.id) {
+        return m;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = row.percentOf(totalPlans);
+    final bar = row.barOf(totalPlans);
+    final title = kind == _RankThumbKind.destination && row.detail.isNotEmpty
+        ? '${row.label} - ${row.detail}'
+        : row.label;
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        SizedBox(
+          width: 18,
+          child: Text(
+            '$rank',
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 13,
+              color: OptacaAdminTheme.textMuted,
+            ),
           ),
-          const SizedBox(height: 12),
-          child,
+        ),
+        const SizedBox(width: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: SizedBox(
+            width: 42,
+            height: 42,
+            child: kind == _RankThumbKind.destination
+                ? _destinationThumb()
+                : _municipalityThumb(),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          flex: 5,
+          child: Text(
+            title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              height: 1.2,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          flex: 4,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: bar,
+              minHeight: 8,
+              backgroundColor: const Color(0xFFFFEDD5),
+              color: OptacaAdminTheme.primary,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        SizedBox(
+          width: 92,
+          child: Text(
+            '${row.count} ${row.count == 1 ? 'plan' : 'plans'} ($pct%)',
+            textAlign: TextAlign.right,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _destinationThumb() {
+    final spot = _spot;
+    final fallback = ColoredBox(
+      color: OptacaAdminTheme.lightOrange,
+      child: const Icon(
+        Icons.place_rounded,
+        color: OptacaAdminTheme.primary,
+        size: 20,
+      ),
+    );
+    if (spot == null) return fallback;
+    return buildTouristSpotProfileImage(
+      spot,
+      fallback: fallback,
+      memCacheWidth: 96,
+      memCacheHeight: 96,
+    );
+  }
+
+  Widget _municipalityThumb() {
+    final municipality = _municipality;
+    final fallback = ColoredBox(
+      color: OptacaAdminTheme.lightOrange,
+      child: const Icon(
+        Icons.location_city_rounded,
+        color: OptacaAdminTheme.primary,
+        size: 20,
+      ),
+    );
+    if (municipality == null) return fallback;
+    return buildMunicipalityImageForMunicipality(
+      municipality,
+      fallback: fallback,
+      memCacheWidth: 96,
+      memCacheHeight: 96,
+    );
+  }
+}
+
+class _AnalyticsPageHeader extends StatelessWidget {
+  const _AnalyticsPageHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF6EC),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: OptacaAdminTheme.border.withValues(alpha: 0.75),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              gradient: OptacaAdminTheme.kpiGradient,
+              borderRadius: BorderRadius.circular(13),
+              boxShadow: [
+                BoxShadow(
+                  color: OptacaAdminTheme.primary.withValues(alpha: 0.25),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.route_rounded,
+              color: Colors.white,
+              size: 24,
+            ),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Trip Planner Analytics',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w900,
+                    color: OptacaAdminTheme.text,
+                    letterSpacing: -0.2,
+                    height: 1.15,
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Monitor trip planning trends, popular destinations, and travel patterns across municipalities.',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    height: 1.35,
+                    color: OptacaAdminTheme.textMuted,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          IgnorePointer(
+            child: CustomPaint(
+              size: const Size(68, 52),
+              painter: _HeaderArtPainter(),
+            ),
+          ),
         ],
       ),
     );
   }
+}
+
+class _HeaderArtPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final mountain = Path()
+      ..moveTo(0, size.height)
+      ..lineTo(size.width * 0.28, size.height * 0.42)
+      ..lineTo(size.width * 0.48, size.height * 0.68)
+      ..lineTo(size.width * 0.72, size.height * 0.28)
+      ..lineTo(size.width, size.height)
+      ..close();
+    canvas.drawPath(
+      mountain,
+      Paint()..color = OptacaAdminTheme.primary.withValues(alpha: 0.18),
+    );
+    final palm = Paint()
+      ..color = OptacaAdminTheme.primary.withValues(alpha: 0.55)
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    final trunkX = size.width * 0.86;
+    canvas.drawLine(
+      Offset(trunkX, size.height * 0.92),
+      Offset(trunkX, size.height * 0.42),
+      palm,
+    );
+    for (final dx in [-14.0, -6.0, 6.0, 14.0]) {
+      canvas.drawLine(
+        Offset(trunkX, size.height * 0.42),
+        Offset(trunkX + dx, size.height * 0.22),
+        palm,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _CardWavePainter extends CustomPainter {
+  const _CardWavePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path()
+      ..moveTo(size.width * 0.45, size.height)
+      ..quadraticBezierTo(
+        size.width * 0.65,
+        size.height * 0.25,
+        size.width,
+        size.height * 0.5,
+      )
+      ..lineTo(size.width, size.height)
+      ..close();
+    canvas.drawPath(
+      path,
+      Paint()..color = OptacaAdminTheme.primary.withValues(alpha: 0.10),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _TripTrendLineChart extends StatefulWidget {
@@ -712,7 +1143,7 @@ class _TripTrendLineChartState extends State<_TripTrendLineChart> {
     final touched = _active;
 
     return SizedBox(
-      height: 268,
+      height: 260,
       child: LineChart(
         LineChartData(
           minX: 0,
@@ -883,7 +1314,7 @@ class _TripTrendLineChartState extends State<_TripTrendLineChart> {
                       children: [
                         TextSpan(
                           text:
-                              '${spot.y.round()} saved trip '
+                              '${spot.y.round()} trip '
                               '${spot.y.round() == 1 ? 'plan' : 'plans'}',
                           style: const TextStyle(
                             color: Color(0xFFFFB46A),
@@ -934,41 +1365,66 @@ class _StatCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: OptacaAdminTheme.cardDecoration,
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: OptacaAdminTheme.lightOrange,
-              borderRadius: BorderRadius.circular(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: OptacaAdminTheme.border),
+        boxShadow: OptacaAdminTheme.cardShadow,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: Stack(
+          children: [
+            const Positioned(
+              right: 0,
+              bottom: 0,
+              width: 90,
+              height: 54,
+              child: CustomPaint(painter: _CardWavePainter()),
             ),
-            child: Icon(icon, color: OptacaAdminTheme.primary),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: OptacaAdminTheme.lightOrange,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(icon, color: OptacaAdminTheme.primary),
                   ),
-                ),
-                Text(
-                  label,
-                  style: const TextStyle(
-                    color: AppColors.textGrey,
-                    fontSize: 12,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          value,
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                            color: OptacaAdminTheme.text,
+                            height: 1.05,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          label,
+                          style: const TextStyle(
+                            color: AppColors.textGrey,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

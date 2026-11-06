@@ -21,8 +21,13 @@ const String kAndroidApkDownloadUrl =
 bool get kHasAndroidApkDownload => kAndroidApkDownloadUrl.trim().isNotEmpty;
 
 /// Trip Planner Android APK (linontripplanner-main release build).
+/// Points at GitHub Releases `latest` (Firebase Spark cannot host APKs).
+/// Bump [kTripPlannerApkVersion] whenever a new APK is uploaded so browsers
+/// do not reuse a cached download.
+const String kTripPlannerApkVersion = '1.0.3+4';
 const String kTripPlannerApkDownloadUrl =
-    'https://github.com/Nyxia505/atmos-trs-system/releases/latest/download/trip-planner.apk';
+    'https://github.com/Nyxia505/atmos-trs-system/releases/latest/download/trip-planner.apk'
+    '?v=$kTripPlannerApkVersion';
 
 bool get kHasTripPlannerApkDownload =>
     kTripPlannerApkDownloadUrl.trim().isNotEmpty;
@@ -33,6 +38,10 @@ Future<bool> openTripPlannerApkDownload() async {
   if (raw.isEmpty) return false;
   final uri = Uri.tryParse(raw);
   if (uri == null || !uri.hasScheme) return false;
+  // Web: open download in a new tab. Mobile: open externally.
+  if (kIsWeb) {
+    return launchUrl(uri, webOnlyWindowName: '_blank');
+  }
   return launchUrl(uri, mode: LaunchMode.externalApplication);
 }
 

@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'data.dart';
 import 'services/spot_interaction_history.dart';
 import 'services/spot_ratings_store.dart';
+import 'services/tourist_spot_unique_views_service.dart';
 import 'trip_planner_utils.dart' show formatSpotFeeForDisplay;
 import 'trip_preferences_store.dart';
 import 'widgets/municipality_image.dart';
@@ -26,6 +29,10 @@ class _SpotDetailScreenState extends State<SpotDetailScreen> {
         SpotInteractionHistoryStore.instance.favoritedKeys.contains(key);
     SpotInteractionHistoryStore.instance.recordViewed(widget.spot);
     SpotRatingsStore.instance.ensureLoaded();
+    // Unique view = authenticated user opened this details screen once.
+    unawaited(
+      TouristSpotUniqueViewsService.instance.recordUniqueView(widget.spot),
+    );
   }
 
   Future<void> _toggleFavorite() async {

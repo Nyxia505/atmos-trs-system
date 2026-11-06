@@ -645,15 +645,6 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
                   ),
                   const SizedBox(height: 22),
                   _posterPicker(),
-                  const SizedBox(height: 14),
-                  TextFormField(
-                    controller: _imageController,
-                    decoration: catalogFieldDecoration(
-                      label: 'Image URL',
-                      hint: 'Or paste a public image URL',
-                      optional: true,
-                    ),
-                  ),
                   const SizedBox(height: 8),
                 ],
               ),
