@@ -6,7 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart'
-    show ValueNotifier, debugPrint, kDebugMode;
+    show ValueNotifier, VoidCallback, debugPrint, kDebugMode;
 
 import 'services/firestore_errors.dart';
 import 'services/firestore_gate.dart';
@@ -111,6 +111,14 @@ const String kTouristVisitsCollection = 'tourist_visits';
 /// Public anonymized profiles for on-device collaborative filtering.
 const String kRecommendationProfilesCollection = 'recommendation_profiles';
 
+bool _isActiveTouristSpotDoc(Map<String, dynamic> d) {
+  final status = (_str(d, 'status') ?? _str(d, 'Status') ?? 'Active')
+      .trim()
+      .toLowerCase();
+  if (status.isEmpty) return true;
+  return status == 'active' || status == 'published';
+}
+
 /// Builds a [TouristSpot] from one `tourist_spots` document.
 TouristSpot? touristSpotFromFirestoreDoc(
   String docId,
@@ -118,6 +126,8 @@ TouristSpot? touristSpotFromFirestoreDoc(
 ) {
   final name = _str(d, 'name') ?? docId;
   if (name.isEmpty) return null;
+  // Trip Planner / Explore only show Active (published) spots.
+  if (!_isActiveTouristSpotDoc(d)) return null;
 
   final rating = _double(d, 'rating');
   final lat = _doubleOrNull(d, 'latitude') ?? _doubleOrNull(d, 'lat');
@@ -179,6 +189,29 @@ TouristSpot? touristSpotFromFirestoreDoc(
   );
 }
 
+void _applyTouristSpotsDocs(
+  Iterable<({String id, Map<String, dynamic> data})> docs,
+) {
+  final byId = <String, TouristSpot>{};
+  for (final doc in docs) {
+    final spot = touristSpotFromFirestoreDoc(doc.id, doc.data);
+    if (spot == null) continue;
+    byId[doc.id] = spot;
+  }
+  allSpots
+    ..clear()
+    ..addAll(byId.values);
+  // Lock curated files (Piduan Falls, Panaon Seaside, …) and drop duplicates.
+  applyCuratedTouristSpotImageUrls();
+  touristSpotCatalogGeneration++;
+  if (kDebugMode) {
+    debugPrint(
+      'tourist_spots applied ${DateTime.now().toIso8601String()} '
+      'count=${allSpots.length} gen=$touristSpotCatalogGeneration',
+    );
+  }
+}
+
 /// Fetches documents from Firestore `tourist_spots` collection and fills [allSpots].
 /// Safe to call multiple times; replaces existing spots each time.
 Future<void> loadTouristSpotsFromFirestore() async {
@@ -187,26 +220,9 @@ Future<void> loadTouristSpotsFromFirestore() async {
   final snapshot =
       await fetchPublicFirestoreCollection(kTouristSpotsCollection);
 
-  final List<TouristSpot> loaded = [];
-  for (final doc in snapshot.docs) {
-    final spot = touristSpotFromFirestoreDoc(doc.id, doc.data());
-    if (spot != null) loaded.add(spot);
-  }
-
-  allSpots
-    ..clear()
-    ..addAll(loaded);
-  // Lock curated files (Piduan Falls, Panaon Seaside, …) and drop duplicates.
-  applyCuratedTouristSpotImageUrls();
-  touristSpotCatalogGeneration++;
-  if (kDebugMode) {
-    debugPrint(
-      'loadTouristSpotsFromFirestore ${DateTime.now().toIso8601String()} '
-      'collection=tourist_spots count=${allSpots.length} '
-      'gen=$touristSpotCatalogGeneration '
-      'ids=${allSpots.take(12).map((s) => s.firestoreDocId).join(',')}',
-    );
-  }
+  _applyTouristSpotsDocs([
+    for (final doc in snapshot.docs) (id: doc.id, data: doc.data()),
+  ]);
   } catch (e) {
     if (_isNonPermissionRecoverableFirestoreError(e)) {
       logRecoverableFirestoreLoad('loadTouristSpotsFromFirestore', e);
@@ -215,6 +231,37 @@ Future<void> loadTouristSpotsFromFirestore() async {
     rethrow;
   }
   });
+}
+
+StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _touristSpotsWatch;
+
+/// Keeps [allSpots] in sync with Firestore without logout / manual refresh.
+/// Call once from session bootstrap; safe to call repeatedly.
+void startTouristSpotsRealtimeSync({VoidCallback? onUpdated}) {
+  if (_touristSpotsWatch != null) return;
+  try {
+    _touristSpotsWatch = FirebaseFirestore.instance
+        .collection(kTouristSpotsCollection)
+        .snapshots()
+        .listen(
+      (snapshot) {
+        _applyTouristSpotsDocs([
+          for (final doc in snapshot.docs) (id: doc.id, data: doc.data()),
+        ]);
+        onUpdated?.call();
+      },
+      onError: (Object e, StackTrace st) {
+        debugPrint('startTouristSpotsRealtimeSync: $e\n$st');
+      },
+    );
+  } catch (e, st) {
+    debugPrint('startTouristSpotsRealtimeSync start failed: $e\n$st');
+  }
+}
+
+void stopTouristSpotsRealtimeSync() {
+  _touristSpotsWatch?.cancel();
+  _touristSpotsWatch = null;
 }
 
 /// Name / short-name variants used when querying tourist spots for one LGU.

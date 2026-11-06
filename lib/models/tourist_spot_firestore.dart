@@ -16,6 +16,7 @@ class TouristSpotFirestore {
     this.municipalityId = '',
     this.qrValue = '',
     this.qrPayload,
+    this.status = 'Active',
   });
 
   final String id;
@@ -33,17 +34,22 @@ class TouristSpotFirestore {
 
   final String qrValue;
   final String? qrPayload;
+  final String status;
 
   factory TouristSpotFirestore.fromFirestore(Map<String, dynamic> data, String id) {
     final lat = data['latitude'];
     final lng = data['longitude'];
     final ratingData = data['rating'];
     final municipalityId = data['municipalityId'] as String? ?? '';
-    final municipality = data['municipality'] as String? ?? '';
+    final municipality = data['municipality'] as String? ??
+        data['municipalityName'] as String? ??
+        data['city'] as String? ??
+        '';
     final qv =
         (data['qrValue'] as String? ?? data['qr_value'] as String? ?? '').trim();
     final qp = data['qr_payload'] as String? ?? data['qrPayload'] as String?;
     final imageUrl = readImageUrl(data);
+    final status = (data['status'] ?? data['Status'] ?? 'Active').toString();
     return TouristSpotFirestore(
       id: id,
       name: data['name'] as String? ?? '',
@@ -58,6 +64,7 @@ class TouristSpotFirestore {
       municipalityId: municipalityId,
       qrValue: qv.isNotEmpty ? qv : id,
       qrPayload: qp?.trim().isNotEmpty == true ? qp : null,
+      status: status.trim().isEmpty ? 'Active' : status.trim(),
     );
   }
 

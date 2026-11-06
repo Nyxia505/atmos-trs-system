@@ -55,6 +55,9 @@ abstract final class GuestStartupRoutes {
   };
 
   /// Unauthenticated cold-start destination. Onboarding is opt-in from Welcome.
+  ///
+  /// Phone-camera QR (no app installed) always opens [qrEntry] so the tourist
+  /// can Log In or Create Account immediately — not the marketing landing.
   static String unauthenticatedRoute({
     required bool isWeb,
     required bool hasPendingQr,

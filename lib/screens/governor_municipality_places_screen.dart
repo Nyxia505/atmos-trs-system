@@ -4,6 +4,7 @@ import 'package:atmos_trs_system/features/governor/theme/governor_dashboard_toke
 import 'package:atmos_trs_system/screens/governor_entity_analytics_screen.dart';
 import 'package:atmos_trs_system/services/establishment_approval_service.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
+import 'package:atmos_trs_system/utils/tourist_spot_metrics.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 
 /// Governor L2: spots + establishments for one municipality (replaces city list).
@@ -172,7 +173,10 @@ class _GovernorMunicipalityPlacesScreenState
             children: [
               _SummaryBanner(
                 accent: accent,
-                spots: spotsList.length,
+                spots: TouristSpotMetrics.countMaps(
+                  spotsList,
+                  kind: SpotCountKind.active,
+                ),
                 establishments: establishments.length,
                 uniqueVisitors: widget.uniqueVisitors,
               ),

@@ -34,8 +34,10 @@ import 'package:atmos_trs_system/services/establishment_approval_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/services/auth_service.dart';
 import 'package:atmos_trs_system/services/tourist_account_admin_service.dart';
+import 'package:atmos_trs_system/utils/checkin_time.dart';
 import 'package:atmos_trs_system/utils/checkin_visitor_count.dart';
 import 'package:atmos_trs_system/utils/production_data_filters.dart';
+import 'package:atmos_trs_system/utils/tourist_spot_metrics.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
 import 'package:atmos_trs_system/widgets/dot_report_export_panel.dart';
 import 'package:atmos_trs_system/widgets/lgu_debug_data_dialogs.dart';
@@ -263,6 +265,8 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   List<Map<String, dynamic>> _governorAllSpots = [];
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
       _announcementsSubscription;
+  StreamSubscription<List<Map<String, dynamic>>>? _checkInsSubscription;
+  StreamSubscription<List<Map<String, dynamic>>>? _spotsSubscription;
   bool _announcementsStreamPrimed = false;
   final Set<String> _seenGovernorEventIds = {};
   final Set<String> _dismissedGovernorNotificationIds = {};
@@ -520,22 +524,11 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     // Unique registered people (one row per tourist), not visit/check-in counts.
     _totalTourists = _tourists.length;
     _totalCheckIns = sumCheckInVisitors(_checkIns);
-
-    final today = DateTime.now();
-    final todayUserIds = <String>{};
-    for (final c in _checkIns) {
-      final d = GovernorFirestoreService.parseCheckInTime(c);
-      if (d == null) continue;
-      if (d.year != today.year ||
-          d.month != today.month ||
-          d.day != today.day) {
-        continue;
-      }
-      final uid = GovernorFirestoreService.checkInUserId(c);
-      if (uid.isNotEmpty) todayUserIds.add(uid);
-    }
-    _uniqueTouristsToday = todayUserIds.length;
-    _activeSpots = _governorAllSpots.length;
+    _recomputeUniqueTouristsToday();
+    _activeSpots = TouristSpotMetrics.countMaps(
+      _governorAllSpots,
+      kind: SpotCountKind.active,
+    );
 
     _applyMunicipalityVisitStatsFromCheckIns();
   }
@@ -668,9 +661,74 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   @override
   void dispose() {
     _announcementsSubscription?.cancel();
+    _checkInsSubscription?.cancel();
+    _spotsSubscription?.cancel();
     _animationController.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  /// Live QR check-ins → Governor KPIs without logout / manual refresh.
+  void _startCheckInsListener({
+    required Map<String, Map<String, dynamic>> spotsById,
+  }) {
+    _checkInsSubscription?.cancel();
+    _checkInsSubscription = GovernorFirestoreService()
+        .watchProvincialQrCheckIns(spotsById: spotsById)
+        .listen(
+      (rows) {
+        if (!mounted) return;
+        setState(() {
+          _checkIns = ProductionDataFilters.realCheckIns(rows);
+          _totalCheckIns = sumCheckInVisitors(_checkIns);
+          _recomputeUniqueTouristsToday();
+          _applyMunicipalityVisitStatsFromCheckIns();
+        });
+        unawaited(_saveGovernorStatsCache());
+      },
+      onError: (Object e) {
+        debugPrint('[GovernorDashboard] qr_checkins stream: $e');
+      },
+    );
+  }
+
+  void _startSpotsListener() {
+    _spotsSubscription?.cancel();
+    _spotsSubscription =
+        GovernorFirestoreService().watchProvincialTouristSpots().listen(
+      (spots) {
+        if (!mounted) return;
+        setState(() {
+          _governorAllSpots = spots;
+          _activeSpots = TouristSpotMetrics.countMaps(
+            spots,
+            kind: SpotCountKind.active,
+          );
+        });
+        unawaited(_saveGovernorStatsCache());
+      },
+      onError: (Object e) {
+        debugPrint('[GovernorDashboard] tourist_spots stream: $e');
+      },
+    );
+  }
+
+  void _recomputeUniqueTouristsToday() {
+    final today = manilaCalendarDate(DateTime.now());
+    final todayUserIds = <String>{};
+    for (final c in _checkIns) {
+      final d = GovernorFirestoreService.parseCheckInTime(c);
+      if (d == null) continue;
+      final wall = manilaCalendarDate(d);
+      if (wall.year != today.year ||
+          wall.month != today.month ||
+          wall.day != today.day) {
+        continue;
+      }
+      final uid = GovernorFirestoreService.checkInUserId(c);
+      if (uid.isNotEmpty) todayUserIds.add(uid);
+    }
+    _uniqueTouristsToday = todayUserIds.length;
   }
 
   /// Governor analytics and lists are limited to Misamis Occidental (17 LGUs).
@@ -820,6 +878,12 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         includeCheckIns: true,
       );
       _applyGovernorSnapshotStats(fullSnapshot);
+      final spotsById = <String, Map<String, dynamic>>{
+        for (final s in fullSnapshot.touristSpots)
+          if ((s['id']?.toString() ?? '').isNotEmpty) s['id'].toString(): s,
+      };
+      _startCheckInsListener(spotsById: spotsById);
+      _startSpotsListener();
 
       final profile = await UserDirectoryService.getProfileByUid(
         authUser.uid,

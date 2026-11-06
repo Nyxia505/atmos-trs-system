@@ -1906,10 +1906,12 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
           unsigned.add(label);
           continue;
         }
+        // Formal report designation only. Audit still stores signerPosition as signed
+        // (e.g. "Head of Hotel"); name + signature PNG are unchanged.
         signed.add(DotPdfSignOff(
           label: label,
           name: s.signerName,
-          position: s.signerPosition,
+          position: DotPdfSignOff.designatedManagerTitle,
           action: s.actionLabel,
           signedAt: s.createdAt,
           signaturePng: s.signaturePng,

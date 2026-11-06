@@ -214,25 +214,19 @@ class _AeRegisterRowDialogState extends State<AeRegisterRowDialog> {
     _guests.text = '${i.guests}';
     _female.text = '${i.female}';
     _male.text = '${i.male}';
-    _rate.text = i.rate <= 0 ? '' : PhpCurrencyInput.format(i.rate);
+    _rate.text = i.rate <= 0 ? '' : PhpCurrencyInput.formatPlain(i.rate);
     _chargesA.text =
-        i.chargesA <= 0 ? '' : PhpCurrencyInput.format(i.chargesA);
+        i.chargesA <= 0 ? '' : PhpCurrencyInput.formatPlain(i.chargesA);
     _chargesB.text =
-        i.chargesB <= 0 ? '' : PhpCurrencyInput.format(i.chargesB);
+        i.chargesB <= 0 ? '' : PhpCurrencyInput.formatPlain(i.chargesB);
     _guestTouched = true;
     _revalidateGuests();
   }
 
   void _onRateFocus() {
-    if (_rateFocus.hasFocus) {
-      final v = PhpCurrencyInput.tryParse(_rate.text);
-      if (v != null && v > 0) {
-        _rate.text = v == v.roundToDouble()
-            ? v.toInt().toString()
-            : v.toStringAsFixed(2);
-        _rate.selection = TextSelection.collapsed(offset: _rate.text.length);
-      }
-    } else {
+    // Keep focus + live comma formatting while typing. Only pretty-print
+    // to two decimal places when the field loses focus.
+    if (!_rateFocus.hasFocus) {
       _formatMoneyField(_rate);
       _revalidateRate();
     }
@@ -268,7 +262,9 @@ class _AeRegisterRowDialogState extends State<AeRegisterRowDialog> {
     final v = PhpCurrencyInput.tryParse(c.text);
     if (v == null) return;
     if (v == 0 && c.text.trim().isEmpty) return;
-    c.text = PhpCurrencyInput.format(v);
+    // Decoration already show ₱ — keep plain grouped digits + cents.
+    c.text = PhpCurrencyInput.formatPlain(v);
+    c.selection = TextSelection.collapsed(offset: c.text.length);
   }
 
   List<String> get _roomOptions {
@@ -688,6 +684,11 @@ class _AeRegisterRowDialogState extends State<AeRegisterRowDialog> {
     final digits = [FilteringTextInputFormatter.digitsOnly];
     final money = [
       FilteringTextInputFormatter.allow(RegExp(r'[0-9.,₱]')),
+    ];
+    // Daily Rate: live thousand separators while typing (no focus steal).
+    final dailyRateFormatters = <TextInputFormatter>[
+      FilteringTextInputFormatter.allow(RegExp(r'[0-9.,₱]')),
+      const PhpCurrencyTextInputFormatter(),
     ];
     final media = MediaQuery.sizeOf(context);
     final wide = media.width >= 640;
@@ -1109,7 +1110,7 @@ class _AeRegisterRowDialogState extends State<AeRegisterRowDialog> {
                                     const TextInputType.numberWithOptions(
                                   decimal: true,
                                 ),
-                                inputFormatters: money,
+                                inputFormatters: dailyRateFormatters,
                                 decoration: _dec(
                                   hint: 'Enter daily rate',
                                   prefix: '₱ ',

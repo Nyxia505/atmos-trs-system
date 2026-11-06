@@ -220,6 +220,10 @@ class _MyAppState extends State<MyApp> {
               kIsWeb ? const LandingPage() : const WelcomeScreen(),
           '/qr-welcome': (context) => const QrScanWelcomeScreen(),
           '/qr-entry': (context) => const QrEntryGateScreen(),
+          // Phone-camera QR opens `/checkin?…` in the browser when the app is
+          // not installed. Hosting rewrites to index.html; map the path so a
+          // path-based router still lands on the Log In / Create Account gate.
+          '/checkin': (context) => const QrEntryGateScreen(),
           '/qr-resume': (context) => const QrPendingResumeScreen(),
           '/tourist-qr-success': (context) => const TouristQrSuccessScreen(),
           '/mobile-onboarding': (context) => const MobileOnboardingScreen(),

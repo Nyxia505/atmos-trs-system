@@ -2191,6 +2191,154 @@ exports.seedTourismDummyData = onCall(
   },
 );
 
+const SPOTS_FCM_TOPIC = 'tourism_spots';
+
+function isActiveTouristSpotStatus(status) {
+  const s = normalizeField(status).toLowerCase();
+  if (!s) return true;
+  return s === 'active' || s === 'published';
+}
+
+/**
+ * One-shot claim so create + activate + retries never double-notify.
+ */
+async function claimTouristSpotFcmSend(spotId) {
+  const id = normalizeField(spotId);
+  if (!id) return false;
+  const ref = db.collection('tourist_spots').doc(id);
+  try {
+    return await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return false;
+      const data = snap.data() || {};
+      if (data.fcmSent_published) return false;
+      if (!isActiveTouristSpotStatus(data.status)) return false;
+      tx.update(ref, {
+        fcmSent_published: FieldValue.serverTimestamp(),
+        fcmSentAt: FieldValue.serverTimestamp(),
+      });
+      return true;
+    });
+  } catch (err) {
+    console.error('[claimTouristSpotFcmSend]', err);
+    return false;
+  }
+}
+
+async function sendTouristSpotTopicPush(spotId, data) {
+  const name = normalizeField(data.name) || 'a new destination';
+  const municipality =
+    normalizeField(data.municipality) ||
+    normalizeField(data.municipalityName) ||
+    normalizeField(data.municipalityId) ||
+    'Misamis Occidental';
+  const title = 'New Tourist Destination!';
+  const body =
+    `A new tourist spot, "${name}", has been added in ${municipality}. Explore it now!`;
+  const messaging = getMessaging();
+  const payload = {
+    notification: {title, body},
+    data: {
+      type: 'new_spot',
+      spotId: String(spotId || ''),
+      title: name,
+      municipality,
+      notificationBody: body,
+    },
+    android: {
+      priority: 'high',
+      notification: {
+        channelId: 'tourism_spots_channel',
+        sound: 'default',
+        tag: `tourist_spot_${spotId}`,
+      },
+    },
+    apns: {
+      payload: {
+        aps: {
+          sound: 'default',
+          'thread-id': 'tourism_spots',
+        },
+      },
+    },
+  };
+  try {
+    const messageId = await messaging.send({
+      ...payload,
+      topic: SPOTS_FCM_TOPIC,
+    });
+    console.log('tourism_spots push sent', {spotId, messageId, topic: SPOTS_FCM_TOPIC});
+    return messageId;
+  } catch (err) {
+    console.error('[sendTouristSpotTopicPush] topic failed, trying tokens', err);
+    const tokens = await collectInstalledAppFcmTokens();
+    if (!tokens.length) throw err;
+    const dead = [];
+    let delivered = 0;
+    for (let i = 0; i < tokens.length; i += 500) {
+      const chunk = tokens.slice(i, i + 500);
+      const response = await messaging.sendEachForMulticast({
+        tokens: chunk,
+        ...payload,
+      });
+      response.responses.forEach((res, idx) => {
+        if (res.success) {
+          delivered += 1;
+          return;
+        }
+        const code = res.error && res.error.code;
+        if (
+          code === 'messaging/registration-token-not-registered' ||
+          code === 'messaging/invalid-registration-token'
+        ) {
+          dead.push(chunk[idx]);
+        }
+      });
+    }
+    if (dead.length) await pruneInvalidFcmTokens(dead);
+    if (delivered === 0) throw err;
+    return `multicast:${delivered}`;
+  }
+}
+
+/**
+ * Notify Trip Planner / tourist apps when an LGU first publishes an Active spot.
+ * Edits to an already-Active spot do not notify. Draft / Inactive create skips.
+ * First transition Inactive → Active notifies once (claim on the doc).
+ */
+exports.notifyNewTouristSpot = onDocumentWritten(
+  {
+    document: 'tourist_spots/{spotId}',
+    region: 'asia-southeast1',
+  },
+  async (event) => {
+    const after = event.data && event.data.after;
+    if (!after || !after.exists) return;
+    const before = event.data && event.data.before;
+    const data = after.data() || {};
+    if (!isActiveTouristSpotStatus(data.status)) return;
+
+    const wasActive =
+      before &&
+      before.exists &&
+      isActiveTouristSpotStatus((before.data() || {}).status);
+    // Ordinary edits of an already-Active spot: no push.
+    if (wasActive) return;
+
+    const spotId = event.params.spotId;
+    const claimed = await claimTouristSpotFcmSend(spotId);
+    if (!claimed) {
+      console.log('[notifyNewTouristSpot] skip (already claimed or inactive)', spotId);
+      return;
+    }
+    try {
+      await sendTouristSpotTopicPush(spotId, data);
+    } catch (err) {
+      console.error('[notifyNewTouristSpot] FCM failed', err);
+    }
+  },
+);
+
 /**
  * Creates a tourist_spots doc + QR metadata for LGU / provincial staff.
  * Used when client Firestore rules block the direct write.

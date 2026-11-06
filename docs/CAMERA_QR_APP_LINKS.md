@@ -22,8 +22,8 @@ Until verified, Android may still offer “Open with ATMOS” / browser chooser.
 
 | Case | Behavior |
 |------|----------|
-| App installed | App Link → pending QR saved → `/qr-welcome` or `/qr-resume` |
-| No app | Browser landing → Get app (Play referrer carries `atmos_q`) → signup → resume or rescan |
-| In-app Scan tab | Unchanged natural flow |
+| App installed | App Link → pending QR saved → `/qr-entry` (guest) or `/qr-resume` (signed-in tourist) |
+| No app | Browser opens `/checkin?…` → pending QR saved → **`/qr-entry` Log In / Create Account** (not marketing landing) → after auth, resume check-in |
+| In-app Scan tab | Unauthenticated scans go to `/qr-entry`; signed-in tourists continue check-in |
 
 Legacy `#/landing?…` QRs still parse on web.

@@ -61,6 +61,12 @@ class DotPdfSignOff {
     this.signaturePng,
   });
 
+  /// Formal title under the signature on establishment DAE reports.
+  ///
+  /// Audit / Sign-to-Save may store a different job title (e.g. "Head of Hotel");
+  /// report generation maps only this printed designation to [designatedManagerTitle].
+  static const designatedManagerTitle = 'Manager';
+
   /// e.g. "Hotel Name · October 2026".
   final String label;
   final String name;
@@ -961,15 +967,18 @@ Uint8List _trimSignaturePngForPdf(Uint8List png) {
   }
 }
 
-/// Formal sign-off: trimmed signature centered on name → bold name → underline → Manager.
+/// Formal sign-off: trimmed signature centered on name → bold name → underline → designation.
 pw.Widget _managerSignOffBlock(DotPdfSignOff s, String Function(String) t) {
   final rawPng = s.signaturePng;
   final png = rawPng == null ? null : _trimSignaturePngForPdf(rawPng);
   final name = s.name.trim().isEmpty ? ' ' : s.name.trim();
+  final position = s.position.trim().isEmpty
+      ? DotPdfSignOff.designatedManagerTitle
+      : s.position.trim();
   const nameSize = 10.0;
 
   return pw.Column(
-    // Center signature strokes over the printed name (and Manager under it).
+    // Center signature strokes over the printed name (and designation under it).
     crossAxisAlignment: pw.CrossAxisAlignment.center,
     mainAxisSize: pw.MainAxisSize.min,
     children: [
@@ -1007,7 +1016,7 @@ pw.Widget _managerSignOffBlock(DotPdfSignOff s, String Function(String) t) {
       ),
       pw.SizedBox(height: 3),
       pw.Text(
-        t('Manager'),
+        t(position),
         style: pw.TextStyle(fontSize: 8.5, color: _kInk),
       ),
     ],

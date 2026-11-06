@@ -651,9 +651,18 @@ class _HomeScreenState extends State<HomeScreen> {
         .addListener(_onVisitedSpotsChanged);
     activity.UserActivityService.savedSpotsRevision
         .addListener(_onSavedSpotsChanged);
+    TouristSpotsRepository.revision.addListener(_onTouristSpotsRevision);
+    TouristSpotsRepository.ensureRealtimeSync();
     unawaited(_loadCachedStats());
     _loadAllData();
     _fetchWeather();
+  }
+
+  void _onTouristSpotsRevision() {
+    if (!mounted) return;
+    final peeked = TouristSpotsRepository.peekCachedSpots();
+    if (peeked.isEmpty) return;
+    setState(() => _cachedFirestoreSpots = peeked);
   }
 
   void _onVisitedSpotsChanged() {
@@ -1173,6 +1182,7 @@ class _HomeScreenState extends State<HomeScreen> {
         .removeListener(_onVisitedSpotsChanged);
     activity.UserActivityService.savedSpotsRevision
         .removeListener(_onSavedSpotsChanged);
+    TouristSpotsRepository.revision.removeListener(_onTouristSpotsRevision);
     super.dispose();
   }
 

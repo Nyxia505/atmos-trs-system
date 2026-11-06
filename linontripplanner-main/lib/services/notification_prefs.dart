@@ -4,6 +4,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 
 const String _eventsTopic = 'tourism_events';
+const String _spotsTopic = 'tourism_spots';
 
 /// Per-user notification switches stored on `users/{uid}.notificationPrefs`.
 class NotificationPrefs {
@@ -61,8 +62,7 @@ class NotificationPrefs {
     await applyDelivery(prefs);
   }
 
-  /// Event push uses the `tourism_events` topic. Other categories are stored
-  /// so in-app alerts can honor them.
+  /// Event push → `tourism_events`. New Active tourist spots → `tourism_spots`.
   static Future<void> applyDelivery(NotificationPrefs prefs) async {
     if (kIsWeb) return;
     try {
@@ -71,6 +71,11 @@ class NotificationPrefs {
         await messaging.subscribeToTopic(_eventsTopic);
       } else {
         await messaging.unsubscribeFromTopic(_eventsTopic);
+      }
+      if (prefs.spotUpdates) {
+        await messaging.subscribeToTopic(_spotsTopic);
+      } else {
+        await messaging.unsubscribeFromTopic(_spotsTopic);
       }
     } catch (e) {
       debugPrint('NotificationPrefs.applyDelivery: $e');

@@ -1,4 +1,4 @@
-import 'dart:async' show unawaited;
+import 'dart:async' show StreamSubscription, unawaited;
 
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/module_shell_prefs.dart';
@@ -18,7 +18,9 @@ import 'package:atmos_trs_system/services/provincial_tourism_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
+import 'package:atmos_trs_system/utils/production_data_filters.dart';
 import 'package:atmos_trs_system/utils/provincial_report_builder.dart';
+import 'package:atmos_trs_system/utils/tourist_spot_metrics.dart';
 import 'package:atmos_trs_system/utils/visit_stats.dart';
 import 'package:atmos_trs_system/widgets/dot_report_export_panel.dart';
 import 'package:atmos_trs_system/widgets/optaca_accounts_panel.dart';
@@ -65,6 +67,8 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
   List<Map<String, dynamic>> _announcements = [];
   List<Map<String, dynamic>> _campaigns = [];
   Set<String> _ackAlertIds = {};
+  StreamSubscription<List<Map<String, dynamic>>>? _checkInsSubscription;
+  StreamSubscription<List<Map<String, dynamic>>>? _spotsSubscription;
 
   // Insights
   String _insightSearch = '';
@@ -133,11 +137,48 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
 
   @override
   void dispose() {
+    _checkInsSubscription?.cancel();
+    _spotsSubscription?.cancel();
     _searchController.dispose();
     _currentPwController.dispose();
     _newPwController.dispose();
     _confirmPwController.dispose();
     super.dispose();
+  }
+
+  void _startCheckInsListener() {
+    _checkInsSubscription?.cancel();
+    final spotsById = <String, Map<String, dynamic>>{
+      for (final s in _spots)
+        if ((s['id']?.toString() ?? '').isNotEmpty) s['id'].toString(): s,
+    };
+    _checkInsSubscription = GovernorFirestoreService()
+        .watchProvincialQrCheckIns(spotsById: spotsById)
+        .listen(
+      (rows) {
+        if (!mounted) return;
+        setState(() {
+          _checkIns = ProductionDataFilters.realCheckIns(rows);
+        });
+      },
+      onError: (Object e) {
+        debugPrint('[OPTACA] qr_checkins stream: $e');
+      },
+    );
+  }
+
+  void _startSpotsListener() {
+    _spotsSubscription?.cancel();
+    _spotsSubscription =
+        GovernorFirestoreService().watchProvincialTouristSpots().listen(
+      (spots) {
+        if (!mounted) return;
+        setState(() => _spots = spots);
+      },
+      onError: (Object e) {
+        debugPrint('[OPTACA] tourist_spots stream: $e');
+      },
+    );
   }
 
   Future<void> _bootstrap() async {
@@ -185,6 +226,8 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
         _isBootstrapping = false;
         _isLoading = false;
       });
+      _startCheckInsListener();
+      _startSpotsListener();
     } catch (e, st) {
       debugPrint('ProvincialTourism _loadData: $e\n$st');
       if (!mounted) return;
@@ -209,10 +252,10 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
   int get _pendingEvents =>
       ProvincialTourismService.pendingEventsCount(_announcements);
 
-  int get _activeDestinations => _spots.where((s) {
-        final status = (s['status']?.toString() ?? 'active').toLowerCase();
-        return status != 'inactive' && status != 'closed';
-      }).length;
+  int get _activeDestinations => TouristSpotMetrics.countMaps(
+        _spots,
+        kind: SpotCountKind.active,
+      );
 
   int get _lgusReporting {
     final ids = <String>{};
@@ -2359,7 +2402,10 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
         allCheckIns: checkIns,
         tourists: _tourists,
         spots: spots,
-        activeSpots: spots.length,
+        activeSpots: TouristSpotMetrics.countMaps(
+          spots,
+          kind: SpotCountKind.active,
+        ),
         startDate: _reportStart,
         endDate: _reportEnd,
         reportType: _reportType,

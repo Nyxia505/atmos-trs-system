@@ -233,6 +233,25 @@ service cloud.firestore {
       allow delete: if isLguStaff();
     }
 
+    /// Unique destinations visited by a tourist (one doc per spotId).
+    /// Dashboards still use qr_checkins as the visit source of truth.
+    match /tourist_visited_destinations/{uid} {
+      allow read: if isSignedIn()
+                  && (request.auth.uid == uid
+                      || isLguStaff()
+                      || isOptacaPortalReader());
+      allow write: if false;
+
+      match /spots/{spotId} {
+        allow read: if isSignedIn()
+                    && (request.auth.uid == uid
+                        || isLguStaff()
+                        || isOptacaPortalReader());
+        allow create, update: if isSignedIn() && request.auth.uid == uid;
+        allow delete: if isLguStaff();
+      }
+    }
+
     match /email_otps/{otpUid} {
       allow read, create, update, delete: if isSignedIn()
                                           && request.auth.uid == otpUid;

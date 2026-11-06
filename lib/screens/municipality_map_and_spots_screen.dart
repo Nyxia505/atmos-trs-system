@@ -13,6 +13,7 @@ import 'package:atmos_trs_system/features/tourism/tourist_spot_detail_screen.dar
 import 'package:atmos_trs_system/models/tourist_destination_detail.dart';
 import 'package:atmos_trs_system/screens/tourist_destination_detail_screen.dart';
 import 'package:atmos_trs_system/services/establishment_map_pins_service.dart';
+import 'package:atmos_trs_system/services/tourist_spots_repository.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart';
 import 'package:atmos_trs_system/screens/establishment_public_detail_screen.dart';
 import 'package:atmos_trs_system/widgets/misamis_occidental_explore_map.dart';
@@ -45,6 +46,7 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
   bool _recordedRecentlyViewed = false;
   late final Stream<List<EstablishmentMapPin>> _pinsStream =
       EstablishmentMapPinsService.watchActivePins();
+  Stream<List<TouristSpotFirestore>>? _spotsStream;
 
   static const double _kMapZoom = 13.5;
 
@@ -138,6 +140,9 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
     setState(() {
       _municipality = m;
       _spots = m != null ? getTouristSpotsForMunicipality(m) : [];
+      _spotsStream = m == null
+          ? null
+          : TouristSpotsRepository.streamTouristSpotsForMunicipality(m.id);
     });
     if (m != null && !_recordedRecentlyViewed) {
       _recordedRecentlyViewed = true;
@@ -169,8 +174,6 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
       );
     }
 
-    final mapSpots = _mapSpots(m);
-
     return ListenableBuilder(
       listenable: AppThemeController.instance,
       builder: (context, _) {
@@ -183,7 +186,35 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
         foregroundColor: AppTheme.onPrimary,
         elevation: 0,
       ),
-      body: Column(
+      body: StreamBuilder<List<TouristSpotFirestore>>(
+        stream: _spotsStream,
+        builder: (context, spotSnap) {
+          final live = spotSnap.data;
+          final spots = live == null
+              ? _spots
+              : mergeMunicipalityTouristSpots(
+                  municipality: m,
+                  firestoreSpots: live,
+                );
+          final mapSpots = spots
+              .where((s) => s.latitude != 0 || s.longitude != 0)
+              .map(
+                (s) => TouristSpotFirestore(
+                  id: s.id,
+                  name: s.name,
+                  category: s.category,
+                  latitude: s.latitude,
+                  longitude: s.longitude,
+                  image: s.imageUrl,
+                  rating: s.rating,
+                  description: s.description,
+                  vrLink: s.vrLink,
+                  municipality: m.name,
+                  municipalityId: m.id,
+                ),
+              )
+              .toList();
+          return Column(
         children: [
           if (!widget.spotsOnly)
           SizedBox(
@@ -213,7 +244,13 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
                     initialZoom: _kMapZoom,
                     onMapReady: (move) => move(m.lat, m.lng, zoom: _kMapZoom),
                     onSpotTap: (fs) {
-                      final spot = _spotForFirestore(fs);
+                      TouristSpot? spot;
+                      for (final s in spots) {
+                        if (s.id == fs.id) {
+                          spot = s;
+                          break;
+                        }
+                      }
                       if (spot == null) return;
                       _openSpot(spot);
                     },
@@ -255,7 +292,7 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
                   ),
                 ],
                 const SizedBox(height: 12),
-                if (_spots.isEmpty)
+                if (spots.isEmpty)
                   Padding(
                     padding: const EdgeInsets.all(24),
                     child: Text(
@@ -267,7 +304,7 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
                     ),
                   )
                 else
-                  ..._spots.map(
+                  ...spots.map(
                     (spot) => _SpotCard(
                       spot: spot,
                       onOpenDetails: () => _openSpot(spot),
@@ -277,6 +314,8 @@ class _MunicipalityMapAndSpotsScreenState extends State<MunicipalityMapAndSpotsS
             ),
           ),
         ],
+          );
+        },
       ),
     );
       },

@@ -760,7 +760,8 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
           subjectId: report.id,
           latest: report.lastSignOff,
           liveContentHash: liveHash,
-          title: 'Sign-offs · ${AeSheetKit.monthName(_month)} $_year',
+          title: 'Sign-offs',
+          periodLabel: '${AeSheetKit.monthName(_month)} $_year',
           emptyText: 'No signed saves for this month yet.',
         );
       case AeRegisterSheet.country:
@@ -854,32 +855,40 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
           for (final e in labels.entries) ...[
             if (e.key != labels.keys.first) const SizedBox(width: 6),
             InkWell(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(11),
               onTap: () => setState(() => _sheet = e.key),
               child: AnimatedContainer(
-                duration: const Duration(milliseconds: 160),
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
                 decoration: BoxDecoration(
-                  color: _sheet == e.key ? AeDashTokens.softAccent : Colors.white,
-                  borderRadius: BorderRadius.circular(12),
+                  color: _sheet == e.key ? AeDashTokens.accent : Colors.white,
+                  borderRadius: BorderRadius.circular(11),
                   border: Border.all(
-                    color: _sheet == e.key
-                        ? const Color(0xFFFDBA74)
-                        : AeDashTokens.border,
+                    color: _sheet == e.key ? AeDashTokens.accent : AeDashTokens.border,
                   ),
+                  boxShadow: _sheet == e.key
+                      ? [
+                          BoxShadow(
+                            color: AeDashTokens.accent.withValues(alpha: 0.22),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ]
+                      : null,
                 ),
                 child: Row(children: [
                   Icon(
                     e.value.$2,
                     size: 16,
-                    color: _sheet == e.key ? AeDashTokens.accent : AeDashTokens.muted,
+                    color: _sheet == e.key ? Colors.white : AeDashTokens.muted,
                   ),
                   const SizedBox(width: 6),
                   Text(
                     e.value.$1,
                     style: AeDashTokens.body(
                       size: 12.5,
-                      color: _sheet == e.key ? const Color(0xFF9A3412) : AeDashTokens.muted,
+                      color: _sheet == e.key ? Colors.white : AeDashTokens.muted,
                       weight: _sheet == e.key ? FontWeight.w800 : FontWeight.w600,
                     ),
                   ),

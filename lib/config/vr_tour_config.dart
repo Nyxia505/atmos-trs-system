@@ -60,7 +60,8 @@ const Set<String> kJimenezChurchVrSpotIds = {
   'jimenez_st_john_the_baptist_church',
   'jimenez_church',
   'st_john_the_baptist_church_jimenez',
-  'jimenez',
+  // Legacy Explore mock id (pre-canonical rename).
+  'vr-6',
 };
 
 const Set<String> kClarinSumanVrSpotIds = {
@@ -179,6 +180,12 @@ bool isJimenezChurchSpot({String? spotId, String? spotName}) {
           name.contains('baptist') ||
           name.contains('st john') ||
           name.contains('saint john'))) {
+    return true;
+  }
+  // Explore used to list "St. John The Baptist Church" without "Jimenez".
+  if ((name.contains('st john') || name.contains('saint john')) &&
+      name.contains('baptist') &&
+      name.contains('church')) {
     return true;
   }
   return false;

@@ -38,6 +38,7 @@ import 'package:atmos_trs_system/utils/lgu_registered_tourists_xlsx.dart';
 import 'package:atmos_trs_system/widgets/registered_tourists_export_dialog.dart';
 import 'package:atmos_trs_system/utils/checkin_time.dart';
 import 'package:atmos_trs_system/utils/checkin_visitor_count.dart';
+import 'package:atmos_trs_system/utils/tourist_spot_metrics.dart';
 import 'package:atmos_trs_system/utils/visit_analytics.dart';
 import 'package:atmos_trs_system/widgets/visit_analytics_board.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
@@ -588,12 +589,10 @@ class _LguDashboardState extends State<LguDashboard>
             setState(() {
               _allTouristSpots = list;
               _touristSpots = filtered;
-              _activeSpots = _touristSpots
-                  .where((s) => s.status == 'Active')
-                  .length;
-              if (_activeSpots == 0 && _touristSpots.isNotEmpty) {
-                _activeSpots = _touristSpots.length;
-              }
+              _activeSpots = TouristSpotMetrics.countModels(
+                filtered,
+                kind: SpotCountKind.active,
+              );
             });
           },
           onError: (Object e) {
@@ -773,10 +772,10 @@ class _LguDashboardState extends State<LguDashboard>
         _allTouristSpots,
         _storedMunicipalityId,
       );
-      _activeSpots = _touristSpots.where((s) => s.status == 'Active').length;
-      if (_activeSpots == 0 && _touristSpots.isNotEmpty) {
-        _activeSpots = _touristSpots.length;
-      }
+      _activeSpots = TouristSpotMetrics.countModels(
+        _touristSpots,
+        kind: SpotCountKind.active,
+      );
 
       if (!_didAutoBackfillSpotQr) {
         _didAutoBackfillSpotQr = true;
@@ -859,10 +858,10 @@ class _LguDashboardState extends State<LguDashboard>
       }
 
       _recomputeDashboardStats();
-      _activeSpots = _touristSpots.where((s) => s.status == 'Active').length;
-      if (_activeSpots == 0 && _touristSpots.isNotEmpty) {
-        _activeSpots = _touristSpots.length;
-      }
+      _activeSpots = TouristSpotMetrics.countModels(
+        _touristSpots,
+        kind: SpotCountKind.active,
+      );
 
       if (mounted) {
         setState(() => _errorMessage = null);
@@ -1721,13 +1720,14 @@ class _LguDashboardState extends State<LguDashboard>
   }
 
   void _recomputeDashboardStats() {
-    final today = DateTime.now();
+    final today = manilaCalendarDate(DateTime.now());
     final todayRows = _filterRealCheckIns(_checkIns).where((c) {
       final d = _parseCheckInTimestamp(c);
       if (d == null) return false;
-      return d.year == today.year &&
-          d.month == today.month &&
-          d.day == today.day;
+      final wall = manilaCalendarDate(d);
+      return wall.year == today.year &&
+          wall.month == today.month &&
+          wall.day == today.day;
     });
     // KPI stores visitor headcount (party size); check-in session count is separate in UI.
     _todayCheckIns = VisitStats.fromCheckIns(todayRows).visitors;
@@ -6428,13 +6428,18 @@ class _LguDashboardState extends State<LguDashboard>
                         if (!mounted) return;
                         await _loadData();
                         if (!mounted) return;
-                        ScaffoldMessenger.of(this.context).showSnackBar(
-                          SnackBar(
-                            content: Text('Unique QR created for "$name"'),
-                            backgroundColor: _primaryOrange,
-                            behavior: SnackBarBehavior.floating,
-                          ),
-                        );
+                        final messenger = ScaffoldMessenger.of(this.context);
+                        messenger
+                          ..clearSnackBars()
+                          ..showSnackBar(
+                            SnackBar(
+                              content: Text('Unique QR created for "$name"'),
+                              backgroundColor: _primaryOrange,
+                              behavior: SnackBarBehavior.floating,
+                              duration: const Duration(seconds: 4),
+                              dismissDirection: DismissDirection.horizontal,
+                            ),
+                          );
                       },
                 icon: saving
                     ? const SizedBox(
@@ -6929,26 +6934,32 @@ class _LguDashboardState extends State<LguDashboard>
                       );
                     }
                     if (docId != null) await _loadData();
+                    final messenger = ScaffoldMessenger.of(this.context);
                     Navigator.pop(context);
-                    if (docId != null && mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
+                    if (!mounted) return;
+                    messenger.clearSnackBars();
+                    if (docId != null) {
+                      messenger.showSnackBar(
                         SnackBar(
                           content: Text(
                             'Tourist spot added. A unique QR was created for "${nameController.text.trim()}".',
                           ),
                           backgroundColor: _primaryOrange,
                           behavior: SnackBarBehavior.floating,
+                          duration: const Duration(seconds: 4),
+                          dismissDirection: DismissDirection.horizontal,
                           action: SnackBarAction(
                             label: 'View QR',
                             textColor: Colors.white,
                             onPressed: () {
+                              messenger.hideCurrentSnackBar();
                               setState(() => _selectedIndex = _spotQRCodesIndex);
                             },
                           ),
                         ),
                       );
-                    } else if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
+                    } else {
+                      messenger.showSnackBar(
                         SnackBar(
                           content: Text(
                             result.error ??
@@ -8479,7 +8490,7 @@ class _LguDashboardState extends State<LguDashboard>
                     _analyticsStatChip(stats.summaryLine),
                     _analyticsStatChip('$tourists registered'),
                     _analyticsStatChip(
-                      '${_touristSpots.where((s) => s.status == 'Active').length} active spots',
+                      '${TouristSpotMetrics.countModels(_touristSpots, kind: SpotCountKind.active)} active spots',
                     ),
                   ],
                 ),

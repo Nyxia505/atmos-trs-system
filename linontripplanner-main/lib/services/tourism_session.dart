@@ -152,6 +152,10 @@ Future<void> _runCatalogLoaders() async {
     await loadOne('tourist_spots', spotsLoader);
     tourismCatalogRevision.value++;
   }
+  // Live LGU catalog — new / edited / deactivated spots without logout.
+  startTouristSpotsRealtimeSync(
+    onUpdated: () => tourismCatalogRevision.value++,
+  );
 
   // Remaining catalogs in parallel (much faster than sequential + 80ms gaps).
   final rest = _catalogLoaders.entries
