@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -47,22 +46,61 @@ class UserActivityService {
     final id = uid.trim();
     if (id.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
-    final previous = prefs.getString(_keyActivityBoundUid);
+    final previous = (prefs.getString(_keyActivityBoundUid) ?? '').trim();
+    final switchingAccounts =
+        previous.isNotEmpty && previous != id;
+
     if (_savedIdsUid != null && _savedIdsUid != id) {
       _savedIds = null;
       _savedIdsUid = null;
       _lastPersistedSaved = const [];
       savedSpotsRevision.value++;
     }
+    // Drop in-memory visit listeners so the previous account cannot paint
+    // the next tourist's Home visited count before scoped prefs load.
+    if (switchingAccounts || (_boundUidCache != null && _boundUidCache != id)) {
+      _notifyVisitedChanged();
+    }
+
     _boundUidCache = id;
     await prefs.setString(_keyActivityBoundUid, id);
-    await _migrateUnscopedKeysIfNeeded(prefs, id);
-    if (previous != null && previous.isNotEmpty && previous != id) {
-      _boundUidCache = id;
+
+    // Only migrate legacy unscoped prefs into the *first* bound account on
+    // this device. Copying them on every new registration poisoned new
+    // tourists with the previous user's visited places.
+    if (previous.isEmpty) {
+      await _migrateUnscopedKeysIfNeeded(prefs, id);
+    } else {
+      // Device already had a bound account — drop leftover unscoped keys so
+      // they cannot be copied into a later tourist's scoped storage.
+      await _purgeUnscopedActivityKeys(prefs);
     }
   }
 
-  /// Older builds wrote visits to unscoped keys; copy into uid-scoped keys once.
+  static Future<void> _purgeUnscopedActivityKeys(SharedPreferences prefs) async {
+    await prefs.remove(_keyVisitedSpots);
+    await prefs.remove(_keyBadges);
+    await prefs.remove(_keyRecentlyViewed);
+    await prefs.remove(_keyNotifications);
+    await prefs.remove(_keyFirstVisitDate);
+    await prefs.remove(_keySavedSpots);
+  }
+
+  /// Clears in-memory activity bindings on logout without deleting Firebase
+  /// visit history. Scoped SharedPreferences for the uid are left intact so
+  /// the same tourist keeps their history after login.
+  static void clearSessionCacheOnLogout() {
+    _boundUidCache = null;
+    _savedIds = null;
+    _savedIdsUid = null;
+    _lastPersistedSaved = const [];
+    savedSpotsRevision.value++;
+    _notifyVisitedChanged();
+  }
+
+  /// Older builds wrote visits to unscoped keys; copy into uid-scoped keys once
+  /// for the first bound account, then remove legacy keys so later accounts
+  /// cannot inherit them.
   static Future<void> _migrateUnscopedKeysIfNeeded(
     SharedPreferences prefs,
     String uid,
@@ -70,20 +108,28 @@ class UserActivityService {
     Future<void> migrateString(String base) async {
       final scoped = '${base}_$uid';
       final scopedVal = prefs.getString(scoped);
-      if (scopedVal != null && scopedVal.isNotEmpty) return;
       final legacy = prefs.getString(base);
-      if (legacy != null && legacy.isNotEmpty) {
+      if ((scopedVal == null || scopedVal.isEmpty) &&
+          legacy != null &&
+          legacy.isNotEmpty) {
         await prefs.setString(scoped, legacy);
+      }
+      if (legacy != null) {
+        await prefs.remove(base);
       }
     }
 
     Future<void> migrateStringList(String base) async {
       final scoped = '${base}_$uid';
       final scopedVal = prefs.getStringList(scoped);
-      if (scopedVal != null && scopedVal.isNotEmpty) return;
       final legacy = prefs.getStringList(base);
-      if (legacy != null && legacy.isNotEmpty) {
+      if ((scopedVal == null || scopedVal.isEmpty) &&
+          legacy != null &&
+          legacy.isNotEmpty) {
         await prefs.setStringList(scoped, legacy);
+      }
+      if (legacy != null) {
+        await prefs.remove(base);
       }
     }
 
@@ -93,6 +139,7 @@ class UserActivityService {
     await migrateString(_keyNotifications);
     await migrateString(_keyFirstVisitDate);
     await migrateStringList(_keySavedSpots);
+    await _purgeUnscopedActivityKeys(prefs);
   }
 
   static Future<String?> _activeUid() async {
@@ -299,11 +346,16 @@ class UserActivityService {
   }
 
   /// Rebuilds local visit history from Firestore QR check-ins + local visits.
+  ///
+  /// Count = unique non-empty [VisitRecord.spotId] values for this tourist only.
   static Future<List<VisitRecord>> syncVisitedSpotsFromQrCheckins() async {
     final uid = AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
     if (uid == null || uid.isEmpty || Firebase.apps.isEmpty) {
       return getVisitedSpots();
     }
+
+    // Ensure prefs reads/writes use this uid (never a previous account).
+    await bindToUser(uid);
 
     final local = await getVisitedSpots();
     try {
@@ -977,21 +1029,12 @@ class UserActivityService {
     return getUserStatsCached();
   }
 
-  /// Durable total visits count (Firestore + local fallback).
-  /// Keeps user visit progress even when local cache changes.
+  /// Unique destinations visited by the signed-in tourist (QR check-ins + local).
+  ///
+  /// Does **not** use `tourists.totalVisits` — that field can lag or be inflated
+  /// and must not override the unique spot-id count.
   static Future<int> getTotalVisitsCount() async {
-    final localCount = (await getVisitedSpots()).length;
-    final uid = AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null || uid.isEmpty || Firebase.apps.isEmpty) return localCount;
-    try {
-      final doc = await FirebaseFirestore.instance.collection('tourists').doc(uid).get();
-      final data = doc.data();
-      final remoteRaw = data?['totalVisits'];
-      final remoteCount = remoteRaw is num ? remoteRaw.toInt() : 0;
-      return math.max(localCount, remoteCount);
-    } catch (_) {
-      return localCount;
-    }
+    return getUniquePlacesVisited();
   }
 
   /// Clear all user activity data for the active account.

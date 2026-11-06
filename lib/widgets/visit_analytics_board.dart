@@ -4,6 +4,7 @@ import 'package:atmos_trs_system/features/governor/widgets/charts/governor_arriv
 import 'package:atmos_trs_system/features/governor/widgets/charts/governor_donut_chart.dart';
 import 'package:atmos_trs_system/features/governor/widgets/governor_chart_card.dart';
 import 'package:atmos_trs_system/features/governor/widgets/governor_city_ranking_list.dart';
+import 'package:atmos_trs_system/utils/checkin_visitor_count.dart';
 import 'package:atmos_trs_system/utils/visit_analytics.dart';
 import 'package:flutter/material.dart';
 
@@ -124,6 +125,30 @@ class _VisitAnalyticsBoardState extends State<VisitAnalyticsBoard> {
     );
   }
 
+  int get _allTimeVisitors {
+    var total = 0;
+    for (final row in widget.checkIns) {
+      total += checkInVisitorCount(row);
+    }
+    return total;
+  }
+
+  String _periodEmptyMessage(VisitAnalyticsSnapshot snapshot, String metric) {
+    final period = snapshot.arrivalPeriodLabel;
+    final periodBit = period.isEmpty ? 'this period' : period;
+    if (widget.checkIns.isEmpty) {
+      return 'No check-ins loaded yet';
+    }
+    if (snapshot.unparsedCheckIns == widget.checkIns.length) {
+      return 'Could not read visit dates from check-in records';
+    }
+    final allTime = _allTimeVisitors;
+    if (allTime > 0 && snapshot.periodVisitorCount == 0) {
+      return 'No $metric for $periodBit · $allTime visitors outside this period';
+    }
+    return 'No $metric recorded for $periodBit';
+  }
+
   Widget _arrivalsCard(VisitAnalyticsSnapshot snapshot) {
     return GovernorChartCard(
       title: 'Tourist arrivals',
@@ -149,9 +174,7 @@ class _VisitAnalyticsBoardState extends State<VisitAnalyticsBoard> {
         labels: snapshot.arrivalLabels,
         tooltipLabels: snapshot.arrivalTooltips,
         valueNoun: 'visitors',
-        emptyMessage: snapshot.arrivalPeriodLabel.isEmpty
-            ? 'No arrivals recorded for this period'
-            : 'No arrivals recorded for this period (${snapshot.arrivalPeriodLabel})',
+        emptyMessage: _periodEmptyMessage(snapshot, 'arrivals'),
         showAllBottomLabels: _range == 'This Month',
       ),
     );
@@ -166,7 +189,7 @@ class _VisitAnalyticsBoardState extends State<VisitAnalyticsBoard> {
       icon: Icons.donut_large_rounded,
       child: GovernorDonutChart(
         centerLabel: total > 0 ? '$total\nvisits' : null,
-        emptyMessage: 'No category visit data available for this period.',
+        emptyMessage: _periodEmptyMessage(snapshot, 'category visits'),
         showCounts: true,
         segments: [
           for (final row in rows)
@@ -205,7 +228,7 @@ class _VisitAnalyticsBoardState extends State<VisitAnalyticsBoard> {
       icon: Icons.people_alt_rounded,
       child: GovernorDonutChart(
         centerLabel: total > 0 ? '$total' : null,
-        emptyMessage: 'No gender counts on check-ins yet',
+        emptyMessage: _periodEmptyMessage(snapshot, 'gender counts'),
         segments: [
           GovernorDonutSegment(
             label: 'Male',
@@ -233,7 +256,7 @@ class _VisitAnalyticsBoardState extends State<VisitAnalyticsBoard> {
       icon: Icons.calendar_view_month_rounded,
       child: GovernorAgeBarChart(
         series: snapshot.ageSeries,
-        emptyMessage: 'Age appears when a visitor profile has a birth date',
+        emptyMessage: _periodEmptyMessage(snapshot, 'age data'),
       ),
     );
   }
@@ -245,7 +268,7 @@ class _VisitAnalyticsBoardState extends State<VisitAnalyticsBoard> {
       icon: Icons.public_rounded,
       child: GovernorDonutChart(
         centerLabel: total > 0 ? '$total' : null,
-        emptyMessage: 'No residence counts on check-ins yet',
+        emptyMessage: _periodEmptyMessage(snapshot, 'residence counts'),
         segments: [
           GovernorDonutSegment(
             label: 'Local',

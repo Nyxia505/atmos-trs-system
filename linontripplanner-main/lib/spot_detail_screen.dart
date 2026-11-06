@@ -346,36 +346,36 @@ class _SpotDetailScreenState extends State<SpotDetailScreen> {
                       ),
                       const SizedBox(height: 20),
 
-                      const Text(
-                        'About this place',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.textDark,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: Colors.black.withValues(alpha: 0.05),
+                      if (spot.description.trim().isNotEmpty) ...[
+                        const Text(
+                          'About this place',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.textDark,
                           ),
                         ),
-                        child: Text(
-                          spot.description.isEmpty
-                              ? 'No description available.'
-                              : spot.description,
-                          style: const TextStyle(
-                            fontSize: 14.5,
-                            color: AppColors.textGrey,
-                            height: 1.65,
+                        const SizedBox(height: 8),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: Colors.black.withValues(alpha: 0.05),
+                            ),
+                          ),
+                          child: Text(
+                            spot.description,
+                            style: const TextStyle(
+                              fontSize: 14.5,
+                              color: AppColors.textGrey,
+                              height: 1.65,
+                            ),
                           ),
                         ),
-                      ),
+                      ],
                       if (_categoryHighlights(spot).isNotEmpty) ...[
                         const SizedBox(height: 20),
                         const Text(
@@ -512,7 +512,7 @@ class _SpotReviewsSection extends StatelessWidget {
               border: Border.all(color: Colors.black.withOpacity(0.06)),
             ),
             child: const Text(
-              'No reviews yet. Be the first to rate this spot.',
+              'No reviews yet.',
               style: TextStyle(color: AppColors.textGrey, fontSize: 13.5),
             ),
           )

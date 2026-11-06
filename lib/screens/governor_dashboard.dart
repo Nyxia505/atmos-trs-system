@@ -34,8 +34,10 @@ import 'package:atmos_trs_system/services/establishment_approval_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/services/auth_service.dart';
 import 'package:atmos_trs_system/services/tourist_account_admin_service.dart';
+import 'package:atmos_trs_system/utils/checkin_time.dart';
 import 'package:atmos_trs_system/utils/checkin_visitor_count.dart';
 import 'package:atmos_trs_system/utils/production_data_filters.dart';
+import 'package:atmos_trs_system/utils/tourist_spot_metrics.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
 import 'package:atmos_trs_system/widgets/dot_report_export_panel.dart';
 import 'package:atmos_trs_system/widgets/lgu_debug_data_dialogs.dart';
@@ -263,6 +265,8 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   List<Map<String, dynamic>> _governorAllSpots = [];
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
       _announcementsSubscription;
+  StreamSubscription<List<Map<String, dynamic>>>? _checkInsSubscription;
+  StreamSubscription<List<Map<String, dynamic>>>? _spotsSubscription;
   bool _announcementsStreamPrimed = false;
   final Set<String> _seenGovernorEventIds = {};
   final Set<String> _dismissedGovernorNotificationIds = {};
@@ -520,22 +524,11 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     // Unique registered people (one row per tourist), not visit/check-in counts.
     _totalTourists = _tourists.length;
     _totalCheckIns = sumCheckInVisitors(_checkIns);
-
-    final today = DateTime.now();
-    final todayUserIds = <String>{};
-    for (final c in _checkIns) {
-      final d = GovernorFirestoreService.parseCheckInTime(c);
-      if (d == null) continue;
-      if (d.year != today.year ||
-          d.month != today.month ||
-          d.day != today.day) {
-        continue;
-      }
-      final uid = GovernorFirestoreService.checkInUserId(c);
-      if (uid.isNotEmpty) todayUserIds.add(uid);
-    }
-    _uniqueTouristsToday = todayUserIds.length;
-    _activeSpots = _governorAllSpots.length;
+    _recomputeUniqueTouristsToday();
+    _activeSpots = TouristSpotMetrics.countMaps(
+      _governorAllSpots,
+      kind: SpotCountKind.active,
+    );
 
     _applyMunicipalityVisitStatsFromCheckIns();
   }
@@ -668,9 +661,74 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   @override
   void dispose() {
     _announcementsSubscription?.cancel();
+    _checkInsSubscription?.cancel();
+    _spotsSubscription?.cancel();
     _animationController.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  /// Live QR check-ins → Governor KPIs without logout / manual refresh.
+  void _startCheckInsListener({
+    required Map<String, Map<String, dynamic>> spotsById,
+  }) {
+    _checkInsSubscription?.cancel();
+    _checkInsSubscription = GovernorFirestoreService()
+        .watchProvincialQrCheckIns(spotsById: spotsById)
+        .listen(
+      (rows) {
+        if (!mounted) return;
+        setState(() {
+          _checkIns = ProductionDataFilters.realCheckIns(rows);
+          _totalCheckIns = sumCheckInVisitors(_checkIns);
+          _recomputeUniqueTouristsToday();
+          _applyMunicipalityVisitStatsFromCheckIns();
+        });
+        unawaited(_saveGovernorStatsCache());
+      },
+      onError: (Object e) {
+        debugPrint('[GovernorDashboard] qr_checkins stream: $e');
+      },
+    );
+  }
+
+  void _startSpotsListener() {
+    _spotsSubscription?.cancel();
+    _spotsSubscription =
+        GovernorFirestoreService().watchProvincialTouristSpots().listen(
+      (spots) {
+        if (!mounted) return;
+        setState(() {
+          _governorAllSpots = spots;
+          _activeSpots = TouristSpotMetrics.countMaps(
+            spots,
+            kind: SpotCountKind.active,
+          );
+        });
+        unawaited(_saveGovernorStatsCache());
+      },
+      onError: (Object e) {
+        debugPrint('[GovernorDashboard] tourist_spots stream: $e');
+      },
+    );
+  }
+
+  void _recomputeUniqueTouristsToday() {
+    final today = manilaCalendarDate(DateTime.now());
+    final todayUserIds = <String>{};
+    for (final c in _checkIns) {
+      final d = GovernorFirestoreService.parseCheckInTime(c);
+      if (d == null) continue;
+      final wall = manilaCalendarDate(d);
+      if (wall.year != today.year ||
+          wall.month != today.month ||
+          wall.day != today.day) {
+        continue;
+      }
+      final uid = GovernorFirestoreService.checkInUserId(c);
+      if (uid.isNotEmpty) todayUserIds.add(uid);
+    }
+    _uniqueTouristsToday = todayUserIds.length;
   }
 
   /// Governor analytics and lists are limited to Misamis Occidental (17 LGUs).
@@ -820,6 +878,12 @@ class _GovernorDashboardState extends State<GovernorDashboard>
         includeCheckIns: true,
       );
       _applyGovernorSnapshotStats(fullSnapshot);
+      final spotsById = <String, Map<String, dynamic>>{
+        for (final s in fullSnapshot.touristSpots)
+          if ((s['id']?.toString() ?? '').isNotEmpty) s['id'].toString(): s,
+      };
+      _startCheckInsListener(spotsById: spotsById);
+      _startSpotsListener();
 
       final profile = await UserDirectoryService.getProfileByUid(
         authUser.uid,
@@ -1573,6 +1637,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     String? subtitle,
     List<Widget>? actions,
     bool compact = false,
+    IconData? titleIcon,
   }) {
     final greetingName =
         _profileName.trim().isNotEmpty ? _profileName.trim() : 'Governor';
@@ -1590,6 +1655,7 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       greeting: headerGreeting,
       title: headerTitle,
       subtitle: headerSubtitle,
+      titleIcon: isDashboard ? null : titleIcon,
       compact: compact,
       showConceptMeta: isDashboard,
       searchController: _searchController,
@@ -3106,9 +3172,22 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                   labels: stats.arrivalLabels,
                   tooltipLabels: stats.arrivalTooltips,
                   valueNoun: 'visitors',
-                  emptyMessage: stats.arrivalPeriodLabel.isEmpty
-                      ? 'No arrivals recorded for this period'
-                      : 'No arrivals recorded for this period (${stats.arrivalPeriodLabel})',
+                  emptyMessage: () {
+                    final period = stats.arrivalPeriodLabel;
+                    final periodBit =
+                        period.isEmpty ? 'this period' : period;
+                    if (_checkIns.isEmpty) {
+                      return 'No check-ins loaded yet';
+                    }
+                    if (stats.unparsedCheckIns == _checkIns.length) {
+                      return 'Could not read visit dates from check-in records';
+                    }
+                    if (_totalCheckIns > 0 && stats.periodVisitorCount == 0) {
+                      return 'No arrivals for $periodBit · '
+                          '$_totalCheckIns visitors outside this period';
+                    }
+                    return 'No arrivals recorded for $periodBit';
+                  }(),
                   showAllBottomLabels: _selectedTimeFilter == 'This Month',
                 ),
     );
@@ -5083,13 +5162,19 @@ class _GovernorDashboardState extends State<GovernorDashboard>
       GovernorTripPlannerSection.events =>
         'Province-wide events and announcements',
       GovernorTripPlannerSection.fares =>
-        'Bus and tricycle fares used when a tourist builds an itinerary',
+        'Manage transportation fares and tourist spot routes across Misamis Occidental.',
     };
     return Container(
       color: _darkBg,
       child: Column(
         children: [
-          _buildHeader(title, subtitle: subtitle),
+          _buildHeader(
+            title,
+            subtitle: subtitle,
+            titleIcon: section == GovernorTripPlannerSection.fares
+                ? Icons.directions_bus_rounded
+                : null,
+          ),
           Expanded(child: GovernorTripPlannerPage(section: section)),
         ],
       ),
@@ -5117,12 +5202,8 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _buildAnalyticsSectionLabel(
-                      'Key insights',
-                      'Quick patterns from check-ins and registrations',
-                      Icons.insights_rounded,
-                    ),
-                    const SizedBox(height: 12),
+                    _buildKeyInsightsSectionHeader(),
+                    const SizedBox(height: 14),
                     _buildAnalyticsCards(),
                     const SizedBox(height: 22),
                     _buildAnalyticsSectionLabel(
@@ -5135,6 +5216,9 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                       checkIns: _checkIns,
                       tourists: _tourists,
                       parseTime: _checkInTimestamp,
+                      categoryBySpotId: _governorCategoryBySpotId(),
+                      categoryBySpotName: _governorCategoryBySpotName(),
+                      categoryNamesByKey: _governorCategoryNamesByKey(),
                     ),
                     const SizedBox(height: 22),
                     _buildAnalyticsSectionLabel(
@@ -5144,12 +5228,8 @@ class _GovernorDashboardState extends State<GovernorDashboard>
                     ),
                     const SizedBox(height: 12),
                     _buildTopSpotsChart(),
-                    const SizedBox(height: 22),
-                    _buildAnalyticsSectionLabel(
-                      'DOT templates (provincial)',
-                      'Fill any form for the province, one LGU filter, or a specific spot / establishment',
-                      Icons.description_outlined,
-                    ),
+                    const SizedBox(height: 16),
+                    _buildDotTemplatesSectionHeader(),
                     const SizedBox(height: 12),
                     _buildGovernorDotReportExports(),
                   ],
@@ -5204,6 +5284,97 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
+  Widget _buildKeyInsightsSectionHeader() {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        _isMobile ? 14 : 16,
+        14,
+        _isMobile ? 14 : 16,
+        14,
+      ),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFFFFF7ED),
+            Color(0xFFFFEDD5),
+            Color(0xFFFFF1E6),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _primaryOrange.withValues(alpha: 0.20)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: _primaryOrange.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(
+              Icons.insights_rounded,
+              color: Color(0xFFEA580C),
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Text(
+                      'Key Insights',
+                      style: TextStyle(
+                        color: _textDark,
+                        fontSize: 16.5,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.25,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFF97316),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Quick overview',
+                      style: TextStyle(
+                        color: _primaryOrange.withValues(alpha: 0.95),
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                const Text(
+                  'Quick patterns from check-ins and registrations',
+                  style: TextStyle(
+                    color: _textMuted,
+                    fontSize: 12.5,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildAnalyticsSectionLabel(
     String title,
     String subtitle,
@@ -5251,139 +5422,277 @@ class _GovernorDashboardState extends State<GovernorDashboard>
     );
   }
 
-  Widget _buildAnalyticsCards() {
-    final topOrigin = _analyticsTopOrigin;
-    final originDisplay = topOrigin.length > 28
-        ? '${topOrigin.substring(0, 26)}…'
-        : topOrigin;
+  String _analyticsDisplayValue(String raw) {
+    final v = raw.trim();
+    if (v.isEmpty || v == '?' || v.toLowerCase() == 'no data') {
+      return '—';
+    }
+    return v;
+  }
 
-    final cards = [
-      (
-        title: 'Daily average',
+  Widget _buildAnalyticsCards() {
+    final peakDisplay = _analyticsDisplayValue(_analyticsPeakHour);
+    final originRaw = _analyticsTopOrigin.trim();
+    final originDisplay = (originRaw.isEmpty ||
+            originRaw == '?' ||
+            originRaw.toLowerCase() == 'no data')
+        ? '—'
+        : originRaw;
+    final peakHasData = peakDisplay != '—';
+    final originHasData = originDisplay != '—';
+
+    final cards = <_GovernorInsightCardSpec>[
+      _GovernorInsightCardSpec(
+        title: 'Daily Average',
         subtitle: 'Visitors per active day',
         value: '$_analyticsDailyAvg',
         icon: Icons.calendar_today_rounded,
-        accent: const Color(0xFF2563EB),
+        accent: const Color(0xFF3B82F6),
+        gradientTop: const Color(0xFFEFF6FF),
+        gradientBottom: const Color(0xFFDBEAFE),
+        border: const Color(0xFF93C5FD),
       ),
-      (
-        title: 'Peak hour',
+      _GovernorInsightCardSpec(
+        title: 'Peak Hour',
         subtitle: 'Busiest QR scan window',
-        value: _analyticsPeakHour,
+        value: peakDisplay,
         icon: Icons.access_time_rounded,
-        accent: _primaryOrange,
+        accent: const Color(0xFFF97316),
+        gradientTop: const Color(0xFFFFF7ED),
+        gradientBottom: const Color(0xFFFED7AA),
+        border: const Color(0xFFFDBA74),
+        badgeLabel: peakHasData ? 'Busiest' : null,
       ),
-      (
-        title: 'Top origin',
+      _GovernorInsightCardSpec(
+        title: 'Top Origin',
         subtitle: 'Most common registration source',
         value: originDisplay,
-        icon: Icons.flight_takeoff_rounded,
-        accent: const Color(0xFF059669),
+        icon: Icons.flight_land_rounded,
+        accent: const Color(0xFF10B981),
+        gradientTop: const Color(0xFFECFDF5),
+        gradientBottom: const Color(0xFFA7F3D0),
+        border: const Color(0xFF6EE7B7),
+        badgeLabel: originHasData ? 'Most common' : null,
       ),
     ];
 
-    if (_isMobile) {
-      return Column(
-        children: [
-          for (var i = 0; i < cards.length; i++) ...[
-            if (i > 0) const SizedBox(height: 10),
-            _buildAnalyticsCard(
-              title: cards[i].title,
-              subtitle: cards[i].subtitle,
-              value: cards[i].value,
-              icon: cards[i].icon,
-              accent: cards[i].accent,
-            ),
-          ],
-        ],
-      );
-    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final columns = width >= 980
+            ? 3
+            : width >= 640
+                ? 2
+                : 1;
+        final gap = width >= 900 ? 14.0 : 12.0;
 
-    return Row(
-      children: [
-        for (var i = 0; i < cards.length; i++) ...[
-          if (i > 0) const SizedBox(width: 12),
-          Expanded(
-            child: _buildAnalyticsCard(
-              title: cards[i].title,
-              subtitle: cards[i].subtitle,
-              value: cards[i].value,
-              icon: cards[i].icon,
-              accent: cards[i].accent,
+        if (columns == 3) {
+          return IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var i = 0; i < cards.length; i++) ...[
+                  if (i > 0) SizedBox(width: gap),
+                  Expanded(child: _buildAnalyticsCard(cards[i])),
+                ],
+              ],
             ),
-          ),
-        ],
-      ],
+          );
+        }
+
+        if (columns == 1) {
+          return Column(
+            children: [
+              for (var i = 0; i < cards.length; i++) ...[
+                if (i > 0) SizedBox(height: gap),
+                _buildAnalyticsCard(cards[i]),
+              ],
+            ],
+          );
+        }
+
+        return Column(
+          children: [
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(child: _buildAnalyticsCard(cards[0])),
+                  SizedBox(width: gap),
+                  Expanded(child: _buildAnalyticsCard(cards[1])),
+                ],
+              ),
+            ),
+            SizedBox(height: gap),
+            _buildAnalyticsCard(cards[2]),
+          ],
+        );
+      },
     );
   }
 
-  Widget _buildAnalyticsCard({
-    required String title,
-    required String subtitle,
-    required String value,
-    required IconData icon,
-    required Color accent,
-  }) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 15),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _cardBorder),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x08000000),
-            blurRadius: 12,
-            offset: Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildAnalyticsCard(_GovernorInsightCardSpec spec) {
+    final value = spec.value.trim().isEmpty ? '—' : spec.value.trim();
+    final multiLine = value.contains('\n') || value.length > 16;
+    final emptyLabel = value == '—' || value.toLowerCase() == 'no data';
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: Stack(
         children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: accent.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(12),
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    spec.gradientTop,
+                    Color.lerp(spec.gradientTop, Colors.white, 0.55)!,
+                    spec.gradientBottom.withValues(alpha: 0.55),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: spec.border.withValues(alpha: 0.95),
+                  width: 1.6,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: spec.accent.withValues(alpha: 0.10),
+                    blurRadius: 18,
+                    offset: const Offset(0, 8),
+                  ),
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.03),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
             ),
-            child: Icon(icon, color: accent, size: 20),
           ),
-          const SizedBox(width: 12),
-          Expanded(
+          Positioned(
+            right: -18,
+            bottom: -28,
+            child: CustomPaint(
+              size: const Size(118, 78),
+              painter: _GovernorInsightWavePainter(
+                color: spec.accent.withValues(alpha: 0.14),
+              ),
+            ),
+          ),
+          Positioned(
+            right: 8,
+            bottom: -8,
+            child: CustomPaint(
+              size: const Size(86, 52),
+              painter: _GovernorInsightWavePainter(
+                color: spec.accent.withValues(alpha: 0.10),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: _textMuted,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.82),
+                        borderRadius: BorderRadius.circular(13),
+                        border: Border.all(
+                          color: spec.accent.withValues(alpha: 0.18),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: spec.accent.withValues(alpha: 0.08),
+                            blurRadius: 8,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
+                      ),
+                      child: Icon(spec.icon, color: spec.accent, size: 22),
+                    ),
+                    const Spacer(),
+                    if (spec.badgeLabel != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.88),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: spec.accent.withValues(alpha: 0.28),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 6,
+                              height: 6,
+                              decoration: BoxDecoration(
+                                color: spec.accent,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              spec.badgeLabel!,
+                              style: TextStyle(
+                                color: spec.accent,
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 16),
                 Text(
                   value,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: _textDark,
-                    fontSize: 22,
+                  style: TextStyle(
+                    color: const Color(0xFF0F172A),
+                    fontSize: emptyLabel
+                        ? 22
+                        : (multiLine ? 20 : 28),
                     fontWeight: FontWeight.w800,
-                    height: 1.15,
-                    letterSpacing: -0.3,
+                    height: 1.12,
+                    letterSpacing: -0.45,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 8),
                 Text(
-                  subtitle,
+                  spec.title,
+                  style: const TextStyle(
+                    color: Color(0xFF1E293B),
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    height: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  spec.subtitle,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: _textMuted.withValues(alpha: 0.92),
+                    color: const Color(0xFF64748B).withValues(alpha: 0.95),
                     fontSize: 11.5,
-                    height: 1.3,
+                    height: 1.35,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
               ],
@@ -6509,19 +6818,66 @@ class _GovernorDashboardState extends State<GovernorDashboard>
   }
 
   // ==================== PROVINCIAL EXPORTS (on Analytics) ====================
+  Widget _buildDotTemplatesSectionHeader() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 38,
+          height: 38,
+          decoration: BoxDecoration(
+            color: _primaryOrange.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Icon(
+            Icons.description_rounded,
+            color: Color(0xFFEA580C),
+            size: 20,
+          ),
+        ),
+        const SizedBox(width: 12),
+        const Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'DOT Templates (Provincial)',
+                style: TextStyle(
+                  color: _textDark,
+                  fontSize: 16.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.25,
+                ),
+              ),
+              SizedBox(height: 3),
+              Text(
+                'Fill any form for the province, one LGU filter, or a specific spot / establishment.',
+                style: TextStyle(
+                  color: _textMuted,
+                  fontSize: 12.5,
+                  height: 1.35,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildGovernorReportPanel({required Widget child}) {
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.all(_isMobile ? 14 : 18),
+      padding: EdgeInsets.all(_isMobile ? 16 : 20),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: _cardBorder),
-        boxShadow: const [
+        boxShadow: [
           BoxShadow(
-            color: Color(0x08000000),
-            blurRadius: 12,
-            offset: Offset(0, 4),
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 14,
+            offset: const Offset(0, 5),
           ),
         ],
       ),
@@ -8890,4 +9246,63 @@ class _EntityDrill {
 
   final Map<String, dynamic>? spot;
   final EstablishmentRegistryEntry? establishment;
+}
+
+class _GovernorInsightCardSpec {
+  const _GovernorInsightCardSpec({
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.icon,
+    required this.accent,
+    required this.gradientTop,
+    required this.gradientBottom,
+    required this.border,
+    this.badgeLabel,
+  });
+
+  final String title;
+  final String subtitle;
+  final String value;
+  final IconData icon;
+  final Color accent;
+  final Color gradientTop;
+  final Color gradientBottom;
+  final Color border;
+  final String? badgeLabel;
+}
+
+class _GovernorInsightWavePainter extends CustomPainter {
+  const _GovernorInsightWavePainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    final path = Path()
+      ..moveTo(0, size.height * 0.55)
+      ..quadraticBezierTo(
+        size.width * 0.28,
+        size.height * 0.18,
+        size.width * 0.52,
+        size.height * 0.48,
+      )
+      ..quadraticBezierTo(
+        size.width * 0.78,
+        size.height * 0.82,
+        size.width,
+        size.height * 0.42,
+      )
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _GovernorInsightWavePainter oldDelegate) =>
+      oldDelegate.color != color;
 }

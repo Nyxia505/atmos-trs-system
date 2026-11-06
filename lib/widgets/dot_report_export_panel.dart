@@ -87,13 +87,19 @@ class DotReportExportPanel extends StatefulWidget {
   State<DotReportExportPanel> createState() => _DotReportExportPanelState();
 }
 
+enum _DotExportOp { excel, pdf, blank }
+
 class _DotReportExportPanelState extends State<DotReportExportPanel> {
   final _service = DotReportExportService();
   final _formSearchController = TextEditingController();
   late DotFormCatalogEntry _selected;
   DateTime? _start;
   DateTime? _end;
-  bool _busy = false;
+  /// Only one export runs at a time; labels/spinners follow this op.
+  _DotExportOp? _activeExport;
+  bool get _busy => _activeExport != null;
+  bool get _excelBusy => _activeExport == _DotExportOp.excel;
+  bool get _pdfBusy => _activeExport == _DotExportOp.pdf;
   static const _kPaperPrefKey = 'dot_report_pdf_paper_size';
   DotPdfPaperSize _paperSize = DotPdfPaperSize.a4;
   String? _lastGapsPreview;
@@ -1496,8 +1502,24 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
   }
 
   String get _excelActionLabel {
-    if (_busy) return 'Generating…';
+    if (_excelBusy) return 'Generating Excel…';
     return 'Download Excel';
+  }
+
+  String get _pdfActionLabel {
+    if (_pdfBusy) return 'Generating PDF…';
+    return 'Download PDF';
+  }
+
+  Widget _downloadBusyIcon() {
+    return const SizedBox(
+      width: 16,
+      height: 16,
+      child: CircularProgressIndicator(
+        strokeWidth: 2,
+        color: Colors.white,
+      ),
+    );
   }
 
   Widget _buildControlsRow() {
@@ -1524,15 +1546,8 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         ),
         ElevatedButton.icon(
           onPressed: _busy ? null : _generateExcel,
-          icon: _busy
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
-                  ),
-                )
+          icon: _excelBusy
+              ? _downloadBusyIcon()
               : const Icon(Icons.table_view_outlined, size: 18),
           label: Text(_excelActionLabel),
           style: ElevatedButton.styleFrom(
@@ -1547,8 +1562,21 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         SizedBox(width: 210, child: _paperSizeField(expand: true)),
         OutlinedButton.icon(
           onPressed: _busy ? null : _generatePdf,
-          icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
-          label: Text('Download PDF (${_paperSize.label})'),
+          icon: _pdfBusy
+              ? SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: widget.primaryColor,
+                  ),
+                )
+              : const Icon(Icons.picture_as_pdf_outlined, size: 18),
+          label: Text(
+            _pdfBusy
+                ? _pdfActionLabel
+                : '$_pdfActionLabel (${_paperSize.label})',
+          ),
           style: OutlinedButton.styleFrom(
             foregroundColor: widget.primaryColor,
             side: BorderSide(color: widget.primaryColor.withValues(alpha: 0.55)),
@@ -1580,15 +1608,8 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         const SizedBox(height: 12),
         ElevatedButton.icon(
           onPressed: _busy ? null : _generateExcel,
-          icon: _busy
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
-                  ),
-                )
+          icon: _excelBusy
+              ? _downloadBusyIcon()
               : const Icon(Icons.table_view_outlined, size: 18),
           label: Text(_excelActionLabel),
           style: ElevatedButton.styleFrom(
@@ -1605,8 +1626,21 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         const SizedBox(height: 8),
         OutlinedButton.icon(
           onPressed: _busy ? null : _generatePdf,
-          icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
-          label: Text('Download PDF (${_paperSize.label})'),
+          icon: _pdfBusy
+              ? SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: widget.primaryColor,
+                  ),
+                )
+              : const Icon(Icons.picture_as_pdf_outlined, size: 18),
+          label: Text(
+            _pdfBusy
+                ? _pdfActionLabel
+                : '$_pdfActionLabel (${_paperSize.label})',
+          ),
           style: OutlinedButton.styleFrom(
             foregroundColor: widget.primaryColor,
             side: BorderSide(color: widget.primaryColor.withValues(alpha: 0.55)),
@@ -1872,10 +1906,12 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
           unsigned.add(label);
           continue;
         }
+        // Formal report designation only. Audit still stores signerPosition as signed
+        // (e.g. "Head of Hotel"); name + signature PNG are unchanged.
         signed.add(DotPdfSignOff(
           label: label,
           name: s.signerName,
-          position: s.signerPosition,
+          position: DotPdfSignOff.designatedManagerTitle,
           action: s.actionLabel,
           signedAt: s.createdAt,
           signaturePng: s.signaturePng,
@@ -1920,15 +1956,17 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       return;
     }
     if (!_scopeReadyForExport()) return;
-    if (_busy) return;
+    if (_activeExport != null) return;
 
     if (_isExtraFillScope) {
       await _generatePortalSummaryFile(excel: true);
       return;
     }
 
-    _busy = true;
-    setState(() => _lastGapsPreview = null);
+    setState(() {
+      _activeExport = _DotExportOp.excel;
+      _lastGapsPreview = null;
+    });
     await WidgetsBinding.instance.endOfFrame;
 
     try {
@@ -1980,7 +2018,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       if (!mounted) return;
       _snack('Export failed: $e', Colors.red.shade700);
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) setState(() => _activeExport = null);
     }
   }
 
@@ -1994,15 +2032,14 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       return;
     }
     if (!_scopeReadyForExport()) return;
-    if (_busy) return;
+    if (_activeExport != null) return;
 
     if (_isExtraFillScope) {
       await _generatePortalSummaryFile(excel: false);
       return;
     }
 
-    _busy = true;
-    setState(() {});
+    setState(() => _activeExport = _DotExportOp.pdf);
     await WidgetsBinding.instance.endOfFrame;
     try {
       final end =
@@ -2062,7 +2099,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       if (!mounted) return;
       _snack('PDF export failed: $e', Colors.red.shade700);
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) setState(() => _activeExport = null);
     }
   }
 
@@ -2091,9 +2128,11 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
   }
 
   Future<void> _generatePortalSummaryFile({required bool excel}) async {
-    if (_busy) return;
-    _busy = true;
-    setState(() => _lastGapsPreview = null);
+    if (_activeExport != null) return;
+    setState(() {
+      _activeExport = excel ? _DotExportOp.excel : _DotExportOp.pdf;
+      _lastGapsPreview = null;
+    });
     await WidgetsBinding.instance.endOfFrame;
     try {
       final dataset = await _portalDatasetForExport();
@@ -2154,14 +2193,13 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         Colors.red.shade700,
       );
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) setState(() => _activeExport = null);
     }
   }
 
   Future<void> _downloadOfficialBlank(DotFormCatalogEntry form) async {
-    if (_busy) return;
-    _busy = true;
-    setState(() {});
+    if (_activeExport != null) return;
+    setState(() => _activeExport = _DotExportOp.blank);
     await WidgetsBinding.instance.endOfFrame;
     try {
       final bytes = await _service.downloadCatalogBlank(form);
@@ -2180,7 +2218,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       if (!mounted) return;
       _snack('Download failed: $e', Colors.red.shade700);
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) setState(() => _activeExport = null);
     }
   }
 

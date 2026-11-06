@@ -10,6 +10,7 @@ import 'package:atmos_trs_system/utils/checkin_visitor_count.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/production_data_filters.dart';
 import 'package:atmos_trs_system/utils/provincial_report_builder.dart';
+import 'package:atmos_trs_system/utils/tourist_spot_metrics.dart';
 
 /// Severity for operational quality alerts.
 enum ProvincialAlertSeverity { info, warning, critical }
@@ -259,14 +260,8 @@ class ProvincialTourismService {
   }) =>
       checkInsInManilaFilter(checkIns, filter, now: now);
 
-  static String municipalityIdOf(Map<String, dynamic> row) {
-    final mid = row['municipalityId']?.toString().trim() ?? '';
-    if (mid.isNotEmpty && isMisamisOccidentalMunicipalityId(mid)) return mid;
-    final fromName = getMunicipalityIdFromName(
-      row['municipality']?.toString() ?? row['city']?.toString(),
-    );
-    return fromName;
-  }
+  static String municipalityIdOf(Map<String, dynamic> row) =>
+      TouristSpotMetrics.municipalityIdOf(row);
 
   static String municipalityNameOf(String id) {
     for (final m in getMisamisOccidentalMunicipalities()) {
@@ -303,9 +298,9 @@ class ProvincialTourismService {
       final id = municipalityIdOf(s);
       if (id.isEmpty || !spotCounts.containsKey(id)) continue;
       spotCounts[id] = (spotCounts[id] ?? 0) + 1;
-      final status = (s['status']?.toString() ?? 'active').toLowerCase();
-      final active = status != 'inactive' && status != 'closed';
-      if (active) {
+      if (TouristSpotMetrics.isActiveStatus(
+        (s['status'] ?? s['Status'])?.toString(),
+      )) {
         activeSpotCounts[id] = (activeSpotCounts[id] ?? 0) + 1;
       }
     }

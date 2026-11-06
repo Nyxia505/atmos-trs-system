@@ -686,8 +686,7 @@ class _EstablishmentDashboardScreenState
           Expanded(
             child: Column(
               children: [
-                if (isMobile || _currentTab == _AeTab.register)
-                  _buildTopHeader(isMobile: isMobile),
+                _buildTopHeader(isMobile: isMobile),
                 Expanded(
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 220),
@@ -718,49 +717,86 @@ class _EstablishmentDashboardScreenState
       };
 
   Widget _buildTopHeader({required bool isMobile}) {
+    // Orange brand header on every establishment feature (Register, Events,
+    // Insights, Reports, Profile, Settings).
+    final title = _currentTab == _AeTab.register
+        ? '$_businessName — DOT Register'
+        : '$_businessName — ${_tabTitle(_currentTab)}';
+    final subtitle = [
+      if (_aeType.isNotEmpty) '$_aeType ($_classificationCode)',
+      if (_municipality.isNotEmpty) _municipality,
+      if (_schema.tracksRooms) '$_roomCount rooms',
+    ].join(' · ');
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.fromLTRB(isMobile ? 12 : 24, 12, isMobile ? 12 : 20, 12),
+      clipBehavior: Clip.antiAlias,
       decoration: const BoxDecoration(
-        color: AeDashTokens.surface,
-        border: Border(bottom: BorderSide(color: AeDashTokens.border)),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFFFF8A30), Color(0xFFF5660B)],
+        ),
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(18)),
+        boxShadow: [
+          BoxShadow(
+            color: Color(0x33EA580C),
+            blurRadius: 16,
+            offset: Offset(0, 6),
+          ),
+        ],
       ),
-      child: SafeArea(
-        bottom: false,
-        child: Row(
-          children: [
-            if (isMobile)
-              IconButton(
-                tooltip: 'Menu',
-                onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-                icon: const Icon(Icons.menu_rounded, color: AeDashTokens.text),
+      child: Stack(
+        children: [
+          const Positioned.fill(child: AeBannerBackdrop()),
+          SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                isMobile ? 12 : 24,
+                12,
+                isMobile ? 12 : 20,
+                14,
               ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Row(
                 children: [
-                  Text(
-                    _currentTab == _AeTab.register
-                        ? '$_businessName — DOT register'
-                        : _tabTitle(_currentTab),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AeDashTokens.heading(size: isMobile ? 17 : 19),
+                  if (isMobile)
+                    IconButton(
+                      tooltip: 'Menu',
+                      onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                      icon: const Icon(Icons.menu_rounded, color: Colors.white),
+                    ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AeDashTokens.heading(
+                            size: isMobile ? 17 : 20,
+                            color: Colors.white,
+                          ),
+                        ),
+                        if (subtitle.isNotEmpty)
+                          Text(
+                            subtitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AeDashTokens.body(
+                              size: 12.5,
+                              color: Colors.white.withValues(alpha: 0.92),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
-                  Text(
-                    [
-                      if (_aeType.isNotEmpty) '$_aeType ($_classificationCode)',
-                      if (_municipality.isNotEmpty) _municipality,
-                      if (_schema.tracksRooms) '$_roomCount rooms',
-                    ].join(' · '),
-                    style: AeDashTokens.body(size: 12),
-                  ),
+                  _statusPill(compact: true, onOrange: true),
                 ],
               ),
             ),
-            _statusPill(compact: true),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -911,39 +947,30 @@ class _EstablishmentDashboardScreenState
         final pad = _pagePad(c.maxWidth);
         return ListView(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.only(bottom: pad + 12),
+          padding: EdgeInsets.fromLTRB(pad, 16, pad, pad + 12),
           children: [
-            AePageHero(
-              icon: Icons.summarize_rounded,
-              title: 'Reports',
-              subtitle: 'Your DOT forms filled from your own register — preview, then download Excel or PDF.',
-              flush: true,
-            ),
-            Padding(
-              padding: EdgeInsets.fromLTRB(pad, c.maxWidth < 600 ? 12 : 18, pad, 0),
-              child: DotReportExportPanel(
-                key: ValueKey('ae-reports-$_uid-${_reportFormIds.join(',')}'),
-                primaryColor: AeDashTokens.accent,
-                textDark: AeDashTokens.text,
-                textMuted: AeDashTokens.muted,
-                borderColor: AeDashTokens.border,
-                scopeLabel: _municipality.isNotEmpty ? _municipality : _businessName,
-                scopeSlug: _municipalityId.isNotEmpty ? _municipalityId : 'establishment',
-                isProvincial: false,
-                isMobile: c.maxWidth < 700,
-                checkIns: const [],
-                tourists: const [],
-                catalogSpots: const [],
+            DotReportExportPanel(
+              key: ValueKey('ae-reports-$_uid-${_reportFormIds.join(',')}'),
+              primaryColor: AeDashTokens.accent,
+              textDark: AeDashTokens.text,
+              textMuted: AeDashTokens.muted,
+              borderColor: AeDashTokens.border,
+              scopeLabel: _municipality.isNotEmpty ? _municipality : _businessName,
+              scopeSlug: _municipalityId.isNotEmpty ? _municipalityId : 'establishment',
+              isProvincial: false,
+              isMobile: c.maxWidth < 700,
+              checkIns: const [],
+              tourists: const [],
+              catalogSpots: const [],
+              municipalityId: _municipalityId,
+              lockedEstablishment: DotReportEntityOption(
+                id: _uid,
+                name: _businessName,
+                kind: DotReportEntityKind.establishment,
                 municipalityId: _municipalityId,
-                lockedEstablishment: DotReportEntityOption(
-                  id: _uid,
-                  name: _businessName,
-                  kind: DotReportEntityKind.establishment,
-                  municipalityId: _municipalityId,
-                  municipalityName: _municipality,
-                ),
-                allowedFormIds: _reportFormIds,
+                municipalityName: _municipality,
               ),
+              allowedFormIds: _reportFormIds,
             ),
           ],
         );
@@ -957,69 +984,55 @@ class _EstablishmentDashboardScreenState
         final pad = _pagePad(c.maxWidth);
         return ListView(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.only(bottom: pad + 12),
+          padding: EdgeInsets.fromLTRB(pad, 16, pad, pad + 12),
           children: [
-            AePageHero(
-              icon: Icons.storefront_rounded,
-              title: 'Profile',
-              subtitle: 'DOT reporting details, map pin and photos shown to tourists.',
-              flush: true,
+            EstablishmentReportingProfileCard(
+              tracksRooms: _schema.tracksRooms,
+              totalRooms: _roomCount,
+              aeType: _aeType,
+              classificationCode: _classificationCode,
+              customAeTypes: _customAeTypes,
+              hostsMice: _hostsMice,
+              saving: _savingProfile,
+              establishmentId: _uid,
+              businessName: _businessName,
+              onSave: _saveReportingProfile,
             ),
-            Padding(
-              padding: EdgeInsets.fromLTRB(pad, c.maxWidth < 600 ? 12 : 18, pad, 0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  EstablishmentReportingProfileCard(
-                    tracksRooms: _schema.tracksRooms,
-                    totalRooms: _roomCount,
-                    aeType: _aeType,
-                    classificationCode: _classificationCode,
-                    customAeTypes: _customAeTypes,
-                    hostsMice: _hostsMice,
-                    saving: _savingProfile,
-                    establishmentId: _uid,
-                    businessName: _businessName,
-                    onSave: _saveReportingProfile,
-                  ),
-                  const SizedBox(height: 18),
-                  SignOffHistoryPanel(
-                    ownerId: _uid,
-                    subjectType: SignOffSubjects.aeProfile,
-                    subjectId: _uid,
-                    title: 'Reporting profile sign-offs',
-                    emptyText: 'No signed profile changes yet.',
-                  ),
-                  const SizedBox(height: 18),
-                  EstablishmentMapPinCard(
-                    latitude: _latitude,
-                    longitude: _longitude,
-                    municipalityId: _municipalityId,
-                    locating: _locating,
-                    saving: _savingLocation,
-                    onBusyChanged: (b) {
-                      if (mounted) setState(() => _locating = b);
-                    },
-                    onChanged: (pin) => _saveMapPin(
-                      latitude: pin.latitude,
-                      longitude: pin.longitude,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  EstablishmentPhotosCard(
-                    urls: _galleryUrls,
-                    maxImages: EstablishmentGalleryService.maxImages,
-                    busy: _galleryBusy,
-                    onAdd: _addGalleryPhoto,
-                    onRemove: _removeGalleryPhoto,
-                  ),
-                  if (_isLodging) ...[
-                    const SizedBox(height: 18),
-                    _lodgingHoursSection(),
-                  ],
-                ],
+            const SizedBox(height: 18),
+            SignOffHistoryPanel(
+              ownerId: _uid,
+              subjectType: SignOffSubjects.aeProfile,
+              subjectId: _uid,
+              title: 'Reporting profile sign-offs',
+              emptyText: 'No signed profile changes yet.',
+            ),
+            const SizedBox(height: 18),
+            EstablishmentMapPinCard(
+              latitude: _latitude,
+              longitude: _longitude,
+              municipalityId: _municipalityId,
+              locating: _locating,
+              saving: _savingLocation,
+              onBusyChanged: (b) {
+                if (mounted) setState(() => _locating = b);
+              },
+              onChanged: (pin) => _saveMapPin(
+                latitude: pin.latitude,
+                longitude: pin.longitude,
               ),
             ),
+            const SizedBox(height: 18),
+            EstablishmentPhotosCard(
+              urls: _galleryUrls,
+              maxImages: EstablishmentGalleryService.maxImages,
+              busy: _galleryBusy,
+              onAdd: _addGalleryPhoto,
+              onRemove: _removeGalleryPhoto,
+            ),
+            if (_isLodging) ...[
+              const SizedBox(height: 18),
+              _lodgingHoursSection(),
+            ],
           ],
         );
       },
@@ -1038,13 +1051,8 @@ class _EstablishmentDashboardScreenState
               profile: _profile,
               schema: _schema,
               hostsMice: _hostsMice,
-              flushHero: true,
-              contentPadding: EdgeInsets.fromLTRB(
-                pad,
-                c.maxWidth < 600 ? 12 : 18,
-                pad,
-                0,
-              ),
+              showHero: false,
+              contentPadding: EdgeInsets.fromLTRB(pad, 16, pad, 0),
             ),
           ],
         );
@@ -1066,22 +1074,27 @@ class _EstablishmentDashboardScreenState
     );
   }
 
-  Widget _statusPill({bool compact = false}) {
+  Widget _statusPill({bool compact = false, bool onOrange = false}) {
     final pillLabel = _isRejected
         ? 'Rejected'
         : _isPending
             ? 'Pending'
             : 'Active';
-    final pillBg = _isRejected
-        ? const Color(0xFFFEE2E2)
-        : _isPending
-            ? const Color(0xFFFFF7ED)
-            : const Color(0xFFECFDF5);
-    final pillFg = _isRejected
-        ? const Color(0xFF9F1239)
-        : _isPending
-            ? const Color(0xFF9A3412)
-            : const Color(0xFF065F46);
+    final Color pillBg;
+    final Color pillFg;
+    if (onOrange) {
+      pillBg = Colors.white.withValues(alpha: 0.18);
+      pillFg = Colors.white;
+    } else if (_isRejected) {
+      pillBg = const Color(0xFFFEE2E2);
+      pillFg = const Color(0xFF9F1239);
+    } else if (_isPending) {
+      pillBg = const Color(0xFFFFF7ED);
+      pillFg = const Color(0xFF9A3412);
+    } else {
+      pillBg = const Color(0xFFECFDF5);
+      pillFg = const Color(0xFF065F46);
+    }
 
     return Container(
       padding: EdgeInsets.symmetric(
@@ -1091,7 +1104,11 @@ class _EstablishmentDashboardScreenState
       decoration: BoxDecoration(
         color: pillBg,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: pillFg.withValues(alpha: 0.25)),
+        border: Border.all(
+          color: onOrange
+              ? Colors.white.withValues(alpha: 0.35)
+              : pillFg.withValues(alpha: 0.25),
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

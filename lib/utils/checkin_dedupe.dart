@@ -44,11 +44,16 @@ class CheckInDedupe {
     final spot = spotId(row);
     if (uid.isEmpty && spot.isEmpty) return null;
     final t = parse(row);
-    final day = t == null
-        ? 'unknown'
-        : '${t.year.toString().padLeft(4, '0')}-'
-            '${t.month.toString().padLeft(2, '0')}-'
-            '${t.day.toString().padLeft(2, '0')}';
+    // Asia/Manila calendar day — matches VisitAnalytics / Governor filters.
+    String day;
+    if (t == null) {
+      day = 'unknown';
+    } else {
+      final wall = manilaCalendarDate(t);
+      day = '${wall.year.toString().padLeft(4, '0')}-'
+          '${wall.month.toString().padLeft(2, '0')}-'
+          '${wall.day.toString().padLeft(2, '0')}';
+    }
     return '$uid|$spot|$day';
   }
 

@@ -48,8 +48,6 @@ double? spotDistanceKm(TouristSpot a, TouristSpot b) {
 /// Average speed km/h by mode (for time estimates).
 double _speedKmh(String mode) {
   switch (mode) {
-    case 'Walking':
-      return 5;
     case 'Motorcycle':
       return 35;
     case 'Public Transport':

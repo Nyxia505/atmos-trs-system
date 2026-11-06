@@ -13,8 +13,9 @@ import 'package:atmos_trs_system/widgets/establishment_dss_charts.dart';
 
 /// Insights (decision support) from the hotel's DOT DAE-1B register.
 ///
-/// Also used read-only by Governor / LGU drill-downs ([embedded] swaps the hero
-/// for a compact title row).
+/// Also used read-only by Governor / LGU drill-downs ([embedded] tweaks the
+/// period toolbar label). The AE dashboard uses the shared orange top header
+/// only — no second decorative page banner.
 class EstablishmentInsightsBoard extends StatefulWidget {
   const EstablishmentInsightsBoard({
     super.key,
@@ -140,14 +141,23 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
             : Column(children: [x, SizedBox(height: gap), y]);
 
         final period = '${AeSheetKit.monthName(a.month)} ${a.year}';
+        // Compact month toolbar (replaces the old large AePageHero banner).
+        // Embedded LGU/Governor views keep a titled row; AE dashboard relies on
+        // the shared orange top header and only needs the month control here.
         final children = <Widget>[
-          if (widget.embedded)
-            Row(
-              children: [
-                Expanded(child: Text('Register insights · $period', style: AeDashTokens.section(size: 15))),
-                _monthPicker(reports),
-              ],
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  widget.embedded
+                      ? 'Register insights · $period'
+                      : 'Period · $period',
+                  style: AeDashTokens.section(size: 14),
+                ),
+              ),
+              _monthPicker(reports),
+            ],
+          ),
           if (error != null)
             AeAlertBanner(
               title: 'Could not load register',
@@ -175,18 +185,8 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
           physics: const AlwaysScrollableScrollPhysics(),
           padding: EdgeInsets.only(bottom: pad + 12),
           children: [
-            if (!widget.embedded)
-              AePageHero(
-                icon: Icons.insights_rounded,
-                title: 'Insights',
-                subtitle: 'From your DOT register — occupancy, length of stay, guest '
-                    'markets, rooms and revenue. Recommendations unlock after '
-                    '${AeRegisterInsightsBuilder.softDays} filled days.',
-                trailing: _monthPicker(reports),
-                flush: true,
-              ),
             Padding(
-              padding: EdgeInsets.fromLTRB(pad, gap, pad, 0),
+              padding: EdgeInsets.fromLTRB(pad, 16, pad, 0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [

@@ -1287,9 +1287,43 @@ function municipalityDisplayName(municipalityId) {
     (key ? key.charAt(0).toUpperCase() + key.slice(1) : 'Misamis Occidental');
 }
 
-/** Days in the current calendar month (1..today) for monthly report CSV columns. */
+/**
+ * Asia/Manila wall-clock parts. Cloud Functions run in UTC; using
+ * `Date#getMonth()` / `getDate()` seeds the wrong calendar month near
+ * Manila midnight and mismatches Governor "This Month" (Manila) filters.
+ */
+function manilaParts(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  }).formatToParts(now);
+  const num = (type) =>
+    Number(parts.find((p) => p.type === type)?.value || 0);
+  // hour12:false still yields "24" for midnight on some engines.
+  let hour = num('hour');
+  if (hour === 24) hour = 0;
+  return {
+    year: num('year'),
+    month: num('month'), // 1-12
+    day: num('day'),
+    hour,
+    minute: num('minute'),
+  };
+}
+
+/** UTC Date for a Manila wall-clock Y-M-D h:m (no DST in PH). */
+function manilaWallDate(year, month1to12, day, hour = 12, minute = 0) {
+  return new Date(Date.UTC(year, month1to12 - 1, day, hour - 8, minute, 0));
+}
+
+/** Days in the current Asia/Manila calendar month (1..today) for seed columns. */
 function currentMonthCheckInDays(now = new Date()) {
-  const today = now.getDate();
+  const {day: today} = manilaParts(now);
   const candidates = [1, 2, 3, 5, 8, 10, 12, 15, 18, 20, 22, 25, 26, today];
   const days = [];
   for (const d of candidates) {
@@ -2157,6 +2191,154 @@ exports.seedTourismDummyData = onCall(
   },
 );
 
+const SPOTS_FCM_TOPIC = 'tourism_spots';
+
+function isActiveTouristSpotStatus(status) {
+  const s = normalizeField(status).toLowerCase();
+  if (!s) return true;
+  return s === 'active' || s === 'published';
+}
+
+/**
+ * One-shot claim so create + activate + retries never double-notify.
+ */
+async function claimTouristSpotFcmSend(spotId) {
+  const id = normalizeField(spotId);
+  if (!id) return false;
+  const ref = db.collection('tourist_spots').doc(id);
+  try {
+    return await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return false;
+      const data = snap.data() || {};
+      if (data.fcmSent_published) return false;
+      if (!isActiveTouristSpotStatus(data.status)) return false;
+      tx.update(ref, {
+        fcmSent_published: FieldValue.serverTimestamp(),
+        fcmSentAt: FieldValue.serverTimestamp(),
+      });
+      return true;
+    });
+  } catch (err) {
+    console.error('[claimTouristSpotFcmSend]', err);
+    return false;
+  }
+}
+
+async function sendTouristSpotTopicPush(spotId, data) {
+  const name = normalizeField(data.name) || 'a new destination';
+  const municipality =
+    normalizeField(data.municipality) ||
+    normalizeField(data.municipalityName) ||
+    normalizeField(data.municipalityId) ||
+    'Misamis Occidental';
+  const title = 'New Tourist Destination!';
+  const body =
+    `A new tourist spot, "${name}", has been added in ${municipality}. Explore it now!`;
+  const messaging = getMessaging();
+  const payload = {
+    notification: {title, body},
+    data: {
+      type: 'new_spot',
+      spotId: String(spotId || ''),
+      title: name,
+      municipality,
+      notificationBody: body,
+    },
+    android: {
+      priority: 'high',
+      notification: {
+        channelId: 'tourism_spots_channel',
+        sound: 'default',
+        tag: `tourist_spot_${spotId}`,
+      },
+    },
+    apns: {
+      payload: {
+        aps: {
+          sound: 'default',
+          'thread-id': 'tourism_spots',
+        },
+      },
+    },
+  };
+  try {
+    const messageId = await messaging.send({
+      ...payload,
+      topic: SPOTS_FCM_TOPIC,
+    });
+    console.log('tourism_spots push sent', {spotId, messageId, topic: SPOTS_FCM_TOPIC});
+    return messageId;
+  } catch (err) {
+    console.error('[sendTouristSpotTopicPush] topic failed, trying tokens', err);
+    const tokens = await collectInstalledAppFcmTokens();
+    if (!tokens.length) throw err;
+    const dead = [];
+    let delivered = 0;
+    for (let i = 0; i < tokens.length; i += 500) {
+      const chunk = tokens.slice(i, i + 500);
+      const response = await messaging.sendEachForMulticast({
+        tokens: chunk,
+        ...payload,
+      });
+      response.responses.forEach((res, idx) => {
+        if (res.success) {
+          delivered += 1;
+          return;
+        }
+        const code = res.error && res.error.code;
+        if (
+          code === 'messaging/registration-token-not-registered' ||
+          code === 'messaging/invalid-registration-token'
+        ) {
+          dead.push(chunk[idx]);
+        }
+      });
+    }
+    if (dead.length) await pruneInvalidFcmTokens(dead);
+    if (delivered === 0) throw err;
+    return `multicast:${delivered}`;
+  }
+}
+
+/**
+ * Notify Trip Planner / tourist apps when an LGU first publishes an Active spot.
+ * Edits to an already-Active spot do not notify. Draft / Inactive create skips.
+ * First transition Inactive → Active notifies once (claim on the doc).
+ */
+exports.notifyNewTouristSpot = onDocumentWritten(
+  {
+    document: 'tourist_spots/{spotId}',
+    region: 'asia-southeast1',
+  },
+  async (event) => {
+    const after = event.data && event.data.after;
+    if (!after || !after.exists) return;
+    const before = event.data && event.data.before;
+    const data = after.data() || {};
+    if (!isActiveTouristSpotStatus(data.status)) return;
+
+    const wasActive =
+      before &&
+      before.exists &&
+      isActiveTouristSpotStatus((before.data() || {}).status);
+    // Ordinary edits of an already-Active spot: no push.
+    if (wasActive) return;
+
+    const spotId = event.params.spotId;
+    const claimed = await claimTouristSpotFcmSend(spotId);
+    if (!claimed) {
+      console.log('[notifyNewTouristSpot] skip (already claimed or inactive)', spotId);
+      return;
+    }
+    try {
+      await sendTouristSpotTopicPush(spotId, data);
+    } catch (err) {
+      console.error('[notifyNewTouristSpot] FCM failed', err);
+    }
+  },
+);
+
 /**
  * Creates a tourist_spots doc + QR metadata for LGU / provincial staff.
  * Used when client Firestore rules block the direct write.
@@ -2565,6 +2747,7 @@ exports.seedLguAnalyticsData = onCall(
     const foreignProfiles = DEMO_TOURIST_PROFILES.filter((p) => !p.isLocal);
 
     const now = new Date();
+    const manila = manilaParts(now);
     const monthlyDays = currentMonthCheckInDays(now);
     let seededTourists = 0;
     let seededCheckins = 0;
@@ -2678,17 +2861,16 @@ exports.seedLguAnalyticsData = onCall(
             ? Math.ceil(partySize / 2)
             : Math.floor(partySize / 2);
           const maleCount = partySize - femaleCount;
-          const eventDate = new Date(
-            now.getFullYear(),
-            now.getMonth(),
+          const eventDate = manilaWallDate(
+            manila.year,
+            manila.month,
             day,
             9 + ((i + j) % 9),
             (i * 7 + j * 11) % 60,
-            0,
-            0,
           );
           const checkinId =
-            `${uid}_${spot.id}_m${now.getMonth() + 1}_d${day}_${j + 1}`;
+            `${uid}_${spot.id}_${manila.year}_` +
+            `m${manila.month}_d${day}_${j + 1}`;
 
           const checkInPayload = {
             userId: uid,
@@ -2700,6 +2882,13 @@ exports.seedLguAnalyticsData = onCall(
             touristEmail: email,
             touristNationality: profile.nationality,
             touristDateOfBirth: dateOfBirth,
+            touristSex: sex,
+            touristCountry: profile.country || (isLocal ? 'Philippines' : ''),
+            touristProvince:
+              profile.province || (isLocal ? 'Misamis Occidental' : ''),
+            touristCity: profile.city || (isLocal ? municipalityName : ''),
+            touristIsLocal: isLocal,
+            touristLocalOrForeign: isLocal ? 'Local' : 'Foreign',
             touristMobile: '',
             municipalityId,
             lguId: municipalityId,
@@ -2717,6 +2906,8 @@ exports.seedLguAnalyticsData = onCall(
             visitorCount: partySize,
             femaleCount,
             maleCount,
+            filipinoCount: isLocal ? partySize : 0,
+            foreignCount: isLocal ? 0 : partySize,
             timestamp: Timestamp.fromDate(eventDate),
             createdAt: Timestamp.fromDate(eventDate),
           };

@@ -47,7 +47,6 @@ WITH CHECK (
       'tourist-spots',
       'images',
       'uploads',
-      'establishments',
       'user_profiles',
       'user-profiles'
     )
@@ -77,7 +76,6 @@ USING (
     'tourist-spots',
     'images',
     'uploads',
-    'establishments',
     'user_profiles',
     'user-profiles'
   )

@@ -678,7 +678,12 @@ DotReportPreviewTable _previewRegisterDomestic({
   });
 
   return DotReportPreviewTable(
-    headers: ['PH region of residence', ...months, 'Total arrivals', 'Guest nights'],
+    headers: [
+      'PH Region of Residence',
+      ...months,
+      'Total Arrivals',
+      'Guest Nights',
+    ],
     rows: rows,
     summaryLine: '${form.code} · $totalArrivals domestic arrivals · $totalNights guest-nights · '
         'Female $female · Male $male · $scopeLabel',

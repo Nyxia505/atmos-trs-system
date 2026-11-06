@@ -989,7 +989,7 @@ class TourismEventTitlesList extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(18, 20, 18, 20),
         decoration: TourismPlanUi.planCardDecoration(),
         child: Text(
-          'No events yet. Posted events will be listed here.',
+          'No events yet.',
           style: TextStyle(
             fontSize: 13.5,
             height: 1.4,

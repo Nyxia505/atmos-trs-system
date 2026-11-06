@@ -1,6 +1,5 @@
-import 'dart:typed_data';
+﻿import 'dart:typed_data';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -14,6 +13,7 @@ import 'services/governor_event_types_store.dart';
 import 'services/storage_image_upload.dart';
 import 'widgets/catalog_image_preview.dart';
 import 'widgets/event_date_schedule_picker.dart';
+import 'widgets/event_location_multi_select.dart';
 
 String _folderSlug(String name) {
   return name
@@ -40,7 +40,7 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
   late TextEditingController _imageController;
   late DateTime _dateTime;
   late String _eventType;
-  String? _municipality;
+  late Set<String> _selectedLocations;
   late DateTime _rangeStart;
   late DateTime _rangeEnd;
   bool _uploadingImage = false;
@@ -51,6 +51,8 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
   @override
   void initState() {
     super.initState();
+    final existingId = widget.existing?.id.trim() ?? '';
+    _docId = existingId.isNotEmpty ? existingId : newTourismEventDocId();
     _titleController = TextEditingController(
       text: widget.existing?.title ?? '',
     );
@@ -69,12 +71,18 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
       widget.existing?.eventType ?? '',
     );
     _eventType = existing.isNotEmpty ? existing : kEventTypeOptions.first;
-    _municipality = catalogSelectionFromRecord(
-      municipality: widget.existing?.municipality ?? '',
-      audienceScope: widget.existing?.audienceScope ?? '',
-      municipalityId: widget.existing?.municipalityId ?? '',
-    );
-    _docId = widget.existing?.id ?? '';
+    _selectedLocations = {
+      for (final name in widget.existing?.locationNames ?? const <String>[])
+        if (name.trim().isNotEmpty) name.trim(),
+    };
+    if (_selectedLocations.isEmpty) {
+      _selectedLocations = {
+        for (final name in splitEventLocationNames(
+          widget.existing?.municipality ?? '',
+        ))
+          name,
+      };
+    }
     final existingDays = widget.existing == null
         ? <DateTime>[eventCalendarDay(_dateTime)]
         : eventExpandedCalendarDays(widget.existing!);
@@ -225,12 +233,18 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
   Future<void> _save() async {
     if (_saving || _uploadingImage) return;
     if (!_formKey.currentState!.validate()) return;
+    if (_selectedLocations.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Select at least one municipality.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
     setState(() => _saving = true);
-    if (_docId.isEmpty) {
-      _docId = FirebaseFirestore.instance
-          .collection(kEventsCollection)
-          .doc()
-          .id;
+    if (_docId.trim().isEmpty) {
+      _docId = newTourismEventDocId();
     }
 
     // Retry pending image upload before writing Firestore (URL may still be empty).
@@ -274,17 +288,15 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
       rangeEnd = swap;
     }
     final oneDay = rangeStart == rangeEnd;
-    final municipalityName = catalogMunicipalityForSelection(_municipality);
-    final provinceWide = _municipality == kProvinceWideValue;
+    final locationNames = _selectedLocations.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     final ev = TourismEvent(
       id: _docId,
       title: _titleController.text.trim(),
       imagePath: _imageController.text.trim(),
       venue: _venueController.text.trim(),
-      municipality: municipalityName,
-      municipalities: provinceWide || municipalityName.isEmpty
-          ? const []
-          : [municipalityName],
+      municipality: locationNames.join(', '),
+      municipalities: locationNames,
       dateTime: combineEventDateAndTime(rangeStart, _dateTime),
       dateMode: oneDay
           ? TourismEventDateMode.single
@@ -294,8 +306,8 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
       rangeEnd: oneDay ? null : rangeEnd,
       eventType: _eventType,
       description: _descriptionController.text.trim(),
-      audienceScope: catalogAudienceScopeForSelection(_municipality),
-      municipalityId: provinceWide ? 'province' : '',
+      audienceScope: widget.existing?.audienceScope ?? '',
+      municipalityId: widget.existing?.municipalityId ?? '',
     );
     try {
       await upsertTourismEventToFirestore(ev);
@@ -605,21 +617,18 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
                   ),
                   const SizedBox(height: 22),
                   _section('Location'),
-                  DropdownButtonFormField<String?>(
-                    value: _municipality,
-                    decoration: catalogFieldDecoration(
-                      label: 'Municipality *',
-                      hint: 'One LGU or the whole province',
-                    ),
-                    hint: const Text('Select municipality or province-wide'),
-                    isExpanded: true,
-                    items: catalogAudienceItems(extraValue: _municipality),
-                    onChanged: municipalities.isEmpty
-                        ? null
-                        : (v) => setState(() => _municipality = v),
-                    validator: (v) => v == null || v.trim().isEmpty
-                        ? 'Select a municipality'
+                  FormField<Set<String>>(
+                    validator: (_) => _selectedLocations.isEmpty
+                        ? 'Select at least one municipality'
                         : null,
+                    builder: (state) => EventLocationMultiSelect(
+                      selectedNames: _selectedLocations,
+                      errorText: state.errorText,
+                      onChanged: (next) {
+                        setState(() => _selectedLocations = next);
+                        state.didChange(next);
+                      },
+                    ),
                   ),
                   const SizedBox(height: 14),
                   TextFormField(

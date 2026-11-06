@@ -1,0 +1,4871 @@
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'dart:async' show Timer, unawaited;
+import 'dart:convert';
+import 'package:atmos_trs_system/config/user_profile_storage.dart';
+import 'package:atmos_trs_system/config/auth_config.dart';
+import 'package:atmos_trs_system/services/announcement_notification_sync.dart';
+import 'package:atmos_trs_system/services/notification_badge_notifier.dart';
+import 'package:atmos_trs_system/services/notification_firestore_service.dart';
+import 'package:atmos_trs_system/services/profile_photo_hydration.dart';
+import 'package:atmos_trs_system/services/tourist_profile_hydration.dart';
+import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
+import 'package:atmos_trs_system/services/tourist_spots_repository.dart';
+import 'package:atmos_trs_system/services/user_activity_service.dart'
+    as activity;
+import 'package:atmos_trs_system/screens/laag_with_friends_screen.dart';
+import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
+import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
+import 'package:atmos_trs_system/screens/municipality_map_and_spots_screen.dart';
+import 'package:atmos_trs_system/features/explore/explore_screen.dart'
+    show kMockSpots;
+import 'package:atmos_trs_system/models/tourist_destination_detail.dart';
+import 'package:atmos_trs_system/screens/tourist_destination_detail_screen.dart';
+import 'package:atmos_trs_system/screens/event_detail_screen.dart';
+import 'package:atmos_trs_system/config/app_theme.dart';
+import 'package:atmos_trs_system/config/app_theme_controller.dart';
+import 'package:atmos_trs_system/config/vr_tour_config.dart';
+import 'package:atmos_trs_system/config/atmos_brand_typography.dart';
+import 'package:atmos_trs_system/services/weather_service.dart';
+import 'package:atmos_trs_system/services/qr_checkin_service.dart';
+import 'package:atmos_trs_system/services/qr_checkin_ui.dart';
+import 'package:atmos_trs_system/services/qr_location_prompt.dart';
+import 'package:atmos_trs_system/data/featured_destinations.dart';
+import 'package:atmos_trs_system/data/misamis_occidental_display_spots.dart';
+import 'package:atmos_trs_system/data/tourist_spot_image_catalog.dart';
+import 'package:atmos_trs_system/widgets/recent_reviews_section.dart';
+import 'package:atmos_trs_system/widgets/save_spot_notice.dart';
+import 'package:atmos_trs_system/widgets/spot_image.dart';
+import 'package:atmos_trs_system/utils/visit_record_image_resolver.dart';
+import 'package:atmos_trs_system/services/tourist_activity_firestore_sync.dart';
+import 'package:atmos_trs_system/features/home/widgets/app_faq_sheet.dart';
+import 'package:atmos_trs_system/features/home/widgets/earned_badges_page.dart';
+import 'package:atmos_trs_system/widgets/tourist_full_page.dart';
+import 'package:atmos_trs_system/features/navigation/tourist_tutorial.dart';
+import 'package:atmos_trs_system/utils/maps_directions_launcher.dart';
+import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
+import 'package:atmos_trs_system/models/municipality.dart';
+import 'package:atmos_trs_system/utils/municipality_helper.dart';
+
+const double _kHomeCenterPanelMaxWidth = 480;
+
+/// Misamis Occidental center (used e.g. for VR preview location)
+const double _kMapCenterLat = 8.3377;
+const double _kMapCenterLng = 123.7072;
+
+/// Lets [PageView] respond to mouse drag / trackpad on web and desktop.
+class _FeaturedCarouselScrollBehavior extends MaterialScrollBehavior {
+  const _FeaturedCarouselScrollBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+    PointerDeviceKind.touch,
+    PointerDeviceKind.mouse,
+    PointerDeviceKind.stylus,
+    PointerDeviceKind.trackpad,
+  };
+}
+
+const Duration _kDiscoverSlideDuration = Duration(milliseconds: 500);
+const Duration _kDiscoverSlideInterval = Duration(seconds: 4);
+const Duration _kDiscoverResumeDelay = Duration(seconds: 5);
+
+/// Lets the tutorial move the Discover carousel without owning its timer.
+class DiscoverCarouselHandle {
+  int logicalIndex = 0;
+  void Function(int logicalIndex)? animateToLogical;
+}
+
+class DiscoverFeaturedCarousel extends StatefulWidget {
+  const DiscoverFeaturedCarousel({
+    super.key,
+    required this.items,
+    required this.compact,
+    required this.handle,
+    required this.cardBuilder,
+    this.tourKey,
+  });
+
+  final List<Map<String, dynamic>> items;
+  final bool compact;
+  final DiscoverCarouselHandle handle;
+  final Widget Function(Map<String, dynamic> destination) cardBuilder;
+  final Key? tourKey;
+
+  @override
+  State<DiscoverFeaturedCarousel> createState() => _DiscoverFeaturedCarouselState();
+}
+
+class _DiscoverFeaturedCarouselState extends State<DiscoverFeaturedCarousel>
+    with WidgetsBindingObserver {
+  late final PageController _controller;
+  Timer? _autoTimer;
+  Timer? _resumeTimer;
+  int _logicalIndex = 0;
+  bool _tickerOn = true;
+  bool _appResumed = true;
+  bool _interactionPaused = false;
+  bool _userDrag = false;
+
+  int get _destinationCount => widget.items.length;
+
+  int get _originPage =>
+      _destinationCount <= 1 ? 0 : _destinationCount * 50;
+
+  int get _pageCount =>
+      _destinationCount <= 1 ? _destinationCount : _destinationCount * 100;
+
+  int _logicalOf(int page) {
+    final count = _destinationCount;
+    if (count <= 0) return 0;
+    final mod = page % count;
+    return mod < 0 ? mod + count : mod;
+  }
+
+  bool _sameDestinations(
+    List<Map<String, dynamic>> a,
+    List<Map<String, dynamic>> b,
+  ) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i]['spotId'] != b[i]['spotId']) return false;
+    }
+    return true;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _appResumed =
+        lifecycle == null || lifecycle == AppLifecycleState.resumed;
+    _controller = PageController(
+      initialPage: _originPage,
+      viewportFraction: 0.85,
+    );
+    widget.handle.logicalIndex = 0;
+    widget.handle.animateToLogical = _animateToLogical;
+    _startAuto();
+  }
+
+  @override
+  void didUpdateWidget(covariant DiscoverFeaturedCarousel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    widget.handle.animateToLogical = _animateToLogical;
+    if (_sameDestinations(oldWidget.items, widget.items)) return;
+    _logicalIndex = 0;
+    widget.handle.logicalIndex = 0;
+    _interactionPaused = false;
+    _resumeTimer?.cancel();
+    if (_controller.hasClients && _destinationCount > 0) {
+      _controller.jumpToPage(_originPage);
+    }
+    _startAuto();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final on = TickerMode.valuesOf(context).enabled;
+    if (on == _tickerOn) return;
+    _tickerOn = on;
+    if (on) {
+      _startAuto();
+    } else {
+      _autoTimer?.cancel();
+      _autoTimer = null;
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appResumed = state == AppLifecycleState.resumed;
+    if (_appResumed) {
+      _startAuto();
+    } else {
+      _autoTimer?.cancel();
+      _autoTimer = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _autoTimer?.cancel();
+    _resumeTimer?.cancel();
+    if (widget.handle.animateToLogical == _animateToLogical) {
+      widget.handle.animateToLogical = null;
+    }
+    WidgetsBinding.instance.removeObserver(this);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _startAuto() {
+    _autoTimer?.cancel();
+    if (!mounted ||
+        _destinationCount < 2 ||
+        !_tickerOn ||
+        !_appResumed ||
+        _interactionPaused) {
+      _autoTimer = null;
+      return;
+    }
+    _autoTimer = Timer.periodic(_kDiscoverSlideInterval, (_) => _tick());
+  }
+
+  void _tick() {
+    if (!mounted || _interactionPaused || !_tickerOn || !_appResumed) return;
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return;
+    if (!_isEffectivelyVisible()) return;
+    if (!_controller.hasClients) return;
+    if (_controller.position.isScrollingNotifier.value) return;
+    _advance();
+  }
+
+  bool _isEffectivelyVisible() {
+    final render = context.findRenderObject();
+    if (render is! RenderBox || !render.attached || !render.hasSize) {
+      return false;
+    }
+    RenderObject? node = render;
+    while (node != null) {
+      if (node is RenderOffstage && node.offstage) return false;
+      final parent = node.parent;
+      if (parent is RenderIndexedStack) {
+        final shown = _shownIndexedChild(parent);
+        if (shown == null) return false;
+        RenderObject? cursor = render;
+        while (cursor != null && !identical(cursor, parent)) {
+          if (identical(cursor, shown)) return true;
+          cursor = cursor.parent;
+        }
+        return false;
+      }
+      node = parent;
+    }
+    return true;
+  }
+
+  RenderBox? _shownIndexedChild(RenderIndexedStack stack) {
+    final index = stack.index;
+    if (index == null) return null;
+    RenderBox? child = stack.firstChild;
+    for (var i = 0; i < index && child != null; i++) {
+      child = stack.childAfter(child);
+    }
+    return child;
+  }
+
+  void _advance() {
+    final current = _controller.page?.round() ?? _originPage;
+    final last = _pageCount - 1;
+    if (current >= last) {
+      final logical = _logicalOf(current);
+      final reset = _originPage + logical;
+      _controller.jumpToPage(reset);
+      _controller.animateToPage(
+        reset + 1,
+        duration: _kDiscoverSlideDuration,
+        curve: Curves.easeInOutCubic,
+      );
+      return;
+    }
+    _controller.animateToPage(
+      current + 1,
+      duration: _kDiscoverSlideDuration,
+      curve: Curves.easeInOutCubic,
+    );
+  }
+
+  void _animateBy(int delta) {
+    if (_destinationCount < 2 || !_controller.hasClients || delta == 0) return;
+    final current = _controller.page?.round() ?? _originPage;
+    _controller.animateToPage(
+      current + delta,
+      duration: _kDiscoverSlideDuration,
+      curve: Curves.easeInOutCubic,
+    );
+  }
+
+  void _animateToLogical(int logical) {
+    final count = _destinationCount;
+    if (count == 0 || logical < 0 || logical >= count) return;
+    if (!_controller.hasClients) return;
+    final current = _controller.page?.round() ?? _originPage;
+    var delta = logical - _logicalOf(current);
+    if (delta == 0) return;
+    if (delta > count / 2) delta -= count;
+    if (delta < -count / 2) delta += count;
+    _animateBy(delta);
+  }
+
+  void _onUserInteractionStart() {
+    _interactionPaused = true;
+    _autoTimer?.cancel();
+    _autoTimer = null;
+    _resumeTimer?.cancel();
+    _resumeTimer = null;
+  }
+
+  void _onUserInteractionEnd() {
+    if (!_interactionPaused) return;
+    _resumeTimer?.cancel();
+    _resumeTimer = Timer(_kDiscoverResumeDelay, () {
+      if (!mounted) return;
+      _interactionPaused = false;
+      _startAuto();
+    });
+  }
+
+  void _onPointerUp() {
+    if (_controller.hasClients &&
+        _controller.position.isScrollingNotifier.value) {
+      return;
+    }
+    _onUserInteractionEnd();
+  }
+
+  void _setLogical(int page) {
+    final logical = _logicalOf(page);
+    widget.handle.logicalIndex = logical;
+    if (logical == _logicalIndex) return;
+    setState(() => _logicalIndex = logical);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = widget.items;
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          key: widget.tourKey,
+          height: widget.compact ? 168 : 228,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final showNav = constraints.maxWidth >= 520 && items.length > 1;
+              return Stack(
+                alignment: Alignment.center,
+                clipBehavior: Clip.none,
+                children: [
+                  Listener(
+                    onPointerDown: (_) => _onUserInteractionStart(),
+                    onPointerUp: (_) => _onPointerUp(),
+                    onPointerCancel: (_) => _onPointerUp(),
+                    child: NotificationListener<ScrollNotification>(
+                      onNotification: (notification) {
+                        if (notification is ScrollStartNotification &&
+                            notification.dragDetails != null) {
+                          _userDrag = true;
+                          _onUserInteractionStart();
+                        } else if (notification is ScrollEndNotification &&
+                            _userDrag) {
+                          _userDrag = false;
+                          _onUserInteractionEnd();
+                        }
+                        return false;
+                      },
+                      child: ScrollConfiguration(
+                        behavior: const _FeaturedCarouselScrollBehavior(),
+                        child: PageView.builder(
+                          controller: _controller,
+                          scrollDirection: Axis.horizontal,
+                          allowImplicitScrolling: true,
+                          onPageChanged: _setLogical,
+                          itemCount: _pageCount,
+                          itemBuilder: (context, index) =>
+                              widget.cardBuilder(items[_logicalOf(index)]),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (showNav) ...[
+                    Positioned(
+                      left: 4,
+                      child: _navButton(
+                        icon: Icons.chevron_left_rounded,
+                        enabled: items.length > 1,
+                        onPressed: () {
+                          _onUserInteractionStart();
+                          _animateBy(-1);
+                          _onUserInteractionEnd();
+                        },
+                      ),
+                    ),
+                    Positioned(
+                      right: 4,
+                      child: _navButton(
+                        icon: Icons.chevron_right_rounded,
+                        enabled: items.length > 1,
+                        onPressed: () {
+                          _onUserInteractionStart();
+                          _animateBy(1);
+                          _onUserInteractionEnd();
+                        },
+                      ),
+                    ),
+                  ],
+                ],
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(items.length, (index) {
+            final selected = _logicalIndex == index;
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: items.length < 2
+                  ? null
+                  : () {
+                      _onUserInteractionStart();
+                      _animateToLogical(index);
+                      _onUserInteractionEnd();
+                    },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                width: selected ? 28 : 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  gradient: selected
+                      ? LinearGradient(
+                          colors: [AppTheme.primary, AppTheme.primaryDark],
+                        )
+                      : null,
+                  color: selected ? null : Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+            );
+          }),
+        ),
+      ],
+    );
+  }
+
+  Widget _navButton({
+    required IconData icon,
+    required VoidCallback onPressed,
+    required bool enabled,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: enabled ? onPressed : null,
+        borderRadius: BorderRadius.circular(24),
+        child: Ink(
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: enabled ? 0.95 : 0.5),
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.12),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Icon(
+              icon,
+              size: 26,
+              color: enabled ? AppTheme.primary : AppTheme.unselectedMuted,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Priority VR / featured destinations on the home Discover carousel.
+/// Categories for Featured Destinations filter.
+const List<String> _featuredCategories = [
+  'All',
+  'Beach',
+  'Historical',
+  'Mountain',
+  'Park',
+  'Nature',
+];
+
+String _spotImage(TouristSpotFirestore spot) {
+  return TouristSpotImageCatalog.displayUrlForSpot(spot);
+}
+
+String _humanizeSpotId(String id) {
+  return id
+      .replaceAll('_', ' ')
+      .split(' ')
+      .where((w) => w.isNotEmpty)
+      .map(
+        (w) => w.length == 1
+            ? w.toUpperCase()
+            : '${w[0].toUpperCase()}${w.substring(1)}',
+      )
+      .join(' ');
+}
+
+TouristSpotFirestore _spotFromFeatured(Map<String, dynamic> destination) {
+  final spotId = destination['spotId']?.toString() ?? '';
+  final known = MisamisOccidentalDisplaySpots.findByAnyId(
+    spotId,
+    featuredDestinations: kFeaturedDestinations,
+  );
+  if (known != null) {
+    return known;
+  }
+  return TouristSpotFirestore(
+    id: spotId,
+    name: destination['name']?.toString() ?? _humanizeSpotId(spotId),
+    category: destination['category']?.toString() ?? 'Spot',
+    latitude: (destination['latitude'] as num?)?.toDouble() ?? _kMapCenterLat,
+    longitude: (destination['longitude'] as num?)?.toDouble() ?? _kMapCenterLng,
+    rating: (destination['rating'] as num?)?.toDouble() ?? 4.5,
+    image: TouristSpotImageCatalog.displayUrl(
+      preferred: destination['image']?.toString(),
+      spotId: spotId,
+      category: destination['category']?.toString(),
+    ),
+    municipality: destination['location']?.toString() ?? '',
+    vrLink: '',
+  );
+}
+
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  UserProfile? _userProfile = UserProfileStorage.cachedProfile;
+  bool _profileLoaded = UserProfileStorage.cachedProfile != null;
+  final DiscoverCarouselHandle _discoverCarousel = DiscoverCarouselHandle();
+
+  // User stats from storage
+  activity.UserStats _userStats = activity.UserStats(
+    placesVisited: 0,
+    badgesEarned: 0,
+    daysAsTourist: 1,
+    savedSpots: 0,
+  );
+  List<activity.VisitRecord> _recentVisits = [];
+  List<TouristSpotFirestore> _cachedFirestoreSpots = [];
+  List<activity.VisitRecord> _recentlyViewed = [];
+  List<activity.AppNotification> _notifications = [];
+  Set<String> _savedSpotIds = {};
+  int _unreadNotifications = 0;
+  String _discoverMunicipalityId = 'calamba';
+
+  bool get _isMobileLayout => MediaQuery.sizeOf(context).width < 600;
+
+  PreferredSizeWidget _mobileSheetAppBar(
+    BuildContext context, {
+    required String title,
+    String? subtitle,
+    List<Widget>? actions,
+  }) {
+    return AppBar(
+      backgroundColor: AppTheme.cardBackground,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      leadingWidth: 80,
+      leading: Padding(
+        padding: const EdgeInsets.only(left: 12),
+        child: Center(
+          child: FilledButton(
+            onPressed: () => Navigator.pop(context),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppTheme.primary,
+              foregroundColor: AppTheme.onPrimary,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              minimumSize: const Size(0, 36),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            child: const Text(
+              'Back',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ),
+      ),
+      title: subtitle == null
+          ? Text(
+              title,
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              ),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                Text(
+                  subtitle,
+                  style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 13),
+                ),
+              ],
+            ),
+      actions: actions,
+    );
+  }
+
+  MisamisOccidentalWeather? _weather;
+  bool _weatherLoading = true;
+
+  // Featured Destinations category filter
+  int _selectedFeaturedCategoryIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_userProfile == null) {
+      _restoreProfileFromDisk();
+    }
+    activity.UserActivityService.visitedSpotsRevision
+        .addListener(_onVisitedSpotsChanged);
+    activity.UserActivityService.savedSpotsRevision
+        .addListener(_onSavedSpotsChanged);
+    unawaited(_loadCachedStats());
+    _loadAllData();
+    _fetchWeather();
+  }
+
+  void _onVisitedSpotsChanged() {
+    if (!mounted) return;
+    unawaited(_reloadVisitedUi());
+  }
+
+  Future<void> _reloadVisitedUi() async {
+    await activity.UserActivityService.syncVisitedSpotsFromQrCheckins();
+    if (!mounted) return;
+    await Future.wait([
+      _loadUserStats(),
+      _loadRecentVisits(skipSync: true),
+    ]);
+  }
+
+  /// Instantly paints Visited / Badges / Days from on-device cache.
+  Future<void> _loadCachedStats() async {
+    final stats = await activity.UserActivityService.getUserStatsCached();
+    if (!mounted) return;
+    setState(() => _userStats = stats);
+  }
+
+  Future<void> _restoreProfileFromDisk() async {
+    final cached = await UserProfileStorage.getUserProfile();
+    if (cached == null || !mounted) return;
+    final authEmail =
+        FirebaseAuth.instance.currentUser?.email?.trim().toLowerCase() ?? '';
+    final cachedEmail = cached.email.trim().toLowerCase();
+    if (authEmail.isNotEmpty && cachedEmail != authEmail) return;
+    setState(() {
+      _userProfile = cached;
+      _profileLoaded = cached.firstName.trim().isNotEmpty;
+    });
+  }
+
+  Future<void> _fetchWeather() async {
+    setState(() => _weatherLoading = true);
+    try {
+      final w = await MisamisOccidentalWeather.fetch();
+      if (mounted) {
+        setState(() {
+          _weather = w;
+          _weatherLoading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _weather ??= MisamisOccidentalWeather.fallback();
+          _weatherLoading = false;
+        });
+      }
+    }
+  }
+
+  IconData _weatherIconForCode(int code) {
+    if (code == 0 || code == 1) return Icons.wb_sunny_rounded;
+    if (code == 2 || code == 3) return Icons.cloud_rounded;
+    if (code >= 45 && code <= 48) return Icons.blur_on;
+    if (code >= 51 && code <= 67) return Icons.grain;
+    if (code >= 71 && code <= 77) return Icons.ac_unit;
+    if (code >= 80 && code <= 82) return Icons.beach_access;
+    if (code >= 95) return Icons.flash_on;
+    return Icons.wb_cloudy_rounded;
+  }
+
+  List<Map<String, dynamic>> get _filteredFeaturedDestinations {
+    final selected = _featuredCategories[_selectedFeaturedCategoryIndex];
+    final base = selected == 'All'
+        ? kFeaturedDestinations
+        : kFeaturedDestinations
+            .where(
+              (d) =>
+                  (d['category'] as String?)?.toLowerCase() ==
+                  selected.toLowerCase(),
+            )
+            .toList();
+    // VR-enabled destinations float to the top of the carousel.
+    bool _hasVr(Map<String, dynamic> d) =>
+        (d['vrLink'] as String?)?.trim().isNotEmpty == true;
+    return [
+      ...base.where(_hasVr),
+      ...base.where((d) => !_hasVr(d)),
+    ];
+  }
+
+  Future<void> _loadAllData() async {
+    unawaited(_loadCachedStats());
+    unawaited(_loadUserProfile());
+    final uid =
+        AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
+
+    unawaited(_loadFirestoreSpotsCache());
+    unawaited(_loadSavedSpots());
+    unawaited(_loadNotifications());
+
+    if (uid != null && uid.isNotEmpty) {
+      unawaited(_refreshJourneyFromCloud(uid));
+    } else {
+      unawaited(_loadRecentVisits());
+      unawaited(_loadRecentlyViewed());
+    }
+  }
+
+  /// Cloud merge + check-in sync — updates stats when done, without blocking first paint.
+  Future<void> _refreshJourneyFromCloud(String uid) async {
+    await activity.UserActivityService.bindToUser(uid);
+    TouristActivityFirestoreSync.resetMergeCache();
+    await TouristActivityFirestoreSync.mergeFromCloud(uid);
+    if (!mounted) return;
+    await activity.UserActivityService.syncVisitedSpotsFromQrCheckins();
+    if (!mounted) return;
+    await Future.wait([
+      _loadUserStats(),
+      _loadRecentVisits(skipSync: true),
+      _loadRecentlyViewed(),
+    ]);
+  }
+
+  Future<void> _loadUserProfile() async {
+    final authUser = FirebaseAuth.instance.currentUser;
+    var profile = await TouristProfileHydration.loadProfile(
+      email: authUser?.email,
+    );
+    profile = await ProfilePhotoHydration.mergeFirestorePhotoUrl(profile);
+    if (mounted) {
+      setState(() {
+        _userProfile = profile ?? UserProfileStorage.cachedProfile;
+        _profileLoaded = true;
+      });
+    }
+  }
+
+  String _headerFirstName() {
+    final cached = _userProfile?.firstName.trim();
+    if (cached != null && cached.isNotEmpty) return cached;
+
+    final auth = FirebaseAuth.instance.currentUser;
+    final display = auth?.displayName?.trim();
+    if (display != null && display.isNotEmpty) {
+      return display.split(RegExp(r'\s+')).first;
+    }
+    final email = auth?.email?.trim();
+    if (email != null && email.contains('@')) {
+      final local = email.split('@').first;
+      if (local.isNotEmpty) {
+        return local[0].toUpperCase() + local.substring(1);
+      }
+    }
+
+    if (!_profileLoaded) return '';
+    return 'Guest';
+  }
+
+  Future<void> _loadUserStats() async {
+    final stats = await activity.UserActivityService.getUserStatsCached();
+    if (mounted) {
+      setState(() => _userStats = stats);
+    }
+  }
+
+  Map<String, TouristSpotFirestore> get _knownSpotsById =>
+      MisamisOccidentalDisplaySpots.buildKnownSpotsMap(
+        firestoreSpots: _cachedFirestoreSpots,
+        featuredDestinations: kFeaturedDestinations,
+      );
+
+  List<TouristSpotFirestore> get _allDestinationSpots =>
+      MisamisOccidentalDisplaySpots.allEligibleFromFirestore(_cachedFirestoreSpots);
+
+  String _featuredImageForDestination(Map<String, dynamic> destination) {
+    final explicit = destination['image']?.toString().trim();
+    if (explicit != null && explicit.isNotEmpty) {
+      return TouristSpotImageCatalog.displayUrl(preferred: explicit);
+    }
+    final spotId = destination['spotId']?.toString() ?? '';
+    final known = MisamisOccidentalDisplaySpots.findByAnyId(
+      spotId,
+      firestoreSpots: _cachedFirestoreSpots,
+      featuredDestinations: kFeaturedDestinations,
+    );
+    if (known != null) {
+      return TouristSpotImageCatalog.displayUrlForSpot(known);
+    }
+    return TouristSpotImageCatalog.displayUrl(
+      spotId: spotId,
+      spotName: destination['name']?.toString(),
+      category: destination['category']?.toString(),
+    );
+  }
+
+  TouristSpotFirestore? _findSpotById(String spotId) =>
+      MisamisOccidentalDisplaySpots.findByAnyId(
+        spotId,
+        firestoreSpots: _cachedFirestoreSpots,
+        featuredDestinations: kFeaturedDestinations,
+      );
+
+  TouristSpotFirestore _spotForSavedId(String spotId) {
+    return _findSpotById(spotId) ??
+        TouristSpotFirestore(
+          id: spotId,
+          name: _humanizeSpotId(spotId),
+          category: 'Spot',
+          latitude: _kMapCenterLat,
+          longitude: _kMapCenterLng,
+          rating: 4.5,
+          image: null,
+          vrLink: '',
+        );
+  }
+
+  void _openVisitRecord(activity.VisitRecord entry) {
+    final mockMatches = kMockSpots.where((s) => s.id == entry.spotId);
+    if (mockMatches.isNotEmpty) {
+      _openDestinationDetail(
+        detail: TouristDestinationDetail.fromExploreSpot(mockMatches.first),
+      );
+      return;
+    }
+    final known = _findSpotById(entry.spotId);
+    if (known != null) {
+      _openSpotDestinationDetail(known);
+      return;
+    }
+    if (_isMunicipalityVisit(entry)) {
+      final municipalityId = _municipalityIdForVisit(entry) ?? entry.spotName;
+      Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => MunicipalityMapAndSpotsScreen(
+            municipalityIdOrName: municipalityId,
+            spotsOnly: true,
+          ),
+        ),
+      );
+      return;
+    }
+    final spotId = entry.spotId.trim();
+    final spotName = entry.spotName.trim();
+    if (spotId.isEmpty && spotName.isEmpty) return;
+    _openSpotDestinationDetail(
+      TouristSpotFirestore(
+        id: spotId.isEmpty ? spotName : spotId,
+        name: spotName.isEmpty ? 'Visited place' : spotName,
+        category: entry.category.trim().isEmpty ? 'Spot' : entry.category.trim(),
+        latitude: 0,
+        longitude: 0,
+        rating: 0,
+        image: entry.imageUrl,
+        vrLink: '',
+      ),
+    );
+  }
+
+  bool _isMunicipalityVisit(activity.VisitRecord entry) {
+    final sid = entry.spotId.trim().toLowerCase();
+    if (sid.startsWith('lgu_')) return true;
+    final name = entry.spotName.trim().toLowerCase();
+    if (name.isEmpty) return false;
+    for (final municipality in getMisamisOccidentalMunicipalities()) {
+      final municipalityName = municipality.name.trim().toLowerCase();
+      if (sid == municipality.id || name == municipalityName) return true;
+    }
+    return false;
+  }
+
+  List<TouristSpotFirestore> get _spotsForVisitImages => _allDestinationSpots;
+
+  Future<void> _loadFirestoreSpotsCache() async {
+    final peeked = TouristSpotsRepository.peekCachedSpots();
+    if (peeked.isNotEmpty && _cachedFirestoreSpots.isEmpty && mounted) {
+      setState(() => _cachedFirestoreSpots = peeked);
+    }
+    final spots = await TouristSpotsRepository.getTouristSpots();
+    if (mounted) {
+      setState(() => _cachedFirestoreSpots = spots);
+      activity.UserActivityService.savedSpotsRevision.value++;
+    }
+  }
+
+  String? _resolveImageForVisitRecord(activity.VisitRecord entry) {
+    return VisitRecordImageResolver.resolve(entry, spots: _spotsForVisitImages);
+  }
+
+  String? _municipalityIdForVisit(activity.VisitRecord entry) {
+    final sid = entry.spotId.trim().toLowerCase();
+    if (sid.startsWith('lgu_')) {
+      final mid = sid.substring(4);
+      return mid.isEmpty ? null : mid;
+    }
+    final fromName = getMunicipalityIdFromName(entry.spotName);
+    if (fromName.isNotEmpty) return fromName;
+    final fromCategory = getMunicipalityIdFromName(entry.category);
+    return fromCategory.isEmpty ? null : fromCategory;
+  }
+
+  Future<List<activity.VisitRecord>> _syncAndEnrichVisits({bool skipSync = false}) async {
+    var visits = skipSync
+        ? await activity.UserActivityService.getVisitedSpots()
+        : await activity.UserActivityService.syncVisitedSpotsFromQrCheckins();
+    if (_cachedFirestoreSpots.isEmpty) {
+      _cachedFirestoreSpots = await TouristSpotsRepository.getTouristSpots();
+    }
+    visits = await VisitRecordImageResolver.enrichAndPersist(
+      visits,
+      spots: _spotsForVisitImages,
+    );
+    return visits;
+  }
+
+  Future<void> _loadRecentVisits({bool skipSync = false}) async {
+    final visits = await _syncAndEnrichVisits(skipSync: skipSync);
+    if (mounted) {
+      setState(() => _recentVisits = visits);
+    }
+  }
+
+  Future<void> _loadRecentlyViewed() async {
+    var list = await activity.UserActivityService.getRecentlyViewed();
+    if (_cachedFirestoreSpots.isEmpty) {
+      _cachedFirestoreSpots = await TouristSpotsRepository.getTouristSpots();
+    }
+    list = await VisitRecordImageResolver.enrichAndPersist(
+      list,
+      spots: _spotsForVisitImages,
+    );
+    if (mounted) {
+      setState(() => _recentlyViewed = list);
+    }
+  }
+
+  Future<void> _loadNotifications() async {
+    final uid =
+        AuthConfig.currentUserUid ?? FirebaseAuth.instance.currentUser?.uid;
+    final notifications = await AnnouncementNotificationSync.loadMergedForHome(
+      userId: uid,
+    );
+    final unread = notifications.where((n) => !n.isRead).length;
+    if (mounted) {
+      setState(() {
+        _notifications = notifications;
+        _unreadNotifications = unread;
+      });
+    }
+    await NotificationBadgeNotifier.instance.refresh(userId: uid);
+  }
+
+  void _onSavedSpotsChanged() {
+    if (!mounted) return;
+    final ids = activity.UserActivityService.savedSpotIdsSnapshot();
+    setState(() {
+      _savedSpotIds = ids;
+      _userStats = activity.UserStats(
+        placesVisited: _userStats.placesVisited,
+        badgesEarned: _userStats.badgesEarned,
+        daysAsTourist: _userStats.daysAsTourist,
+        savedSpots: ids.length,
+      );
+    });
+  }
+
+  Future<void> _loadSavedSpots() async {
+    await activity.UserActivityService.ensureSavedSpotsLoaded();
+    if (!mounted) return;
+    _onSavedSpotsChanged();
+  }
+
+  Future<void> _toggleSaveSpot(TouristSpotFirestore spot) async {
+    final name = spot.name.trim().isEmpty ? 'This destination' : spot.name.trim();
+    final future = activity.UserActivityService.toggleSaveSpot(spot.id);
+    final saved = activity.UserActivityService.isSpotSavedSync(spot.id);
+    if (!mounted) return;
+    SaveSpotNotice.show(
+      context,
+      saved ? '$name saved!' : '$name removed from saved',
+    );
+    final result = await future;
+    if (!mounted || result == saved) return;
+    if (activity.UserActivityService.isSpotSavedSync(spot.id) == saved) return;
+    SaveSpotNotice.show(
+      context,
+      'Could not update $name. Try again.',
+      error: true,
+    );
+  }
+
+  /// Builds image widget for spot or visit: supports assets (assets/...) and network URLs.
+  Widget _buildSpotImage(
+    String? imageUrl, {
+    required double width,
+    required double height,
+    String? spotId,
+    String? municipalityId,
+    String? spotName,
+    String? category,
+  }) {
+    return SpotImage(
+      imageUrl: imageUrl,
+      spotId: spotId,
+      municipalityId: municipalityId,
+      spotName: spotName,
+      category: category,
+      width: width,
+      height: height,
+      fit: BoxFit.cover,
+    );
+  }
+
+  Future<void> _checkInToSpot(TouristSpotFirestore spot) async {
+    final firestoreSpot = await QRCheckInService.getSpotById(spot.id);
+    final lat = firestoreSpot?.latitude ?? spot.latitude;
+    final lng = firestoreSpot?.longitude ?? spot.longitude;
+
+    if (!mounted) return;
+    if (!await ensureQrLocationReady(context, spotLabel: spot.name)) return;
+
+    final locationError = await QRCheckInService.verifyProximityToTouristSpot(
+      latitude: lat,
+      longitude: lng,
+      spotLabel: spot.name,
+    );
+    if (!mounted) return;
+    if (locationError != null) {
+      showQRCheckInErrorDialog(context, locationError);
+      return;
+    }
+
+    final municipalityId =
+        firestoreSpot != null && firestoreSpot.municipalityId.isNotEmpty
+        ? firestoreSpot.municipalityId
+        : QRCheckInService.resolveMunicipalityIdForSpot(
+            spotDocId: spot.id,
+            municipality: spot.municipality,
+            municipalityId: spot.municipalityId,
+            displayName: spot.name,
+          );
+
+    final ok = await performQRCheckIn(
+      context,
+      municipalityId: municipalityId,
+      spotId: spot.id,
+      spotName: spot.name,
+      municipality: spot.municipality.isNotEmpty
+          ? spot.municipality
+          : spot.name,
+      category: spot.category,
+    );
+    if (!ok || !mounted) return;
+
+    await _loadUserStats();
+    await _loadRecentVisits();
+  }
+
+  void _showFaq(BuildContext context) {
+    openAppFaq(
+      context,
+      fullScreen: _isMobileLayout,
+      centeredPanel: !_isMobileLayout,
+      maxPanelWidth: _kHomeCenterPanelMaxWidth,
+    );
+  }
+
+  TouristTutorialKeys? _tourKeys;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final keys = TouristTutorialScope.maybeOf(context);
+    if (keys != _tourKeys) {
+      _unregisterTourCallbacks();
+      _tourKeys = keys;
+      keys?.showVrCard = _showVrCardForTour;
+      keys?.openVrSpot = _openVrSpotForTour;
+    }
+  }
+
+  void _unregisterTourCallbacks() {
+    final keys = _tourKeys;
+    if (keys == null) return;
+    if (keys.showVrCard == _showVrCardForTour) keys.showVrCard = null;
+    if (keys.openVrSpot == _openVrSpotForTour) keys.openVrSpot = null;
+  }
+
+  TouristDestinationDetail _featuredDetail(Map<String, dynamic> destination) =>
+      TouristDestinationDetail.fromFeaturedMap(
+        destination,
+        resolvedImage: _featuredImageForDestination(destination),
+      );
+
+  /// Slides the Discover carousel to the first card that has a VR tour.
+  void _showVrCardForTour() {
+    final filtered = _filteredFeaturedDestinations;
+    final index = filtered.indexWhere((d) => _featuredDetail(d).hasVrTour);
+    if (index < 0 || index == _discoverCarousel.logicalIndex) return;
+    _discoverCarousel.animateToLogical?.call(index);
+  }
+
+  /// Opens the visible Discover card if it has a VR tour, otherwise the first
+  /// featured spot that does.
+  void _openVrSpotForTour() {
+    final keys = _tourKeys;
+    if (keys == null) return;
+    final filtered = _filteredFeaturedDestinations;
+    final visible = _discoverCarousel.logicalIndex < filtered.length
+        ? filtered[_discoverCarousel.logicalIndex]
+        : null;
+    final candidates = [
+      if (visible != null) visible,
+      ...filtered,
+      ...kFeaturedDestinations,
+    ];
+    for (final destination in candidates) {
+      final detail = _featuredDetail(destination);
+      if (!detail.hasVrTour) continue;
+      _openDestinationDetail(
+        detail: detail,
+        firestoreSpot: _spotFromFeatured(destination),
+        vrSectionKey: keys.vrSection,
+      );
+      return;
+    }
+  }
+
+  @override
+  void dispose() {
+    _unregisterTourCallbacks();
+    activity.UserActivityService.visitedSpotsRevision
+        .removeListener(_onVisitedSpotsChanged);
+    activity.UserActivityService.savedSpotsRevision
+        .removeListener(_onSavedSpotsChanged);
+    super.dispose();
+  }
+
+  String _timeBasedGreeting() {
+    final h = DateTime.now().hour;
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  }
+
+  Widget _buildSectionHeader({
+    required String title,
+    String? subtitle,
+    required IconData icon,
+    Widget? trailing,
+  }) {
+    final accent = AppTheme.primary;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: accent.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(icon, size: 20, color: accent),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.2,
+                ),
+              ),
+              if (subtitle != null) ...[
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 12.5),
+                ),
+              ],
+            ],
+          ),
+        ),
+        if (trailing != null) trailing,
+      ],
+    );
+  }
+
+  BoxDecoration _homeMiniCardDecoration(Color accent) {
+    return BoxDecoration(
+      color: AppTheme.cardBackground,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: accent.withValues(alpha: 0.15)),
+      boxShadow: [
+        BoxShadow(
+          color: accent.withValues(alpha: 0.05),
+          blurRadius: 6,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCenteredPanelShell({
+    required String title,
+    required IconData icon,
+    required Widget body,
+    String? trailingLabel,
+    double heightFraction = 0.72,
+  }) {
+    final accent = AppTheme.primary;
+    final maxH = MediaQuery.sizeOf(context).height * heightFraction;
+
+    return Center(
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+        constraints: BoxConstraints(
+          maxWidth: _kHomeCenterPanelMaxWidth,
+          maxHeight: maxH,
+        ),
+        decoration: BoxDecoration(
+          color: AppTheme.cardBackground,
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.12),
+              blurRadius: 24,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 8, 0),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: accent.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(icon, color: accent, size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                  ),
+                  if (trailingLabel != null) ...[
+                    Text(
+                      trailingLabel,
+                      style: TextStyle(color: AppTheme.unselectedMuted),
+                    ),
+                    const SizedBox(width: 4),
+                  ],
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: Icon(Icons.close, color: AppTheme.unselectedMuted),
+                    tooltip: 'Close',
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(child: body),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showCenteredHomePanel({
+    required String title,
+    required IconData icon,
+    required Widget body,
+    String? trailingLabel,
+    double heightFraction = 0.72,
+  }) {
+    return showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      builder: (context) => _buildCenteredPanelShell(
+        title: title,
+        icon: icon,
+        body: body,
+        trailingLabel: trailingLabel,
+        heightFraction: heightFraction,
+      ),
+    );
+  }
+
+  Widget _buildQuickActionsRow() {
+    final accent = AppTheme.primary;
+    final tourKeys = TouristTutorialScope.maybeOf(context);
+    return Align(
+      alignment: Alignment.center,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: _kHomeCenterPanelMaxWidth),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: KeyedSubtree(
+                      key: tourKeys?.askTala,
+                      child: _quickActionTile(
+                        icon: Icons.help_outline_rounded,
+                        label: 'Ask Tala',
+                        accent: accent,
+                        onTap: () => _showFaq(context),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _quickActionTile(
+                      icon: Icons.map_rounded,
+                      label: 'All places',
+                      accent: accent,
+                      onTap: _showAllDestinationsDialog,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _quickActionTile(
+                      icon: Icons.bookmark_rounded,
+                      label: _savedSpotIds.isEmpty
+                          ? 'Saved'
+                          : 'Saved (${_savedSpotIds.length})',
+                      accent: accent,
+                      onTap: _showSavedSpotsDialog,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _quickActionTile(
+                      icon: Icons.groups_rounded,
+                      label: 'Laag with Friends',
+                      accent: accent,
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const LaagWithFriendsScreen(),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                key: tourKeys?.statsRow,
+                children: [
+                  Expanded(
+                    child: _buildStatCard(
+                      'Visited',
+                      _userStats.placesVisited.toString(),
+                      Icons.place_rounded,
+                      accent,
+                      onTap: _showVisitedPlacesDialog,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _buildStatCard(
+                      'Badges',
+                      _userStats.badgesEarned.toString(),
+                      Icons.emoji_events_rounded,
+                      accent,
+                      onTap: _showBadgesDialog,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _quickActionTile({
+    required IconData icon,
+    required String label,
+    required Color accent,
+    required VoidCallback onTap,
+  }) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 72),
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+          decoration: _homeMiniCardDecoration(accent),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: accent, size: 20),
+              const SizedBox(height: 4),
+              Text(
+                label,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: accent,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                  height: 1.15,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  bool get _compactSpotImages => MediaQuery.sizeOf(context).width < 600;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: AppThemeController.instance,
+      builder: (context, _) {
+        final accent = AppTheme.primary;
+
+        return Scaffold(
+          backgroundColor: AppTheme.pageBackground,
+          body: Column(
+            children: [
+              _buildHeader(context, accent),
+              Expanded(
+                child: SafeArea(
+                  top: false,
+                  child: RefreshIndicator(
+                    color: accent,
+                    onRefresh: _loadAllData,
+                    child: SingleChildScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(height: 8),
+                          _buildQuickActionsRow(),
+                          const SizedBox(height: 24),
+                          _buildDiscoverSection(),
+                          const SizedBox(height: 24),
+                          _buildDiscoverByMunicipalitySection(),
+                          const SizedBox(height: 24),
+                          const RecentReviewsSection(),
+                          const SizedBox(height: 24),
+                          _buildRecentlyViewedSection(),
+                          const SizedBox(height: 20),
+                          _buildRecentVisitsSection(context),
+                          const SizedBox(height: 40),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildHeaderProfileAvatar(Color ringColor) {
+    final url = _userProfile?.profilePhotoUrl?.trim();
+    if (url != null && url.isNotEmpty) {
+      return ClipOval(
+        child: Image.network(
+          url,
+          width: 48,
+          height: 48,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          loadingBuilder: (context, child, progress) {
+            // Avoid showing a progress spinner that makes the avatar blink
+            // on every rebuild/tap.
+            return child;
+          },
+          errorBuilder: (_, __, ___) {
+            final b64 = _userProfile?.profileImageBase64;
+            if (b64 != null && b64.isNotEmpty) {
+              return Image.memory(
+                base64Decode(b64),
+                width: 48,
+                height: 48,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+              );
+            }
+            return Icon(Icons.person, color: AppTheme.unselectedMuted, size: 28);
+          },
+        ),
+      );
+    }
+    final b64 = _userProfile?.profileImageBase64;
+    if (b64 != null && b64.isNotEmpty) {
+      return ClipOval(
+        child: Image.memory(
+          base64Decode(b64),
+          width: 48,
+          height: 48,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          errorBuilder: (_, __, ___) =>
+              Icon(Icons.person, color: AppTheme.unselectedMuted, size: 28),
+        ),
+      );
+    }
+    return Icon(Icons.person, color: AppTheme.unselectedMuted, size: 28);
+  }
+
+  Widget _buildHeader(BuildContext context, Color accent) {
+    final userName = _headerFirstName();
+    final onHeader = AppTheme.onPrimary;
+    final topInset = MediaQuery.paddingOf(context).top;
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final nameFontSize = screenWidth < 360 ? 24.0 : 30.0;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(height: topInset),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+          decoration: BoxDecoration(
+            color: accent,
+            borderRadius: const BorderRadius.only(
+              bottomLeft: Radius.circular(28),
+              bottomRight: Radius.circular(28),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: accent.withValues(alpha: 0.35),
+                blurRadius: 16,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Row(
+        children: [
+          GestureDetector(
+            onTap: () {},
+            child: Container(
+              width: 54,
+              height: 54,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: onHeader.withValues(alpha: 0.14),
+                border: Border.all(
+                  color: onHeader.withValues(alpha: 0.55),
+                  width: 2,
+                ),
+              ),
+              child: Center(child: _buildHeaderProfileAvatar(onHeader)),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _timeBasedGreeting(),
+                  style: TextStyle(
+                    color: onHeader.withValues(alpha: 0.9),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: userName.isEmpty
+                          ? Container(
+                              height: 28,
+                              width: 120,
+                              decoration: BoxDecoration(
+                                color: onHeader.withValues(alpha: 0.25),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                            )
+                          : Text(
+                              userName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AtmosBrandTypography.displayTitle(
+                                color: onHeader,
+                                fontSize: nameFontSize,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      fit: FlexFit.loose,
+                      child: _buildHeaderWeatherChip(onHeader),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Welcome to Asenso Misamis Occidental',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: onHeader.withValues(alpha: 0.88),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHeaderIcon(
+    IconData icon,
+    VoidCallback onTap, {
+    bool hasNotification = false,
+    int notificationCount = 0,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppTheme.primary.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: AppTheme.primary, size: 24),
+          ),
+          if (hasNotification)
+            Positioned(
+              top: -4,
+              right: -4,
+              child: Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: AppTheme.primary,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 2),
+                ),
+                constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
+                child: Text(
+                  notificationCount > 9 ? '9+' : notificationCount.toString(),
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _showNotifications(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Container(
+          height: MediaQuery.of(context).size.height * 0.6,
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: AppTheme.cardBackground,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Notifications',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
+                  if (_notifications.isNotEmpty)
+                    TextButton(
+                      onPressed: () async {
+                        await activity.UserActivityService.clearNotifications();
+                        setModalState(() {});
+                        await _loadNotifications();
+                        await NotificationBadgeNotifier.instance.refresh();
+                        if (mounted) setState(() {});
+                      },
+                      child: Text(
+                        'Clear All',
+                        style: TextStyle(color: AppTheme.primary),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: _notifications.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.notifications_off_outlined,
+                              size: 64,
+                              color: Colors.grey.shade300,
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'No notifications',
+                              style: TextStyle(
+                                color: AppTheme.unselectedMuted,
+                                fontSize: 16,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'You\'re all caught up!',
+                              style: TextStyle(
+                                color: AppTheme.unselectedMuted,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    : ListView.builder(
+                        itemCount: _notifications.length,
+                        itemBuilder: (context, index) {
+                          final notification = _notifications[index];
+                          return _buildNotificationItemFromData(
+                            notification,
+                            () async {
+                              if (!notification.isRead) {
+                                final id = notification.id;
+                                if (id.startsWith('ann_')) {
+                                  await activity
+                                      .UserActivityService.markNotificationAsRead(
+                                    id,
+                                  );
+                                } else {
+                                  await NotificationFirestoreService.markAsRead(
+                                    id,
+                                  );
+                                  await activity
+                                      .UserActivityService.markNotificationAsRead(
+                                    id,
+                                  );
+                                }
+                                await _loadNotifications();
+                                await NotificationBadgeNotifier.instance
+                                    .refresh();
+                                setModalState(() {});
+                                if (mounted) setState(() {});
+                              }
+                              final id = notification.id;
+                              if (id.startsWith('ann_') && mounted) {
+                                Navigator.of(context).pop();
+                                await EventDetailScreen.open(
+                                  context,
+                                  eventId: id.substring(4),
+                                  title: notification.title,
+                                  content: notification.message,
+                                  type: notification.type.name,
+                                  imageUrl: notification.imageUrl,
+                                  municipalityName:
+                                      notification.municipalityName,
+                                );
+                              }
+                            },
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNotificationItemFromData(
+    activity.AppNotification notification,
+    VoidCallback onTap,
+  ) {
+    IconData icon;
+    Color color;
+
+    switch (notification.type) {
+      case activity.NotificationType.badge:
+        icon = Icons.emoji_events_rounded;
+        color = AppTheme.primary;
+        break;
+      case activity.NotificationType.event:
+        icon = Icons.event_rounded;
+        color = AppTheme.primary;
+        break;
+      case activity.NotificationType.weather:
+        icon = Icons.wb_sunny_rounded;
+        color = AppTheme.primary;
+        break;
+      case activity.NotificationType.checkin:
+        icon = Icons.check_circle_rounded;
+        color = AppTheme.primary;
+        break;
+      case activity.NotificationType.welcome:
+        icon = Icons.waving_hand_rounded;
+        color = AppTheme.primary;
+        break;
+      case activity.NotificationType.system:
+        icon = Icons.info_rounded;
+        color = AppTheme.primary;
+        break;
+    }
+
+    final timeAgo = _getTimeAgo(notification.createdAt);
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: notification.isRead
+              ? AppTheme.cardBackground
+              : AppTheme.primary.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(12),
+          border: notification.isRead
+              ? null
+              : Border.all(color: AppTheme.primary.withOpacity(0.2)),
+        ),
+        child: Row(
+          children: [
+            if ((notification.imageUrl?.trim().isNotEmpty ?? false))
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: SizedBox(
+                  width: 52,
+                  height: 52,
+                  child: SpotImage(
+                    imageUrl: notification.imageUrl,
+                    fit: BoxFit.cover,
+                    width: 52,
+                    height: 52,
+                  ),
+                ),
+              )
+            else
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: color, size: 24),
+              ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          notification.title,
+                          style: TextStyle(
+                            fontWeight: notification.isRead
+                                ? FontWeight.w500
+                                : FontWeight.w600,
+                            color: AppTheme.textPrimary,
+                          ),
+                        ),
+                      ),
+                      if (!notification.isRead)
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: AppTheme.primary,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    notification.message,
+                    style: TextStyle(fontSize: 13, color: AppTheme.unselectedMuted),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    timeAgo,
+                    style: TextStyle(fontSize: 11, color: AppTheme.unselectedMuted),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _getTimeAgo(DateTime dateTime) {
+    final diff = DateTime.now().difference(dateTime);
+    if (diff.inMinutes < 1) return 'Just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${dateTime.day}/${dateTime.month}/${dateTime.year}';
+  }
+
+  Widget _buildDiscoverSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: _buildSectionHeader(
+            title: 'Discover',
+            subtitle: 'Featured destinations for virtual tours',
+            icon: Icons.auto_awesome_rounded,
+            trailing: TextButton(
+              onPressed: _showPriorityDestinationsDialog,
+              child: Text(
+                'See all',
+                style: TextStyle(
+                  color: AppTheme.primary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        _buildFeaturedCategoryChips(),
+        const SizedBox(height: 12),
+        _buildFeaturedSection(),
+      ],
+    );
+  }
+
+  Widget _buildDiscoverByMunicipalitySection() {
+    final municipalities = getMisamisOccidentalMunicipalities();
+    final selectedId = _discoverMunicipalityId;
+    final spots = TouristSpotsRepository.forMunicipality(
+      _allDestinationSpots,
+      municipalityIdOrName: selectedId,
+    );
+    Municipality? selected;
+    for (final m in municipalities) {
+      if (m.id == selectedId) {
+        selected = m;
+        break;
+      }
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: _buildSectionHeader(
+            title: 'Discover by Municipality',
+            subtitle: selected != null
+                ? 'Registered spots in ${selected.name}'
+                : 'Browse spots by city or municipality',
+            icon: Icons.map_rounded,
+            trailing: TextButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) => MunicipalityMapAndSpotsScreen(
+                      municipalityIdOrName: selectedId,
+                    ),
+                  ),
+                );
+              },
+              child: Text(
+                'Map',
+                style: TextStyle(
+                  color: AppTheme.primary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 40,
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            scrollDirection: Axis.horizontal,
+            itemCount: municipalities.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final m = municipalities[index];
+              final selectedChip = m.id == selectedId;
+              return ChoiceChip(
+                label: Text(m.name),
+                selected: selectedChip,
+                onSelected: (_) {
+                  setState(() => _discoverMunicipalityId = m.id);
+                },
+                selectedColor: AppTheme.primary.withValues(alpha: 0.18),
+                labelStyle: TextStyle(
+                  color: selectedChip ? AppTheme.primary : AppTheme.textPrimary,
+                  fontWeight: selectedChip ? FontWeight.w700 : FontWeight.w500,
+                  fontSize: 13,
+                ),
+                side: BorderSide(
+                  color: selectedChip
+                      ? AppTheme.primary
+                      : AppTheme.border,
+                ),
+                backgroundColor: AppTheme.cardBackground,
+                showCheckmark: false,
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (spots.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppTheme.cardBackground,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppTheme.border),
+              ),
+              child: Text(
+                'No registered tourist spots in ${selected?.name ?? 'this municipality'} yet.',
+                style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 13),
+              ),
+            ),
+          )
+        else
+          SizedBox(
+            height: _compactSpotImages ? 168 : 188,
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              scrollDirection: Axis.horizontal,
+              itemCount: spots.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 12),
+              itemBuilder: (context, index) {
+                final spot = spots[index];
+                final image = TouristSpotImageCatalog.displayUrlForSpot(spot);
+                return GestureDetector(
+                  onTap: () => _openSpotDestinationDetail(spot),
+                  child: Container(
+                    width: _compactSpotImages ? 148 : 168,
+                    decoration: BoxDecoration(
+                      color: AppTheme.cardBackground,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: AppTheme.border),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.05),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: SpotImage(
+                            imageUrl: image,
+                            fit: BoxFit.cover,
+                            width: double.infinity,
+                            height: double.infinity,
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                spot.name,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: AppTheme.textPrimary,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                spot.category.isNotEmpty
+                                    ? spot.category
+                                    : 'Tourist Spot',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: AppTheme.unselectedMuted,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildVisitedPlacesBody(List<activity.VisitRecord> visits) {
+    if (visits.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.explore_off, size: 64, color: Colors.grey.shade300),
+            const SizedBox(height: 16),
+            Text(
+              'No places visited yet',
+              style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 16),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Scan a destination QR code at the tourist spot to add it here.',
+              style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 14),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+      itemCount: visits.length,
+      itemBuilder: (context, index) {
+        return _buildVisitListItem(visits[index]);
+      },
+    );
+  }
+
+  Future<void> _showVisitedPlacesDialog() async {
+    if (!mounted) return;
+
+    // Show what we already have instantly; the QR check-in sync refreshes it.
+    final visitsNotifier = ValueNotifier<List<activity.VisitRecord>?>(
+      _recentVisits.isNotEmpty ? _recentVisits : null,
+    );
+    final syncing = ValueNotifier<bool>(true);
+    var closed = false;
+
+    Future<void> loadVisits() async {
+      try {
+        if (visitsNotifier.value == null) {
+          var local = await activity.UserActivityService.getVisitedSpots();
+          if (_cachedFirestoreSpots.isNotEmpty) {
+            local = await VisitRecordImageResolver.enrichAndPersist(
+              local,
+              spots: _spotsForVisitImages,
+            );
+          }
+          if (local.isNotEmpty && !closed) visitsNotifier.value = local;
+        }
+        final visits = await _syncAndEnrichVisits(skipSync: false);
+        if (!closed) visitsNotifier.value = visits;
+        if (!mounted) return;
+        final stats = await activity.UserActivityService.getUserStatsCached();
+        if (!mounted) return;
+        setState(() {
+          _recentVisits = visits;
+          _userStats = stats;
+        });
+      } catch (e) {
+        debugPrint('[Home] visited sync failed: $e');
+        if (!closed) visitsNotifier.value ??= const <activity.VisitRecord>[];
+      } finally {
+        if (!closed) syncing.value = false;
+      }
+    }
+
+    Widget visitedBody() {
+      return ValueListenableBuilder<List<activity.VisitRecord>?>(
+        valueListenable: visitsNotifier,
+        builder: (context, visits, _) {
+          return ValueListenableBuilder<bool>(
+            valueListenable: syncing,
+            builder: (context, isSyncing, _) {
+              if (visits == null) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              return Column(
+                children: [
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 200),
+                    child: isSyncing
+                        ? LinearProgressIndicator(
+                            minHeight: 2,
+                            color: AppTheme.primary,
+                            backgroundColor: AppTheme.primary.withValues(
+                              alpha: 0.12,
+                            ),
+                          )
+                        : const SizedBox(width: double.infinity),
+                  ),
+                  Expanded(
+                    child: visits.isEmpty && isSyncing
+                        ? const Center(child: CircularProgressIndicator())
+                        : _buildVisitedPlacesBody(visits),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    }
+
+    unawaited(loadVisits());
+
+    try {
+      if (_isMobileLayout) {
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            fullscreenDialog: true,
+            builder: (ctx) => Scaffold(
+              backgroundColor: AppTheme.cardBackground,
+              appBar: _mobileSheetAppBar(ctx, title: 'Visited Places'),
+              body: visitedBody(),
+            ),
+          ),
+        );
+        return;
+      }
+
+      await _showCenteredHomePanel(
+        title: 'Visited Places',
+        icon: Icons.place_rounded,
+        body: visitedBody(),
+      );
+    } finally {
+      closed = true;
+      visitsNotifier.dispose();
+      syncing.dispose();
+    }
+  }
+
+  Widget _buildVisitListItem(activity.VisitRecord visit) {
+    final daysAgo = DateTime.now().difference(visit.visitedAt).inDays;
+    final timeLabel = daysAgo == 0
+        ? 'Today'
+        : daysAgo == 1
+        ? 'Yesterday'
+        : '$daysAgo days ago';
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _openVisitRecord(visit),
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: AppTheme.cardBackground,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: _buildSpotImage(
+                  _resolveImageForVisitRecord(visit),
+                  width: 50,
+                  height: 50,
+                  spotId: visit.spotId,
+                  municipalityId: _municipalityIdForVisit(visit),
+                  spotName: visit.spotName,
+                  category: visit.category,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      visit.spotName,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppTheme.primary.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            visit.category,
+                            style: TextStyle(
+                              color: AppTheme.primary,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Icon(
+                          Icons.access_time,
+                          size: 12,
+                          color: AppTheme.unselectedMuted,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          timeLabel,
+                          style: TextStyle(
+                            color: AppTheme.unselectedMuted,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.check_circle, color: AppTheme.primary, size: 20),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showBadgesDialog() async {
+    final badges = await activity.UserActivityService.getEarnedBadges();
+    if (!mounted) return;
+    await pushTouristFullPage<void>(
+      context,
+      EarnedBadgesPage(
+        earned: badges,
+        visitedCount: _userStats.placesVisited,
+      ),
+    );
+  }
+
+  Widget _buildSavedSpotsBody({VoidCallback? onListChanged}) {
+    final savedSpots =
+        activity.UserActivityService.savedSpotIdsSnapshot()
+            .map(_spotForSavedId)
+            .toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
+
+    if (savedSpots.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.bookmark_border,
+              size: 64,
+              color: Colors.grey.shade300,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No saved spots',
+              style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 16),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Tap the bookmark icon to save spots!',
+              style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 14),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      itemCount: savedSpots.length,
+      itemBuilder: (context, index) {
+        return _buildSavedSpotItem(
+          savedSpots[index],
+          onListChanged: onListChanged,
+        );
+      },
+    );
+  }
+
+  Future<void> _showSavedSpotsDialog() async {
+    if (!mounted) return;
+    unawaited(_loadFirestoreSpotsCache());
+
+    Widget savedBody({required VoidCallback onListChanged}) {
+      return ListenableBuilder(
+        listenable: activity.UserActivityService.savedSpotsRevision,
+        builder: (context, _) =>
+            _buildSavedSpotsBody(onListChanged: onListChanged),
+      );
+    }
+
+    if (_isMobileLayout) {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          fullscreenDialog: true,
+          builder: (ctx) => StatefulBuilder(
+            builder: (ctx, setSheetState) => Scaffold(
+              backgroundColor: AppTheme.pageBackground,
+              appBar: _mobileSheetAppBar(ctx, title: 'Saved Spots'),
+              body: savedBody(onListChanged: () => setSheetState(() {})),
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
+    await _showCenteredHomePanel(
+      title: 'Saved Spots',
+      icon: Icons.bookmark_rounded,
+      body: StatefulBuilder(
+        builder: (context, setSheetState) =>
+            savedBody(onListChanged: () => setSheetState(() {})),
+      ),
+    );
+  }
+
+  Widget _buildSavedSpotItem(
+    TouristSpotFirestore spot, {
+    VoidCallback? onListChanged,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: GestureDetector(
+        onTap: () {
+          Navigator.pop(context);
+          _openSpotDestinationDetail(spot);
+        },
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: AppTheme.cardBackground,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: _buildSpotImage(_spotImage(spot), width: 50, height: 50),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      spot.name,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppTheme.primary.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            spot.category,
+                            style: TextStyle(
+                              color: AppTheme.primary,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: Icon(Icons.bookmark, color: AppTheme.primary),
+                onPressed: () async {
+                  await _toggleSaveSpot(spot);
+                  onListChanged?.call();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatCard(
+    String label,
+    String value,
+    IconData icon,
+    Color color, {
+    VoidCallback? onTap,
+  }) {
+    final child = Container(
+      constraints: const BoxConstraints(minHeight: 72),
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+      decoration: _homeMiniCardDecoration(color),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: color,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              height: 1.15,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              color: AppTheme.textPrimary,
+              letterSpacing: -0.5,
+              height: 1,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+
+    if (onTap == null) return child;
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: child,
+      ),
+    );
+  }
+
+  Widget _buildFeaturedCategoryChips() {
+    return SizedBox(
+      height: 42,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        itemCount: _featuredCategories.length,
+        itemBuilder: (context, index) {
+          final label = _featuredCategories[index];
+          final isSelected = index == _selectedFeaturedCategoryIndex;
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () {
+                  setState(() => _selectedFeaturedCategoryIndex = index);
+                },
+                borderRadius: BorderRadius.circular(20),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 9,
+                  ),
+                  decoration: BoxDecoration(
+                    gradient: isSelected
+                        ? LinearGradient(
+                            colors: [AppTheme.primary, AppTheme.primaryDark],
+                          )
+                        : null,
+                    color: isSelected ? null : AppTheme.cardBackground,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: isSelected
+                          ? Colors.transparent
+                          : AppTheme.border,
+                    ),
+                    boxShadow: isSelected
+                        ? [
+                            BoxShadow(
+                              color: AppTheme.primary.withOpacity(0.35),
+                              blurRadius: 12,
+                              offset: const Offset(0, 4),
+                            ),
+                          ]
+                        : [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.04),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                  ),
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: isSelected ? AppTheme.onPrimary : AppTheme.textPrimary,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildFeaturedSection() {
+    final items = _filteredFeaturedDestinations;
+    if (items.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: AppTheme.cardBackground,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.05),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.info_outline,
+                color: AppTheme.primary.withOpacity(0.9),
+                size: 20,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'No featured destinations for this category yet.',
+                  style: TextStyle(color: AppTheme.textPrimary, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return DiscoverFeaturedCarousel(
+      items: items,
+      compact: _compactSpotImages,
+      handle: _discoverCarousel,
+      tourKey: _tourKeys?.discover,
+      cardBuilder: _buildFeaturedCard,
+    );
+  }
+
+  Widget _buildFeaturedCardImage(String imageUrl) {
+    return SpotImage(
+      imageUrl: imageUrl,
+      fit: BoxFit.cover,
+      width: double.infinity,
+      height: double.infinity,
+    );
+  }
+
+  void _openDestinationDetail({
+    required TouristDestinationDetail detail,
+    TouristSpotFirestore? firestoreSpot,
+    Key? vrSectionKey,
+  }) {
+    Navigator.of(context)
+        .push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => TouristDestinationDetailScreen(
+          destination: detail,
+          firestoreSpot: firestoreSpot,
+          vrSectionKey: vrSectionKey,
+        ),
+      ),
+    )
+        .then((_) {
+      if (mounted) _loadSavedSpots();
+    });
+  }
+
+  void _showFeaturedDestinationDetail(Map<String, dynamic> destination) {
+    final image = _featuredImageForDestination(destination);
+    final detail = TouristDestinationDetail.fromFeaturedMap(
+      destination,
+      resolvedImage: image,
+    );
+    final spot = _spotFromFeatured(destination);
+    _openDestinationDetail(detail: detail, firestoreSpot: spot);
+  }
+
+  void _openSpotDestinationDetail(TouristSpotFirestore spot) {
+    _openDestinationDetail(
+      detail: TouristDestinationDetail.fromFirestoreSpot(spot),
+      firestoreSpot: spot,
+    );
+  }
+
+  Widget _buildFeaturedCard(Map<String, dynamic> destination) {
+    return GestureDetector(
+      onTap: () => _showFeaturedDestinationDetail(destination),
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(22),
+          boxShadow: [
+            BoxShadow(
+              color: AppTheme.primary.withOpacity(0.15),
+              blurRadius: 16,
+              offset: const Offset(0, 8),
+            ),
+            BoxShadow(
+              color: Colors.black.withOpacity(0.08),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(22),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              _buildFeaturedCardImage(_featuredImageForDestination(destination)),
+              Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withOpacity(0.15),
+                      Colors.black.withOpacity(0.75),
+                    ],
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 16,
+                left: 16,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    destination['category'] as String,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 12,
+                right: 12,
+                child: ListenableBuilder(
+                  listenable: activity.UserActivityService.savedSpotsRevision,
+                  builder: (context, _) {
+                    final spot = _spotFromFeatured(destination);
+                    final isSaved =
+                        activity.UserActivityService.isSpotSavedSync(spot.id);
+                    return Material(
+                      color: Colors.white,
+                      shape: const CircleBorder(),
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: () => unawaited(_toggleSaveSpot(spot)),
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Icon(
+                            isSaved ? Icons.bookmark : Icons.bookmark_border,
+                            color: isSaved
+                                ? AppTheme.primary
+                                : AppTheme.unselectedMuted,
+                            size: 22,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              Positioned(
+                bottom: 16,
+                left: 16,
+                right: 16,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      destination['name'] as String,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      destination['description'] as String,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.8),
+                        fontSize: 12,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Compact weather beside the user name in the home header (no background).
+  Widget _buildHeaderWeatherChip(Color onHeader) {
+    final showInitialLoading = _weatherLoading && _weather == null;
+    final w = _weather ?? MisamisOccidentalWeather.fallback();
+    final mainIcon = _weatherIconForCode(w.weatherCode);
+
+    return InkWell(
+      onTap: _fetchWeather,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+        child: Opacity(
+          opacity: _weatherLoading && _weather != null ? 0.7 : 1,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 92),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      showInitialLoading ? Icons.wb_sunny_rounded : mainIcon,
+                      color: onHeader,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 3),
+                    if (showInitialLoading)
+                      SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: onHeader,
+                        ),
+                      )
+                    else
+                      Flexible(
+                        child: Text(
+                          w.temperatureDisplay,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: onHeader,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            height: 1,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                if (!showInitialLoading) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    w.subtitle.split('·').first.trim(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: TextStyle(
+                      color: onHeader.withValues(alpha: 0.88),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showSpotBottomSheet(TouristSpotFirestore spot) {
+    activity.UserActivityService.recordRecentlyViewed(
+      spotId: spot.id,
+      spotName: spot.name,
+      category: spot.category,
+      imageUrl: _spotImage(spot),
+    ).then((_) async {
+      if (!mounted) return;
+      final list = await activity.UserActivityService.getRecentlyViewed();
+      if (mounted) setState(() => _recentlyViewed = list);
+    });
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => ListenableBuilder(
+        listenable: activity.UserActivityService.savedSpotsRevision,
+        builder: (context, _) {
+          final currentlySaved =
+              activity.UserActivityService.isSpotSavedSync(spot.id);
+          final maxWidth = 400.0;
+
+          return Center(
+            child: Container(
+              margin: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+              constraints: BoxConstraints(maxWidth: maxWidth),
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: AppTheme.cardBackground,
+                borderRadius: const BorderRadius.all(Radius.circular(20)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Color(0x1A000000),
+                    blurRadius: 20,
+                    offset: Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade300,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: _buildSpotImage(
+                          _spotImage(spot),
+                          width: 80,
+                          height: 80,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              spot.name,
+                              style: TextStyle(
+                                color: AppTheme.textPrimary,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.primary.withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    spot.category,
+                                    style: TextStyle(
+                                      color: AppTheme.primary,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            unawaited(_toggleSaveSpot(spot));
+                          },
+                          icon: Icon(
+                            currentlySaved
+                                ? Icons.bookmark
+                                : Icons.bookmark_border,
+                            size: 18,
+                          ),
+                          label: Text(currentlySaved ? 'Saved' : 'Save'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: currentlySaved
+                                ? Colors.white
+                                : AppTheme.primary,
+                            backgroundColor: currentlySaved
+                                ? AppTheme.primary
+                                : null,
+                            side: BorderSide(color: AppTheme.primary),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: () async {
+                            Navigator.pop(context);
+                            await _checkInToSpot(spot);
+                          },
+                          icon: const Icon(
+                            Icons.qr_code_scanner_rounded,
+                            size: 18,
+                          ),
+                          label: const Text('Register'),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppTheme.primary,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => MunicipalityMapAndSpotsScreen(
+                              municipalityIdOrName: spot.name,
+                            ),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.map_rounded, size: 18),
+                      label: Text('Open map · ${spot.name}'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppTheme.primary,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (resolveVrTourUrl(
+                        vrLink: spot.vrLink,
+                        spotId: spot.id,
+                        spotName: spot.name,
+                      ) !=
+                      null)
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          openVrForTouristSpot(
+                            context,
+                            spotId: spot.id,
+                            spotName: spot.name,
+                            vrLink: spot.vrLink,
+                          );
+                        },
+                        icon: const Icon(Icons.vrpano_rounded, size: 18),
+                        label: Text(VrDownloadAppPrompt.ctaLabel()),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppTheme.primary,
+                          side: BorderSide(color: AppTheme.primary),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _showAllDestinationsDialog() {
+    final spots = _allDestinationSpots;
+    if (_isMobileLayout) {
+      Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          fullscreenDialog: true,
+          builder: (ctx) => Scaffold(
+            backgroundColor: AppTheme.pageBackground,
+            appBar: _mobileSheetAppBar(
+              ctx,
+              title: 'All Destinations',
+              subtitle: '${spots.length} spots',
+            ),
+            body: ListenableBuilder(
+              listenable: activity.UserActivityService.savedSpotsRevision,
+              builder: (context, _) => ListView.builder(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                itemCount: spots.length,
+                itemBuilder: (context, index) {
+                  return _buildDestinationListItem(
+                    spots[index],
+                    listContext: ctx,
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
+    _showCenteredHomePanel(
+      title: 'All Destinations',
+      icon: Icons.explore_rounded,
+      trailingLabel: '${spots.length} spots',
+      heightFraction: 0.82,
+      body: ListenableBuilder(
+        listenable: activity.UserActivityService.savedSpotsRevision,
+        builder: (context, _) => ListView.builder(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          itemCount: spots.length,
+          itemBuilder: (context, index) {
+            return _buildDestinationListItem(spots[index]);
+          },
+        ),
+      ),
+    );
+  }
+
+  /// Discover "See all": only the priority virtual-tour destinations.
+  void _showPriorityDestinationsDialog() {
+    const destinations = kFeaturedDestinations;
+    final countLabel = '${destinations.length} destinations';
+    if (_isMobileLayout) {
+      Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          fullscreenDialog: true,
+          builder: (ctx) => Scaffold(
+            backgroundColor: AppTheme.pageBackground,
+            appBar: _mobileSheetAppBar(
+              ctx,
+              title: 'Priority Destinations',
+              subtitle: countLabel,
+            ),
+            body: ListenableBuilder(
+              listenable: activity.UserActivityService.savedSpotsRevision,
+              builder: (context, _) => ListView.builder(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                itemCount: destinations.length,
+                itemBuilder: (context, index) => _buildPriorityDestinationItem(
+                  destinations[index],
+                  listContext: ctx,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
+    _showCenteredHomePanel(
+      title: 'Priority Destinations',
+      icon: Icons.auto_awesome_rounded,
+      trailingLabel: countLabel,
+      heightFraction: 0.82,
+      body: ListenableBuilder(
+        listenable: activity.UserActivityService.savedSpotsRevision,
+        builder: (context, _) => ListView.builder(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          itemCount: destinations.length,
+          itemBuilder: (context, index) =>
+              _buildPriorityDestinationItem(destinations[index]),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPriorityDestinationItem(
+    Map<String, dynamic> destination, {
+    BuildContext? listContext,
+  }) {
+    final navContext = listContext ?? context;
+    final spot = _spotFromFeatured(destination);
+    final isSaved = activity.UserActivityService.isSpotSavedSync(spot.id);
+    final hasVr = _featuredDetail(destination).hasVrTour;
+    final location = destination['location']?.toString() ?? '';
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.pop(navContext);
+        _showFeaturedDestinationDetail(destination);
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppTheme.cardBackground,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: _buildSpotImage(
+                _featuredImageForDestination(destination),
+                width: 70,
+                height: 70,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    destination['name']?.toString() ?? '',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textPrimary,
+                      fontSize: 15,
+                    ),
+                  ),
+                  if (location.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      location,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: AppTheme.unselectedMuted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: [
+                      _priorityTag(
+                        destination['category']?.toString() ?? 'Destination',
+                      ),
+                      if (hasVr)
+                        _priorityTag('360° Virtual Tour',
+                            icon: Icons.vrpano_rounded),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: Icon(
+                isSaved ? Icons.bookmark : Icons.bookmark_border,
+                color: isSaved ? AppTheme.primary : AppTheme.unselectedMuted,
+              ),
+              onPressed: () {
+                unawaited(_toggleSaveSpot(spot));
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _priorityTag(String label, {IconData? icon}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppTheme.primary.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 12, color: AppTheme.primary),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            label,
+            style: TextStyle(
+              color: AppTheme.primary,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDestinationListItem(
+    TouristSpotFirestore spot, {
+    BuildContext? listContext,
+  }) {
+    final isSaved = activity.UserActivityService.isSpotSavedSync(spot.id);
+    final navContext = listContext ?? context;
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.pop(navContext);
+        _openSpotDestinationDetail(spot);
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppTheme.cardBackground,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: _buildSpotImage(_spotImage(spot), width: 70, height: 70),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    spot.name,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textPrimary,
+                      fontSize: 15,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppTheme.primary.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          spot.category,
+                          style: TextStyle(
+                            color: AppTheme.primary,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: Icon(
+                isSaved ? Icons.bookmark : Icons.bookmark_border,
+                color: isSaved ? AppTheme.primary : AppTheme.unselectedMuted,
+              ),
+              onPressed: () {
+                unawaited(_toggleSaveSpot(spot));
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _viewedTimeLabel(DateTime at) {
+    final diff = DateTime.now().difference(at);
+    if (diff.inMinutes < 1) return 'Just now';
+    if (diff.inHours < 1) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${at.day}/${at.month}/${at.year}';
+  }
+
+  Widget _buildRecentlyViewedSection() {
+    final accent = AppTheme.primary;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildSectionHeader(
+            title: 'Recently viewed',
+            subtitle: 'Spots you opened from Home',
+            icon: Icons.visibility_rounded,
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            height: _recentlyViewed.isEmpty
+                ? 132
+                : (MediaQuery.sizeOf(context).width < 600 ? 188 : 228),
+            child: _recentlyViewed.isEmpty
+                ? Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 20,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: accent.withValues(alpha: 0.12)),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.travel_explore_rounded,
+                          size: 40,
+                          color: accent.withValues(alpha: 0.55),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Text(
+                            'Open any spot from All places or your lists — it will show up here.',
+                            style: TextStyle(
+                              color: AppTheme.unselectedMuted,
+                              fontSize: 13,
+                              height: 1.35,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: _recentlyViewed.length.clamp(0, 12),
+                    itemBuilder: (context, index) {
+                      return _buildRecentlyViewedCard(_recentlyViewed[index]);
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRecentlyViewedCard(activity.VisitRecord entry) {
+    final timeLabel = _viewedTimeLabel(entry.visitedAt);
+    final heroImage = _resolveImageForVisitRecord(entry);
+    final accent = AppTheme.primary;
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    final cardSize = compact ? 188.0 : 228.0;
+    final imageH = compact ? 80.0 : 100.0;
+
+    void onOpen() => _openVisitRecord(entry);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onOpen,
+        borderRadius: BorderRadius.circular(20),
+        child: SizedBox(
+          width: cardSize,
+          height: cardSize,
+          child: Container(
+            margin: const EdgeInsets.only(right: 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: accent.withValues(alpha: 0.12)),
+              boxShadow: [
+                BoxShadow(
+                  color: accent.withValues(alpha: 0.06),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Stack(
+                  children: [
+                    SizedBox(
+                      height: imageH,
+                      width: double.infinity,
+                      child: heroImage != null && heroImage.isNotEmpty
+                          ? _buildSpotImage(
+                              heroImage,
+                              width: cardSize,
+                              height: imageH,
+                            )
+                          : Container(
+                              color: AppTheme.border,
+                              child: Icon(
+                                Icons.place_rounded,
+                                size: 42,
+                                color: AppTheme.unselectedMuted,
+                              ),
+                            ),
+                    ),
+                  ],
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: accent.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            entry.category.trim().isEmpty
+                                ? 'Recently viewed'
+                                : entry.category.trim(),
+                            style: TextStyle(
+                              color: accent,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Expanded(
+                          child: Text(
+                            entry.spotName,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: AppTheme.textPrimary,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              height: 1.2,
+                            ),
+                          ),
+                        ),
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.schedule_rounded,
+                              size: 16,
+                              color: AppTheme.unselectedMuted,
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                timeLabel,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.textPrimary,
+                                ),
+                              ),
+                            ),
+                            Icon(
+                              Icons.arrow_forward_rounded,
+                              size: 16,
+                              color: accent,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRecentVisitsSection(BuildContext context) {
+    final accent = AppTheme.primary;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildSectionHeader(
+            title: 'Visited',
+            subtitle: 'Tourist spots you checked in via QR',
+            icon: Icons.route_rounded,
+            trailing: TextButton(
+              onPressed: _showVisitedPlacesDialog,
+              child: Text(
+                'See all',
+                style: TextStyle(color: accent, fontWeight: FontWeight.w700),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Container(
+            height: _compactSpotImages ? 172 : 208,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: accent.withValues(alpha: 0.12)),
+              boxShadow: [
+                BoxShadow(
+                  color: accent.withValues(alpha: 0.05),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: _recentVisits.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: AppTheme.primary.withOpacity(0.08),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.terrain_rounded,
+                              size: 40,
+                              color: AppTheme.primary.withOpacity(0.7),
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          Text(
+                            'Start your journey',
+                            style: TextStyle(
+                              color: AppTheme.textPrimary,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Scan a destination QR code to record your visit here.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: AppTheme.unselectedMuted,
+                              fontSize: 13,
+                              height: 1.35,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+                    itemCount: _recentVisits.take(6).length,
+                    itemBuilder: (context, index) =>
+                        _buildRecentVisitCard(_recentVisits[index]),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRecentVisitCard(activity.VisitRecord visit) {
+    final daysAgo = DateTime.now().difference(visit.visitedAt).inDays;
+    final timeLabel = daysAgo == 0
+        ? 'Today'
+        : daysAgo == 1
+        ? 'Yesterday'
+        : '$daysAgo days ago';
+    final heroImage = _resolveImageForVisitRecord(visit);
+    final cardW = _compactSpotImages ? 128.0 : 150.0;
+    final imageH = _compactSpotImages ? 76.0 : 100.0;
+
+    return GestureDetector(
+      onTap: () {
+        final known = _findSpotById(visit.spotId);
+        final spot = known ??
+            TouristSpotFirestore(
+              id: visit.spotId,
+              name: visit.spotName,
+              category: visit.category,
+              latitude: _kMapCenterLat,
+              longitude: _kMapCenterLng,
+              rating: 4.5,
+              image: heroImage ?? visit.imageUrl ?? '',
+              vrLink: '',
+            );
+        _openSpotDestinationDetail(spot);
+      },
+      child: Container(
+        width: cardW,
+        margin: const EdgeInsets.only(right: 12),
+        decoration: BoxDecoration(
+          color: AppTheme.cardBackground,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 10,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Stack(
+              children: [
+                ClipRRect(
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(16),
+                  ),
+                  child: heroImage != null && heroImage.isNotEmpty
+                      ? _buildSpotImage(
+                          heroImage,
+                          width: cardW,
+                          height: imageH,
+                          spotId: visit.spotId,
+                          municipalityId: _municipalityIdForVisit(visit),
+                          spotName: visit.spotName,
+                          category: visit.category,
+                        )
+                      : Container(
+                          width: cardW,
+                          height: imageH,
+                          color: AppTheme.border,
+                          child: const Icon(Icons.place, size: 40),
+                        ),
+                ),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 4,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.check_circle,
+                      color: AppTheme.primary,
+                      size: 16,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            Padding(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    visit.spotName,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: AppTheme.textPrimary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.access_time,
+                        size: 12,
+                        color: AppTheme.unselectedMuted,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        timeLabel,
+                        style: TextStyle(
+                          color: AppTheme.unselectedMuted,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Full-screen featured destination detail on mobile (e.g. Baliangao Beach).
+class _FeaturedDestinationFullScreenPage extends StatefulWidget {
+  const _FeaturedDestinationFullScreenPage({
+    required this.destination,
+    required this.buildImage,
+  });
+
+  final Map<String, dynamic> destination;
+  final Widget Function(String imageUrl) buildImage;
+
+  @override
+  State<_FeaturedDestinationFullScreenPage> createState() =>
+      _FeaturedDestinationFullScreenPageState();
+  }
+
+class _FeaturedDestinationFullScreenPageState
+    extends State<_FeaturedDestinationFullScreenPage> {
+  bool _isSaved = false;
+
+  String get _spotId => widget.destination['spotId']?.toString() ?? '';
+  double get _lat => (widget.destination['latitude'] as num?)?.toDouble() ?? 0;
+  double get _lng => (widget.destination['longitude'] as num?)?.toDouble() ?? 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _isSaved = activity.UserActivityService.isSpotSavedSync(_spotId);
+    activity.UserActivityService.savedSpotsRevision.addListener(_onSavedRevision);
+    unawaited(_loadSaved());
+  }
+
+  @override
+  void dispose() {
+    activity.UserActivityService.savedSpotsRevision
+        .removeListener(_onSavedRevision);
+    super.dispose();
+  }
+
+  void _onSavedRevision() {
+    final saved = activity.UserActivityService.isSpotSavedSync(_spotId);
+    if (!mounted || saved == _isSaved) return;
+    setState(() => _isSaved = saved);
+  }
+
+  Future<void> _loadSaved() async {
+    if (!mounted) return;
+    final spotId = _spotId;
+    if (spotId.isEmpty) {
+      if (mounted) setState(() => _isSaved = false);
+      return;
+    }
+    await activity.UserActivityService.ensureSavedSpotsLoaded();
+    if (!mounted) return;
+    setState(() => _isSaved = activity.UserActivityService.isSpotSavedSync(spotId));
+  }
+
+  Future<void> _launchDirections() async {
+    final destination = widget.destination;
+    final name = destination['name']?.toString() ?? '';
+    final location = destination['location']?.toString() ?? '';
+    await MapsDirectionsLauncher.open(
+      destinationLabel: MapsDirectionsLauncher.placeLabel(
+        name: name,
+        address: location,
+      ),
+      destinationLatitude: _lat == 0 ? null : _lat,
+      destinationLongitude: _lng == 0 ? null : _lng,
+    );
+  }
+
+  Future<void> _toggleSave() async {
+    final spotId = _spotId;
+    if (spotId.isEmpty) return;
+    final name = widget.destination['name']?.toString().trim();
+    final label = (name == null || name.isEmpty) ? 'This destination' : name;
+    final future = activity.UserActivityService.toggleSaveSpot(spotId);
+    final savedNow = activity.UserActivityService.isSpotSavedSync(spotId);
+    if (!mounted) return;
+    SaveSpotNotice.show(
+      context,
+      savedNow ? '$label saved!' : '$label removed from saved',
+    );
+    final result = await future;
+    if (!mounted || result == savedNow) return;
+    if (activity.UserActivityService.isSpotSavedSync(spotId) == savedNow) return;
+    SaveSpotNotice.show(
+      context,
+      'Could not update $label. Try again.',
+      error: true,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: AppThemeController.instance,
+      builder: (context, _) {
+        final accent = AppTheme.primary;
+        final onAccent = AppTheme.onPrimary;
+        final destination = widget.destination;
+        // Show the short description in the details view (as requested).
+        final detail =
+            destination['description'] as String? ??
+            destination['detail'] as String? ??
+            '';
+        final image = destination['image'] as String;
+        final name = destination['name'] as String;
+        final category = destination['category'] as String;
+        final rating = destination['rating'];
+        final openingHours = destination['openingHours']?.toString() ?? '';
+        final entranceFee = destination['entranceFee']?.toString() ?? '';
+        final cottageRates = destination['cottageRates']?.toString() ?? '';
+        final location = destination['location']?.toString() ?? '';
+        final nearbyRestaurants = (destination['nearbyRestaurants'] as List?)
+            ?.map((e) {
+              if (e is Map) return e['name']?.toString() ?? '';
+              return e.toString();
+            })
+            .where((s) => s.trim().isNotEmpty)
+            .toList();
+        final nearbyRestaurantCards =
+            TouristDestinationDetail.fromFeaturedMap(destination).nearbyRestaurants;
+        final featuredDetail =
+            TouristDestinationDetail.fromFeaturedMap(destination);
+        final nearbyHotelCards = featuredDetail.nearbyHotels;
+        final nearbyCafeCards = featuredDetail.nearbyCafes;
+        final nearbyAttractionCards = featuredDetail.nearbyAttractions;
+        final nearbyHotels = (destination['nearbyHotels'] as List?)
+            ?.map((e) {
+              if (e is Map) return e['name']?.toString() ?? '';
+              return e.toString();
+            })
+            .where((s) => s.trim().isNotEmpty)
+            .toList();
+
+        final screenH = MediaQuery.sizeOf(context).height;
+
+        return Scaffold(
+          backgroundColor: AppTheme.cardBackground,
+          body: CustomScrollView(
+            slivers: [
+              SliverAppBar(
+                pinned: true,
+                expandedHeight: screenH * 0.42,
+                backgroundColor: AppTheme.cardBackground,
+                foregroundColor: Colors.black87,
+                leadingWidth: 80,
+                leading: Padding(
+                  padding: const EdgeInsets.only(left: 12),
+                  child: Center(
+                    child: FilledButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: accent,
+                        foregroundColor: onAccent,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 8,
+                        ),
+                        minimumSize: const Size(0, 36),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      child: const Text(
+                        'Back',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                flexibleSpace: FlexibleSpaceBar(background: widget.buildImage(image)),
+              ),
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(
+                  20,
+                  16,
+                  20,
+                  24 + MediaQuery.paddingOf(context).bottom,
+                ),
+                sliver: SliverToBoxAdapter(
+                  child: _FeaturedDestinationDetailBody(
+                    name: name,
+                    category: category,
+                    rating: rating,
+                    detail: detail,
+                    image: image,
+                    buildImage: widget.buildImage,
+                    showHeroImage: false,
+                    accent: accent,
+                    openingHours: openingHours,
+                    entranceFee: entranceFee,
+                    cottageRates: cottageRates,
+                    location: location,
+                    nearbyRestaurants: nearbyRestaurants ?? const [],
+                    nearbyRestaurantCards: nearbyRestaurantCards,
+                    nearbyHotels: nearbyHotels ?? const [],
+                    nearbyHotelCards: nearbyHotelCards,
+                    nearbyHotelsNote:
+                        destination['nearbyHotelsNote']?.toString() ?? '',
+                    nearbyCafeCards: nearbyCafeCards,
+                    nearbyCafesNote:
+                        destination['nearbyCafesNote']?.toString() ?? '',
+                    nearbyAttractionCards: nearbyAttractionCards,
+                    nearbyAttractionsNote:
+                        destination['nearbyAttractionsNote']?.toString() ?? '',
+                    isSaved: _isSaved,
+                    isSaving: false,
+                    onDirections: () {
+                      _launchDirections();
+                    },
+                    onSave: () {
+                      _toggleSave();
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _FeaturedDestinationDetailBody extends StatelessWidget {
+  const _FeaturedDestinationDetailBody({
+    required this.name,
+    required this.category,
+    required this.rating,
+    required this.detail,
+    required this.image,
+    required this.buildImage,
+    this.showHeroImage = true,
+    this.accent,
+    this.openingHours = '',
+    this.entranceFee = '',
+    this.cottageRates = '',
+    this.location = '',
+    this.nearbyRestaurants = const [],
+    this.nearbyRestaurantCards = const [],
+    this.nearbyHotels = const [],
+    this.nearbyHotelCards = const [],
+    this.nearbyHotelsNote = '',
+    this.nearbyCafeCards = const [],
+    this.nearbyCafesNote = '',
+    this.nearbyAttractionCards = const [],
+    this.nearbyAttractionsNote = '',
+    this.isSaved = false,
+    this.isSaving = false,
+    this.onDirections,
+    this.onSave,
+  });
+
+  final String name;
+  final String category;
+  final dynamic rating;
+  final String detail;
+  final String image;
+  final Widget Function(String imageUrl) buildImage;
+  final bool showHeroImage;
+  final Color? accent;
+  final String openingHours;
+  final String entranceFee;
+  final String cottageRates;
+  final String location;
+  final List<String> nearbyRestaurants;
+  final List<NearbyPlaceCard> nearbyRestaurantCards;
+  final List<String> nearbyHotels;
+  final List<NearbyPlaceCard> nearbyHotelCards;
+  final String nearbyHotelsNote;
+  final List<NearbyPlaceCard> nearbyCafeCards;
+  final String nearbyCafesNote;
+  final List<NearbyPlaceCard> nearbyAttractionCards;
+  final String nearbyAttractionsNote;
+  final bool isSaved;
+  final bool isSaving;
+  final VoidCallback? onDirections;
+  final VoidCallback? onSave;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = accent ?? AppTheme.primary;
+    final restaurants = nearbyRestaurants.where((e) => e.trim().isNotEmpty).toList();
+    final hotels = nearbyHotels.where((e) => e.trim().isNotEmpty).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (showHeroImage) ...[
+          ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: AspectRatio(aspectRatio: 16 / 9, child: buildImage(image)),
+          ),
+          const SizedBox(height: 16),
+        ],
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                category,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Text(
+          name,
+          style: TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.bold,
+            color: AppTheme.textPrimary,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          detail,
+          style: TextStyle(
+            fontSize: 15,
+            height: 1.5,
+            color: AppTheme.textPrimary,
+          ),
+        ),
+        const SizedBox(height: 18),
+        Wrap(
+          spacing: 12,
+          runSpacing: 10,
+          children: [
+            _InfoChip(
+              icon: Icons.access_time,
+              label: 'Opening hours',
+              value: openingHours,
+              color: color,
+            ),
+            _InfoChip(
+              icon: Icons.monetization_on_outlined,
+              label: 'Entrance fee',
+              value: entranceFee,
+              color: color,
+            ),
+            if (cottageRates.trim().isNotEmpty)
+              _InfoChip(
+                icon: Icons.holiday_village_outlined,
+                label: 'Cottages & tables',
+                value: cottageRates,
+                color: color,
+              ),
+            _InfoChip(
+              icon: Icons.location_on_outlined,
+              label: 'Location',
+              value: location,
+              color: color,
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            FilledButton.icon(
+              onPressed: onDirections,
+              icon: const Icon(Icons.near_me_rounded),
+              label: const Text('Get Directions'),
+              style: FilledButton.styleFrom(
+                backgroundColor: color,
+                foregroundColor: AppTheme.onPrimary,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+              ),
+            ),
+            FilledButton.icon(
+              onPressed: onSave != null && !isSaving ? onSave : null,
+              icon: Icon(isSaved ? Icons.bookmark : Icons.bookmark_border),
+              label: Text(isSaved ? 'Saved' : 'Save'),
+              style: FilledButton.styleFrom(
+                backgroundColor: isSaved ? Colors.green.shade600 : color,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+              ),
+            ),
+          ],
+        ),
+        if (nearbyRestaurantCards.isNotEmpty ||
+            restaurants.isNotEmpty ||
+            hotels.isNotEmpty ||
+            nearbyHotelCards.isNotEmpty ||
+            nearbyCafeCards.isNotEmpty ||
+            nearbyAttractionCards.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          if (nearbyRestaurantCards.isNotEmpty) ...[
+            Row(
+              children: [
+                Icon(Icons.restaurant_outlined, color: color, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Nearby Restaurants',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: color,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 220,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: nearbyRestaurantCards.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 12),
+                itemBuilder: (_, i) =>
+                    _FeaturedNearbyRestaurantTile(
+                      place: nearbyRestaurantCards[i],
+                      accent: color,
+                    ),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ] else if (restaurants.isNotEmpty) ...[
+            _NearbySummaryCard(
+              title: 'Nearby Restaurants',
+              icon: Icons.restaurant_outlined,
+              color: color,
+              items: restaurants,
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (hotels.isNotEmpty || nearbyHotelCards.isNotEmpty) ...[
+            if (nearbyHotelsNote.trim().isNotEmpty) ...[
+              Text(
+                nearbyHotelsNote,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.4,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+            if (nearbyHotelCards.isNotEmpty) ...[
+              Row(
+                children: [
+                  Icon(Icons.hotel_outlined, color: color, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Nearby Hotels',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: color,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 220,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: nearbyHotelCards.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 12),
+                  itemBuilder: (_, i) => _FeaturedNearbyRestaurantTile(
+                    place: nearbyHotelCards[i],
+                    accent: color,
+                  ),
+                ),
+              ),
+            ] else ...[
+              _NearbySummaryCard(
+                title: 'Nearby Hotels',
+                icon: Icons.hotel_outlined,
+                color: color,
+                items: hotels,
+              ),
+            ],
+          ],
+          if (nearbyCafeCards.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            if (nearbyCafesNote.trim().isNotEmpty) ...[
+              Text(
+                nearbyCafesNote,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.4,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+            Row(
+              children: [
+                Icon(Icons.local_cafe_outlined, color: color, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Nearby Cafés',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: color,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 220,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: nearbyCafeCards.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 12),
+                itemBuilder: (_, i) => _FeaturedNearbyRestaurantTile(
+                  place: nearbyCafeCards[i],
+                  accent: color,
+                ),
+              ),
+            ),
+          ],
+          if (nearbyAttractionCards.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            if (nearbyAttractionsNote.trim().isNotEmpty) ...[
+              Text(
+                nearbyAttractionsNote,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.4,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+            Row(
+              children: [
+                Icon(Icons.attractions_outlined, color: color, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Nearby Tourist Attractions',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: color,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 220,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: nearbyAttractionCards.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 12),
+                itemBuilder: (_, i) => _FeaturedNearbyRestaurantTile(
+                  place: nearbyAttractionCards[i],
+                  accent: color,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ],
+    );
+  }
+}
+
+class _FeaturedNearbyRestaurantTile extends StatelessWidget {
+  const _FeaturedNearbyRestaurantTile({
+    required this.place,
+    required this.accent,
+  });
+
+  final NearbyPlaceCard place;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () {
+          unawaited(
+            MapsDirectionsLauncher.open(
+              destinationLabel: place.directionsLabel,
+            ),
+          );
+        },
+        borderRadius: BorderRadius.circular(18),
+        child: Container(
+      width: 176,
+      decoration: BoxDecoration(
+        color: AppTheme.cardBackground,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: accent.withValues(alpha: 0.12)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.none,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
+            child: Container(
+              height: 118,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: AppTheme.surfaceMuted,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Colors.black.withValues(alpha: 0.08),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.14),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.06),
+                    blurRadius: 2,
+                    offset: const Offset(0, 1),
+                  ),
+                ],
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: SpotImage(
+                imageUrl: place.imageUrl,
+                fit: BoxFit.contain,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    place.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
+                  const Spacer(),
+                  if (place.contact != null &&
+                      place.contact!.trim().isNotEmpty)
+                    Text(
+                      'Contact: ${place.contact}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 11, color: accent),
+                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          place.driveMinutes != null
+                              ? '~${place.driveMinutes!.round()} min drive'
+                              : '${place.distanceKm.toStringAsFixed(1)} km',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: AppTheme.unselectedMuted,
+                          ),
+                        ),
+                      ),
+                      Icon(Icons.directions_rounded, size: 14, color: accent),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NearbySummaryCard extends StatelessWidget {
+  const _NearbySummaryCard({
+    required this.title,
+    required this.icon,
+    required this.color,
+    required this.items,
+  });
+
+  final String title;
+  final IconData icon;
+  final Color color;
+  final List<String> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = items.isNotEmpty ? items.first.trim() : '';
+    final extra = items.length - 1;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            color.withValues(alpha: 0.14),
+            color.withValues(alpha: 0.06),
+          ],
+        ),
+        border: Border.all(color: color.withValues(alpha: 0.18)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, color: color),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                    color: color,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  primary.isEmpty ? '—' : primary,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+                if (extra > 0) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    '+$extra more',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Icon(Icons.chevron_right_rounded, color: color),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoChip extends StatelessWidget {
+  const _InfoChip({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final v = value.trim();
+    final screenW = MediaQuery.sizeOf(context).width;
+    final maxChipW = screenW < 420 ? screenW - 64 : 280.0;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxChipW),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color.withValues(alpha: 0.2)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: color),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: color.withValues(alpha: 0.85),
+                    ),
+                  ),
+                  Text(
+                    v.isEmpty ? '—' : v,
+                    maxLines: label == 'Location' ? 2 : 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textPrimary,
+                      height: 1.2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

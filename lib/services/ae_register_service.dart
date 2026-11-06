@@ -8,6 +8,7 @@ import 'package:atmos_trs_system/config/ae_register_schema.dart';
 import 'package:atmos_trs_system/models/ae_register.dart';
 import 'package:atmos_trs_system/models/sign_off.dart';
 import 'package:atmos_trs_system/services/sign_off_service.dart';
+import 'package:atmos_trs_system/utils/ae_guest_count_validation.dart';
 import 'package:atmos_trs_system/utils/ae_register_calculator.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 
@@ -65,6 +66,21 @@ abstract final class AeRegisterService {
   static const collection = 'ae_monthly_reports';
   static const rowsSubcollection = 'rows';
   static const _writeTimeout = Duration(seconds: 20);
+
+  /// Trusted write gate: female + male must equal guests; amounts non-negative.
+  static void assertValidRegisterRow(AeRegisterRow row) {
+    final guestsErr = AeGuestCountValidation.validate(
+      guests: row.guests,
+      female: row.female,
+      male: row.male,
+    );
+    if (guestsErr != null) {
+      throw StateError(guestsErr.summary);
+    }
+    if (row.rate < 0 || row.chargesA < 0 || row.chargesB < 0) {
+      throw StateError('Rates and charges cannot be negative.');
+    }
+  }
 
   static CollectionReference<Map<String, dynamic>> get _col =>
       FirebaseFirestore.instance.collection(collection);
@@ -183,6 +199,7 @@ abstract final class AeRegisterService {
         await flushIfFull();
       }
       for (final r in upserts.where((r) => r.date.year == year && r.date.month == month)) {
+        assertValidRegisterRow(r);
         final ref = r.id.isEmpty ? rowsCol.doc() : rowsCol.doc(r.id);
         final before = r.id.isEmpty ? null : byId[r.id];
         final row = AeRegisterRow(

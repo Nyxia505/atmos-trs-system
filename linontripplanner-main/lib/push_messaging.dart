@@ -9,10 +9,16 @@ import 'services/notification_prefs.dart';
 /// Same topic string as Cloud Function `EVENTS_FCM_TOPIC` in `functions/index.js`.
 const String kEventsFcmTopic = 'tourism_events';
 
+/// Same topic string as Cloud Function `SPOTS_FCM_TOPIC` (new Active tourist spots).
+const String kSpotsFcmTopic = 'tourism_spots';
+
 /// Must match AndroidManifest `default_notification_channel_id` and Cloud Function
 /// `android.notification.channelId`.
 const String kAndroidNotificationChannelId = 'tourism_events_channel';
 const String kAndroidNotificationChannelName = 'Tourism events';
+
+const String kAndroidSpotsChannelId = 'tourism_spots_channel';
+const String kAndroidSpotsChannelName = 'Tourist spot updates';
 
 final FlutterLocalNotificationsPlugin _localNotifications =
     FlutterLocalNotificationsPlugin();
@@ -35,6 +41,15 @@ Future<void> _ensureAndroidChannel() async {
       kAndroidNotificationChannelId,
       kAndroidNotificationChannelName,
       description: 'Alerts when new tourism events are published',
+      importance: Importance.high,
+      playSound: true,
+    ),
+  );
+  await android.createNotificationChannel(
+    const AndroidNotificationChannel(
+      kAndroidSpotsChannelId,
+      kAndroidSpotsChannelName,
+      description: 'Alerts when LGUs publish new tourist spots',
       importance: Importance.high,
       playSound: true,
     ),
@@ -101,26 +116,39 @@ String _eventNotificationTitle(Map<String, dynamic> data, String? fallback) {
 }
 
 Future<void> _showForegroundNotification(RemoteMessage message) async {
-  if (message.data['type'] == 'new_event') {
+  final data = message.data;
+  final type = data['type']?.toString();
+  if (type == 'new_event' || type == 'new_spot') {
     final prefs = await NotificationPrefs.load();
-    if (!prefs.events) return;
+    if (type == 'new_event' && !prefs.events) return;
+    if (type == 'new_spot' && !prefs.spotUpdates) return;
   }
   final n = message.notification;
-  final data = message.data;
-  final fromData = _eventNotificationBodyFromData(data);
-  final title = _eventNotificationTitle(data, n?.title);
+  final fromData = type == 'new_spot'
+      ? (data['notificationBody']?.toString().trim().isNotEmpty == true
+          ? data['notificationBody']!.toString().trim()
+          : n?.body)
+      : _eventNotificationBodyFromData(data);
+  final title = type == 'new_spot'
+      ? (n?.title?.trim().isNotEmpty == true
+          ? n!.title!.trim()
+          : 'New Tourist Destination!')
+      : _eventNotificationTitle(data, n?.title);
   final body = fromData ?? n?.body;
   if (body == null || body.isEmpty) return;
   final id = _foregroundNotificationId++;
+  final isSpot = type == 'new_spot';
   _localNotifications.show(
     id: id,
     title: title,
     body: body,
     notificationDetails: NotificationDetails(
       android: AndroidNotificationDetails(
-        kAndroidNotificationChannelId,
-        kAndroidNotificationChannelName,
-        channelDescription: 'Alerts when new tourism events are published',
+        isSpot ? kAndroidSpotsChannelId : kAndroidNotificationChannelId,
+        isSpot ? kAndroidSpotsChannelName : kAndroidNotificationChannelName,
+        channelDescription: isSpot
+            ? 'Alerts when LGUs publish new tourist spots'
+            : 'Alerts when new tourism events are published',
         importance: Importance.high,
         priority: Priority.high,
         icon: '@mipmap/ic_launcher',

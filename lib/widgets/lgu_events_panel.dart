@@ -177,7 +177,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     if (cached != null) {
       setState(() {
         _allEvents = _mergeWithLocal(
-          [...cached.mine, ...cached.province],
+          _combineMineAndProvince(cached.mine, cached.province),
           _allEvents,
         );
         _splitEvents();
@@ -453,7 +453,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
       if (!mounted) return;
       setState(() {
         _allEvents = _mergeWithLocal(
-          [...both.mine, ...both.province],
+          _combineMineAndProvince(both.mine, both.province),
           _allEvents,
         );
         _splitEvents();
@@ -473,20 +473,22 @@ class _LguEventsPanelState extends State<LguEventsPanel>
 
   /// Keeps optimistic (still publishing) posts and their local photo bytes
   /// when a Firestore reload lands, so cards never flicker or vanish.
+  ///
+  /// Always returns at most one row per [LguEventService.canonicalKey] so
+  /// concatenating mine + province feeds cannot render the same doc twice.
   List<Map<String, dynamic>> _mergeWithLocal(
     List<Map<String, dynamic>> fetched,
     List<Map<String, dynamic>> local,
   ) {
-    final localById = {
-      for (final e in local)
-        if ((e['id']?.toString() ?? '').isNotEmpty) e['id'].toString(): e,
+    final localByKey = {
+      for (final e in local) LguEventService.canonicalKey(e): e,
     };
-    final fetchedIds = <String>{};
+    final fetchedKeys = <String>{};
     final merged = <Map<String, dynamic>>[];
-    for (final e in fetched) {
-      final id = e['id']?.toString() ?? '';
-      fetchedIds.add(id);
-      final prev = localById[id];
+    for (final e in LguEventService.mergeUnique(fetched)) {
+      final key = LguEventService.canonicalKey(e);
+      if (!fetchedKeys.add(key)) continue;
+      final prev = localByKey[key];
       if (prev != null && prev[_kPendingKey] == true) {
         merged.add(prev);
       } else if (prev != null && prev[_kLocalImageKey] is Uint8List) {
@@ -495,13 +497,18 @@ class _LguEventsPanelState extends State<LguEventsPanel>
         merged.add(e);
       }
     }
-    final pendingNew = local.where(
-      (e) =>
-          e[_kPendingKey] == true &&
-          !fetchedIds.contains(e['id']?.toString() ?? ''),
-    );
-    return [...pendingNew, ...merged];
+    final pendingNew = local.where((e) {
+      if (e[_kPendingKey] != true) return false;
+      return !fetchedKeys.contains(LguEventService.canonicalKey(e));
+    });
+    return LguEventService.mergeUnique([...pendingNew, ...merged]);
   }
+
+  List<Map<String, dynamic>> _combineMineAndProvince(
+    List<Map<String, dynamic>> mine,
+    List<Map<String, dynamic>> province,
+  ) =>
+      LguEventService.mergeUnique([...mine, ...province]);
 
   bool _sameEvents(
     List<Map<String, dynamic>> a,
@@ -524,15 +531,22 @@ class _LguEventsPanelState extends State<LguEventsPanel>
   }
 
   void _upsertLocal(Map<String, dynamic> event) {
-    final id = event['id']?.toString() ?? '';
+    final key = LguEventService.canonicalKey(event);
     List<Map<String, dynamic>> apply(List<Map<String, dynamic>> list) {
-      final next = List<Map<String, dynamic>>.from(list);
-      final i = next.indexWhere((e) => e['id']?.toString() == id);
-      if (i >= 0) {
-        next[i] = event;
-      } else {
-        next.insert(0, event);
+      final next = <Map<String, dynamic>>[];
+      var replaced = false;
+      for (final e in list) {
+        if (LguEventService.canonicalKey(e) == key) {
+          if (!replaced) {
+            next.add(event);
+            replaced = true;
+          }
+          // Drop any prior duplicate rows for the same canonical key.
+          continue;
+        }
+        next.add(e);
       }
+      if (!replaced) next.insert(0, event);
       return next;
     }
 
@@ -540,8 +554,20 @@ class _LguEventsPanelState extends State<LguEventsPanel>
     _splitEvents();
   }
 
-  void _removeLocal(String id) {
-    _allEvents = _allEvents.where((e) => e['id']?.toString() != id).toList();
+  void _removeLocal(String id, {String sourceCollection = ''}) {
+    final source = sourceCollection.trim().isNotEmpty
+        ? sourceCollection.trim()
+        : LguEventService.collection;
+    final key = id.trim().isEmpty ? '' : '$source:$id';
+    _allEvents = _allEvents.where((e) {
+      if (key.isNotEmpty) {
+        return LguEventService.canonicalKey(e) != key &&
+            e['id']?.toString() != id;
+      }
+      return e['id']?.toString() != id;
+    }).toList();
+    // Keep list unique after delete (belt-and-suspenders for stale dupes).
+    _allEvents = LguEventService.mergeUnique(_allEvents);
     _splitEvents();
   }
 
@@ -749,6 +775,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
       }
     }
     final extraImages = <Uint8List>[];
+    var submitting = false;
 
     final draft = await showDialog<_PostDraft>(
       context: context,
@@ -1072,11 +1099,15 @@ class _LguEventsPanelState extends State<LguEventsPanel>
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
+                onPressed: submitting
+                    ? null
+                    : () => Navigator.pop(dialogContext),
                 child: const Text('Cancel'),
               ),
               FilledButton.icon(
-                onPressed: () {
+                onPressed: submitting
+                    ? null
+                    : () {
                   if (municipalityId.isEmpty) {
                     ScaffoldMessenger.of(this.context).showSnackBar(
                       const SnackBar(
@@ -1124,6 +1155,7 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                     allDay ? 0 : endTime.hour,
                     allDay ? 0 : endTime.minute,
                   );
+                  setDialogState(() => submitting = true);
                   Navigator.pop(
                     dialogContext,
                     _PostDraft(
@@ -1149,14 +1181,27 @@ class _LguEventsPanelState extends State<LguEventsPanel>
                 style: FilledButton.styleFrom(
                   backgroundColor: widget.primaryColor,
                 ),
-                icon: Icon(
-                  existing == null ? Icons.send_rounded : Icons.check_rounded,
-                  size: 18,
-                ),
+                icon: submitting
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Icon(
+                        existing == null
+                            ? Icons.send_rounded
+                            : Icons.check_rounded,
+                        size: 18,
+                      ),
                 label: Text(
-                  existing == null
-                      ? 'Publish'
-                      : (scheduleOnly ? 'Save schedule' : 'Save'),
+                  submitting
+                      ? 'Saving…'
+                      : existing == null
+                          ? 'Publish'
+                          : (scheduleOnly ? 'Save schedule' : 'Save'),
                 ),
               ),
             ],
@@ -1396,14 +1441,18 @@ class _LguEventsPanelState extends State<LguEventsPanel>
       ),
     );
     if (confirmed != true) return;
+    final source = _sourceCollection(event);
     try {
       await _service.deleteEvent(
         id,
         municipalityId: _municipalityId,
-        sourceCollection: _sourceCollection(event),
+        sourceCollection: source,
       );
       LguEventService.invalidateEventsCache();
-      await _load(silent: false);
+      if (mounted) {
+        setState(() => _removeLocal(id, sourceCollection: source));
+      }
+      unawaited(_load(silent: true));
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Event deleted.')),
@@ -2148,8 +2197,9 @@ class _LguEventsPanelState extends State<LguEventsPanel>
           runSpacing: gap,
           alignment: WrapAlignment.start,
           children: [
-            for (final event in hits)
+            for (final event in LguEventService.mergeUnique(hits))
               SizedBox(
+                key: ValueKey(LguEventService.canonicalKey(event)),
                 width: cardWidth,
                 child: _buildGridCard(event),
               ),

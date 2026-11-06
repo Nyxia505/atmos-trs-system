@@ -61,6 +61,12 @@ class DotPdfSignOff {
     this.signaturePng,
   });
 
+  /// Formal title under the signature on establishment DAE reports.
+  ///
+  /// Audit / Sign-to-Save may store a different job title (e.g. "Head of Hotel");
+  /// report generation maps only this printed designation to [designatedManagerTitle].
+  static const designatedManagerTitle = 'Manager';
+
   /// e.g. "Hotel Name · October 2026".
   final String label;
   final String name;
@@ -232,10 +238,26 @@ Future<Uint8List> buildDotReportPdfBytes({
   final splitTables = paginateTables ?? showSectionTitles;
   final isVar2 = form.reportType == DotReportType.var2VisitorRecord;
 
-  String headerLines(String text) {
-    final parts = text.trim().split(RegExp(r'\s+'));
-    if (parts.length <= 1 || text.trim().length <= 8) return text;
-    return parts.join('\n');
+  /// Header wrap for A4 portrait. Never stacks every word on its own line
+  /// (that made "PH Region of Residence" read vertically).
+  String headerLines(String text, {required int col}) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return trimmed;
+    // First / label column: keep the full phrase on one horizontal line.
+    if (col == 0) return trimmed;
+    // Compact tokens (months like 2026-11, short codes).
+    if (trimmed.length <= 10 || RegExp(r'^\d{4}-\d{2}$').hasMatch(trimmed)) {
+      return trimmed;
+    }
+    final parts = trimmed.split(RegExp(r'\s+'));
+    if (parts.length <= 1) return trimmed;
+    // Prefer a single line when the phrase is short enough for numeric cols.
+    if (trimmed.length <= 16) return trimmed;
+    // Two-line wrap at a word boundary only (e.g. "Total Arrivals").
+    if (parts.length == 2) return '${parts[0]}\n${parts[1]}';
+    if (trimmed.length <= 24) return trimmed;
+    final mid = (parts.length / 2).ceil();
+    return '${parts.sublist(0, mid).join(' ')}\n${parts.sublist(mid).join(' ')}';
   }
 
   /// Portal tables wrap headers onto two lines so 7-column event / fare
@@ -316,18 +338,26 @@ Future<Uint8List> buildDotReportPdfBytes({
       final alignCenter =
           header || numericCols.contains(col) || emptyCols.contains(col);
       final shown = header
-          ? (splitTables ? headerLinesSoft(text) : headerLines(text))
+          ? (splitTables
+              ? headerLinesSoft(text)
+              : headerLines(text, col: col))
           : text;
+      final headerFont = !splitTables && col == 0 && header
+          ? math.max(6.5, headSize - 0.4)
+          : (header ? headSize : bodySize);
       return pw.Padding(
         padding: pw.EdgeInsets.symmetric(
-          horizontal: cellPadH,
-          vertical: header ? 6 : 3,
+          horizontal: !splitTables && col == 0
+              ? math.max(2.0, cellPadH - 0.5)
+              : cellPadH,
+          vertical: header ? (splitTables ? 6 : 5) : 3,
         ),
         child: pw.Text(
           t(shown),
           textAlign: alignCenter ? pw.TextAlign.center : pw.TextAlign.left,
+          maxLines: !splitTables && header && col == 0 ? 1 : 3,
           style: pw.TextStyle(
-            fontSize: header ? headSize : bodySize,
+            fontSize: headerFont,
             fontWeight:
                 header || bold ? pw.FontWeight.bold : pw.FontWeight.normal,
             color: color ?? _kInk,
@@ -358,16 +388,23 @@ Future<Uint8List> buildDotReportPdfBytes({
       return 1.7;
     }
 
+    // Widen the first (label) column so "PH Region of Residence" fits
+    // horizontally on VAR / DAE portrait pages.
+    final firstHeader = colCount > 0 ? table.headers.first : '';
+    final firstFlex = firstHeader.toLowerCase().contains('region')
+        ? 3.6
+        : (firstHeader.length >= 18 ? 3.2 : 2.6);
+
     final columnWidths = <int, pw.TableColumnWidth>{
       for (var c = 0; c < colCount; c++)
         c: pw.FlexColumnWidth(
           splitTables
               ? flexFor(c)
               : (c == 0
-                  ? 2.6
+                  ? firstFlex
                   : numericCols.contains(c) || emptyCols.contains(c)
-                      ? (longestWord(table.headers[c]) >= 8 ? 1.7 : 1.15)
-                      : 1.7),
+                      ? (longestWord(table.headers[c]) >= 8 ? 1.55 : 1.1)
+                      : 1.6),
         ),
     };
 
@@ -930,15 +967,18 @@ Uint8List _trimSignaturePngForPdf(Uint8List png) {
   }
 }
 
-/// Formal sign-off: trimmed signature centered on name → bold name → underline → Manager.
+/// Formal sign-off: trimmed signature centered on name → bold name → underline → designation.
 pw.Widget _managerSignOffBlock(DotPdfSignOff s, String Function(String) t) {
   final rawPng = s.signaturePng;
   final png = rawPng == null ? null : _trimSignaturePngForPdf(rawPng);
   final name = s.name.trim().isEmpty ? ' ' : s.name.trim();
+  final position = s.position.trim().isEmpty
+      ? DotPdfSignOff.designatedManagerTitle
+      : s.position.trim();
   const nameSize = 10.0;
 
   return pw.Column(
-    // Center signature strokes over the printed name (and Manager under it).
+    // Center signature strokes over the printed name (and designation under it).
     crossAxisAlignment: pw.CrossAxisAlignment.center,
     mainAxisSize: pw.MainAxisSize.min,
     children: [
@@ -976,7 +1016,7 @@ pw.Widget _managerSignOffBlock(DotPdfSignOff s, String Function(String) t) {
       ),
       pw.SizedBox(height: 3),
       pw.Text(
-        t('Manager'),
+        t(position),
         style: pw.TextStyle(fontSize: 8.5, color: _kInk),
       ),
     ],

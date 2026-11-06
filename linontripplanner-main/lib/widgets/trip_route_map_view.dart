@@ -1,39 +1,16 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' show LatLng;
 
 import '../data.dart';
-import '../directions_service.dart';
 import '../municipal_road_distances.dart'
     show
         RoadRouteDirection,
         municipalitiesOnRoadBetween,
         roadTableIndexFor;
-import '../municipality_bus_terminals.dart' show haversineDistanceKm;
 import '../municipality_coordinates.dart' show getMunicipalityCoordinates;
 import '../road_route_service.dart';
 import '../tourist_plan/tourist_travel_estimates.dart' show formatHoursMinutes;
 import 'trip_route_osm_map_view.dart';
-
-/// Snapshot of the in-map road route (distance, time, errors).
-class TripRouteUpdate {
-  final bool loading;
-  final bool failed;
-  final double? distanceKm;
-  final int? durationMinutes;
-  final String? errorMessage;
-
-  const TripRouteUpdate({
-    required this.loading,
-    required this.failed,
-    this.distanceKm,
-    this.durationMinutes,
-    this.errorMessage,
-  });
-}
-
-typedef TripRouteUpdateCallback = void Function(TripRouteUpdate update);
 
 /// Trip route map (flutter_map) with start/end pins, spots, and road polyline.
 class TripRouteMapView extends StatefulWidget {
@@ -63,18 +40,6 @@ class TripRouteMapView extends StatefulWidget {
   final bool showBusStops;
   final bool showBusTerminals;
 
-  /// Called whenever route loading, geometry, or estimates change.
-  final TripRouteUpdateCallback? onRouteUpdate;
-
-  /// Zoom, pan, and pinch. Defaults to on when [compact] is false.
-  final bool? interactive;
-
-  /// `Walking`, `Motorcycle`, or `Car`. Walking draws a dotted route.
-  final String travelMode;
-
-  /// Origin circle + red destination pin, matching Google Maps directions.
-  final bool googleStyleEndpoints;
-
   const TripRouteMapView({
     super.key,
     required this.start,
@@ -95,10 +60,6 @@ class TripRouteMapView extends StatefulWidget {
     this.showTouristSpots = true,
     this.showBusStops = true,
     this.showBusTerminals = true,
-    this.onRouteUpdate,
-    this.interactive,
-    this.travelMode = 'Motorcycle',
-    this.googleStyleEndpoints = false,
   });
 
   @override
@@ -120,9 +81,7 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(_fetchDirections());
-    });
+    _fetchDirections();
   }
 
   @override
@@ -132,41 +91,9 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
         oldWidget.start.name != widget.start.name ||
         oldWidget.end.name != widget.end.name ||
         _stopKey(oldWidget.visitStops) != _stopKey(widget.visitStops) ||
-        !_sameSpotNames(oldWidget.spots, widget.spots) ||
-        !_samePoint(oldWidget.startPinPoint, widget.startPinPoint) ||
-        !_samePoint(oldWidget.endPinPoint, widget.endPinPoint)) {
+        !_sameSpotNames(oldWidget.spots, widget.spots)) {
       _fetchDirections();
     }
-  }
-
-  bool _samePoint(LatLng? a, LatLng? b) {
-    if (identical(a, b)) return true;
-    if (a == null || b == null) return false;
-    return (a.latitude - b.latitude).abs() < 1e-5 &&
-        (a.longitude - b.longitude).abs() < 1e-5;
-  }
-
-  bool get _interactive => widget.interactive ?? !widget.compact;
-
-  /// Re-runs the existing road router (OSRM / Directions).
-  void retryDirections() => _fetchDirections();
-
-  void zoomBy(double delta) => _osmMapKey.currentState?.zoomBy(delta);
-
-  void _emitRouteUpdate() {
-    final callback = widget.onRouteUpdate;
-    if (callback == null) return;
-    final update = TripRouteUpdate(
-      loading: _loadingDirections,
-      failed: _directionsFailed,
-      distanceKm: _routeKm,
-      durationMinutes: _routeMinutes,
-      errorMessage: _directionsErrorMessage ?? _directionsErrorStatus,
-    );
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      callback(update);
-    });
   }
 
   String _stopKey(List<RoadStop>? stops) {
@@ -209,7 +136,6 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
           _directionsErrorMessage =
               'No ${direction.name} route from ${widget.start.name} to ${widget.end.name}.';
         });
-        _emitRouteUpdate();
         return;
       }
     }
@@ -217,86 +143,42 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
       if (!mounted || generation != _fetchGeneration) return;
       setState(() {
         _loadingDirections = false;
+        _roadRoutePoints = null;
+        _routeKm = null;
+        _routeMinutes = null;
         _directionsFailed = false;
         _directionsErrorStatus = null;
         _directionsErrorMessage = null;
       });
-      _emitRouteUpdate();
       return;
     }
-    final previewKm = _estimatePreviewKm();
     setState(() {
-      // Never block the map. Preview pins show immediately; OSRM swaps in.
-      _loadingDirections = false;
+      _loadingDirections = true;
+      _roadRoutePoints = null;
       _directionsFailed = false;
       _directionsErrorStatus = null;
       _directionsErrorMessage = null;
-      _routeKm ??= previewKm;
-      _routeMinutes ??= previewKm == null
-          ? null
-          : (previewKm / 40 * 60).round().clamp(1, 24 * 60);
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) fitRouteBounds();
-    });
-    _emitRouteUpdate();
-    DirectionsResult result;
-    try {
-      // Tourist Get Directions (explicit start/end pins): two-point OSRM only.
-      // Trip Planner still routes through every town on the provincial loop.
-      final pinToPin = widget.visitStops != null && stops.length >= 2;
-      result = pinToPin
-          ? await getDirectionsRoute(
-              [stops.first.point, stops.last.point],
-              osrmOnly: true,
-              osrmTimeout: const Duration(seconds: 8),
-            ).timeout(
-              const Duration(seconds: 8),
-              onTimeout: () => const DirectionsResult(
-                errorStatus: 'TIMEOUT',
-                errorMessage: 'Unable to load directions. Please try again.',
-              ),
-            )
-          : await getOrderedRoadRoute(
-              stops,
-              direction: widget.direction,
-            ).timeout(
-              const Duration(seconds: 12),
-              onTimeout: () => const DirectionsResult(
-                errorStatus: 'TIMEOUT',
-                errorMessage: 'Unable to load directions. Please try again.',
-              ),
-            );
-    } catch (_) {
-      result = const DirectionsResult(
-        errorStatus: 'ERROR',
-        errorMessage: 'Unable to load directions. Please try again.',
-      );
-    }
+    final result = await getOrderedRoadRoute(
+      stops,
+      direction: widget.direction,
+    );
     if (!mounted || generation != _fetchGeneration) return;
-    final hasPolyline = result.polyline != null && result.polyline!.length >= 2;
     setState(() {
       _loadingDirections = false;
-      if (hasPolyline) {
-        _roadRoutePoints = result.polyline;
-        _routeKm = result.distanceMeters == null
-            ? _routeKm
-            : result.distanceMeters! / 1000;
-        _routeMinutes = result.durationSeconds == null
-            ? _routeMinutes
-            : (result.durationSeconds! / 60).round();
-        _directionsFailed = false;
-        _directionsErrorStatus = null;
-        _directionsErrorMessage = null;
-      } else if (_displayRouteLine.length < 2) {
-        _directionsErrorStatus = result.errorStatus;
-        _directionsErrorMessage = result.errorMessage;
-        _directionsFailed = true;
-      }
+      _roadRoutePoints = result.polyline;
+      _routeKm = result.distanceMeters == null
+          ? null
+          : result.distanceMeters! / 1000;
+      _routeMinutes = result.durationSeconds == null
+          ? null
+          : (result.durationSeconds! / 60).round();
+      _directionsErrorStatus = result.errorStatus;
+      _directionsErrorMessage = result.errorMessage;
+      _directionsFailed = result.polyline == null;
     });
-    _emitRouteUpdate();
     if (result.polyline != null && result.polyline!.length >= 2) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.delayed(const Duration(milliseconds: 200), () {
         if (mounted) fitRouteBounds();
       });
     }
@@ -408,42 +290,9 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
     _osmMapKey.currentState?.fitRouteBounds();
   }
 
-  List<LatLng> _previewRouteLine() {
-    final origin = widget.startPinPoint ?? _startPosition;
-    final dest = widget.endPinPoint ?? _endPosition;
-    if (origin != null && dest != null) {
-      if (_samePosition(origin, dest)) return [origin];
-      return [origin, dest];
-    }
-    if (origin != null) return [origin];
-    if (dest != null) return [dest];
-    return const [];
-  }
-
-  List<LatLng> get _displayRouteLine {
-    if (_roadRoutePoints != null && _roadRoutePoints!.length >= 2) {
-      return _roadRoutePoints!;
-    }
-    return _previewRouteLine();
-  }
-
-  double? _estimatePreviewKm() {
-    final line = _previewRouteLine();
-    if (line.length < 2) return null;
-    var total = 0.0;
-    for (var i = 1; i < line.length; i++) {
-      total += haversineDistanceKm(
-        line[i - 1].latitude,
-        line[i - 1].longitude,
-        line[i].latitude,
-        line[i].longitude,
-      );
-    }
-    return total > 0 ? total : null;
-  }
-
   Widget _buildMapWidget() {
-    final line = _displayRouteLine;
+    // Only the road geometry from the routing service is drawn.
+    final line = _roadRoutePoints ?? const <LatLng>[];
     final map = TripRouteOsmMapView(
       key: _osmMapKey,
       start: widget.start,
@@ -452,10 +301,8 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
       budget: widget.budget,
       exactBudgetSpotNames: widget.exactBudgetSpotNames,
       compact: widget.compact,
-      interactive: _interactive,
       routeLinePoints: line,
-      roadFollowing:
-          _roadRoutePoints != null && _roadRoutePoints!.length >= 2,
+      roadFollowing: line.length >= 2,
       startPinPoint: widget.visitStops != null
           ? widget.startPinPoint
           : (widget.startPinPoint ?? _startPosition),
@@ -470,27 +317,8 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
       showTouristSpots: widget.showTouristSpots,
       showBusStops: widget.showBusStops,
       showBusTerminals: widget.showBusTerminals,
-      dottedRoute: widget.travelMode == 'Walking',
-      googleStyleEndpoints: widget.googleStyleEndpoints,
     );
-    return _interactive ? map : IgnorePointer(child: map);
-  }
-
-  Widget _zoomButton(IconData icon, double delta) {
-    return Material(
-      color: Colors.white,
-      elevation: 2,
-      borderRadius: BorderRadius.circular(10),
-      child: InkWell(
-        onTap: () => zoomBy(delta),
-        borderRadius: BorderRadius.circular(10),
-        child: SizedBox(
-          width: 36,
-          height: 36,
-          child: Icon(icon, size: 20, color: const Color(0xFF1E293B)),
-        ),
-      ),
-    );
+    return widget.compact ? IgnorePointer(child: map) : map;
   }
 
   @override
@@ -503,21 +331,40 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
       fit: StackFit.expand,
       children: [
         _buildMapWidget(),
-        if (_interactive)
+        if (_loadingDirections)
           Positioned(
-            right: 8,
-            bottom: widget.compact ? 28 : 16,
-            child: Column(
-              children: [
-                _zoomButton(Icons.add_rounded, 1),
-                const SizedBox(height: 6),
-                _zoomButton(Icons.remove_rounded, -1),
-              ],
+            top: widget.compact ? 8 : 16,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Card(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: widget.compact ? 10 : 16,
+                    vertical: widget.compact ? 6 : 10,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: widget.compact ? 16 : 20,
+                        height: widget.compact ? 16 : 20,
+                        child: const CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        widget.compact
+                            ? 'Loading route...'
+                            : 'Loading route along roads...',
+                        style: TextStyle(fontSize: widget.compact ? 11 : 14),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
-        if (!widget.compact &&
-            !widget.googleStyleEndpoints &&
-            _routeKm != null)
+        if (!widget.compact && !_loadingDirections && _routeKm != null)
           Positioned(
             left: 12,
             top: 12,
@@ -538,9 +385,7 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
               ),
             ),
           ),
-        if (_directionsFailed &&
-            (_roadRoutePoints == null || _roadRoutePoints!.length < 2) &&
-            _displayRouteLine.length < 2)
+        if (_directionsFailed && _roadRoutePoints == null)
           Positioned(
             left: 16,
             right: 16,

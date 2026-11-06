@@ -154,6 +154,61 @@ class GovernorFirestoreService {
     return snapshot;
   }
 
+  /// Live `qr_checkins` for Governor / OPTACA dashboards (province-wide).
+  /// Emits normalized rows whenever a tourist completes a valid scan.
+  Stream<List<Map<String, dynamic>>> watchProvincialQrCheckIns({
+    Map<String, Map<String, dynamic>> spotsById = const {},
+  }) {
+    return _firestore.collection('qr_checkins').snapshots().map((snap) {
+      return normalizeQrCheckInDocs(
+        snap.docs,
+        spotsById: spotsById,
+      );
+    });
+  }
+
+  /// Live province tourist spots (Active counts stay in sync with LGU publishes).
+  Stream<List<Map<String, dynamic>>> watchProvincialTouristSpots() {
+    return _firestore.collection('tourist_spots').snapshots().map((snap) {
+      final byId = <String, Map<String, dynamic>>{};
+      for (final doc in snap.docs) {
+        final row = {'id': doc.id, ...doc.data()};
+        if (!_isTouristSpotInProvince(row)) continue;
+        byId[doc.id] = row;
+      }
+      return byId.values.toList();
+    });
+  }
+
+  /// Normalize a batch of `qr_checkins` docs into dashboard rows (deduped by id).
+  static List<Map<String, dynamic>> normalizeQrCheckInDocs(
+    Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> docs, {
+    Map<String, Map<String, dynamic>> spotsById = const {},
+  }) {
+    final byId = <String, Map<String, dynamic>>{};
+    for (final doc in docs) {
+      final normalized = normalizeCheckInRow(
+        doc.id,
+        doc.data(),
+        spotsById: spotsById,
+        sourceCollection: 'qr_checkins',
+      );
+      if (normalized == null) continue;
+      if (!_isCheckInInProvince(normalized)) continue;
+      byId[doc.id] = normalized;
+    }
+    final list = byId.values.toList();
+    list.sort((a, b) {
+      final ta = parseCheckInTime(a);
+      final tb = parseCheckInTime(b);
+      if (ta == null && tb == null) return 0;
+      if (ta == null) return 1;
+      if (tb == null) return -1;
+      return tb.compareTo(ta);
+    });
+    return list;
+  }
+
   Future<List<Map<String, dynamic>>> _loadAllCheckIns(
     Map<String, Map<String, dynamic>> spotsById,
     List<String> warnings,

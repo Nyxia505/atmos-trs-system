@@ -36,6 +36,25 @@ class AeDailyRegisterTable extends StatefulWidget {
 class _AeDailyRegisterTableState extends State<AeDailyRegisterTable> {
   int? _dayFilter;
   AeDailyRegisterSort _sort = AeDailyRegisterSort.newestDate;
+  final _hScroll = ScrollController();
+  final _vScroll = ScrollController();
+
+  static const _peachHeader = Color(0xFFFFF1E7);
+  static const _rowAlt = Color(0xFFF8FAFC);
+  static const _totalFill = Color(0xFFFFF7ED);
+
+  @override
+  void dispose() {
+    _hScroll.dispose();
+    _vScroll.dispose();
+    super.dispose();
+  }
+
+  String _peso(double v) {
+    final m = AeSheetKit.money(v);
+    if (m == '-') return '₱0.00';
+    return '₱$m';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -57,182 +76,364 @@ class _AeDailyRegisterTableState extends State<AeDailyRegisterTable> {
 
     final cols = <(String, double, TextAlign)>[
       ('#', 44, TextAlign.center),
-      ('Date', 96, TextAlign.left),
-      if (s.tracksRooms) ('Room', 64, TextAlign.center),
-      ('Residence / Nationality', 200, TextAlign.left),
-      if (s.has(AeRegisterColumn.phRegion)) ('PH origin', 150, TextAlign.left),
-      (s.guestsLabel, 84, TextAlign.center),
-      if (s.tracksNights) ('Checked-in day', 100, TextAlign.center),
-      (s.rateLabel, 100, TextAlign.right),
-      if (widget.showCharges && s.has(AeRegisterColumn.chargesA)) ('Charges (A)', 96, TextAlign.right),
-      if (widget.showCharges && s.has(AeRegisterColumn.chargesB)) ('Charges (B)', 96, TextAlign.right),
-      if (widget.showCharges) ('Subtotal', 100, TextAlign.right),
-      ('Female', 64, TextAlign.center),
-      ('Male', 64, TextAlign.center),
-      ('Validation', 92, TextAlign.center),
+      ('Date', 100, TextAlign.center),
+      if (s.tracksRooms) ('Room', 72, TextAlign.center),
+      ('Residence / Nationality', 210, TextAlign.left),
+      if (s.has(AeRegisterColumn.phRegion)) ('PH origin', 160, TextAlign.left),
+      (s.guestsLabel, 96, TextAlign.center),
+      if (s.tracksNights) ('Checked-in day', 108, TextAlign.center),
+      (s.rateLabel, 112, TextAlign.center),
+      if (widget.showCharges && s.has(AeRegisterColumn.chargesA))
+        ('Charges (A)', 100, TextAlign.center),
+      if (widget.showCharges && s.has(AeRegisterColumn.chargesB))
+        ('Charges (B)', 100, TextAlign.center),
+      if (widget.showCharges) ('Subtotal', 108, TextAlign.center),
+      ('Female', 68, TextAlign.center),
+      ('Male', 68, TextAlign.center),
+      ('Validation', 110, TextAlign.center),
       ('Encoded by', 170, TextAlign.left),
-      if (!widget.readOnly) ('', 112, TextAlign.center),
+      if (!widget.readOnly) ('Actions', 118, TextAlign.center),
     ];
     final tableWidth = cols.fold<double>(0, (w, c) => w + c.$2);
-
-    double sum(double Function(AeRegisterRow r) f) => visible.fold<double>(0, (t, r) => t + f(r));
     final head = AeSheetKit.cell(size: 11.5, weight: FontWeight.w800);
+
+    double sum(double Function(AeRegisterRow r) f) =>
+        visible.fold<double>(0, (t, r) => t + f(r));
+
+    final screenH = MediaQuery.sizeOf(context).height;
+    final tableBodyMaxH = (screenH * 0.48).clamp(280.0, 520.0);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            Text('${visible.length} of ${widget.rows.length} rows', style: AeDashTokens.body(size: 12)),
-            DropdownButton<int?>(
-              value: _dayFilter,
-              underline: const SizedBox.shrink(),
-              hint: const Text('All days'),
-              items: [
-                const DropdownMenuItem<int?>(value: null, child: Text('All days')),
-                for (final d in days) DropdownMenuItem<int?>(value: d, child: Text('Day $d')),
-              ],
-              onChanged: (v) => setState(() => _dayFilter = v),
-            ),
-            DropdownButton<AeDailyRegisterSort>(
-              value: _sort,
-              underline: const SizedBox.shrink(),
-              items: const [
-                DropdownMenuItem(
-                  value: AeDailyRegisterSort.newestDate,
-                  child: Text('Newest date first'),
-                ),
-                DropdownMenuItem(
-                  value: AeDailyRegisterSort.oldestDate,
-                  child: Text('Oldest date first'),
-                ),
-                DropdownMenuItem(
-                  value: AeDailyRegisterSort.recentlyAdded,
-                  child: Text('Recently added'),
-                ),
-                DropdownMenuItem(
-                  value: AeDailyRegisterSort.recentlyUpdated,
-                  child: Text('Recently updated'),
-                ),
-              ],
-              onChanged: (v) {
-                if (v == null) return;
-                setState(() => _sort = v);
-              },
-            ),
-            if (widget.issues.isNotEmpty)
-              Chip(
-                avatar: const Icon(Icons.error_outline_rounded, size: 16, color: AeDashTokens.danger),
-                label: Text('${widget.issues.length} validation issue(s)'),
-                backgroundColor: const Color(0xFFFEF2F2),
-                side: const BorderSide(color: Color(0xFFFECACA)),
-              ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        AeSheetFrame(
-          minWidth: tableWidth,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AeDashTokens.border),
+            boxShadow: AeDashTokens.cardShadow,
+          ),
+          child: Wrap(
+            spacing: 10,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Row(children: [
-                for (final c in cols) AeCell(c.$1, width: c.$2, align: c.$3, fill: AeSheetKit.headerFill, style: head, height: 36),
-              ]),
-              if (visible.isEmpty)
-                SizedBox(
-                  width: tableWidth,
-                  height: 72,
-                  child: Center(
-                    child: Text(
-                      widget.readOnly
-                          ? 'No register rows for this month.'
-                          : 'No rows yet — use "Add stay" to record guests (${s.rowNoun} per row).',
-                      style: AeDashTokens.body(size: 12.5),
-                    ),
+              Text(
+                '${visible.length} of ${widget.rows.length} rows',
+                style: AeDashTokens.body(size: 12.5, weight: FontWeight.w700, color: AeDashTokens.text),
+              ),
+              _filterChip(
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<int?>(
+                    value: _dayFilter,
+                    isDense: true,
+                    hint: const Text('All days'),
+                    items: [
+                      const DropdownMenuItem<int?>(value: null, child: Text('All days')),
+                      for (final d in days)
+                        DropdownMenuItem<int?>(value: d, child: Text('Day $d')),
+                    ],
+                    onChanged: (v) => setState(() => _dayFilter = v),
                   ),
                 ),
-              for (var i = 0; i < visible.length; i++) _row(i, visible[i], issuesByRow[visible[i].id], cols),
-              if (visible.isNotEmpty)
-                Row(children: [
-                  for (final c in cols)
-                    switch (c.$1) {
-                      '#' => AeCell('', width: c.$2, fill: AeSheetKit.headerFill),
-                      'Date' => AeCell('TOTAL', width: c.$2, fill: AeSheetKit.headerFill, style: head),
-                      final l when l == s.guestsLabel =>
-                        AeCell('${sum((r) => r.guests.toDouble()).round()}', width: c.$2, align: c.$3, fill: AeSheetKit.headerFill, style: head),
-                      final l when l == s.rateLabel =>
-                        AeCell(AeSheetKit.money(sum((r) => r.rate)), width: c.$2, align: c.$3, fill: AeSheetKit.headerFill, style: head),
-                      'Charges (A)' =>
-                        AeCell(AeSheetKit.money(sum((r) => r.chargesA)), width: c.$2, align: c.$3, fill: AeSheetKit.headerFill, style: head),
-                      'Charges (B)' =>
-                        AeCell(AeSheetKit.money(sum((r) => r.chargesB)), width: c.$2, align: c.$3, fill: AeSheetKit.headerFill, style: head),
-                      'Subtotal' =>
-                        AeCell(AeSheetKit.money(sum((r) => r.subtotal)), width: c.$2, align: c.$3, fill: AeSheetKit.headerFill, style: head),
-                      'Female' => AeCell('${sum((r) => r.female.toDouble()).round()}', width: c.$2, align: c.$3, fill: AeSheetKit.headerFill, style: head),
-                      'Male' => AeCell('${sum((r) => r.male.toDouble()).round()}', width: c.$2, align: c.$3, fill: AeSheetKit.headerFill, style: head),
-                      _ => AeCell('', width: c.$2, fill: AeSheetKit.headerFill),
+              ),
+              _filterChip(
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<AeDailyRegisterSort>(
+                    value: _sort,
+                    isDense: true,
+                    items: const [
+                      DropdownMenuItem(
+                        value: AeDailyRegisterSort.newestDate,
+                        child: Text('Newest date first'),
+                      ),
+                      DropdownMenuItem(
+                        value: AeDailyRegisterSort.oldestDate,
+                        child: Text('Oldest date first'),
+                      ),
+                      DropdownMenuItem(
+                        value: AeDailyRegisterSort.recentlyAdded,
+                        child: Text('Recently added'),
+                      ),
+                      DropdownMenuItem(
+                        value: AeDailyRegisterSort.recentlyUpdated,
+                        child: Text('Recently updated'),
+                      ),
+                    ],
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setState(() => _sort = v);
                     },
-                ]),
+                  ),
+                ),
+              ),
+              if (widget.issues.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFEF2F2),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFFFECACA)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.error_outline_rounded, size: 15, color: AeDashTokens.danger),
+                      const SizedBox(width: 5),
+                      Text(
+                        '${widget.issues.length} validation issue(s)',
+                        style: AeDashTokens.body(
+                          size: 12,
+                          color: AeDashTokens.danger,
+                          weight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
             ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: AeDashTokens.softShadow,
+          ),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFFE2E8F0)),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Scrollbar(
+              controller: _hScroll,
+              thumbVisibility: true,
+              notificationPredicate: (n) => n.metrics.axis == Axis.horizontal,
+              child: SingleChildScrollView(
+                controller: _hScroll,
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: tableWidth,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Sticky header (fixed while body scrolls vertically).
+                      Row(children: [
+                        for (final c in cols)
+                          AeCell(
+                            c.$1 == 'Actions' ? 'Actions' : c.$1,
+                            width: c.$2,
+                            align: TextAlign.center,
+                            fill: _peachHeader,
+                            style: head,
+                            height: 40,
+                          ),
+                      ]),
+                      ConstrainedBox(
+                        constraints: BoxConstraints(maxHeight: tableBodyMaxH),
+                        child: Scrollbar(
+                          controller: _vScroll,
+                          thumbVisibility: visible.length > 8,
+                          child: SingleChildScrollView(
+                            controller: _vScroll,
+                            child: Column(
+                              children: [
+                                if (visible.isEmpty)
+                                  SizedBox(
+                                    width: tableWidth,
+                                    height: 88,
+                                    child: Center(
+                                      child: Text(
+                                        widget.readOnly
+                                            ? 'No register rows for this month.'
+                                            : 'No rows yet — use "Add Stay" to record guests (${s.rowNoun} per row).',
+                                        style: AeDashTokens.body(size: 12.5),
+                                      ),
+                                    ),
+                                  ),
+                                for (var i = 0; i < visible.length; i++)
+                                  _row(i, visible[i], issuesByRow[visible[i].id], cols),
+                                if (visible.isNotEmpty)
+                                  Row(children: [
+                                    for (final c in cols)
+                                      switch (c.$1) {
+                                        '#' => AeCell('', width: c.$2, fill: _totalFill, height: 36),
+                                        'Date' => AeCell(
+                                            'TOTAL',
+                                            width: c.$2,
+                                            align: TextAlign.center,
+                                            fill: _totalFill,
+                                            style: head,
+                                            height: 36,
+                                          ),
+                                        final l when l == s.guestsLabel => AeCell(
+                                            '${sum((r) => r.guests.toDouble()).round()}',
+                                            width: c.$2,
+                                            align: TextAlign.center,
+                                            fill: _totalFill,
+                                            style: head,
+                                            height: 36,
+                                          ),
+                                        final l when l == s.rateLabel => AeCell(
+                                            _peso(sum((r) => r.rate)),
+                                            width: c.$2,
+                                            align: TextAlign.center,
+                                            fill: _totalFill,
+                                            style: head,
+                                            height: 36,
+                                          ),
+                                        'Charges (A)' => AeCell(
+                                            _peso(sum((r) => r.chargesA)),
+                                            width: c.$2,
+                                            align: TextAlign.center,
+                                            fill: _totalFill,
+                                            style: head,
+                                            height: 36,
+                                          ),
+                                        'Charges (B)' => AeCell(
+                                            _peso(sum((r) => r.chargesB)),
+                                            width: c.$2,
+                                            align: TextAlign.center,
+                                            fill: _totalFill,
+                                            style: head,
+                                            height: 36,
+                                          ),
+                                        'Subtotal' => AeCell(
+                                            _peso(sum((r) => r.subtotal)),
+                                            width: c.$2,
+                                            align: TextAlign.center,
+                                            fill: _totalFill,
+                                            style: head,
+                                            height: 36,
+                                          ),
+                                        'Female' => AeCell(
+                                            '${sum((r) => r.female.toDouble()).round()}',
+                                            width: c.$2,
+                                            align: TextAlign.center,
+                                            fill: _totalFill,
+                                            style: head,
+                                            height: 36,
+                                          ),
+                                        'Male' => AeCell(
+                                            '${sum((r) => r.male.toDouble()).round()}',
+                                            width: c.$2,
+                                            align: TextAlign.center,
+                                            fill: _totalFill,
+                                            style: head,
+                                            height: 36,
+                                          ),
+                                        _ => AeCell('', width: c.$2, fill: _totalFill, height: 36),
+                                      },
+                                  ]),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ],
     );
   }
 
-  Widget _row(int index, AeRegisterRow r, List<String>? issues, List<(String, double, TextAlign)> cols) {
+  Widget _filterChip({required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AeDashTokens.border),
+      ),
+      child: child,
+    );
+  }
+
+  Widget _row(
+    int index,
+    AeRegisterRow r,
+    List<String>? issues,
+    List<(String, double, TextAlign)> cols,
+  ) {
     final s = widget.schema;
     final ok = r.female + r.male == r.guests;
     final hasIssue = issues != null && issues.isNotEmpty;
-    final fill = hasIssue ? const Color(0xFFFEF2F2) : (index.isEven ? Colors.white : const Color(0xFFF8FAFC));
+    final fill = hasIssue
+        ? const Color(0xFFFEF2F2)
+        : (index.isEven ? Colors.white : _rowAlt);
     final cells = <Widget>[];
     for (final c in cols) {
       final w = c.$2;
       final a = c.$3;
       switch (c.$1) {
         case '#':
-          cells.add(AeCell('${index + 1}', width: w, align: a, fill: fill, style: AeSheetKit.cell(color: AeDashTokens.muted)));
+          cells.add(AeCell(
+            '${index + 1}',
+            width: w,
+            align: a,
+            fill: fill,
+            height: 38,
+            style: AeSheetKit.cell(color: AeDashTokens.muted),
+          ));
         case 'Date':
-          cells.add(AeCell(AeSheetKit.shortDate(r.date), width: w, fill: fill));
+          cells.add(AeCell(
+            AeSheetKit.shortDate(r.date),
+            width: w,
+            align: TextAlign.center,
+            fill: fill,
+            height: 38,
+          ));
         case 'Room':
-          cells.add(AeCell(r.roomNo, width: w, align: a, fill: fill));
+          cells.add(AeCell(r.roomNo, width: w, align: a, fill: fill, height: 38));
         case 'Residence / Nationality':
-          cells.add(AeCell(r.residence, width: w, fill: fill));
+          cells.add(AeCell(r.residence, width: w, fill: fill, height: 38));
         case 'PH origin':
-          cells.add(AeCell(r.phRegion, width: w, fill: fill, style: AeSheetKit.cell(color: AeDashTokens.muted)));
+          cells.add(AeCell(
+            r.phRegion,
+            width: w,
+            fill: fill,
+            height: 38,
+            style: AeSheetKit.cell(color: AeDashTokens.muted),
+          ));
         case 'Checked-in day':
           cells.add(AeCell(
             r.checkedInDay ? 'Yes' : 'No',
             width: w,
             align: a,
             fill: fill,
-            style: AeSheetKit.cell(weight: r.checkedInDay ? FontWeight.w800 : FontWeight.w500, color: r.checkedInDay ? AeDashTokens.success : AeDashTokens.text),
+            height: 38,
+            style: AeSheetKit.cell(
+              weight: r.checkedInDay ? FontWeight.w800 : FontWeight.w500,
+              color: r.checkedInDay ? AeDashTokens.success : AeDashTokens.text,
+            ),
           ));
         case 'Charges (A)':
-          cells.add(AeCell(AeSheetKit.money(r.chargesA), width: w, align: a, fill: fill));
+          cells.add(AeCell(_peso(r.chargesA), width: w, align: a, fill: fill, height: 38));
         case 'Charges (B)':
-          cells.add(AeCell(AeSheetKit.money(r.chargesB), width: w, align: a, fill: fill));
+          cells.add(AeCell(_peso(r.chargesB), width: w, align: a, fill: fill, height: 38));
         case 'Subtotal':
-          cells.add(AeCell(AeSheetKit.money(r.subtotal), width: w, align: a, fill: fill));
+          cells.add(AeCell(_peso(r.subtotal), width: w, align: a, fill: fill, height: 38));
         case 'Female':
-          cells.add(AeCell('${r.female}', width: w, align: a, fill: fill));
+          cells.add(AeCell('${r.female}', width: w, align: a, fill: fill, height: 38));
         case 'Male':
-          cells.add(AeCell('${r.male}', width: w, align: a, fill: fill));
+          cells.add(AeCell('${r.male}', width: w, align: a, fill: fill, height: 38));
         case 'Validation':
           cells.add(AeCell(
             '',
             width: w,
             align: a,
             fill: fill,
+            height: 38,
             child: Tooltip(
               message: hasIssue ? issues.join('\n') : 'OK',
-              child: Text(
-                hasIssue ? (ok ? 'Check' : 'Error') : 'OK',
-                style: AeSheetKit.cell(weight: FontWeight.w800, color: hasIssue ? AeDashTokens.danger : AeDashTokens.success),
-              ),
+              child: _validationBadge(hasIssue: hasIssue, ok: ok),
             ),
           ));
         case 'Encoded by':
@@ -241,43 +442,61 @@ class _AeDailyRegisterTableState extends State<AeDailyRegisterTable> {
             '',
             width: w,
             fill: fill,
+            height: 38,
             child: Tooltip(
               message: au.isEmpty
                   ? 'Saved before sign-offs were required'
                   : [
                       '${au.encodedBy} · ${au.encodedPosition}',
-                      if (au.createdBy.isNotEmpty && au.createdBy != au.encodedBy) 'First entered by ${au.createdBy}',
+                      if (au.createdBy.isNotEmpty && au.createdBy != au.encodedBy)
+                        'First entered by ${au.createdBy}',
                     ].join('\n'),
               child: Text(
                 au.isEmpty ? '—' : au.encodedBy,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: AeSheetKit.cell(color: au.isEmpty ? AeDashTokens.muted : AeDashTokens.text),
+                style: AeSheetKit.cell(
+                  color: au.isEmpty ? AeDashTokens.muted : AeDashTokens.text,
+                ),
               ),
             ),
           ));
-        case '':
+        case 'Actions':
           cells.add(AeCell(
             '',
             width: w,
             align: a,
             fill: fill,
+            height: 38,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _icon(Icons.edit_rounded, 'Edit', () => widget.onEdit?.call(r)),
-                if (s.tracksNights) _icon(Icons.redo_rounded, 'Copy to next night', () => widget.onDuplicateNext?.call(r)),
-                _icon(Icons.delete_outline_rounded, 'Delete', () => widget.onDelete?.call(r), color: AeDashTokens.danger),
+                _icon(Icons.edit_rounded, 'Edit', () => widget.onEdit?.call(r), color: AeDashTokens.accent),
+                if (s.tracksNights)
+                  _icon(Icons.redo_rounded, 'Copy to next night', () => widget.onDuplicateNext?.call(r)),
+                _icon(
+                  Icons.delete_outline_rounded,
+                  'Delete',
+                  () => widget.onDelete?.call(r),
+                  color: AeDashTokens.danger,
+                ),
               ],
             ),
           ));
         default:
           if (c.$1 == s.guestsLabel) {
-            cells.add(AeCell('${r.guests}', width: w, align: a, fill: fill, style: AeSheetKit.cell(weight: FontWeight.w700)));
+            cells.add(AeCell(
+              '${r.guests}',
+              width: w,
+              align: a,
+              fill: fill,
+              height: 38,
+              style: AeSheetKit.cell(weight: FontWeight.w700),
+            ));
           } else if (c.$1 == s.rateLabel) {
-            cells.add(AeCell(AeSheetKit.money(r.rate), width: w, align: a, fill: fill));
+            cells.add(AeCell(_peso(r.rate), width: w, align: a, fill: fill, height: 38));
           } else {
-            cells.add(AeCell('', width: w, fill: fill));
+            cells.add(AeCell('', width: w, fill: fill, height: 38));
           }
       }
     }
@@ -289,7 +508,40 @@ class _AeDailyRegisterTableState extends State<AeDailyRegisterTable> {
     );
   }
 
-  Widget _icon(IconData icon, String tip, VoidCallback onTap, {Color color = AeDashTokens.muted}) => IconButton(
+  Widget _validationBadge({required bool hasIssue, required bool ok}) {
+    final bad = hasIssue;
+    final bg = bad ? const Color(0xFFFEE2E2) : const Color(0xFFDCFCE7);
+    final fg = bad ? const Color(0xFFB91C1C) : const Color(0xFF15803D);
+    final label = bad ? (ok ? 'Check' : 'Error') : 'OK';
+    final icon = bad ? Icons.error_rounded : Icons.check_circle_rounded;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: fg.withValues(alpha: 0.22)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: fg),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: AeSheetKit.cell(size: 11, color: fg, weight: FontWeight.w800),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _icon(
+    IconData icon,
+    String tip,
+    VoidCallback onTap, {
+    Color color = AeDashTokens.muted,
+  }) =>
+      IconButton(
         tooltip: tip,
         visualDensity: VisualDensity.compact,
         padding: EdgeInsets.zero,

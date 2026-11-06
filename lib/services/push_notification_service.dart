@@ -11,11 +11,23 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:atmos_trs_system/services/announcement_notification_sync.dart';
 import 'package:atmos_trs_system/services/notification_badge_notifier.dart';
+import 'package:atmos_trs_system/services/tourist_spots_repository.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart' as activity;
 import 'package:atmos_trs_system/screens/event_detail_screen.dart';
 
 /// FCM topic all tourist apps subscribe to — must match [functions/index.js].
 const String kGovernorAnnouncementsTopic = 'governor_announcements';
+
+/// New Active tourist spots published by LGUs — must match [functions/index.js].
+const String kTourismSpotsTopic = 'tourism_spots';
+const String kAndroidSpotsChannelId = 'tourism_spots_channel';
+
+const AndroidNotificationChannel _androidSpotsChannel = AndroidNotificationChannel(
+  kAndroidSpotsChannelId,
+  'Tourist spot updates',
+  description: 'Alerts when LGUs publish new tourist spots',
+  importance: Importance.high,
+);
 
 /// Status-bar icon must be a white-on-transparent silhouette (Android draws it
 /// from alpha only). Regenerate with `dart run tools/gen_notification_icons.dart`.
@@ -185,6 +197,7 @@ Future<void> _ensureLocalNotificationsCore() async {
     await androidPlugin?.createNotificationChannel(_androidOtpChannel);
     await androidPlugin?.createNotificationChannel(_androidCheckInChannel);
     await androidPlugin?.createNotificationChannel(_androidNearbySpotChannel);
+    await androidPlugin?.createNotificationChannel(_androidSpotsChannel);
     await androidPlugin?.requestNotificationsPermission();
   }
 
@@ -250,6 +263,9 @@ Future<void> syncFcmTokenToUserDoc(String uid) async {
     // Subscribe early so topic pushes arrive without waiting for MainShell.
     try {
       await FirebaseMessaging.instance.subscribeToTopic(kGovernorAnnouncementsTopic);
+      if (await _touristSpotPushesEnabled()) {
+        await FirebaseMessaging.instance.subscribeToTopic(kTourismSpotsTopic);
+      }
     } catch (e) {
       debugPrint('[Push] early topic subscribe: $e');
     }
@@ -679,12 +695,18 @@ Future<void> _showForegroundNotification(RemoteMessage message) async {
     debugPrint('[Push] skip foreground tray for signup OTP FCM');
     return;
   }
+  final type = message.data['type']?.toString() ?? '';
+  if (type == 'new_spot' && !await _touristSpotPushesEnabled()) {
+    debugPrint('[Push] skip new_spot (spotUpdates off)');
+    return;
+  }
   final notification = message.notification;
   final aid = message.data['announcementId']?.toString() ?? '';
   final title = notification?.title ??
       message.data['title']?.toString() ??
-      'ATMOS-TRS';
+      (type == 'new_spot' ? 'New Tourist Destination!' : 'ATMOS-TRS');
   final body = notification?.body ??
+      message.data['notificationBody']?.toString() ??
       message.data['body']?.toString() ??
       'New announcement';
 
@@ -704,17 +726,22 @@ Future<void> _showForegroundNotification(RemoteMessage message) async {
     return;
   }
 
-  const android = AndroidNotificationDetails(
-    'atmos_high_importance',
-    'ATMOS announcements',
-    channelDescription: 'Governor & tourism promos, events, and alerts',
+  final android = AndroidNotificationDetails(
+    type == 'new_spot' ? kAndroidSpotsChannelId : 'atmos_high_importance',
+    type == 'new_spot' ? 'Tourist spot updates' : 'ATMOS announcements',
+    channelDescription: type == 'new_spot'
+        ? 'Alerts when LGUs publish new tourist spots'
+        : 'Governor & tourism promos, events, and alerts',
     importance: Importance.high,
     priority: Priority.high,
     icon: _kNotificationSmallIcon,
     largeIcon: _kNotificationLargeIcon,
     color: _kNotificationColor,
+    tag: type == 'new_spot'
+        ? 'tourist_spot_${message.data['spotId'] ?? ''}'
+        : null,
   );
-  const details = NotificationDetails(android: android);
+  final details = NotificationDetails(android: android);
 
   await _localNotifications.show(
     id: message.hashCode,
@@ -739,6 +766,21 @@ Future<bool> _touristEventPushesEnabled() async {
   return true;
 }
 
+/// Honors `users/{uid}.notificationPrefs.spotUpdates` (default on).
+Future<bool> _touristSpotPushesEnabled() async {
+  try {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return true;
+    final snap =
+        await FirebaseFirestore.instance.collection('users').doc(uid).get();
+    final prefs = snap.data()?['notificationPrefs'];
+    if (prefs is Map && prefs['spotUpdates'] == false) return false;
+  } catch (e) {
+    debugPrint('[Push] spot preference check skipped: $e');
+  }
+  return true;
+}
+
 /// Registers FCM: permission, local notification plugin, topic subscription, and listeners.
 /// Call when the tourist main shell opens (not on web — use in-app notifications only there).
 Future<void> registerTouristPushNotifications() async {
@@ -749,6 +791,7 @@ Future<void> registerTouristPushNotifications() async {
 
     await _ensureLocalNotificationsCore();
     _wireFcmTokenRefreshToFirestore();
+    TouristSpotsRepository.ensureRealtimeSync();
 
     final messaging = FirebaseMessaging.instance;
     final eventsOn = await _touristEventPushesEnabled();
@@ -758,6 +801,14 @@ Future<void> registerTouristPushNotifications() async {
     } else {
       await messaging.unsubscribeFromTopic(kGovernorAnnouncementsTopic);
       debugPrint('[Push] event notifications are off for this account');
+    }
+    final spotsOn = await _touristSpotPushesEnabled();
+    if (spotsOn) {
+      await messaging.subscribeToTopic(kTourismSpotsTopic);
+      debugPrint('[Push] subscribed to topic $kTourismSpotsTopic');
+    } else {
+      await messaging.unsubscribeFromTopic(kTourismSpotsTopic);
+      debugPrint('[Push] spot-update notifications are off for this account');
     }
 
     await _onMessageSubscription?.cancel();

@@ -663,7 +663,8 @@ class _MiceRegisterWorkspaceState extends State<MiceRegisterWorkspace> {
           subjectId: report.id,
           latest: report.lastSignOff,
           liveContentHash: liveHash,
-          title: 'Sign-offs · $_periodLabel',
+          title: 'Sign-offs',
+          periodLabel: _periodLabel,
           emptyText: 'No signed saves for this month yet.',
         );
     }

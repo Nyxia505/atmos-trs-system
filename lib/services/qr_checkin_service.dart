@@ -66,6 +66,7 @@ class SpotInfo {
     this.longitude,
     this.imageUrl,
     this.category,
+    this.status = 'Active',
     this.fromCache = false,
   });
   final String spotId;
@@ -83,6 +84,9 @@ class SpotInfo {
   /// From Firestore `tourist_spots`; shown on the check-in screen header.
   final String? imageUrl;
   final String? category;
+
+  /// `Active` / `Inactive` from `tourist_spots.status`.
+  final String status;
 }
 
 /// Saves QR check-ins to Firestore "qr_checkins" collection for municipality-based dashboards.
@@ -209,20 +213,78 @@ class QRCheckInService {
     if (todayScanCount >= 1) {
       return (
         message:
-            'Thank you, $displayName! for scanning $locationLabel again today.',
-        dialogTitle: 'Welcome back again!',
+            'Check-in Successful! Your visit to $locationLabel was already '
+            'recorded today. Welcome back, $displayName!',
+        dialogTitle: 'Welcome back!',
       );
     }
     if (hasPriorVisitsAtLocation) {
       return (
-        message: 'Thank you, $displayName! for scanning $locationLabel again.',
-        dialogTitle: 'Thank you!',
+        message:
+            'Check-in Successful! Your visit to $locationLabel has been recorded.',
+        dialogTitle: 'Check-in Successful!',
       );
     }
     return (
-      message: 'Thank you, $displayName! for scanning $locationLabel.',
-      dialogTitle: 'Thank you!',
+      message:
+          'Check-in Successful! Your visit to $locationLabel has been recorded.',
+      dialogTitle: 'Check-in Successful!',
     );
+  }
+
+  static bool _isActiveSpotStatus(String? status) {
+    final s = (status ?? '').trim().toLowerCase();
+    if (s.isEmpty) return true;
+    return s == 'active' || s == 'published';
+  }
+
+  static bool _isLguPortalSpotId(String spotId) =>
+      spotId.trim().toLowerCase().startsWith('lgu_');
+
+  /// Durable unique destinations for Home Visited + cross-device sync.
+  static Future<void> _upsertUniqueVisitedDestination({
+    required String uid,
+    required String spotId,
+    required String spotName,
+    required String municipalityId,
+    required String municipalityName,
+  }) async {
+    if (uid.isEmpty || spotId.isEmpty) return;
+    final ref = _firestore
+        .collection('tourist_visited_destinations')
+        .doc(uid)
+        .collection('spots')
+        .doc(spotId);
+    try {
+      await _firestore.runTransaction((tx) async {
+        final snap = await tx.get(ref);
+        if (!snap.exists) {
+          tx.set(ref, {
+            'touristUid': uid,
+            'touristSpotId': spotId,
+            'touristSpotName': spotName,
+            'municipalityId': municipalityId,
+            'municipalityName': municipalityName,
+            'firstVisitedAt': FieldValue.serverTimestamp(),
+            'lastVisitedAt': FieldValue.serverTimestamp(),
+            'validVisitCount': 1,
+            'createdAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+          return;
+        }
+        tx.update(ref, {
+          'touristSpotName': spotName,
+          'municipalityId': municipalityId,
+          'municipalityName': municipalityName,
+          'lastVisitedAt': FieldValue.serverTimestamp(),
+          'validVisitCount': FieldValue.increment(1),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      });
+    } catch (e) {
+      debugPrint('[CheckIn] unique visited upsert skipped: $e');
+    }
   }
 
   /// Loads prior `checkins` for [userId] + [locationId] to classify the welcome message.
@@ -366,6 +428,7 @@ class QRCheckInService {
           longitude: cached.longitude,
           imageUrl: cached.imageUrl,
           category: cached.category,
+          status: 'Active',
           fromCache: true,
         );
       }
@@ -388,6 +451,7 @@ class QRCheckInService {
       final lngRaw = d['longitude'];
       final double? lat = latRaw is num ? latRaw.toDouble() : null;
       final double? lng = lngRaw is num ? lngRaw.toDouble() : null;
+      final status = (d['status'] ?? d['Status'] ?? 'Active').toString();
       final info = SpotInfo(
         spotId: doc.id,
         spotName: name,
@@ -399,6 +463,7 @@ class QRCheckInService {
         longitude: lng,
         imageUrl: TouristSpotFirestore.readImageUrl(d),
         category: d['category'] as String?,
+        status: status.trim().isEmpty ? 'Active' : status.trim(),
       );
       if (lat != null && lng != null && lat.abs() > 1e-7 && lng.abs() > 1e-7) {
         unawaited(
@@ -564,7 +629,10 @@ class QRCheckInService {
     var resolvedSpotName = spotName?.trim() ?? '';
     var resolvedMunicipality = municipality?.trim() ?? '';
     var normalizedMunicipalityId = normalizeMunicipalityId(municipalityId);
-    final spotDoc = await getSpotById(locationId);
+    // Prefer a live spot read for municipalityId + Active status; fall back to
+    // the device cache when offline so valid scans still record.
+    var spotDoc = await getSpotById(locationId, preferCache: false);
+    spotDoc ??= await getSpotById(locationId, preferCache: true);
     if (spotDoc != null) {
       if (spotDoc.municipalityId.isNotEmpty) {
         normalizedMunicipalityId = spotDoc.municipalityId;
@@ -575,6 +643,20 @@ class QRCheckInService {
       if (resolvedMunicipality.isEmpty && spotDoc.municipality.isNotEmpty) {
         resolvedMunicipality = spotDoc.municipality;
       }
+      // Destination QR only — LGU portal QR (`lgu_*`) has no tourist_spots row.
+      if (!_isLguPortalSpotId(locationId) &&
+          !_isActiveSpotStatus(spotDoc.status)) {
+        return const QRCheckInFailure(
+          'This destination is inactive and is not accepting check-ins right now.',
+        );
+      }
+    } else if (!_isLguPortalSpotId(locationId) &&
+        !BetaTestingGuard.bypassValidation) {
+      // Prefer failing closed for destination QR when the spot doc is missing.
+      return const QRCheckInFailure(
+        'This QR does not match an active tourist destination. '
+        'Ask the tourism office to verify the spot.',
+      );
     }
     if (normalizedMunicipalityId.isEmpty) {
       return const QRCheckInFailure(
@@ -683,21 +765,29 @@ class QRCheckInService {
       // Tourism dashboards read qr_checkins filtered by municipalityId / lguId.
       // partySize / visitorCount = companions + 1 (one scan session → one party visit).
       await qrRef.set({
+        'visitId': qrRef.id,
         'userId': uid,
         'user_id': uid,
         'tourist_id': uid,
+        'touristUid': uid,
         'touristName': displayName,
         'tourist_name': displayName,
         'municipalityId': normalizedMunicipalityId,
         'lguId': normalizedMunicipalityId,
+        'municipalityName': resolvedMunicipality,
         'spotId': routedLocationId,
         'spot_id': routedLocationId,
         'touristSpotId': routedLocationId,
         'spot_name': resolvedSpotName,
         'spotName': resolvedSpotName,
+        'touristSpotName': resolvedSpotName.isNotEmpty
+            ? resolvedSpotName
+            : locationLabel,
         'location': locationLabel,
         'municipality': resolvedMunicipality,
         'status': 'Verified',
+        'visitStatus': 'Verified',
+        'qrCodeId': routedLocationId,
         'source': 'qr_scan',
         if (isDemoQr) 'demoQr': true,
         'partySize': resolvedPartySize,
@@ -707,6 +797,7 @@ class QRCheckInService {
         'filipinoCount': resolvedFilipinos,
         'foreignCount': resolvedForeign,
         'timestamp': FieldValue.serverTimestamp(),
+        'checkInTimestamp': FieldValue.serverTimestamp(),
         'createdAt': FieldValue.serverTimestamp(),
         'checkins_ref': checkinRef.id,
         ...touristSnap,
@@ -762,6 +853,14 @@ class QRCheckInService {
             .doc(uid)
             .set(patch, SetOptions(merge: true));
       } catch (_) {}
+
+      await _upsertUniqueVisitedDestination(
+        uid: uid,
+        spotId: routedLocationId,
+        spotName: locationLabel,
+        municipalityId: normalizedMunicipalityId,
+        municipalityName: resolvedMunicipality,
+      );
 
       debugPrint(
         '[CheckIn] saved qr_checkins/${qrRef.id} '

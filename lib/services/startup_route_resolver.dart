@@ -8,6 +8,7 @@ import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/module_shell_prefs.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/config/user_profile_storage.dart';
+import 'package:atmos_trs_system/navigation/guest_startup_routes.dart';
 import 'package:atmos_trs_system/navigation/role_router.dart';
 import 'package:atmos_trs_system/services/dashboard_user_service.dart';
 import 'package:atmos_trs_system/services/mobile_onboarding_storage.dart';
@@ -134,11 +135,11 @@ class StartupRouteResolver {
     final pendingLgu = await PendingLguCheckInStorage.peek();
     if (firebaseUser == null) {
       if (pendingSpot != null || pendingLgu != null) {
-        // Scanned spot is already stored. Go straight to tourist login.
-        return '/login';
+        // Phone-camera / App Link QR with no session → Log In / Create Account.
+        return GuestStartupRoutes.qrEntry;
       }
       if (!kIsWeb && !await MobileOnboardingStorage.isComplete()) {
-        return '/mobile-onboarding';
+        return GuestStartupRoutes.onboarding;
       }
       return route;
     }
@@ -147,8 +148,9 @@ class StartupRouteResolver {
       if (route == '/dashboard' ||
           route == '/verify-otp' ||
           route == '/landing' ||
-          route == '/login') {
-        return '/qr-resume';
+          route == GuestStartupRoutes.login ||
+          route == GuestStartupRoutes.qrEntry) {
+        return GuestStartupRoutes.qrResume;
       }
     }
     return route;
@@ -156,12 +158,16 @@ class StartupRouteResolver {
 
   /// Full Firestore-backed route; run after first frame.
   static Future<String> resolveAuthoritativeRoute() async {
-    var route = kIsWeb ? '/landing' : '/login';
+    var route = kIsWeb ? '/landing' : GuestStartupRoutes.login;
 
-    if (Firebase.apps.isEmpty) return route;
+    if (Firebase.apps.isEmpty) {
+      return _applyQrWelcomeIfNeeded(route, firebaseUser: null);
+    }
 
     var firebaseUser = FirebaseAuth.instance.currentUser;
-    if (firebaseUser == null) return route;
+    if (firebaseUser == null) {
+      return _applyQrWelcomeIfNeeded(route, firebaseUser: null);
+    }
 
     final staffFastRoute = await _resolveTrustedStaffRoute(firebaseUser);
     if (staffFastRoute != null) {
@@ -323,6 +329,17 @@ class StartupRouteResolver {
       var authoritative = await resolveAuthoritativeRoute();
       authoritative = await _maybeTripPlannerAdminShell(authoritative);
       if (authoritative == currentRoute) return;
+
+      // Camera-QR guests must stay on Log In / Create Account — never bounce
+      // them to marketing landing / welcome after the first frame refine.
+      if ((currentRoute == GuestStartupRoutes.qrEntry ||
+              currentRoute == GuestStartupRoutes.login ||
+              currentRoute == GuestStartupRoutes.signupTouristQr) &&
+          (authoritative == '/landing' ||
+              authoritative == GuestStartupRoutes.welcome ||
+              authoritative == '/')) {
+        return;
+      }
 
       // Keep verified tourists on the dashboard if Firestore is briefly stale.
       if (authoritative == '/verify-otp' && currentRoute == '/dashboard') {

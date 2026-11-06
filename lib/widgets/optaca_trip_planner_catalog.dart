@@ -64,6 +64,7 @@ class _OptacaTripPlannerCatalogState extends State<OptacaTripPlannerCatalog> {
         final spots = snap.data!.docs
             .map((d) => <String, dynamic>{'id': d.id, ...d.data()})
             .where(_isProvinceSpot)
+            .where(_isActiveSpot)
             .toList()
           ..sort((a, b) => (a['name']?.toString() ?? '')
               .toLowerCase()
@@ -250,6 +251,12 @@ class _OptacaTripPlannerCatalogState extends State<OptacaTripPlannerCatalog> {
 bool _isProvinceSpot(Map<String, dynamic> s) {
   final mid = ProvincialTourismService.municipalityIdOf(s);
   return mid.isNotEmpty && isMisamisOccidentalMunicipalityId(mid);
+}
+
+bool _isActiveSpot(Map<String, dynamic> s) {
+  final status = (s['status'] ?? s['Status'] ?? 'Active').toString().trim().toLowerCase();
+  if (status.isEmpty) return true;
+  return status == 'active' || status == 'published';
 }
 
 /// True when the spot has a usable VR URL (Firestore link or known Clear Pano).

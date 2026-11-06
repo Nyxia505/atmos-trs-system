@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'dart:async' show unawaited;
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -534,7 +534,58 @@ class _GovernorSidebar extends StatelessWidget {
                 ),
               ),
             Expanded(child: _navList()),
-            if (!collapsed)
+            if (!collapsed &&
+                TripPlanHostBridge.openAtmosStaffModule != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () {
+                      unawaited(
+                        TripPlanHostBridge.openAtmosStaffModule!(context),
+                      );
+                    },
+                    child: Ink(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.28),
+                        ),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(
+                            Icons.dashboard_customize_outlined,
+                            color: Colors.white,
+                            size: 18,
+                          ),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Open ATMOS TRS module',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 12.5,
+                              ),
+                            ),
+                          ),
+                          Icon(
+                            Icons.arrow_forward_rounded,
+                            color: Colors.white,
+                            size: 18,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              )
+            else if (!collapsed)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
                 child: Container(
@@ -9245,14 +9296,29 @@ class _AdminSettingsTabState extends State<_AdminSettingsTab> {
             children: [
               ListTile(
                 leading: Icon(
-                  Icons.info_outline_rounded,
+                  Icons.dashboard_customize_outlined,
                   color: AppColors.primary.withValues(alpha: 0.9),
                 ),
-                title: const Text('ATMOS TRS OPTACA PORTAL'),
-                subtitle: const Text(
-                  'Misamis Occidental tourism admin',
-                  style: TextStyle(fontSize: 13),
+                title: const Text('Open ATMOS TRS module'),
+                subtitle: Text(
+                  TripPlanHostBridge.openAtmosStaffModule != null
+                      ? 'Switch to the OPTACA provincial tourism dashboard'
+                      : 'Available when opened inside ATMOS TRS',
+                  style: const TextStyle(fontSize: 13),
                 ),
+                trailing: TripPlanHostBridge.openAtmosStaffModule != null
+                    ? const Icon(
+                        Icons.chevron_right,
+                        color: AppColors.textGrey,
+                      )
+                    : null,
+                onTap: TripPlanHostBridge.openAtmosStaffModule == null
+                    ? null
+                    : () {
+                        unawaited(
+                          TripPlanHostBridge.openAtmosStaffModule!(context),
+                        );
+                      },
               ),
               const Divider(height: 1),
               ListTile(

@@ -80,7 +80,11 @@ class TouristSpot {
       rating: (data['rating'] ?? 4.5).toDouble(),
       reviewCount: (data['reviewCount'] ?? 0) as int,
       description: data['description'] ?? '',
-      city: data['city'] ?? '',
+      city: (data['municipality'] ??
+              data['municipalityName'] ??
+              data['city'] ??
+              '')
+          .toString(),
       vrLink: vrLinkStr != null && vrLinkStr.isNotEmpty ? vrLinkStr : null,
       vrPanoramaUrl: panoStr != null && panoStr.isNotEmpty ? panoStr : null,
       latitude: (data['latitude'] ?? 0).toDouble(),
@@ -171,7 +175,7 @@ final List<TouristSpot> kVRTourSpots = [
     description: 'Historic stone fort built in 1755 and Cotta Shrine overlooking Panguil Bay in Barangay Baybay Triunfo. Free admission; typically open daily 8:00 AM–5:00 PM. Dress modestly at the active shrine.',
     city: 'Ozamis City',
     vrPanoramaUrl: "assets/images/Cotta Fort & Shrine.jpg",
-    vrLink: '',
+    vrLink: kCottaFortVrUrl,
     hasVR: true,
     latitude: 8.1472,
     longitude: 123.8408,
@@ -191,9 +195,10 @@ final List<TouristSpot> kVRTourSpots = [
     latitude: 8.1833,
     longitude: 123.8667,
   ),
+  // Canonical id + Clear Pano URL so Explore → Jimenez map resolves Launch VR.
   TouristSpot(
-    id: 'vr-6',
-    name: 'St. John The Baptist Church',
+    id: 'jimenez_st_john_the_baptist_church',
+    name: 'Jimenez Church (St John The Baptist)',
     category: 'Church',
     imageUrl: 'assets/images/Jimenez.png',
     distance: 42.1,
@@ -201,7 +206,7 @@ final List<TouristSpot> kVRTourSpots = [
     description: 'Church of St. John the Baptist in Barangay Poblacion, Jimenez. National Cultural Treasure with 19th-century painted wooden ceilings and coral stone facade. Free admission; active parish — dress modestly. Typically open daily 6:00 AM–5:00 PM for prayer.',
     city: 'Jimenez',
     vrPanoramaUrl: 'assets/images/Jimenez.png',
-    vrLink: '',
+    vrLink: kJimenezChurchVrUrl,
     hasVR: true,
     latitude: 8.3347,
     longitude: 123.8408,

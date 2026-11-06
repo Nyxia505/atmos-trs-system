@@ -1,6 +1,11 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
+import 'package:atmos_trs_system/utils/municipality_helper.dart';
+import 'package:atmos_trs_system/utils/tourist_spot_visibility.dart';
 
 const String _collectionId = 'tourist_spots';
 
@@ -20,32 +25,88 @@ class TouristSpotsRepository {
 
   static List<TouristSpotFirestore>? _cachedSpots;
   static Future<List<TouristSpotFirestore>>? _spotsInFlight;
+  static StreamSubscription<List<TouristSpotFirestore>>? _liveSub;
+
+  /// Bumped whenever the live snapshot (or a fresh get) updates the cache.
+  static final ValueNotifier<int> revision = ValueNotifier<int>(0);
+
+  /// Keeps the session cache warm so Home / maps update without opening Explore.
+  static void ensureRealtimeSync() {
+    if (_liveSub != null || !_isFirebaseInitialized) return;
+    _liveSub = streamTouristSpots().listen(
+      (_) {},
+      onError: (Object e) => debugPrint('[TouristSpots] live sync: $e'),
+    );
+  }
 
   /// Spots already fetched this session. Empty until the first successful read.
   static List<TouristSpotFirestore> peekCachedSpots() =>
       List<TouristSpotFirestore>.unmodifiable(_cachedSpots ?? const []);
 
-  /// Stream of all tourist spots (for map markers and home).
-  /// Returns empty stream if Firebase is not initialized.
+  static void invalidateCache() {
+    _cachedSpots = null;
+    _spotsInFlight = null;
+  }
+
+  static List<TouristSpotFirestore> _activeOnly(
+    Iterable<TouristSpotFirestore> spots,
+  ) {
+    final byId = <String, TouristSpotFirestore>{};
+    for (final s in spots) {
+      if (!isTouristSpotActiveStatus(s.status)) continue;
+      if (s.id.trim().isEmpty) continue;
+      byId[s.id] = s;
+    }
+    return byId.values.toList();
+  }
+
+  static void _setCache(List<TouristSpotFirestore> spots) {
+    _cachedSpots = spots;
+    revision.value++;
+  }
+
+  /// Live Active tourist spots (for map markers, home, municipality lists).
   static Stream<List<TouristSpotFirestore>> streamTouristSpots() {
     if (!_isFirebaseInitialized) {
       return Stream.value(<TouristSpotFirestore>[]);
     }
     try {
-      return _firestore
-          .collection(_collectionId)
-          .snapshots()
-          .map((snap) => snap.docs
-              .map((d) => TouristSpotFirestore.fromFirestore(d.data(), d.id))
-              .toList())
-          .handleError((_) => <TouristSpotFirestore>[]);
+      return _firestore.collection(_collectionId).snapshots().map((snap) {
+        final spots = _activeOnly(
+          snap.docs.map((d) => TouristSpotFirestore.fromFirestore(d.data(), d.id)),
+        );
+        _setCache(spots);
+        return spots;
+      }).handleError((_) => _cachedSpots ?? <TouristSpotFirestore>[]);
     } catch (_) {
       return Stream.value(<TouristSpotFirestore>[]);
     }
   }
 
-  /// One-time fetch (e.g. for initial load).
-  /// Returns empty list if Firebase is not initialized.
+  /// Active spots for one municipality (by id / display name).
+  static Stream<List<TouristSpotFirestore>> streamTouristSpotsForMunicipality(
+    String municipalityIdOrName,
+  ) {
+    final want = normalizeMunicipalityId(municipalityIdOrName);
+    final wantName = municipalityIdOrName.trim().toLowerCase();
+    return streamTouristSpots().map((all) {
+      return all.where((s) {
+        final mid = normalizeMunicipalityId(
+          s.municipalityId.isNotEmpty
+              ? s.municipalityId
+              : getMunicipalityIdFromName(s.municipality),
+        );
+        if (want.isNotEmpty && mid == want) return true;
+        final mun = s.municipality.trim().toLowerCase();
+        if (wantName.isEmpty) return false;
+        return mun == wantName ||
+            mun.contains(wantName) ||
+            wantName.contains(mun.split(' ').first);
+      }).toList();
+    });
+  }
+
+  /// One-time fetch (e.g. for initial load). Returns Active spots only.
   static Future<List<TouristSpotFirestore>> getTouristSpots() async {
     if (_cachedSpots != null) return _cachedSpots!;
     final pending = _spotsInFlight;
@@ -65,10 +126,10 @@ class TouristSpotsRepository {
     }
     try {
       final snap = await _firestore.collection(_collectionId).get();
-      final spots = snap.docs
-          .map((d) => TouristSpotFirestore.fromFirestore(d.data(), d.id))
-          .toList();
-      _cachedSpots = spots;
+      final spots = _activeOnly(
+        snap.docs.map((d) => TouristSpotFirestore.fromFirestore(d.data(), d.id)),
+      );
+      _setCache(spots);
       return spots;
     } catch (_) {
       return _cachedSpots ?? <TouristSpotFirestore>[];

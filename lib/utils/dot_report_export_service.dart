@@ -11,6 +11,7 @@ import 'package:atmos_trs_system/utils/checkin_visitor_expansion.dart';
 import 'package:atmos_trs_system/utils/dae3_aggregates.dart';
 import 'package:atmos_trs_system/utils/dae1b2_template_fill.dart';
 import 'package:atmos_trs_system/utils/dae3_form_a_template_fill.dart';
+import 'package:atmos_trs_system/utils/dae_ae_styled_xlsx.dart';
 import 'package:atmos_trs_system/utils/dot_report_preview.dart';
 import 'package:atmos_trs_system/utils/ae_register_report_query.dart';
 import 'package:atmos_trs_system/utils/dot_var2_visitor_record_report.dart';
@@ -674,6 +675,38 @@ class DotReportExportService {
     required DateTime startDate,
     required DateTime endDate,
   }) {
+    final gapList = preview.gaps.isEmpty
+        ? <String>[
+            'Best-effort ATMOS workbook — official cell layout not fully mapped yet.',
+          ]
+        : List<String>.from(preview.gaps);
+
+    final s =
+        '${startDate.year}${startDate.month.toString().padLeft(2, '0')}${startDate.day.toString().padLeft(2, '0')}';
+    final e =
+        '${endDate.year}${endDate.month.toString().padLeft(2, '0')}${endDate.day.toString().padLeft(2, '0')}';
+    final slug = scopeSlug.trim().isEmpty ? 'report' : scopeSlug.trim();
+    final filename = 'ATMOS_${form.id}_${slug}_${s}_$e.xlsx';
+
+    // AE DAE-1A / DAE-1B: styled Report sheet (print-ready). Other forms keep
+    // the compact ATMOS_DATA workbook.
+    if (form.id == 'dae1a_manual' || form.id == 'dae1b_macro') {
+      final bytes = DaeAeStyledXlsx.build(
+        form: form,
+        preview: preview,
+        scopeLabel: scopeLabel,
+        startDate: startDate,
+        endDate: endDate,
+      );
+      return DotReportExportResult(
+        bytes: bytes,
+        filename: filename,
+        gaps: gapList,
+        summary: preview.summaryLine,
+        checkInsProcessed: preview.rows.length,
+      );
+    }
+
     final excel = Excel.createExcel();
     final data = excel['ATMOS_DATA'];
     _removeSheetIfExists(excel, 'Sheet1');
@@ -692,19 +725,8 @@ class DotReportExportService {
       _writeRow(data, 4 + preview.rows.length, preview.footer!);
     }
     final gaps = excel['ATMOS_GAPS'];
-    final gapList = preview.gaps.isEmpty
-        ? <String>[
-            'Best-effort ATMOS workbook — official cell layout not fully mapped yet.',
-          ]
-        : List<String>.from(preview.gaps);
     _writeGapsSheet(gaps, gapList);
 
-    final s =
-        '${startDate.year}${startDate.month.toString().padLeft(2, '0')}${startDate.day.toString().padLeft(2, '0')}';
-    final e =
-        '${endDate.year}${endDate.month.toString().padLeft(2, '0')}${endDate.day.toString().padLeft(2, '0')}';
-    final slug = scopeSlug.trim().isEmpty ? 'report' : scopeSlug.trim();
-    final filename = 'ATMOS_${form.id}_${slug}_${s}_$e.xlsx';
     final bytes = excel.encode() ?? <int>[];
 
     return DotReportExportResult(
