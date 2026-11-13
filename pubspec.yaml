@@ -148,11 +148,16 @@ flutter:
     - assets/mockup/
     - assets/Onboarding_screen/
     # Unicode-capable font embedded in DOT report PDFs (default Helvetica lacks — – ’ • →).
+    - assets/fonts/noto_sans/NotoSans-Regular.ttf
+    - assets/fonts/noto_sans/NotoSans-Bold.ttf
     - assets/fonts/noto_sans/
     # Bundled official template used when the Supabase copy is missing.
     - forms_format/CUS-FORM-MICE-UTILIZATION-SURVEY-FORM.xlsx
     - forms_format/3.-DAE1B.2.xlsx
     - forms_format/DAE1B.2.Domestic.xlsx
+    # Philippine address lists for tourist signup. Misamis Occidental stays in Dart.
+    - assets/ph_address/cities_by_province.json
+    - assets/ph_address/barangays/
 
   fonts:
     - family: HolidayCalling

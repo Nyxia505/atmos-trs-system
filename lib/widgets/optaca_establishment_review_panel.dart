@@ -3,10 +3,13 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:atmos_trs_system/config/app_theme.dart';
+import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
 import 'package:atmos_trs_system/services/ae_type_suggestion_service.dart';
 import 'package:atmos_trs_system/services/establishment_approval_service.dart';
 import 'package:atmos_trs_system/services/establishment_category_service.dart';
+import 'package:atmos_trs_system/services/establishment_registration_service.dart';
 import 'package:atmos_trs_system/services/firestore_auth_gate.dart';
+import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/widgets/ae_register/ae_register_compliance_panel.dart';
 
 const _kBorder = Color(0xFFE2E8F0);
@@ -31,6 +34,14 @@ _StatusStyle _statusStyle(EstablishmentRegistryEntry e) {
       bg: const Color(0xFFECFDF5),
       label: 'Active',
       icon: Icons.verified_rounded,
+    );
+  }
+  if (e.needsRevision) {
+    return (
+      fg: const Color(0xFFC2410C),
+      bg: const Color(0xFFFFF7ED),
+      label: 'Needs revision',
+      icon: Icons.edit_note_rounded,
     );
   }
   if (e.isRejected) {
@@ -156,6 +167,7 @@ class _OptacaEstablishmentReviewPanelState
         'pending' => e.isPending,
         'active' => e.isActive,
         'rejected' => e.isRejected,
+        'needs_revision' => e.needsRevision,
         _ => true,
       };
       if (!statusOk) return false;
@@ -183,16 +195,22 @@ class _OptacaEstablishmentReviewPanelState
           primaryColor: widget.primaryColor,
           textDark: widget.textDark,
           textMuted: widget.textMuted,
-          onApprove: e.isPending
+          onApprove: e.isPending || e.needsRevision
               ? () async {
                   Navigator.pop(ctx);
                   await _approve(e);
                 }
               : null,
-          onReject: e.isPending
+          onReject: e.isPending || e.needsRevision
               ? () async {
                   Navigator.pop(ctx);
                   await _reject(e);
+                }
+              : null,
+          onRequestRevision: e.isPending
+              ? () async {
+                  Navigator.pop(ctx);
+                  await _requestRevision(e);
                 }
               : null,
           onApproveCategory: e.categoryPendingReview
@@ -201,6 +219,14 @@ class _OptacaEstablishmentReviewPanelState
                   await _approveCategory(e);
                 }
               : null,
+          onEdit: () async {
+            Navigator.pop(ctx);
+            await _edit(e);
+          },
+          onDelete: () async {
+            Navigator.pop(ctx);
+            await _delete(e);
+          },
         );
       },
     );
@@ -261,7 +287,7 @@ class _OptacaEstablishmentReviewPanelState
           controller: _notes,
           maxLines: 3,
           decoration: const InputDecoration(
-            labelText: 'Reason (optional)',
+            labelText: 'Reason (required)',
             border: OutlineInputBorder(),
           ),
         ),
@@ -271,7 +297,10 @@ class _OptacaEstablishmentReviewPanelState
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
+            onPressed: () {
+              if (_notes.text.trim().isEmpty) return;
+              Navigator.pop(ctx, true);
+            },
             style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
             child: const Text('Reject'),
           ),
@@ -279,6 +308,10 @@ class _OptacaEstablishmentReviewPanelState
       ),
     );
     if (ok != true) return;
+    if (_notes.text.trim().isEmpty) {
+      _snack('A rejection reason is required.', error: true);
+      return;
+    }
     try {
       await EstablishmentApprovalService.reject(e.id, notes: _notes.text);
       if (!mounted) return;
@@ -286,6 +319,60 @@ class _OptacaEstablishmentReviewPanelState
     } catch (err) {
       if (!mounted) return;
       _snack('Reject failed: $err', error: true);
+    }
+  }
+
+  Future<void> _requestRevision(EstablishmentRegistryEntry e) async {
+    final tokenOk = await FirestoreAuthGate.ensureFreshIdToken();
+    if (!tokenOk) {
+      _snack(FirestoreAuthGate.missingAuthMessage(), error: true);
+      return;
+    }
+    _notes.clear();
+    if (!mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Request corrections?'),
+        content: TextField(
+          controller: _notes,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            labelText: 'What must the establishment correct? (required)',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (_notes.text.trim().isEmpty) return;
+              Navigator.pop(ctx, true);
+            },
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.brandOrange),
+            child: const Text('Request revision'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    if (_notes.text.trim().isEmpty) {
+      _snack('Describe the required corrections.', error: true);
+      return;
+    }
+    try {
+      await EstablishmentApprovalService.requestRevision(
+        e.id,
+        notes: _notes.text,
+      );
+      if (!mounted) return;
+      _snack('Revision requested for ${e.businessName}');
+    } catch (err) {
+      if (!mounted) return;
+      _snack('Request failed: $err', error: true);
     }
   }
 
@@ -341,6 +428,85 @@ class _OptacaEstablishmentReviewPanelState
     }
   }
 
+  Future<void> _edit(EstablishmentRegistryEntry e) async {
+    final tokenOk = await FirestoreAuthGate.ensureFreshIdToken();
+    if (!tokenOk) {
+      _snack(FirestoreAuthGate.missingAuthMessage(), error: true);
+      return;
+    }
+    if (!mounted) return;
+    final draft = await showDialog<_EstablishmentEditDraft>(
+      context: context,
+      builder: (ctx) => _EditEstablishmentDialog(entry: e),
+    );
+    if (draft == null) return;
+    final official = EstablishmentRegistrationService.categoryTypes.any(
+      (type) => type.toLowerCase() == draft.category.toLowerCase(),
+    );
+    try {
+      await EstablishmentApprovalService.updateProfile(
+        estId: e.id,
+        businessName: draft.businessName,
+        ownerName: draft.ownerName,
+        municipalityId: draft.municipalityId,
+        municipality: draft.municipality,
+        category: draft.category,
+        contactNumber: draft.contactNumber,
+        barangay: draft.barangay,
+        businessPermitNo: draft.businessPermitNo,
+        roomCount: draft.roomCount,
+        clearPendingCategory: official,
+      );
+      if (!mounted) return;
+      _snack('Updated ${draft.businessName}');
+    } catch (err) {
+      if (!mounted) return;
+      _snack('Update failed: $err', error: true);
+    }
+  }
+
+  Future<void> _delete(EstablishmentRegistryEntry e) async {
+    final tokenOk = await FirestoreAuthGate.ensureFreshIdToken();
+    if (!tokenOk) {
+      _snack(FirestoreAuthGate.missingAuthMessage(), error: true);
+      return;
+    }
+    if (!mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete establishment account?'),
+        content: Text(
+          '${e.businessName} will be removed. They will no longer be able to open the Establishment Dashboard.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: _kReject),
+            child: const Text('Delete account'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      final loginRemoved = await EstablishmentApprovalService.deleteAccount(e.id);
+      if (!mounted) return;
+      _snack(
+        loginRemoved
+            ? 'Deleted ${e.businessName}'
+            : 'Removed ${e.businessName}. The login email stays reserved until the account-delete server tool is deployed.',
+      );
+    } catch (err) {
+      if (!mounted) return;
+      _snack('Delete failed: $err', error: true);
+    }
+  }
+
   void _snack(String msg, {bool error = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -365,6 +531,8 @@ class _OptacaEstablishmentReviewPanelState
               'pending': all?.where((e) => e.isPending).length ?? 0,
               'active': all?.where((e) => e.isActive).length ?? 0,
               'rejected': all?.where((e) => e.isRejected).length ?? 0,
+              'needs_revision':
+                  all?.where((e) => e.needsRevision).length ?? 0,
               'all': all?.length ?? 0,
             };
 
@@ -474,7 +642,7 @@ class _OptacaEstablishmentReviewPanelState
               ),
               const SizedBox(height: 3),
               Text(
-                'Tap an establishment to view full details. Approve pending ones so they can file their monthly DOT register.',
+                'Tap an establishment to view full details. Approve a pending registration so that account can open the Establishment Dashboard.',
                 style: TextStyle(
                   fontSize: 12.5,
                   color: widget.textMuted,
@@ -543,6 +711,7 @@ class _OptacaEstablishmentReviewPanelState
     const tabs = [
       ('all', 'All', Icons.apps_rounded),
       ('pending', 'Pending', Icons.hourglass_top_rounded),
+      ('needs_revision', 'Needs revision', Icons.edit_note_rounded),
       ('active', 'Active', Icons.verified_rounded),
       ('rejected', 'Rejected', Icons.block_rounded),
     ];
@@ -693,6 +862,8 @@ class _OptacaEstablishmentReviewPanelState
                   onTap: () => _openDetails(e),
                   onApprove: () => _approve(e),
                   onReject: () => _reject(e),
+                  onEdit: () => _edit(e),
+                  onDelete: () => _delete(e),
                 ),
               ),
           ],
@@ -800,6 +971,8 @@ class _RegistryCard extends StatefulWidget {
     required this.onTap,
     required this.onApprove,
     required this.onReject,
+    required this.onEdit,
+    required this.onDelete,
   });
 
   final EstablishmentRegistryEntry entry;
@@ -809,6 +982,8 @@ class _RegistryCard extends StatefulWidget {
   final VoidCallback onTap;
   final VoidCallback onApprove;
   final VoidCallback onReject;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
 
   @override
   State<_RegistryCard> createState() => _RegistryCardState();
@@ -942,12 +1117,29 @@ class _RegistryCardState extends State<_RegistryCard> {
                             ),
                             const SizedBox(width: 2),
                             Padding(
-                              padding: const EdgeInsets.only(top: 12),
-                              child: Icon(
-                                Icons.chevron_right_rounded,
-                                color: _hover
-                                    ? widget.primaryColor
-                                    : widget.textMuted,
+                              padding: const EdgeInsets.only(top: 4),
+                              child: PopupMenuButton<String>(
+                                tooltip: 'Account actions',
+                                onSelected: (value) {
+                                  if (value == 'edit') widget.onEdit();
+                                  if (value == 'delete') widget.onDelete();
+                                },
+                                itemBuilder: (context) => const [
+                                  PopupMenuItem(
+                                    value: 'edit',
+                                    child: Text('Edit account'),
+                                  ),
+                                  PopupMenuItem(
+                                    value: 'delete',
+                                    child: Text('Delete account'),
+                                  ),
+                                ],
+                                icon: Icon(
+                                  Icons.more_vert_rounded,
+                                  color: _hover
+                                      ? widget.primaryColor
+                                      : widget.textMuted,
+                                ),
                               ),
                             ),
                           ],
@@ -1066,7 +1258,10 @@ class _EstablishmentDetailSheet extends StatelessWidget {
     required this.textMuted,
     this.onApprove,
     this.onReject,
+    this.onRequestRevision,
     this.onApproveCategory,
+    this.onEdit,
+    this.onDelete,
   });
 
   final EstablishmentRegistryEntry entry;
@@ -1075,7 +1270,10 @@ class _EstablishmentDetailSheet extends StatelessWidget {
   final Color textMuted;
   final Future<void> Function()? onApprove;
   final Future<void> Function()? onReject;
+  final Future<void> Function()? onRequestRevision;
   final Future<void> Function()? onApproveCategory;
+  final Future<void> Function()? onEdit;
+  final Future<void> Function()? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -1084,8 +1282,12 @@ class _EstablishmentDetailSheet extends StatelessWidget {
         ? null
         : _formatReviewedAt(e.reviewedAt!);
     final maxH = MediaQuery.sizeOf(context).height * 0.9;
-    final hasActions =
-        onApprove != null || onReject != null || onApproveCategory != null;
+    final hasActions = onApprove != null ||
+        onReject != null ||
+        onRequestRevision != null ||
+        onApproveCategory != null ||
+        onEdit != null ||
+        onDelete != null;
     final checkTimes = e.checkInTime.isNotEmpty || e.checkOutTime.isNotEmpty
         ? '${e.checkInTime.isEmpty ? '—' : e.checkInTime} – '
             '${e.checkOutTime.isEmpty ? '—' : e.checkOutTime}'
@@ -1194,23 +1396,64 @@ class _EstablishmentDetailSheet extends StatelessWidget {
                       ),
                       if (e.businessPermitUrl.isNotEmpty) ...[
                         const SizedBox(height: 12),
-                        OutlinedButton.icon(
-                          onPressed: () {
-                            final uri = Uri.tryParse(e.businessPermitUrl);
-                            if (uri != null) _launch(uri);
-                          },
-                          icon: const Icon(Icons.image_outlined, size: 18),
-                          label: const Text('View permit photo'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: primaryColor,
-                            side: BorderSide(
-                              color: primaryColor.withValues(alpha: 0.45),
-                            ),
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Container(
+                            height: 180,
+                            width: double.infinity,
+                            color: Colors.white,
+                            child: Image.network(
+                              e.businessPermitUrl,
+                              fit: BoxFit.contain,
+                              errorBuilder: (_, __, ___) => const Center(
+                                child: Text('Could not load permit preview'),
+                              ),
                             ),
                           ),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () => _openPermitZoom(
+                                  context,
+                                  e.businessPermitUrl,
+                                ),
+                                icon: const Icon(Icons.zoom_in_rounded, size: 18),
+                                label: const Text('Inspect permit'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: primaryColor,
+                                  side: BorderSide(
+                                    color: primaryColor.withValues(alpha: 0.45),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () {
+                                  final uri = Uri.tryParse(e.businessPermitUrl);
+                                  if (uri != null) _launch(uri);
+                                },
+                                icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                                label: const Text('Open file'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: textMuted,
+                                  side: const BorderSide(color: _kBorder),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ],
@@ -1502,6 +1745,38 @@ class _EstablishmentDetailSheet extends StatelessWidget {
     );
   }
 
+  void _openPermitZoom(BuildContext context, String url) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => Scaffold(
+          backgroundColor: const Color(0xFF0F172A),
+          appBar: AppBar(
+            backgroundColor: const Color(0xFF0F172A),
+            foregroundColor: Colors.white,
+            title: const Text('Business Permit'),
+          ),
+          body: SafeArea(
+            child: InteractiveViewer(
+              minScale: 0.8,
+              maxScale: 5,
+              child: Center(
+                child: Image.network(
+                  url,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const Text(
+                    'Could not load permit',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _actionBar(BuildContext context) {
     return Container(
       padding: EdgeInsets.fromLTRB(
@@ -1524,11 +1799,79 @@ class _EstablishmentDetailSheet extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (onEdit != null || onDelete != null)
+            Row(
+              children: [
+                if (onEdit != null)
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => onEdit!(),
+                      icon: const Icon(Icons.edit_outlined, size: 18),
+                      label: const Text('Edit account'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: primaryColor,
+                        side: BorderSide(
+                          color: primaryColor.withValues(alpha: 0.45),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+                if (onEdit != null && onDelete != null)
+                  const SizedBox(width: 10),
+                if (onDelete != null)
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => onDelete!(),
+                      icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                      label: const Text('Delete account'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _kReject,
+                        side: BorderSide(
+                          color: _kReject.withValues(alpha: 0.45),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          if ((onEdit != null || onDelete != null) &&
+              (onApproveCategory != null ||
+                  onRequestRevision != null ||
+                  onApprove != null ||
+                  onReject != null))
+            const SizedBox(height: 10),
           if (onApproveCategory != null) ...[
             OutlinedButton.icon(
               onPressed: () => onApproveCategory!(),
               icon: const Icon(Icons.category_outlined, size: 18),
               label: const Text('Publish category to official list'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: primaryColor,
+                side: BorderSide(color: primaryColor.withValues(alpha: 0.45)),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+            if (onApprove != null ||
+                onReject != null ||
+                onRequestRevision != null)
+              const SizedBox(height: 10),
+          ],
+          if (onRequestRevision != null) ...[
+            OutlinedButton.icon(
+              onPressed: () => onRequestRevision!(),
+              icon: const Icon(Icons.edit_note_rounded, size: 18),
+              label: const Text('Request corrections'),
               style: OutlinedButton.styleFrom(
                 foregroundColor: primaryColor,
                 side: BorderSide(color: primaryColor.withValues(alpha: 0.45)),
@@ -1762,6 +2105,255 @@ class _AeTypeSuggestionsInbox extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _EstablishmentEditDraft {
+  const _EstablishmentEditDraft({
+    required this.businessName,
+    required this.ownerName,
+    required this.municipalityId,
+    required this.municipality,
+    required this.category,
+    required this.contactNumber,
+    required this.barangay,
+    required this.businessPermitNo,
+    this.roomCount,
+  });
+
+  final String businessName;
+  final String ownerName;
+  final String municipalityId;
+  final String municipality;
+  final String category;
+  final String contactNumber;
+  final String barangay;
+  final String businessPermitNo;
+  final int? roomCount;
+}
+
+class _EditEstablishmentDialog extends StatefulWidget {
+  const _EditEstablishmentDialog({required this.entry});
+
+  final EstablishmentRegistryEntry entry;
+
+  @override
+  State<_EditEstablishmentDialog> createState() =>
+      _EditEstablishmentDialogState();
+}
+
+class _EditEstablishmentDialogState extends State<_EditEstablishmentDialog> {
+  late final TextEditingController _name;
+  late final TextEditingController _owner;
+  late final TextEditingController _contact;
+  late final TextEditingController _barangay;
+  late final TextEditingController _permit;
+  late final TextEditingController _rooms;
+  late String _municipalityId;
+  late String _category;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.entry;
+    _name = TextEditingController(text: e.businessName);
+    _owner = TextEditingController(text: e.ownerName);
+    _contact = TextEditingController(text: e.contactNumber);
+    _barangay = TextEditingController(text: e.barangay);
+    _permit = TextEditingController(text: e.businessPermitNo);
+    _rooms = TextEditingController(text: e.roomCount?.toString() ?? '');
+    final places = getMisamisOccidentalMunicipalities();
+    var id = normalizeMunicipalityId(e.municipalityId);
+    if (id.isEmpty) id = getMunicipalityIdFromName(e.municipality);
+    if (!places.any((place) => place.id == id)) {
+      id = places.isEmpty ? '' : places.first.id;
+    }
+    _municipalityId = id;
+    final current = e.category.trim();
+    final types = _categories(current);
+    _category = types.firstWhere(
+      (type) => type.toLowerCase() == current.toLowerCase(),
+      orElse: () => types.first,
+    );
+  }
+
+  List<String> _categories(String current) {
+    final builtIn = EstablishmentRegistrationService.categoryTypes;
+    if (current.isEmpty ||
+        builtIn.any((type) => type.toLowerCase() == current.toLowerCase())) {
+      return builtIn;
+    }
+    return [...builtIn, current];
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _owner.dispose();
+    _contact.dispose();
+    _barangay.dispose();
+    _permit.dispose();
+    _rooms.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final name = _name.text.trim();
+    final owner = _owner.text.trim();
+    final roomsRaw = _rooms.text.trim();
+    int? rooms;
+    if (name.isEmpty || owner.isEmpty || _municipalityId.isEmpty) {
+      setState(() => _error = 'Business name, owner, and municipality are required.');
+      return;
+    }
+    if (roomsRaw.isNotEmpty) {
+      rooms = int.tryParse(roomsRaw);
+      if (rooms == null || rooms < 0) {
+        setState(() => _error = 'Rooms must be a whole number.');
+        return;
+      }
+    }
+    final place = getMisamisOccidentalMunicipalities().firstWhere(
+      (item) => item.id == _municipalityId,
+    );
+    Navigator.pop(
+      context,
+      _EstablishmentEditDraft(
+        businessName: name,
+        ownerName: owner,
+        municipalityId: place.id,
+        municipality: place.name,
+        category: _category,
+        contactNumber: _contact.text.trim(),
+        barangay: _barangay.text.trim(),
+        businessPermitNo: _permit.text.trim(),
+        roomCount: rooms,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final places = getMisamisOccidentalMunicipalities();
+    final types = _categories(widget.entry.category.trim());
+    final email = widget.entry.email.trim();
+    return AlertDialog(
+      title: const Text('Edit establishment account'),
+      content: SizedBox(
+        width: 420,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (email.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    'Login email stays $email.',
+                    style: const TextStyle(fontSize: 13, height: 1.35),
+                  ),
+                ),
+              TextField(
+                controller: _name,
+                decoration: const InputDecoration(
+                  labelText: 'Business name',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _owner,
+                decoration: const InputDecoration(
+                  labelText: 'Owner name',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              DropdownButtonFormField<String>(
+                initialValue: _municipalityId.isEmpty ? null : _municipalityId,
+                decoration: const InputDecoration(
+                  labelText: 'Municipality',
+                  border: OutlineInputBorder(),
+                ),
+                items: [
+                  for (final place in places)
+                    DropdownMenuItem(value: place.id, child: Text(place.name)),
+                ],
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() => _municipalityId = value);
+                },
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _barangay,
+                decoration: const InputDecoration(
+                  labelText: 'Barangay',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              DropdownButtonFormField<String>(
+                initialValue: _category,
+                decoration: const InputDecoration(
+                  labelText: 'Category',
+                  border: OutlineInputBorder(),
+                ),
+                items: [
+                  for (final type in types)
+                    DropdownMenuItem(value: type, child: Text(type)),
+                ],
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() => _category = value);
+                },
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _contact,
+                decoration: const InputDecoration(
+                  labelText: 'Contact number',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _permit,
+                decoration: const InputDecoration(
+                  labelText: 'Business permit no.',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _rooms,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Rooms',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 10),
+                Text(_error!, style: const TextStyle(color: _kReject)),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _save,
+          child: const Text('Save'),
+        ),
+      ],
     );
   }
 }

@@ -30,9 +30,13 @@ import 'package:atmos_trs_system/services/registration_completion_service.dart';
 import 'package:atmos_trs_system/services/registration_rollback_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/utils/email_utils.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 /// OTP verification before tourist dashboard: code is emailed to the user
 /// (open Inbox; Spam only if missing). No on-device OTP popup during signup.
+///
+/// Establishment / LGU signup reuses this screen with role-specific copy and
+/// stronger "Check Your Email" actions (Open Email / Resend / I've Verified).
 class VerifyOtpScreen extends StatefulWidget {
   const VerifyOtpScreen({super.key});
 
@@ -58,6 +62,8 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
   int? _expirySecondsLeft;
   Timer? _expiryTicker;
   String? _contactEmail;
+  /// `tourism_establishment` | `tourism` | tourist (default).
+  String _accountType = 'tourist';
   /// Set after a successful code check; the "Verified!" view runs it on
   /// "Go to Dashboard".
   Future<void> Function()? _goToDashboard;
@@ -66,6 +72,13 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
   String _verifiedEmail = '';
   bool _verifiedIsStaff = false;
   bool _verifiedAwaitingApproval = false;
+  AppLifecycleListener? _lifecycleListener;
+
+  bool get _isEstablishmentFlow =>
+      _accountType == 'tourism_establishment' || _accountType == 'establishment';
+
+  bool get _isLguFlow =>
+      _accountType == 'tourism' || _accountType == 'tourism_office';
 
   static const Color _verifyOrange = Color(0xFFFF6B00);
   static const Color _textDark = Color(0xFF1C1917);
@@ -123,6 +136,16 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
         ),
       );
     }
+    _lifecycleListener = AppLifecycleListener(
+      onResume: () {
+        if (_goToDashboard != null || _checkingEmailVerified || _submitting) {
+          return;
+        }
+        if (_isEstablishmentFlow || _isLguFlow) {
+          unawaited(_quietRecheckEmailVerified());
+        }
+      },
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map) {
@@ -139,9 +162,26 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
         if (args['emailDeliveryFailed'] == true) {
           _emailDeliveryFailed = true;
         }
+        final type = args['accountType']?.toString().trim().toLowerCase();
+        if (type != null && type.isNotEmpty) {
+          _accountType = type;
+        }
       }
       unawaited(_bootstrapVerifyScreen());
     });
+  }
+
+  Future<void> _quietRecheckEmailVerified() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    try {
+      final verified = await AuthService.reloadAndCheckEmailVerified()
+          .timeout(const Duration(seconds: 8));
+      if (!mounted || !verified || _goToDashboard != null) return;
+      await _submit(firebaseEmailVerified: true);
+    } catch (_) {
+      // Silent — user can still tap I've Verified or enter OTP.
+    }
   }
 
   Future<void> _bootstrapVerifyScreen() async {
@@ -150,6 +190,16 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
     await PendingLguRegistrationCache.hydrate();
     final pendingTourist = _pendingTourist();
     final u = FirebaseAuth.instance.currentUser;
+    if (!_isEstablishmentFlow &&
+        u != null &&
+        PendingEstablishmentRegistrationCache.forUid(u.uid) != null) {
+      _accountType = 'tourism_establishment';
+    }
+    if (!_isLguFlow &&
+        u != null &&
+        PendingLguRegistrationCache.forUid(u.uid) != null) {
+      _accountType = 'tourism';
+    }
 
     // Deferred Auth: no Firebase user yet — stay on OTP with local pending.
     if (u == null && pendingTourist != null && pendingTourist.authDeferred) {
@@ -428,6 +478,7 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
 
   @override
   void dispose() {
+    _lifecycleListener?.dispose();
     _expiryTicker?.cancel();
     _otpController.dispose();
     for (final c in _digitControllers) {
@@ -899,8 +950,9 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
       if (!mounted) return;
       _showVerified(() async {
         if (profileForRoute.isTourismEstablishment ||
-            route == '/establishment-dashboard') {
-          Navigator.pushReplacementNamed(context, '/establishment-dashboard');
+            route == '/establishment-dashboard' ||
+            route == '/establishment-pending-approval') {
+          Navigator.pushReplacementNamed(context, route);
         } else if (profileForRoute.isTourismOffice ||
             route == '/lgu-dashboard') {
           Navigator.pushReplacementNamed(context, '/lgu-dashboard');
@@ -1087,9 +1139,23 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
       }());
 
       final pending = PendingRegistrationCache.forUid(user.uid);
+      final estPending = PendingEstablishmentRegistrationCache.forUid(user.uid);
+      final lguPending = PendingLguRegistrationCache.forUid(user.uid);
       final pendingName = pending?.touristData['fullName']?.toString().trim() ?? '';
-      final name = pendingName.isNotEmpty ? pendingName : email.split('@').first;
-      final mobile = pending?.touristData['mobile']?.toString().trim() ?? '';
+      final estName = (estPending?.establishmentData['businessName'] ??
+              estPending?.userData['businessName'] ??
+              '')
+          .toString()
+          .trim();
+      final lguName =
+          (lguPending?.userData['fullName'] ?? '').toString().trim();
+      final name = pendingName.isNotEmpty
+          ? pendingName
+          : (estName.isNotEmpty
+              ? estName
+              : (lguName.isNotEmpty ? lguName : email.split('@').first));
+      final mobile = pending?.touristData['mobile']?.toString().trim() ??
+          (estPending?.userData['contactNumber'] ?? '').toString().trim();
 
       final delivery = await OtpDeliveryService.deliverVerificationCode(
         uid: user.uid,
@@ -1210,7 +1276,7 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
     if (!mounted) return;
     Navigator.pushReplacementNamed(
       context,
-      '/signup',
+      '/signup-tourist',
       arguments: <String, dynamic>{'editPending': true},
     );
   }
@@ -1281,208 +1347,451 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
         await _onEditSignupDetails();
       },
       child: Scaffold(
+        resizeToAvoidBottomInset: true,
         body: Stack(
           children: [
             const Positioned.fill(child: _OtpGradientBackdrop()),
             SafeArea(
-              child: Center(
-                child: SingleChildScrollView(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: width < 400 ? 16 : 24,
-                    vertical: 28,
-                  ),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: cardMaxWidth),
-                    child: _OtpGlassCard(
-                      child: verified
-                          ? _buildVerifiedView(width)
-                          : Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _buildEnvelopeBadge(),
-                          const SizedBox(height: 28),
-                          Text(
-                            'Verify your Email',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: width < 380 ? 24 : 28,
-                              fontWeight: FontWeight.w800,
-                              color: _textDark,
-                              letterSpacing: -0.4,
-                              height: 1.15,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          const Text(
-                            'Open your email Inbox for the 6-digit code, '
-                            'then enter it below (Spam only if missing).',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 15,
-                              color: _textMuted,
-                              height: 1.4,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            masked,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w700,
-                              color: _verifyOrange,
-                              letterSpacing: 0.2,
-                            ),
-                          ),
-                          const SizedBox(height: 14),
-                          Text(
-                            _expiryLabel(),
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: (_expirySecondsLeft != null &&
-                                      _expirySecondsLeft! <= 0)
-                                  ? Colors.red.shade700
-                                  : _textMuted.withValues(alpha: 0.95),
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          if (_statusBanner != null) ...[
-                            const SizedBox(height: 14),
-                            Text(
-                              _statusBanner!,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 13,
-                                height: 1.35,
-                                color: _isDeliveryFailureBanner(_statusBanner!)
-                                    ? Colors.red.shade700
-                                    : _verifyOrange,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                          if (_resending) ...[
-                            const SizedBox(height: 12),
-                            const SizedBox(
-                              width: 22,
-                              height: 22,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.2,
-                                color: _verifyOrange,
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 28),
-                          _buildOtpBoxes(width),
-                          const SizedBox(height: 28),
-                          SizedBox(
-                            width: double.infinity,
-                            height: 52,
-                            child: FilledButton(
-                              onPressed: _submitting ||
-                                      _otpController.text.length != 6
-                                  ? null
-                                  : _submit,
-                              style: FilledButton.styleFrom(
-                                backgroundColor: _verifyOrange,
-                                disabledBackgroundColor:
-                                    _verifyOrange.withValues(alpha: 0.45),
-                                foregroundColor: Colors.white,
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  const verticalPad = 28.0;
+                  final horizontalPad = width < 400 ? 16.0 : 24.0;
+                  return SingleChildScrollView(
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: EdgeInsets.fromLTRB(
+                      horizontalPad,
+                      verticalPad,
+                      horizontalPad,
+                      verticalPad,
+                    ),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minHeight: math.max(
+                          0,
+                          constraints.maxHeight - (verticalPad * 2),
+                        ),
+                        maxWidth: cardMaxWidth,
+                      ),
+                      child: Center(
+                        child: _OtpGlassCard(
+                          child: verified
+                              ? _buildVerifiedView(width)
+                              : _buildPendingVerificationCard(
+                                  width: width,
+                                  emailText: emailText,
+                                  masked: masked,
+                                  hasPendingSignup: hasPendingSignup,
                                 ),
-                              ),
-                              child: AnimatedSwitcher(
-                                duration: const Duration(milliseconds: 200),
-                                child: _submitting
-                                    ? const SizedBox(
-                                        key: ValueKey('loading'),
-                                        width: 22,
-                                        height: 22,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2.2,
-                                          color: Colors.white,
-                                        ),
-                                      )
-                                    : const Text(
-                                        key: ValueKey('label'),
-                                        'Verify',
-                                        style: TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w700,
-                                          letterSpacing: 0.2,
-                                        ),
-                                      ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 22),
-                          _buildResendRow(),
-                          if (hasPendingSignup) ...[
-                            const SizedBox(height: 8),
-                            TextButton(
-                              onPressed: _onEditSignupDetails,
-                              style: TextButton.styleFrom(
-                                foregroundColor: _verifyOrange,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 8,
-                                ),
-                              ),
-                              child: const Text(
-                                'Wrong email? Edit details',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 4),
-                          TextButton(
-                            onPressed: () async {
-                              if (hasPendingSignup) {
-                                await _onCancelRegistration();
-                                return;
-                              }
-                              await FirebaseAuth.instance.signOut();
-                              await SessionStorage.clearSession();
-                              AuthConfig.currentUserUid = null;
-                              if (context.mounted) {
-                                Navigator.pushReplacementNamed(
-                                  context,
-                                  '/login',
-                                );
-                              }
-                            },
-                            style: TextButton.styleFrom(
-                              foregroundColor: _textMuted,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                            ),
-                            child: Text(
-                              hasPendingSignup ? 'Cancel signup' : 'Log out',
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
                     ),
-                  ),
-                ),
+                  );
+                },
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildPendingVerificationCard({
+    required double width,
+    required String emailText,
+    required String masked,
+    required bool hasPendingSignup,
+  }) {
+    final title = _isEstablishmentFlow || _isLguFlow
+        ? 'Check Your Email'
+        : 'Verify your Email';
+    final subtitle = _isEstablishmentFlow
+        ? "We've sent a verification link and 6-digit code to your email address. "
+            'Please verify your email to continue your establishment registration.'
+        : _isLguFlow
+            ? "We've sent a verification code to your email. "
+                'Verify your email to continue LGU registration.'
+            : 'Open your email Inbox for the 6-digit code, '
+                'then enter it below (Spam only if missing).';
+    final displayEmail =
+        emailText.isNotEmpty ? emailText : (masked.isNotEmpty ? masked : 'your email');
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildEnvelopeBadge(),
+        const SizedBox(height: 28),
+        Text(
+          title,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: width < 380 ? 24 : 28,
+            fontWeight: FontWeight.w800,
+            color: _textDark,
+            letterSpacing: -0.4,
+            height: 1.15,
+          ),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          subtitle,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            fontSize: 15,
+            color: _textMuted,
+            height: 1.4,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF7ED),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _verifyOrange.withValues(alpha: 0.2)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.mail_outline_rounded, color: _verifyOrange, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  displayEmail,
+                  textAlign: TextAlign.left,
+                  style: const TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                    color: _textDark,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (_isEstablishmentFlow || _isLguFlow) ...[
+          const SizedBox(height: 14),
+          _buildVerificationSteps(),
+        ],
+        const SizedBox(height: 14),
+        Text(
+          _expiryLabel(),
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 13,
+            color: (_expirySecondsLeft != null && _expirySecondsLeft! <= 0)
+                ? Colors.red.shade700
+                : _textMuted.withValues(alpha: 0.95),
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        if (_statusBanner != null) ...[
+          const SizedBox(height: 14),
+          Text(
+            _statusBanner!,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.35,
+              color: _isDeliveryFailureBanner(_statusBanner!)
+                  ? Colors.red.shade700
+                  : _verifyOrange,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+        if (_resending) ...[
+          const SizedBox(height: 12),
+          const SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(
+              strokeWidth: 2.2,
+              color: _verifyOrange,
+            ),
+          ),
+        ],
+        if (_isEstablishmentFlow || _isLguFlow) ...[
+          const SizedBox(height: 18),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: OutlinedButton.icon(
+              onPressed: _openEmailApp,
+              icon: const Icon(Icons.open_in_new_rounded, size: 18),
+              label: const Text(
+                'Open Email',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+              ),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _verifyOrange,
+                side: BorderSide(color: _verifyOrange.withValues(alpha: 0.55)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+            ),
+          ),
+        ],
+        const SizedBox(height: 22),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            _isEstablishmentFlow || _isLguFlow
+                ? 'Or enter the 6-digit code from your email'
+                : 'Enter verification code',
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: _textMuted,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        _buildOtpBoxes(),
+        const SizedBox(height: 22),
+        SizedBox(
+          width: double.infinity,
+          height: 52,
+          child: FilledButton(
+            onPressed:
+                _submitting || _otpController.text.length != 6 ? null : _submit,
+            style: FilledButton.styleFrom(
+              backgroundColor: _verifyOrange,
+              disabledBackgroundColor: _verifyOrange.withValues(alpha: 0.45),
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              child: _submitting
+                  ? const SizedBox(
+                      key: ValueKey('loading'),
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : Text(
+                      key: const ValueKey('label'),
+                      _isEstablishmentFlow ? 'Verify & Continue' : 'Verify',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        if (_isEstablishmentFlow || _isLguFlow)
+          _buildEstablishmentActionButtons()
+        else
+          _buildResendRow(),
+        if (hasPendingSignup) ...[
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: _onEditSignupDetails,
+            style: TextButton.styleFrom(
+              foregroundColor: _verifyOrange,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            ),
+            child: const Text(
+              'Wrong email? Edit details',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+        const SizedBox(height: 4),
+        TextButton(
+          onPressed: () async {
+            if (hasPendingSignup) {
+              await _onCancelRegistration();
+              return;
+            }
+            // Establishment / LGU: leave Auth session and keep pending cache
+            // so login can resume verification (do not delete the account).
+            await FirebaseAuth.instance.signOut();
+            await SessionStorage.clearSession();
+            AuthConfig.currentUserUid = null;
+            if (mounted) {
+              Navigator.pushReplacementNamed(context, '/login');
+            }
+          },
+          style: TextButton.styleFrom(
+            foregroundColor: _textMuted,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          ),
+          child: Text(
+            hasPendingSignup
+                ? 'Cancel signup'
+                : (_isEstablishmentFlow || _isLguFlow
+                    ? 'Back to Login'
+                    : 'Log out'),
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVerificationSteps() {
+    final steps = _isEstablishmentFlow
+        ? const [
+            ('1', 'Open your Inbox (and Spam if needed)'),
+            ('2', 'Open the ATMOS TRS verification message'),
+            ('3', 'Tap the verification link or enter the 6-digit code'),
+            ('4', 'Return here and continue registration'),
+          ]
+        : const [
+            ('1', 'Open your email Inbox'),
+            ('2', 'Find the ATMOS TRS verification code'),
+            ('3', 'Enter the 6-digit code below'),
+          ];
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'How to verify',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              color: _textDark,
+            ),
+          ),
+          const SizedBox(height: 8),
+          for (final step in steps)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 22,
+                    height: 22,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF7ED),
+                      borderRadius: BorderRadius.circular(7),
+                      border: Border.all(
+                        color: _verifyOrange.withValues(alpha: 0.35),
+                      ),
+                    ),
+                    child: Text(
+                      step.$1,
+                      style: const TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w800,
+                        color: _verifyOrange,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      step.$2,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        height: 1.35,
+                        fontWeight: FontWeight.w500,
+                        color: _textMuted,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEstablishmentActionButtons() {
+    final canResend = !_resending && _cooldown <= 0 && !_checkingEmailVerified;
+    return Column(
+      children: [
+        SizedBox(
+          width: double.infinity,
+          height: 46,
+          child: OutlinedButton(
+            onPressed: canResend ? () => _resend() : null,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: _verifyOrange,
+              side: BorderSide(color: _verifyOrange.withValues(alpha: 0.55)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: Text(
+              _resending
+                  ? 'Sending…'
+                  : (_cooldown > 0
+                      ? 'Resend in ${_formatCooldown(_cooldown)}'
+                      : 'Resend Verification Email'),
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          height: 46,
+          child: FilledButton(
+            onPressed: (_checkingEmailVerified || _submitting || _resending)
+                ? null
+                : _onIveVerifiedMyEmail,
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF1F2937),
+              disabledBackgroundColor: const Color(0xFF1F2937).withValues(alpha: 0.45),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: Text(
+              _checkingEmailVerified ? 'Checking…' : "I've Verified My Email",
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _openEmailApp() async {
+    final email = _deliveryEmailFor(FirebaseAuth.instance.currentUser);
+    final candidates = <Uri>[
+      if (email.isNotEmpty) Uri(scheme: 'mailto', path: email),
+      Uri.parse('https://mail.google.com'),
+      Uri.parse('mailto:'),
+    ];
+    for (final uri in candidates) {
+      try {
+        if (await canLaunchUrl(uri)) {
+          final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+          if (ok) return;
+        }
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    _snack(
+      'Open your email app and look for the ATMOS TRS verification message.',
+      isError: false,
     );
   }
 
@@ -1868,12 +2177,18 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
     );
   }
 
-  Widget _buildOtpBoxes(double screenWidth) {
-    final gap = screenWidth < 360 ? 6.0 : 10.0;
+  Widget _buildOtpBoxes() {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final boxW =
-            ((constraints.maxWidth - gap * 5) / 6).clamp(40.0, 56.0);
+        final maxW = constraints.maxWidth;
+        var gap = maxW < 340 ? 6.0 : 8.0;
+        var boxW = (maxW - gap * 5) / 6;
+        if (boxW > 52) boxW = 52;
+        if (boxW < 32) {
+          gap = 4;
+          boxW = (maxW - gap * 5) / 6;
+        }
+        final digitSize = boxW < 40 ? 18.0 : 22.0;
         return Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: List.generate(6, (index) {
@@ -1881,7 +2196,6 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
               padding: EdgeInsets.only(left: index == 0 ? 0 : gap),
               child: SizedBox(
                 width: boxW,
-                height: boxW + 4,
                 child: AnimatedBuilder(
                   animation: _digitFocusNodes[index],
                   builder: (context, _) {
@@ -1908,8 +2222,8 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
                         keyboardType: TextInputType.number,
                         textAlign: TextAlign.center,
                         textAlignVertical: TextAlignVertical.center,
-                        style: const TextStyle(
-                          fontSize: 22,
+                        style: TextStyle(
+                          fontSize: digitSize,
                           fontWeight: FontWeight.w800,
                           color: _textDark,
                           height: 1.1,
@@ -1919,10 +2233,13 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
                           FilteringTextInputFormatter.digitsOnly,
                         ],
                         decoration: InputDecoration(
+                          isDense: true,
                           counterText: '',
                           filled: true,
                           fillColor: const Color(0xFFFFFBF7),
-                          contentPadding: EdgeInsets.zero,
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 14,
+                          ),
                           enabledBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
                             borderSide: BorderSide(
@@ -1987,7 +2304,9 @@ class _VerifyOtpScreenState extends State<VerifyOtpScreen> {
       if (!mounted) return;
       if (!verified) {
         _snack(
-          'Firebase still shows this email as unverified. Open the verification message, then try again, or enter the 6-digit code.',
+          _isEstablishmentFlow
+              ? 'Email is still unverified. Open the ATMOS TRS message in your Inbox, tap the verification link (or enter the 6-digit code), then try again.'
+              : 'Firebase still shows this email as unverified. Open the verification message, then try again, or enter the 6-digit code.',
           isError: true,
         );
         return;

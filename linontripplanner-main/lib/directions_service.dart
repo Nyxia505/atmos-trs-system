@@ -26,46 +26,238 @@ class DirectionsResult {
   });
 }
 
-/// Fetches a driving road route: OSRM (OpenStreetMap, no key) first, then
-/// Google Directions as a fallback.
+/// Fetches a driving road route.
+///
+/// Order: **OpenRouteService via Cloudflare Worker** (primary) → public OSRM
+/// → Google (JS / Cloud Function / REST) as last-resort fallbacks.
 Future<DirectionsResult> getDirectionsRoute(List<LatLng> waypoints) async {
-  if (waypoints.length < 2) return const DirectionsResult();
+  if (waypoints.length < 2) {
+    return const DirectionsResult(
+      errorStatus: 'TOO_FEW_POINTS',
+      errorMessage: 'Need at least two waypoints for a road route.',
+    );
+  }
+
+  DirectionsResult last = const DirectionsResult(errorStatus: 'NO_RESPONSE');
+
+  if (kHasOrsDirectionsProxy) {
+    last = await _getDirectionsViaOrsProxy(waypoints);
+    if (last.polyline != null && last.polyline!.length >= 2) return last;
+  }
 
   final osrm = await _getDirectionsViaOsrm(waypoints);
-  if (osrm.polyline != null) return osrm;
+  if (osrm.polyline != null && osrm.polyline!.length >= 2) return osrm;
+  last = osrm;
 
   final keys = googleMapsApiKeysForDirections;
-  if (keys.isEmpty) return osrm;
-
-  DirectionsResult last = osrm;
+  if (keys.isEmpty) return last;
 
   if (kIsWeb) {
     last = await getDirectionsViaGoogleMapsJs(waypoints);
-    if (last.polyline != null) return last;
+    if (last.polyline != null && last.polyline!.length >= 2) return last;
   }
 
   for (final key in keys) {
     if (!kIsWeb) {
       last = await _getGoogleRoadRoute(waypoints, key);
-      if (last.polyline != null) return last;
+      if (last.polyline != null && last.polyline!.length >= 2) return last;
     }
 
     if (kIsWeb && directionsUseDeployedCloudFunction) {
       final cf = await _getDirectionsViaCloudFunction(waypoints, key);
-      if (cf.polyline != null) return cf;
+      if (cf.polyline != null && cf.polyline!.length >= 2) return cf;
       last = cf;
     }
 
     if (kIsWeb) {
       last = await _getGoogleRoadRoute(waypoints, key);
-      if (last.polyline != null) return last;
+      if (last.polyline != null && last.polyline!.length >= 2) return last;
     }
   }
   return last;
 }
 
+void _logDirections({
+  required String provider,
+  required int? httpStatus,
+  required String? error,
+  required int pointCount,
+}) {
+  // ignore: avoid_print
+  print(
+    '[directions] provider=$provider httpStatus=${httpStatus ?? '-'} '
+    'error=${error ?? '-'} points=$pointCount',
+  );
+}
+
+/// Primary: Cloudflare Worker → OpenRouteService GeoJSON LineString.
+/// Two attempts with delay. API key never leaves the Worker.
+Future<DirectionsResult> _getDirectionsViaOrsProxy(
+  List<LatLng> waypoints,
+) async {
+  DirectionsResult last = const DirectionsResult(
+    errorStatus: 'ORS_NO_RESPONSE',
+    errorMessage: 'OpenRouteService proxy did not respond.',
+  );
+  for (var attempt = 0; attempt < 2; attempt++) {
+    last = await _getDirectionsViaOrsProxyOnce(waypoints, attempt: attempt);
+    if (last.polyline != null && last.polyline!.length >= 2) return last;
+    if (attempt == 0) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+  }
+  return last;
+}
+
+Future<DirectionsResult> _getDirectionsViaOrsProxyOnce(
+  List<LatLng> waypoints, {
+  required int attempt,
+}) async {
+  final url = kOrsDirectionsProxyUrl.trim();
+  if (url.isEmpty) {
+    return const DirectionsResult(
+      errorStatus: 'ORS_NOT_CONFIGURED',
+      errorMessage: 'ORS_DIRECTIONS_PROXY_URL is empty.',
+    );
+  }
+
+  // Deduplicate consecutive equal points (ORS rejects zero-length segments).
+  final coords = <List<double>>[];
+  for (final p in waypoints) {
+    final pair = <double>[p.longitude, p.latitude];
+    if (coords.isEmpty ||
+        (coords.last[0] - pair[0]).abs() > 1e-7 ||
+        (coords.last[1] - pair[1]).abs() > 1e-7) {
+      coords.add(pair);
+    }
+  }
+  if (coords.length < 2) {
+    _logDirections(
+      provider: 'openrouteservice',
+      httpStatus: null,
+      error: 'TOO_FEW_POINTS',
+      pointCount: 0,
+    );
+    return const DirectionsResult(
+      errorStatus: 'TOO_FEW_POINTS',
+      errorMessage: 'Need at least two distinct waypoints.',
+    );
+  }
+
+  try {
+    final response = await http
+        .post(
+          Uri.parse(url),
+          headers: const {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: jsonEncode({'coordinates': coords}),
+        )
+        .timeout(const Duration(seconds: 25));
+
+    final status = response.statusCode;
+    Map<String, dynamic>? map;
+    try {
+      map = jsonDecode(response.body) as Map<String, dynamic>?;
+    } catch (_) {
+      map = null;
+    }
+
+    if (map == null) {
+      _logDirections(
+        provider: 'openrouteservice',
+        httpStatus: status,
+        error: 'NO_RESPONSE',
+        pointCount: 0,
+      );
+      return DirectionsResult(
+        errorStatus: 'ORS_NO_RESPONSE',
+        errorMessage: 'HTTP $status with empty/invalid JSON (attempt ${attempt + 1})',
+      );
+    }
+
+    final err = (map['error'] ?? '').toString().trim();
+    if (err.isNotEmpty) {
+      final msg = (map['errorMessage'] ?? map['message'] ?? err).toString();
+      _logDirections(
+        provider: 'openrouteservice',
+        httpStatus: status,
+        error: err,
+        pointCount: 0,
+      );
+      return DirectionsResult(errorStatus: err, errorMessage: msg);
+    }
+
+    final pointsList = map['points'] as List<dynamic>?;
+    final polyline = <LatLng>[];
+    if (pointsList != null) {
+      for (final e in pointsList) {
+        if (e is! Map) continue;
+        final lat = (e['lat'] as num?)?.toDouble();
+        final lng = (e['lng'] as num?)?.toDouble();
+        if (lat == null || lng == null) continue;
+        if (lat.abs() > 90 || lng.abs() > 180) continue;
+        polyline.add(LatLng(lat, lng));
+      }
+    }
+
+    if (polyline.length < 2) {
+      _logDirections(
+        provider: 'openrouteservice',
+        httpStatus: status,
+        error: 'NO_POLYLINE',
+        pointCount: polyline.length,
+      );
+      return DirectionsResult(
+        errorStatus: 'NO_POLYLINE',
+        errorMessage:
+            'ORS returned ${polyline.length} point(s); need at least 2.',
+      );
+    }
+
+    _logDirections(
+      provider: 'openrouteservice',
+      httpStatus: status,
+      error: null,
+      pointCount: polyline.length,
+    );
+    return DirectionsResult(
+      polyline: polyline,
+      distanceMeters: (map['distanceMeters'] as num?)?.toDouble(),
+      durationSeconds: (map['durationSeconds'] as num?)?.toDouble(),
+    );
+  } catch (e) {
+    _logDirections(
+      provider: 'openrouteservice',
+      httpStatus: null,
+      error: e.toString(),
+      pointCount: 0,
+    );
+    return DirectionsResult(
+      errorStatus: 'ORS_ERROR',
+      errorMessage: e.toString(),
+    );
+  }
+}
+
 /// Public OSRM demo server; allows browser CORS and needs no API key.
+/// Retries once — the demo host is flaky on mobile networks.
 Future<DirectionsResult> _getDirectionsViaOsrm(List<LatLng> waypoints) async {
+  DirectionsResult last = const DirectionsResult(errorStatus: 'NO_RESPONSE');
+  for (var attempt = 0; attempt < 2; attempt++) {
+    last = await _getDirectionsViaOsrmOnce(waypoints);
+    if (last.polyline != null && last.polyline!.length >= 2) return last;
+    if (attempt == 0) {
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+    }
+  }
+  return last;
+}
+
+Future<DirectionsResult> _getDirectionsViaOsrmOnce(
+  List<LatLng> waypoints,
+) async {
   final coords = waypoints
       .map((p) => '${p.longitude},${p.latitude}')
       .join(';');
@@ -74,7 +266,7 @@ Future<DirectionsResult> _getDirectionsViaOsrm(List<LatLng> waypoints) async {
     '?overview=full&geometries=polyline',
   );
   try {
-    final response = await http.get(uri).timeout(const Duration(seconds: 15));
+    final response = await http.get(uri).timeout(const Duration(seconds: 20));
     final map = jsonDecode(response.body) as Map<String, dynamic>?;
     if (map == null) return const DirectionsResult(errorStatus: 'NO_RESPONSE');
     if (map['code'] != 'Ok') {
@@ -93,15 +285,33 @@ Future<DirectionsResult> _getDirectionsViaOsrm(List<LatLng> waypoints) async {
     }
     final points = decodePolyline(encoded);
     if (points.length < 2) {
+      _logDirections(
+        provider: 'osrm',
+        httpStatus: response.statusCode,
+        error: 'NO_POLYLINE',
+        pointCount: points.length,
+      );
       return const DirectionsResult(errorStatus: 'NO_POLYLINE');
     }
+    _logDirections(
+      provider: 'osrm',
+      httpStatus: response.statusCode,
+      error: null,
+      pointCount: points.length,
+    );
     return DirectionsResult(
       polyline: points,
       distanceMeters: (route?['distance'] as num?)?.toDouble(),
       durationSeconds: (route?['duration'] as num?)?.toDouble(),
     );
   } catch (e) {
-    return DirectionsResult(errorStatus: 'ERROR', errorMessage: e.toString());
+    _logDirections(
+      provider: 'osrm',
+      httpStatus: null,
+      error: e.toString(),
+      pointCount: 0,
+    );
+    return DirectionsResult(errorStatus: 'OSRM_ERROR', errorMessage: e.toString());
   }
 }
 

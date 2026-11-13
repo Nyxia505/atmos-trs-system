@@ -20,6 +20,7 @@ const {
   Timestamp,
 } = require('firebase-admin/firestore');
 const {getMessaging} = require('firebase-admin/messaging');
+const https = require('https');
 const {
   announcementPushCopy,
   isTourismEvent,
@@ -2225,6 +2226,38 @@ async function claimTouristSpotFcmSend(spotId) {
   }
 }
 
+function vrLinkOf(data) {
+  if (!data) return '';
+  return normalizeField(data.vr_link || data.vrLink);
+}
+
+/**
+ * One notification per VR URL. Saving the same link again does not re-notify.
+ */
+async function claimVrTourFcmSend(spotId, url) {
+  const id = normalizeField(spotId);
+  const link = normalizeField(url);
+  if (!id || !link) return false;
+  const ref = db.collection('tourist_spots').doc(id);
+  try {
+    return await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return false;
+      const data = snap.data() || {};
+      if (vrLinkOf(data) !== link) return false;
+      if (normalizeField(data.fcmSent_vrLink) === link) return false;
+      tx.update(ref, {
+        fcmSent_vrLink: link,
+        fcmSentVrAt: FieldValue.serverTimestamp(),
+      });
+      return true;
+    });
+  } catch (err) {
+    console.error('[claimVrTourFcmSend]', err);
+    return false;
+  }
+}
+
 async function sendTouristSpotTopicPush(spotId, data) {
   const name = normalizeField(data.name) || 'a new destination';
   const municipality =
@@ -2235,22 +2268,55 @@ async function sendTouristSpotTopicPush(spotId, data) {
   const title = 'New Tourist Destination!';
   const body =
     `A new tourist spot, "${name}", has been added in ${municipality}. Explore it now!`;
+  return sendTourismSpotsTopicMessage(spotId, {
+    title,
+    body,
+    type: 'new_spot',
+    name,
+    municipality,
+    tag: `tourist_spot_${spotId}`,
+  });
+}
+
+async function sendVrTourTopicPush(spotId, data, vrUrl) {
+  const name = normalizeField(data.name) || 'a tourist spot';
+  const municipality =
+    normalizeField(data.municipality) ||
+    normalizeField(data.municipalityName) ||
+    normalizeField(data.municipalityId) ||
+    'Misamis Occidental';
+  const title = 'New VR Tour!';
+  const body =
+    `A 360° VR tour is now available for "${name}" in ${municipality}. Open ATMOS to look around.`;
+  return sendTourismSpotsTopicMessage(spotId, {
+    title,
+    body,
+    type: 'new_vr_tour',
+    name,
+    municipality,
+    vrLink: normalizeField(vrUrl),
+    tag: `tourist_vr_${spotId}`,
+  });
+}
+
+async function sendTourismSpotsTopicMessage(spotId, details) {
   const messaging = getMessaging();
   const payload = {
-    notification: {title, body},
+    notification: {title: details.title, body: details.body},
     data: {
-      type: 'new_spot',
+      type: details.type,
       spotId: String(spotId || ''),
-      title: name,
-      municipality,
-      notificationBody: body,
+      title: details.name,
+      municipality: details.municipality,
+      notificationBody: details.body,
+      ...(details.vrLink ? {vrLink: details.vrLink} : {}),
     },
     android: {
       priority: 'high',
       notification: {
         channelId: 'tourism_spots_channel',
         sound: 'default',
-        tag: `tourist_spot_${spotId}`,
+        tag: details.tag,
       },
     },
     apns: {
@@ -2302,9 +2368,9 @@ async function sendTouristSpotTopicPush(spotId, data) {
 }
 
 /**
- * Notify Trip Planner / tourist apps when an LGU first publishes an Active spot.
- * Edits to an already-Active spot do not notify. Draft / Inactive create skips.
- * First transition Inactive → Active notifies once (claim on the doc).
+ * Notify tourist phones when an LGU publishes an Active spot, and again when
+ * that spot gains a new VR tour URL. Saving the same VR link does not repeat.
+ * Draft / Inactive spots are skipped.
  */
 exports.notifyNewTouristSpot = onDocumentWritten(
   {
@@ -2318,14 +2384,33 @@ exports.notifyNewTouristSpot = onDocumentWritten(
     const data = after.data() || {};
     if (!isActiveTouristSpotStatus(data.status)) return;
 
+    const beforeData = before && before.exists ? before.data() || {} : {};
+    const beforeLink = vrLinkOf(beforeData);
+    const afterLink = vrLinkOf(data);
+    const vrAdded = Boolean(afterLink) && afterLink !== beforeLink;
     const wasActive =
       before &&
       before.exists &&
-      isActiveTouristSpotStatus((before.data() || {}).status);
-    // Ordinary edits of an already-Active spot: no push.
-    if (wasActive) return;
+      isActiveTouristSpotStatus(beforeData.status);
 
     const spotId = event.params.spotId;
+    if (vrAdded) {
+      const claimedVr = await claimVrTourFcmSend(spotId, afterLink);
+      if (!claimedVr) {
+        console.log('[notifyNewTouristSpot] VR skip (already sent for this link)', spotId);
+      } else {
+        try {
+          await sendVrTourTopicPush(spotId, data, afterLink);
+        } catch (err) {
+          console.error('[notifyNewTouristSpot] VR FCM failed', err);
+        }
+      }
+    }
+
+    // Ordinary edits of an already-Active spot, and a first publish that
+    // already sent the VR alert, do not also send the generic new-spot push.
+    if (wasActive || vrAdded) return;
+
     const claimed = await claimTouristSpotFcmSend(spotId);
     if (!claimed) {
       console.log('[notifyNewTouristSpot] skip (already claimed or inactive)', spotId);
@@ -3657,6 +3742,41 @@ exports.optacaManageAccount = onCall(
       });
       return repaired;
     }
+    if (action === 'delete') {
+      if (accountType !== 'establishment') {
+        throw new HttpsError(
+          'permission-denied',
+          'Only establishment accounts can be deleted here.',
+        );
+      }
+      try {
+        await auth.deleteUser(uid);
+      } catch (err) {
+        const code = err && err.code ? String(err.code) : '';
+        if (code !== 'auth/user-not-found') {
+          console.error('[optacaManageAccount] deleteUser', code, err);
+          throw new HttpsError(
+            'internal',
+            (err && err.message) || 'Could not delete the establishment login.',
+          );
+        }
+      }
+      await deleteEstablishmentAccountDocs(uid);
+      try {
+        await writeAccountActivityLog({
+          actorUid: request.auth.uid,
+          actorName: caller.actorName,
+          targetUid: uid,
+          targetEmail: normalizeField(existing.email).toLowerCase(),
+          accountType,
+          action: 'Establishment Account Deleted',
+          result: 'success',
+        });
+      } catch (logErr) {
+        console.error('[optacaManageAccount] activity log after delete', logErr);
+      }
+      return {ok: true, authDeleted: true};
+    }
 
     throw new HttpsError('invalid-argument', 'Unknown account action.');
   },
@@ -3825,6 +3945,22 @@ async function resetManagedAccountPasswordDirect({
   }
 
   return {ok: true, mustChangePassword: true};
+}
+
+async function deleteEstablishmentAccountDocs(uid) {
+  const batch = db.batch();
+  batch.delete(db.collection('users').doc(uid));
+  batch.delete(db.collection('accommodation_establishments').doc(uid));
+  batch.delete(db.collection('email_otps').doc(uid));
+  const [names, reports, mice] = await Promise.all([
+    db.collection('usernames').where('uid', '==', uid).limit(10).get(),
+    db.collection('ae_monthly_reports').where('aeId', '==', uid).limit(40).get(),
+    db.collection('mice_monthly_reports').where('aeId', '==', uid).limit(40).get(),
+  ]);
+  for (const doc of names.docs) batch.delete(doc.ref);
+  for (const doc of reports.docs) batch.delete(doc.ref);
+  for (const doc of mice.docs) batch.delete(doc.ref);
+  await batch.commit();
 }
 
 function isEstablishmentRole(role) {
@@ -4580,3 +4716,150 @@ exports.createSpotCategory = onCall(
     return {ok: true, name: cleaned, alreadyExists: false};
   },
 );
+
+// ---------------------------------------------------------------------------
+// Trip Planner / ATMOS web directions proxy (CORS-safe Google Directions).
+// Client: linontripplanner-main/lib/directions_service.dart
+// URL: https://us-central1-<project>.cloudfunctions.net/getDirectionsHttp
+// ---------------------------------------------------------------------------
+
+function setDirectionsCorsHeaders(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Max-Age', '86400');
+}
+
+function decodeGooglePolyline(encoded) {
+  const points = [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+  while (index < encoded.length) {
+    let b;
+    let shift = 0;
+    let result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlat = result & 1 ? ~(result >> 1) : result >> 1;
+    lat += dlat;
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlng = result & 1 ? ~(result >> 1) : result >> 1;
+    lng += dlng;
+    points.push({lat: lat / 1e5, lng: lng / 1e5});
+  }
+  return points;
+}
+
+function runGoogleDirectionsProxy(origin, destination, waypoints, apiKey) {
+  const params = new URLSearchParams({
+    origin,
+    destination,
+    mode: 'driving',
+    key: apiKey,
+  });
+  if (waypoints && String(waypoints).trim()) {
+    params.set('waypoints', waypoints);
+  }
+  const url =
+    `https://maps.googleapis.com/maps/api/directions/json?${params.toString()}`;
+  return new Promise((resolve) => {
+    https
+      .get(url, (res) => {
+        let body = '';
+        res.on('data', (chunk) => (body += chunk));
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(body);
+            if (json.status !== 'OK') {
+              return resolve({
+                error: json.status || 'UNKNOWN',
+                errorMessage: json.error_message || null,
+              });
+            }
+            const routes = json.routes;
+            if (!routes || routes.length === 0) {
+              return resolve({error: 'ZERO_RESULTS'});
+            }
+            const route = routes[0];
+            const legs = route.legs || [];
+            const points = [];
+            for (const leg of legs) {
+              for (const step of leg.steps || []) {
+                const pl = step.polyline && step.polyline.points;
+                if (!pl) continue;
+                for (const p of decodeGooglePolyline(pl)) {
+                  const last = points[points.length - 1];
+                  if (last && last.lat === p.lat && last.lng === p.lng) continue;
+                  points.push(p);
+                }
+              }
+            }
+            if (points.length === 0) {
+              const encoded =
+                route.overview_polyline && route.overview_polyline.points;
+              if (!encoded) return resolve({error: 'NO_POLYLINE'});
+              return resolve({encodedPolyline: encoded});
+            }
+            resolve({points});
+          } catch (e) {
+            resolve({
+              error: 'INTERNAL',
+              errorMessage: e.message || String(e),
+            });
+          }
+        });
+      })
+      .on('error', (err) => {
+        resolve({
+          error: 'INTERNAL',
+          errorMessage: err.message || String(err),
+        });
+      });
+  });
+}
+
+/** HTTP + CORS proxy so Flutter web can fetch Google Directions. */
+exports.getDirectionsHttp = functionsV1.https.onRequest(async (req, res) => {
+  setDirectionsCorsHeaders(res);
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('');
+    return;
+  }
+  if (req.method !== 'POST') {
+    res.status(405).json({error: 'METHOD_NOT_ALLOWED'});
+    return;
+  }
+  try {
+    const data = req.body && req.body.data != null ? req.body.data : req.body;
+    const {origin, destination, waypoints = '', apiKey} = data || {};
+    if (!origin || !destination || !apiKey) {
+      res.status(400).json({
+        error: 'invalid-argument',
+        errorMessage: 'Missing origin, destination, or apiKey',
+      });
+      return;
+    }
+    const result = await runGoogleDirectionsProxy(
+      origin,
+      destination,
+      waypoints,
+      apiKey,
+    );
+    res.status(200).json(result);
+  } catch (e) {
+    res.status(500).json({
+      error: 'INTERNAL',
+      errorMessage: e.message || e.stack || String(e),
+    });
+  }
+});

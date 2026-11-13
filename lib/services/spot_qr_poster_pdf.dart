@@ -30,11 +30,23 @@ class SpotPosterItem {
 
 PdfColor _pdf(Color c) => PdfColor.fromInt(c.toARGB32());
 
+pw.Font _posterBaseFont(SpotQrPosterAssets assets) {
+  final data = assets.regularFontData;
+  if (data == null) return pw.Font.helvetica();
+  return pw.Font.ttf(data);
+}
+
+pw.Font _posterBoldFont(SpotQrPosterAssets assets) {
+  final data = assets.boldFontData;
+  if (data == null) return pw.Font.helveticaBold();
+  return pw.Font.ttf(data);
+}
+
 /// Builds an A4 portrait PDF using the same poster layout as the PNG export.
 Future<pw.Document> buildSpotPosterPdfDocument(List<SpotPosterItem> spots) async {
   final assets = await SpotQrPosterAssets.load();
-  final base = pw.Font.ttf(assets.regularFontData);
-  final bold = pw.Font.ttf(assets.boldFontData);
+  final base = _posterBaseFont(assets);
+  final bold = _posterBoldFont(assets);
   final pdf = pw.Document(
     theme: pw.ThemeData.withFont(base: base, bold: bold),
   );
@@ -64,8 +76,8 @@ Future<pw.Document> buildSpotPosterPdfDocument(List<SpotPosterItem> spots) async
 
 Future<Uint8List> renderSpotQrPosterPdf(SpotQrPosterData data) async {
   final assets = await SpotQrPosterAssets.load();
-  final base = pw.Font.ttf(assets.regularFontData);
-  final bold = pw.Font.ttf(assets.boldFontData);
+  final base = _posterBaseFont(assets);
+  final bold = _posterBoldFont(assets);
   final doc = pw.Document(
     theme: pw.ThemeData.withFont(base: base, bold: bold),
   );

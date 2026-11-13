@@ -12,6 +12,25 @@ import '../road_route_service.dart';
 import '../tourist_plan/tourist_travel_estimates.dart' show formatHoursMinutes;
 import 'trip_route_osm_map_view.dart';
 
+/// Status of an in-map road-route fetch (for parent screens / retry banners).
+class TripRouteDirectionsStatus {
+  const TripRouteDirectionsStatus({
+    required this.loading,
+    required this.failed,
+    this.errorStatus,
+    this.errorMessage,
+    this.routeKm,
+    this.routeMinutes,
+  });
+
+  final bool loading;
+  final bool failed;
+  final String? errorStatus;
+  final String? errorMessage;
+  final double? routeKm;
+  final int? routeMinutes;
+}
+
 /// Trip route map (flutter_map) with start/end pins, spots, and road polyline.
 class TripRouteMapView extends StatefulWidget {
   final Municipality start;
@@ -40,6 +59,12 @@ class TripRouteMapView extends StatefulWidget {
   final bool showBusStops;
   final bool showBusTerminals;
 
+  /// Lift loading / error overlays above a parent bottom sheet (logical px).
+  final double overlayBottomInset;
+
+  /// Notifies parents when the road polyline fetch starts / succeeds / fails.
+  final ValueChanged<TripRouteDirectionsStatus>? onDirectionsStatus;
+
   const TripRouteMapView({
     super.key,
     required this.start,
@@ -60,6 +85,8 @@ class TripRouteMapView extends StatefulWidget {
     this.showTouristSpots = true,
     this.showBusStops = true,
     this.showBusTerminals = true,
+    this.overlayBottomInset = 0,
+    this.onDirectionsStatus,
   });
 
   @override
@@ -114,6 +141,22 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
     return true;
   }
 
+  void _emitDirectionsStatus() {
+    widget.onDirectionsStatus?.call(
+      TripRouteDirectionsStatus(
+        loading: _loadingDirections,
+        failed: _directionsFailed,
+        errorStatus: _directionsErrorStatus,
+        errorMessage: _directionsErrorMessage,
+        routeKm: _routeKm,
+        routeMinutes: _routeMinutes,
+      ),
+    );
+  }
+
+  /// Public retry for parent screens (e.g. ATMOS spot directions sheet).
+  void retryDirections() => _fetchDirections();
+
   Future<void> _fetchDirections() async {
     final generation = ++_fetchGeneration;
     final direction = widget.direction;
@@ -136,6 +179,7 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
           _directionsErrorMessage =
               'No ${direction.name} route from ${widget.start.name} to ${widget.end.name}.';
         });
+        _emitDirectionsStatus();
         return;
       }
     }
@@ -150,6 +194,7 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
         _directionsErrorStatus = null;
         _directionsErrorMessage = null;
       });
+      _emitDirectionsStatus();
       return;
     }
     setState(() {
@@ -159,6 +204,7 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
       _directionsErrorStatus = null;
       _directionsErrorMessage = null;
     });
+    _emitDirectionsStatus();
     final result = await getOrderedRoadRoute(
       stops,
       direction: widget.direction,
@@ -175,8 +221,10 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
           : (result.durationSeconds! / 60).round();
       _directionsErrorStatus = result.errorStatus;
       _directionsErrorMessage = result.errorMessage;
-      _directionsFailed = result.polyline == null;
+      _directionsFailed = result.polyline == null ||
+          (result.polyline != null && result.polyline!.length < 2);
     });
+    _emitDirectionsStatus();
     if (result.polyline != null && result.polyline!.length >= 2) {
       Future.delayed(const Duration(milliseconds: 200), () {
         if (mounted) fitRouteBounds();
@@ -389,7 +437,7 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
           Positioned(
             left: 16,
             right: 16,
-            bottom: 24,
+            bottom: 24 + widget.overlayBottomInset,
             child: GestureDetector(
               onTap: _fetchDirections,
               child: Container(
@@ -411,13 +459,15 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
                 child: Text(
                   _directionsErrorMessage != null &&
                           _directionsErrorMessage!.isNotEmpty
-                      ? _directionsErrorMessage!
+                      ? '${_directionsErrorMessage!} Tap to retry.'
                       : _directionsErrorStatus == 'REQUEST_DENIED'
-                      ? 'Enable Directions API on this key in Google Cloud, then tap to retry.'
+                      ? 'Google Directions needs Billing enabled on the project. Tap to retry.'
                       : _directionsErrorStatus == 'NO_GOOGLE_MAPS'
                       ? 'Route service is still loading. Tap to retry.'
                       : _directionsErrorStatus == 'NO_ROUTE'
                       ? 'No valid road route was found. Tap to retry.'
+                      : _directionsErrorStatus == 'OSRM_ERROR'
+                      ? 'Road server timed out. Tap to retry.'
                       : 'Road route: ${_directionsErrorStatus ?? "tap to retry"}',
                   style: const TextStyle(
                     color: AppColors.textGrey,
@@ -433,7 +483,7 @@ class TripRouteMapViewState extends State<TripRouteMapView> {
           Positioned(
             left: 16,
             right: 16,
-            bottom: 24,
+            bottom: 24 + widget.overlayBottomInset,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               decoration: BoxDecoration(

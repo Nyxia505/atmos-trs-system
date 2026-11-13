@@ -23,7 +23,7 @@ class CoachStep {
   final String title;
   final String body;
 
-  /// The user must tap the highlighted widget to continue (no Next button).
+  /// Pulses the target. The user can tap it or press Next to continue.
   final bool requireTap;
   final double padding;
   final String? primaryLabel;
@@ -480,6 +480,26 @@ class _CoachCard extends StatelessWidget {
                 }),
               ),
             ],
+            if (step.requireTap) ...[
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.touch_app_rounded, size: 18, color: accent),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Tap the highlighted button',
+                      style: theme.textTheme.labelLarge?.copyWith(
+                        color: accent,
+                        fontWeight: FontWeight.w700,
+                        height: 1.3,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 8),
             Row(
               children: [
@@ -494,33 +514,10 @@ class _CoachCard extends StatelessWidget {
                     child: Text(isIntro ? 'Skip' : 'Skip tour'),
                   ),
                 const Spacer(),
-                if (step.requireTap)
-                  Flexible(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.touch_app_rounded, size: 18, color: accent),
-                          const SizedBox(width: 6),
-                          Flexible(
-                            child: Text(
-                              'Tap the highlighted button',
-                              style: theme.textTheme.labelLarge?.copyWith(
-                                color: accent,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
-                else
-                  FilledButton(
-                    onPressed: onNext,
-                    child: Text(forwardLabel),
-                  ),
+                FilledButton(
+                  onPressed: onNext,
+                  child: Text(forwardLabel),
+                ),
               ],
             ),
           ],

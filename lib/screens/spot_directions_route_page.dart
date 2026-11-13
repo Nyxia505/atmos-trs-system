@@ -9,8 +9,6 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart' show LatLng;
 import 'package:share_plus/share_plus.dart';
 import 'package:trip_plan/data.dart' as trip;
-import 'package:trip_plan/municipality_bus_terminals.dart'
-    show haversineDistanceKm;
 import 'package:trip_plan/municipality_coordinates.dart';
 import 'package:trip_plan/tourist_plan/tourist_travel_estimates.dart'
     show formatHoursMinutes, travelMinutesForKm;
@@ -61,7 +59,6 @@ class _SpotDirectionsRoutePageState extends State<SpotDirectionsRoutePage> {
   ];
 
   final _mapKey = GlobalKey<TripRouteMapViewState>();
-  int _mapReloadToken = 0;
 
   SpotMapPoint? _dest;
   LatLng? _origin;
@@ -69,7 +66,14 @@ class _SpotDirectionsRoutePageState extends State<SpotDirectionsRoutePage> {
   String _travelMode = 'Motorcycle';
   bool _swapped = false;
   double? _routeKm;
+  int? _routeMinutes;
   bool _loadingOrigin = true;
+  bool _routeLoading = false;
+  bool _routeFailed = false;
+  String? _routeErrorStatus;
+  String? _routeErrorMessage;
+
+  static const double _sheetReserve = 268;
 
   @override
   void initState() {
@@ -203,19 +207,11 @@ class _SpotDirectionsRoutePageState extends State<SpotDirectionsRoutePage> {
     return dest?.name ?? widget.spotName;
   }
 
-  double _displayKm() {
-    if (_routeKm != null && _routeKm! > 0) return _routeKm!;
-    final from = _fromPoint;
-    final to = _toPoint;
-    if (from == null || to == null) return 0;
-    return haversineDistanceKm(
-          from.latitude,
-          from.longitude,
-          to.latitude,
-          to.longitude,
-        ) *
-        1.25;
-  }
+  /// Road distance only — never substitute Haversine as if it were road km.
+  double? get _roadKm =>
+      (_routeKm != null && _routeKm! > 0) ? _routeKm : null;
+
+  bool get _hasRoadRoute => _roadKm != null;
 
   String _viaLine() {
     final dest = _dest;
@@ -299,8 +295,10 @@ class _SpotDirectionsRoutePageState extends State<SpotDirectionsRoutePage> {
             child: dest == null
                 ? const Center(child: CircularProgressIndicator())
                 : TripRouteMapView(
-                    key: ValueKey<int>(_mapReloadToken),
+                    key: _mapKey,
                     compact: false,
+                    overlayBottomInset: _sheetReserve + bottomInset,
+                    onDirectionsStatus: _onDirectionsStatus,
                     start: origin == null
                         ? tripMunicipalityFor(
                             name: dest.municipality,
@@ -355,7 +353,7 @@ class _SpotDirectionsRoutePageState extends State<SpotDirectionsRoutePage> {
           ),
           Positioned(
             right: 16,
-            bottom: 268 + bottomInset,
+            bottom: _sheetReserve + bottomInset + (_routeFailed ? 72 : 0),
             child: Material(
               color: Colors.white,
               shape: const CircleBorder(),
@@ -370,6 +368,13 @@ class _SpotDirectionsRoutePageState extends State<SpotDirectionsRoutePage> {
               ),
             ),
           ),
+          if (_routeFailed)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: _sheetReserve + bottomInset + 12,
+              child: _routeRetryBanner(),
+            ),
           Positioned(
             left: 0,
             right: 0,
@@ -377,6 +382,100 @@ class _SpotDirectionsRoutePageState extends State<SpotDirectionsRoutePage> {
             child: _bottomSheet(bottomInset),
           ),
         ],
+      ),
+    );
+  }
+
+  void _onDirectionsStatus(TripRouteDirectionsStatus status) {
+    if (!mounted) return;
+    setState(() {
+      _routeLoading = status.loading;
+      _routeFailed = status.failed;
+      _routeErrorStatus = status.errorStatus;
+      _routeErrorMessage = status.errorMessage;
+      if (status.loading) {
+        _routeKm = null;
+        _routeMinutes = null;
+      } else if (status.failed) {
+        _routeKm = null;
+        _routeMinutes = null;
+      } else {
+        _routeKm = status.routeKm;
+        _routeMinutes = status.routeMinutes;
+      }
+    });
+  }
+
+  void _retryRoute() {
+    _mapKey.currentState?.retryDirections();
+  }
+
+  String _routeFailureLabel() {
+    final msg = (_routeErrorMessage ?? '').trim();
+    if (msg.isNotEmpty) return msg;
+    switch (_routeErrorStatus) {
+      case 'ORS_NOT_CONFIGURED':
+      case 'MISCONFIGURED':
+        return 'Road routing proxy is not configured yet.';
+      case 'REQUEST_DENIED':
+        return 'Google Directions needs Billing on the Cloud project.';
+      case 'OSRM_ERROR':
+      case 'ORS_ERROR':
+        return 'Road server timed out.';
+      case 'NO_ROUTE':
+      case 'NO_POLYLINE':
+        return 'No valid road route was found.';
+      case 'NO_GOOGLE_MAPS':
+        return 'Route service is still loading.';
+      default:
+        return 'Could not draw the blue road line (${_routeErrorStatus ?? 'unknown'}).';
+    }
+  }
+
+  Widget _routeRetryBanner() {
+    return Material(
+      color: Colors.white,
+      elevation: 6,
+      shadowColor: Colors.black26,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: _routeLoading ? null : _retryRoute,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+          child: Row(
+            children: [
+              Icon(
+                Icons.alt_route_rounded,
+                color: _mapsBlue,
+                size: 22,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '${_routeFailureLabel()} Tap to retry.',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    height: 1.35,
+                    color: _text,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (_routeLoading)
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                TextButton(
+                  onPressed: _retryRoute,
+                  child: const Text('Retry'),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -519,7 +618,7 @@ class _SpotDirectionsRoutePageState extends State<SpotDirectionsRoutePage> {
               title: const Text('Retry route'),
               onTap: () {
                 Navigator.pop(ctx);
-                setState(() => _mapReloadToken++);
+                _retryRoute();
               },
             ),
           ],
@@ -529,9 +628,18 @@ class _SpotDirectionsRoutePageState extends State<SpotDirectionsRoutePage> {
   }
 
   Widget _bottomSheet(double bottomInset) {
-    final km = _displayKm();
-    final minutes = km > 0 ? travelMinutesForKm(km, _travelMode) : 0;
+    final km = _roadKm ?? 0;
+    final minutes = _hasRoadRoute
+        ? (_routeMinutes ?? travelMinutesForKm(km, _travelMode))
+        : 0;
     final walking = _travelMode == 'Walking';
+    final etaLabel = !_hasRoadRoute
+        ? (_routeLoading || _loadingOrigin
+            ? 'Finding road route…'
+            : _routeFailed
+                ? 'Road route unavailable — tap Retry above'
+                : 'Route to $_toLabel')
+        : '${formatHoursMinutes(minutes)} (${km.toStringAsFixed(1)} km)';
 
     return Material(
       color: _sheetBg,
@@ -593,11 +701,7 @@ class _SpotDirectionsRoutePageState extends State<SpotDirectionsRoutePage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      minutes > 0
-                          ? '${formatHoursMinutes(minutes)} (${km.toStringAsFixed(1)} km)'
-                          : _loadingOrigin
-                              ? 'Finding the fastest route…'
-                              : 'Route to $_toLabel',
+                      etaLabel,
                       style: const TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.w700,

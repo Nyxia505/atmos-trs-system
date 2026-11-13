@@ -190,12 +190,28 @@ service cloud.firestore {
     match /notifications/{notificationId} {
       allow read: if isSignedIn()
                   && resource.data.user_id == request.auth.uid;
+      // Self-create (welcome / check-in) or OPTACA/LGU staff notifying an AE.
       allow create: if isSignedIn()
-                    && request.resource.data.user_id == request.auth.uid;
+                    && (
+                      request.resource.data.user_id == request.auth.uid
+                      || isLguStaff()
+                      || isOptacaPortalReader()
+                    );
       allow update: if isSignedIn()
                     && resource.data.user_id == request.auth.uid;
       allow delete: if isSignedIn()
                      && resource.data.user_id == request.auth.uid;
+    }
+
+    /// Inbox for OPTACA: new establishment registrations awaiting review.
+    /// Stable doc ids (`est_reg_{uid}`) prevent duplicate alerts.
+    match /optaca_alerts/{alertId} {
+      allow read: if isProvincialStaff() || isOptacaPortalReader();
+      allow create: if isSignedIn()
+        && request.resource.data.establishmentId == request.auth.uid
+        && request.resource.data.type == 'establishment_registration'
+        && alertId == ('est_reg_' + request.auth.uid);
+      allow update, delete: if isProvincialStaff() || isOptacaPortalReader();
     }
 
     match /announcements/{announcementId} {
@@ -212,14 +228,25 @@ service cloud.firestore {
         && (request.auth.uid == userId
             || (isLguStaff()
                 && request.resource.data.get('role', 'tourist') == 'tourist'));
+      // Establishments cannot self-set status to active/approved.
       allow update: if isSignedIn()
-        && (request.auth.uid == userId || isLguStaff());
+        && (
+          isLguStaff()
+          || (
+            request.auth.uid == userId
+            && request.resource.data.get('status', resource.data.get('status', ''))
+                 == resource.data.get('status', '')
+          )
+        );
       // Staff may delete tourist role docs (never used for self-service Auth delete).
       allow delete: if isLguStaff()
         && (
           !('role' in resource.data)
           || resource.data.role == 'tourist'
           || resource.data.role == 'Tourist'
+          || resource.data.role == 'tourism_establishment'
+          || resource.data.role == 'tourismestablishment'
+          || resource.data.role == 'establishment'
         );
 
       match /faq_chats/{messageId} {
@@ -381,9 +408,28 @@ service cloud.firestore {
 
     /// Destinations: LGU manages own municipality; OPTACA / provincial may
     /// manage the province-wide catalog (portal Tourist Spots tab).
+    function canonicalMunicipalityId(raw) {
+      let id = raw.lower();
+      return id == 'ozamis' || id == 'ozamiz' || id == 'ozamiz city' || id == 'ozamis city'
+          ? 'ozamiz'
+        : id == 'oroquieta' || id == 'oroquieta city'
+          ? 'oroquieta'
+        : id == 'tangub' || id == 'tangub city'
+          ? 'tangub'
+        : id == 'don victoriano' || id == 'don victoriano chiongbian' || id == 'dvc'
+          ? 'dvc'
+        : id == 'lopez jaena' || id == 'lopezjaena'
+          ? 'lopezjaena'
+        : id == 'sapang dalaga' || id == 'sapangdalaga'
+          ? 'sapangdalaga'
+        : id;
+    }
+
     function spotMunicipalityId(data) {
-      let mid = data.get('municipalityId', '');
-      return mid == 'ozamis' ? 'ozamiz' : mid;
+      let stored = canonicalMunicipalityId(data.get('municipalityId', ''));
+      return stored != ''
+        ? stored
+        : canonicalMunicipalityId(data.get('municipality', ''));
     }
 
     function spotMunicipalityName(data) {
@@ -391,24 +437,12 @@ service cloud.firestore {
     }
 
     function lguOwnsSpotData(data) {
-      let mid = lguMunicipalityId() == 'ozamis' ? 'ozamiz' : lguMunicipalityId();
-      let catalog = lguCatalogName(mid).lower();
+      let mid = canonicalMunicipalityId(lguMunicipalityId());
       let dataMid = spotMunicipalityId(data);
-      let name = spotMunicipalityName(data);
       return isLguTourismFromUserDoc()
         && mid != ''
-        && (
-          (dataMid != '' && dataMid == mid)
-          || (dataMid == '' && catalog.size() > 0 && (
-            name == catalog
-            || (mid == 'ozamiz' && (
-              name == 'ozamiz city' || name == 'ozamis city' || name == 'ozamis' || name == 'ozamiz'
-            ))
-            || (mid == 'dvc' && (
-              name == 'don victoriano' || name == 'don victoriano chiongbian'
-            ))
-          ))
-        );
+        && dataMid != ''
+        && dataMid == mid;
     }
 
     function provincialMayManageSpot() {
@@ -540,13 +574,26 @@ service cloud.firestore {
                       || request.resource.data.get('authUid', '') == request.auth.uid
                       || estId == request.auth.uid
                       || isLguStaff()
+                    )
+                    // New self-registrations start pending; staff may seed other statuses.
+                    && (
+                      isLguStaff()
+                      || request.resource.data.get('status', 'pending') == 'pending'
                     );
+      // Owners may edit their profile fields but cannot self-approve.
+      // Only LGU / OPTACA / provincial staff may change `status`.
       allow update: if isSignedIn()
                     && (
-                      resource.data.get('ownerUid', '') == request.auth.uid
-                      || resource.data.get('authUid', '') == request.auth.uid
-                      || estId == request.auth.uid
-                      || isLguStaff()
+                      isLguStaff()
+                      || (
+                        (
+                          resource.data.get('ownerUid', '') == request.auth.uid
+                          || resource.data.get('authUid', '') == request.auth.uid
+                          || estId == request.auth.uid
+                        )
+                        && request.resource.data.get('status', resource.data.get('status', 'pending'))
+                             == resource.data.get('status', 'pending')
+                      )
                     );
       allow delete: if isLguStaff();
     }

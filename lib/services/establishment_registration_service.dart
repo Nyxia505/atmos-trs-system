@@ -1,7 +1,10 @@
+import 'dart:async' show unawaited;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
+import 'package:atmos_trs_system/services/notification_firestore_service.dart';
 import 'package:atmos_trs_system/services/otp_service.dart';
 import 'package:atmos_trs_system/services/pending_establishment_registration_cache.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
@@ -91,5 +94,21 @@ class EstablishmentRegistrationService {
     }
 
     await PendingEstablishmentRegistrationCache.clear();
+
+    final businessName = (establishmentData['businessName'] ??
+            establishmentData['name'] ??
+            userData['businessName'] ??
+            'Establishment')
+        .toString();
+    final municipality =
+        (establishmentData['municipality'] ?? userData['municipality'] ?? '')
+            .toString();
+    unawaited(
+      NotificationFirestoreService.createOptacaEstablishmentRegistrationAlert(
+        establishmentId: uid,
+        businessName: businessName,
+        municipality: municipality,
+      ),
+    );
   }
 }

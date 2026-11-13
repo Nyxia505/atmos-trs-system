@@ -950,15 +950,32 @@ class _EventsAndAnnouncementsHostState extends State<_EventsAndAnnouncementsHost
   }
 }
 
-class _PortalEstablishmentsTab extends StatefulWidget {
+class _PortalEstablishmentsTab extends StatelessWidget {
   const _PortalEstablishmentsTab();
 
   @override
-  State<_PortalEstablishmentsTab> createState() =>
-      _PortalEstablishmentsTabState();
+  Widget build(BuildContext context) {
+    final host = TripPlanHostBridge.establishmentReviewPanel;
+    if (host != null) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
+        children: [host(context)],
+      );
+    }
+    return const _PortalEstablishmentsList();
+  }
 }
 
-class _PortalEstablishmentsTabState extends State<_PortalEstablishmentsTab> {
+class _PortalEstablishmentsList extends StatefulWidget {
+  const _PortalEstablishmentsList();
+
+  @override
+  State<_PortalEstablishmentsList> createState() =>
+      _PortalEstablishmentsListState();
+}
+
+class _PortalEstablishmentsListState extends State<_PortalEstablishmentsList> {
   late Future<PublicFirestoreDocs> _load =
       fetchPublicFirestoreCollection('accommodation_establishments');
   final TextEditingController _search = TextEditingController();

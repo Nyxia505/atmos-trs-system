@@ -30,7 +30,7 @@ class QrProfileScreen extends StatefulWidget {
   final bool isAfterRegistration;
 
   /// After registration success, Continue navigates here unless a pending
-  /// entry QR exists (then `/qr-resume`).
+  /// entry QR exists (web → Landing + install popup; native → `/qr-resume`).
   final String continueRoute;
 
   /// Human-readable MO-… id shown under the success heading (not the QR payload).

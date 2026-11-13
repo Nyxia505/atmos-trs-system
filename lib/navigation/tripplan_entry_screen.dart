@@ -12,6 +12,7 @@ import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/widgets/lgu_debug_data_dialogs.dart';
 import 'package:atmos_trs_system/widgets/optaca_alerts_quality_panel.dart';
 import 'package:atmos_trs_system/widgets/optaca_accounts_panel.dart';
+import 'package:atmos_trs_system/widgets/optaca_establishment_review_panel.dart';
 import 'package:atmos_trs_system/utils/dot_report_entity_scope.dart';
 import 'package:atmos_trs_system/widgets/optaca_portal_dot_reports.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -134,6 +135,8 @@ class _TripPlanEntryScreenState extends State<TripPlanEntryScreen> {
         (context) => const OptacaAlertsQualityPanel();
     TripPlanHostBridge.lguAccountManagementPanel =
         (context) => const OptacaAccountsPanel();
+    TripPlanHostBridge.establishmentReviewPanel =
+        (context) => const OptacaEstablishmentReviewPanel();
     unawaited(_bootstrap());
   }
 
@@ -171,6 +174,7 @@ class _TripPlanEntryScreenState extends State<TripPlanEntryScreen> {
     TripPlanHostBridge.mergeKnownVrDestinations = null;
     TripPlanHostBridge.alertsQualityPanel = null;
     TripPlanHostBridge.lguAccountManagementPanel = null;
+    TripPlanHostBridge.establishmentReviewPanel = null;
     TripPlanHostBridge.isHostCatalogAdmin = null;
     super.dispose();
   }

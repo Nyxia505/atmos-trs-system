@@ -2,6 +2,7 @@ import 'dart:async' show unawaited;
 
 import 'package:atmos_trs_system/config/module_shell_prefs.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
+import 'package:atmos_trs_system/services/establishment_approval_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/config/auth_config.dart';
@@ -85,15 +86,16 @@ class RoleRouter {
     }
 
     if (profile.isTourismEstablishment) {
-      final municipalityId = getMunicipalityIdFromName(profile.municipality);
+      final municipalityId = profile.municipalityId.trim().isNotEmpty
+          ? profile.municipalityId.trim()
+          : getMunicipalityIdFromName(profile.municipality);
       await SessionStorage.saveSession(
         firebaseUid,
         role: UserRole.tourismEstablishment,
         email: profile.email,
         municipalityId: municipalityId.isNotEmpty ? municipalityId : null,
       );
-      if (!profile.isVerified) return '/verify-otp';
-      return '/establishment-dashboard';
+      return routeForEstablishment(profile);
     }
 
     if (profile.isTourist) {
@@ -129,13 +131,24 @@ class RoleRouter {
       return '/lgu-dashboard';
     }
     if (profile.isTourismEstablishment) {
-      if (!profile.isVerified) return '/verify-otp';
-      return '/establishment-dashboard';
+      return routeForEstablishment(profile);
     }
     if (profile.isTourist && !profile.isVerified) {
       return '/verify-otp';
     }
     if (profile.isTourist) return '/dashboard';
     return '/dashboard';
+  }
+
+  /// Email verify → OPTACA hold → dashboard only when status is active.
+  static String routeForEstablishment(AppUserProfile profile) {
+    if (!profile.isVerified) return '/verify-otp';
+    if (EstablishmentRegistryStatus.allowsDashboardAccess(
+      isVerified: profile.isVerified,
+      status: profile.status,
+    )) {
+      return '/establishment-dashboard';
+    }
+    return '/establishment-pending-approval';
   }
 }

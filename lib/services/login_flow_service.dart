@@ -82,7 +82,8 @@ class LoginFlowService {
     if (storedUid == uid && storedRole == UserRole.tourismEstablishment) {
       final profile = await profileFuture;
       if (profile != null && profile.isTourismEstablishment) {
-        return '/establishment-dashboard';
+        // Never skip email verification for establishments.
+        return RoleRouter.routeForProfile(profile);
       }
     }
     if (storedUid == uid && storedRole == UserRole.tourism) {

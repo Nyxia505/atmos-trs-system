@@ -69,6 +69,25 @@ class TouristProfilePhotoService {
     }
   }
 
+  static Future<String?> _base64ForFirestoreAsync(Uint8List jpegBytes) async {
+    var bytes = jpegBytes;
+    var encoded = base64Encode(bytes);
+    if (encoded.length <= UserProfileStorage.maxProfileImageBase64Length) {
+      return encoded;
+    }
+    bytes = await _compressToFit(bytes, 512, 68);
+    encoded = base64Encode(bytes);
+    if (encoded.length <= UserProfileStorage.maxProfileImageBase64Length) {
+      return encoded;
+    }
+    bytes = await _compressToFit(bytes, 384, 58);
+    encoded = base64Encode(bytes);
+    if (encoded.length <= UserProfileStorage.maxProfileImageBase64Length) {
+      return encoded;
+    }
+    return null;
+  }
+
   static String? base64ForFirestore(Uint8List jpegBytes) {
     var bytes = jpegBytes;
     var encoded = base64Encode(bytes);
@@ -111,21 +130,44 @@ class TouristProfilePhotoService {
         m.contains('terminated the upload');
   }
 
-  static const Duration _storageUploadTimeout = Duration(seconds: 15);
-  static const Duration _firestoreWriteTimeout = Duration(seconds: 12);
+  static const Duration _storageUploadTimeout = Duration(seconds: 5);
+  static const Duration _firestoreWriteTimeout = Duration(seconds: 8);
+
+  /// After Storage fails once this session (billing, rules, timeout), later
+  /// photos skip that wait and save through Firestore.
+  static bool _storageUnavailable = false;
 
   /// Web picks are already resized by the browser (canvas); decoding them again
   /// with `package:image` runs on the UI thread there and freezes the page.
   static const int _webSkipCompressBelowBytes = 600 * 1024;
 
   static Future<Uint8List> _prepareJpeg(Uint8List rawBytes) async {
+    // Gallery and camera picks are already resized. Decoding them again
+    // freezes the profile screen before the new photo can appear.
+    if (rawBytes.length <= 280 * 1024) return rawBytes;
     if (kIsWeb) {
       if (rawBytes.length <= _webSkipCompressBelowBytes) return rawBytes;
-      return compressJpeg(rawBytes, maxSide: 800, quality: 78);
+      return compressJpeg(rawBytes, maxSide: 720, quality: 74);
     }
     return compute(
       compressProfileJpegIsolate,
-      ProfileJpegCompressArgs(rawBytes, 800, 78),
+      ProfileJpegCompressArgs(rawBytes, 720, 74),
+    );
+  }
+
+  static Future<Uint8List> _compressToFit(
+    Uint8List rawBytes,
+    int maxSide,
+    int quality,
+  ) {
+    if (kIsWeb) {
+      return Future<Uint8List>.value(
+        compressJpeg(rawBytes, maxSide: maxSide, quality: quality),
+      );
+    }
+    return compute(
+      compressProfileJpegIsolate,
+      ProfileJpegCompressArgs(rawBytes, maxSide, quality),
     );
   }
 
@@ -146,25 +188,32 @@ class TouristProfilePhotoService {
     }
 
     final previousUrl = UserProfileStorage.cachedProfile?.profilePhotoUrl;
+    // Encode while Storage is attempted so a failed upload does not compress
+    // again on the screen that is waiting.
+    final base64Future = _base64ForFirestoreAsync(compressed);
     TouristProfilePhotoUploadResult? result;
-    try {
-      final url = await _uploadToStorage(uid: uid, bytes: compressed);
-      result = TouristProfilePhotoUploadResult(profilePhotoUrl: url);
-    } on FirebaseException catch (e, st) {
-      if (!_storageShouldUseFirestoreFallback(e)) {
+    if (!_storageUnavailable) {
+      try {
+        final url = await _uploadToStorage(uid: uid, bytes: compressed);
+        result = TouristProfilePhotoUploadResult(profilePhotoUrl: url);
+      } on FirebaseException catch (e, st) {
+        _storageUnavailable = true;
+        if (!_storageShouldUseFirestoreFallback(e)) {
+          debugPrint(
+            '[ProfilePhoto] Storage fail plugin=${e.plugin} code=${e.code}: $e\n$st',
+          );
+        }
         debugPrint(
-          '[ProfilePhoto] Storage fail plugin=${e.plugin} code=${e.code}: $e\n$st',
+          '[ProfilePhoto] Storage unavailable (${e.code}); Firestore base64 fallback',
         );
+      } catch (e, st) {
+        _storageUnavailable = true;
+        debugPrint('[ProfilePhoto] Storage error; trying Firestore fallback: $e\n$st');
       }
-      debugPrint(
-        '[ProfilePhoto] Storage unavailable (${e.code}); Firestore base64 fallback',
-      );
-    } catch (e, st) {
-      debugPrint('[ProfilePhoto] Storage error; trying Firestore fallback: $e\n$st');
     }
 
     if (result == null) {
-      final b64 = base64ForFirestore(compressed);
+      final b64 = await base64Future;
       if (b64 == null) {
         throw StateError('This photo is too large. Try a smaller one.');
       }

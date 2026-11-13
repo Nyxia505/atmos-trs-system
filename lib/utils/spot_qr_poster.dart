@@ -523,22 +523,35 @@ class SpotQrPosterAssets {
   final ui.Image? logoImage;
   final String regularFont;
   final String boldFont;
-  final ByteData regularFontData;
-  final ByteData boldFontData;
+  final ByteData? regularFontData;
+  final ByteData? boldFontData;
 
   static const String regularFamily = 'SpotQrPosterNoto';
   static const String boldFamily = 'SpotQrPosterNotoBold';
+  static const String fallbackFamily = 'Roboto';
 
   static SpotQrPosterAssets? _instance;
   static bool _fontsRegistered = false;
 
+  static Future<ByteData?> _loadFontAsset(String asset) async {
+    try {
+      final data = await rootBundle.load(asset);
+      if (data.lengthInBytes < 256) return null;
+      return data;
+    } catch (e) {
+      debugPrint('[SpotQrPoster] $asset unavailable: $e');
+      return null;
+    }
+  }
+
   static Future<SpotQrPosterAssets> load() async {
     if (_instance != null) return _instance!;
 
-    final regularData = await rootBundle.load(_kFontRegularAsset);
-    final boldData = await rootBundle.load(_kFontBoldAsset);
+    final regularData = await _loadFontAsset(_kFontRegularAsset);
+    final boldData = await _loadFontAsset(_kFontBoldAsset);
+    final hasFonts = regularData != null && boldData != null;
 
-    if (!_fontsRegistered) {
+    if (hasFonts && !_fontsRegistered) {
       final regularLoader = FontLoader(regularFamily)
         ..addFont(Future<ByteData>.value(regularData));
       final boldLoader = FontLoader(boldFamily)
@@ -566,8 +579,8 @@ class SpotQrPosterAssets {
     _instance = SpotQrPosterAssets._(
       logoBytes: logoBytes,
       logoImage: logoImage,
-      regularFont: regularFamily,
-      boldFont: boldFamily,
+      regularFont: hasFonts ? regularFamily : fallbackFamily,
+      boldFont: hasFonts ? boldFamily : fallbackFamily,
       regularFontData: regularData,
       boldFontData: boldData,
     );

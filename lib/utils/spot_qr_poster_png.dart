@@ -307,6 +307,9 @@ void _drawText(
         color: color,
         fontFamily: fontFamily,
         fontSize: fontSize,
+        fontWeight: fontFamily == SpotQrPosterAssets.fallbackFamily
+            ? FontWeight.w700
+            : FontWeight.w500,
         letterSpacing: letterSpacing,
         height: height,
       ),

@@ -58,10 +58,9 @@ class _QrCameraGetAppBannerState extends State<QrCameraGetAppBanner> {
   }
 
   Future<void> _dismiss() async {
+    // X = stay on the website; keep pending QR so check-in can still resume.
     setState(() => _visible = false);
     QrLaunchBootstrap.appliedFromLaunchUrl = false;
-    await PendingSpotCheckInStorage.clear();
-    await PendingLguCheckInStorage.clear();
   }
 
   Future<void> _download() async {

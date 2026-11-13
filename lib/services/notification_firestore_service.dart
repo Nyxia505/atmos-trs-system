@@ -72,6 +72,128 @@ class NotificationFirestoreService {
     }
   }
 
+  /// Notifies an establishment owner after OPTACA approve / reject / revision.
+  /// Dedupes by `type` + `establishmentId` + `status` so re-saves do not spam.
+  static Future<void> createEstablishmentDecisionNotification({
+    required String userId,
+    required String businessName,
+    required String status,
+    String reviewNotes = '',
+  }) async {
+    if (!_isFirebaseInitialized || userId.isEmpty) return;
+    final normalized = status.trim().toLowerCase();
+    if (normalized.isEmpty) return;
+    try {
+      // One notice per status outcome (approved / rejected / needs_revision).
+      final dedupeType = 'establishment_$normalized';
+      final existing = await _firestore
+          .collection(_notificationsCollection)
+          .where('user_id', isEqualTo: userId)
+          .where('type', isEqualTo: dedupeType)
+          .where('establishment_id', isEqualTo: userId)
+          .limit(1)
+          .get();
+      if (existing.docs.isNotEmpty) return;
+
+      final name = businessName.trim().isEmpty ? 'Your establishment' : businessName.trim();
+      final notes = reviewNotes.trim();
+      final String title;
+      final String message;
+      switch (normalized) {
+        case 'active':
+        case 'approved':
+          title = 'Registration approved';
+          message =
+              '$name is approved. You can now open your Establishment Dashboard.';
+          break;
+        case 'rejected':
+          title = 'Registration rejected';
+          message = notes.isEmpty
+              ? 'OPTACA did not approve $name. Sign in to view details.'
+              : 'OPTACA rejected $name: $notes';
+          break;
+        case 'needs_revision':
+          title = 'Corrections requested';
+          message = notes.isEmpty
+              ? 'OPTACA asked for corrections on $name. Sign in to review.'
+              : 'OPTACA requested corrections for $name: $notes';
+          break;
+        default:
+          title = 'Registration update';
+          message = 'OPTACA updated the status of $name to $normalized.';
+      }
+
+      await _firestore.collection(_notificationsCollection).add({
+        'user_id': userId,
+        'title': title,
+        'message': message,
+        'type': dedupeType,
+        'status': normalized,
+        'establishment_id': userId,
+        'created_at': FieldValue.serverTimestamp(),
+        'is_read': false,
+      });
+    } catch (e) {
+      debugPrint(
+        'NotificationFirestoreService.createEstablishmentDecisionNotification: $e',
+      );
+    }
+  }
+
+  /// Creates a one-time OPTACA inbox alert for a new AE registration.
+  static Future<void> createOptacaEstablishmentRegistrationAlert({
+    required String establishmentId,
+    required String businessName,
+    required String municipality,
+  }) async {
+    if (!_isFirebaseInitialized || establishmentId.isEmpty) return;
+    try {
+      final ref = _firestore
+          .collection('optaca_alerts')
+          .doc('est_reg_$establishmentId');
+      final existing = await ref.get();
+      if (existing.exists) return;
+      await ref.set({
+        'type': 'establishment_registration',
+        'establishmentId': establishmentId,
+        'businessName': businessName.trim(),
+        'municipality': municipality.trim(),
+        'status': 'pending',
+        'created_at': FieldValue.serverTimestamp(),
+        'is_read': false,
+        'action': 'open_establishment_review',
+      });
+    } catch (e) {
+      debugPrint(
+        'NotificationFirestoreService.createOptacaEstablishmentRegistrationAlert: $e',
+      );
+    }
+  }
+
+  /// Marks the OPTACA registration alert resolved after a decision.
+  static Future<void> resolveOptacaEstablishmentRegistrationAlert(
+    String establishmentId, {
+    required String status,
+  }) async {
+    if (!_isFirebaseInitialized || establishmentId.isEmpty) return;
+    try {
+      final ref = _firestore
+          .collection('optaca_alerts')
+          .doc('est_reg_$establishmentId');
+      final snap = await ref.get();
+      if (!snap.exists) return;
+      await ref.set({
+        'status': status.trim().toLowerCase(),
+        'is_read': true,
+        'resolved_at': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint(
+        'NotificationFirestoreService.resolveOptacaEstablishmentRegistrationAlert: $e',
+      );
+    }
+  }
+
   /// Fetches user-specific notifications for [userId], newest first.
   static Future<List<NotificationItem>> getUserNotifications(String userId) async {
     if (!_isFirebaseInitialized || userId.isEmpty) return [];

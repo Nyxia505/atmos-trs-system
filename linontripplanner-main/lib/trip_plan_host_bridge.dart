@@ -46,6 +46,10 @@ class TripPlanHostBridge {
   /// OPTACA LGU & User Account Management panel from ATMOS host.
   static WidgetBuilder? lguAccountManagementPanel;
 
+  /// OPTACA establishment inbox: approve or reject a registration so the
+  /// establishment can open its dashboard.
+  static WidgetBuilder? establishmentReviewPanel;
+
   /// Official DOT Excel/PDF forms panel from ATMOS host.
   static WidgetBuilder? officialDotReports;
 

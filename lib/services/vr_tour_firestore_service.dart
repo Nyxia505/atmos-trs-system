@@ -200,10 +200,10 @@ class VrTourFirestoreService {
       if (spotDoc.exists && spotDoc.data() != null) {
         final d = spotDoc.data()!;
         final name = d['name']?.toString() ?? spotName ?? '';
-        final known = vrUrlForSpotId(id, spotName: name);
-        if (known != null) return known;
         final link = (d['vr_link'] ?? d['vrLink'] ?? '').toString().trim();
         if (link.isNotEmpty) return link;
+        final known = vrUrlForSpotId(id, spotName: name);
+        if (known != null) return known;
       }
     } catch (e) {
       debugPrint('[VrTourFirestore] resolveVrUrlForSpot: $e');

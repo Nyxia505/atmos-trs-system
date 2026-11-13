@@ -16,6 +16,14 @@ $Root = Split-Path -Parent $PSScriptRoot
 $WebDir = Join-Path $Root 'build\web'
 $Flutter = 'C:\flutter\bin\flutter.bat'
 
+# Node/firebase-tools on this Windows setup fails TLS without system CAs
+# ("unable to verify the first certificate"). Keep deploy working locally.
+if ([string]::IsNullOrWhiteSpace($env:NODE_OPTIONS)) {
+  $env:NODE_OPTIONS = '--use-system-ca'
+} elseif ($env:NODE_OPTIONS -notmatch 'use-system-ca') {
+  $env:NODE_OPTIONS = "$($env:NODE_OPTIONS) --use-system-ca"
+}
+
 Push-Location $Root
 try {
   if (-not $SkipBuild) {
@@ -58,8 +66,19 @@ try {
   }
 
   if (-not $SkipDeploy) {
-    firebase deploy --only hosting
-    if ($LASTEXITCODE -ne 0) { throw 'firebase deploy failed' }
+    # Node TLS on some Windows setups fails Firebase APIs without system CAs.
+    $prevNodeOptions = $env:NODE_OPTIONS
+    if ([string]::IsNullOrWhiteSpace($env:NODE_OPTIONS)) {
+      $env:NODE_OPTIONS = '--use-system-ca'
+    } elseif ($env:NODE_OPTIONS -notmatch '--use-system-ca') {
+      $env:NODE_OPTIONS = "$env:NODE_OPTIONS --use-system-ca"
+    }
+    try {
+      firebase deploy --only hosting
+      if ($LASTEXITCODE -ne 0) { throw 'firebase deploy failed' }
+    } finally {
+      $env:NODE_OPTIONS = $prevNodeOptions
+    }
   }
 }
 finally {

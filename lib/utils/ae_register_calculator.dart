@@ -504,6 +504,12 @@ abstract final class AeRegisterCalculator {
       if (r.female + r.male != r.guests) {
         issues.add(AeRegisterIssue(r.id, 'Female + Male must equal guests (${r.guests}).'));
       }
+      if (r.rate < 0 || r.chargesA < 0 || r.chargesB < 0) {
+        issues.add(AeRegisterIssue(r.id, 'Rates and charges cannot be negative.'));
+      }
+      if (r.residence.trim().isEmpty) {
+        issues.add(AeRegisterIssue(r.id, 'Residence / nationality is required.'));
+      }
       if (tracksRooms) {
         final room = r.roomNo.trim();
         final n = int.tryParse(room);

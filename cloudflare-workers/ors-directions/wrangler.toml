@@ -1,0 +1,13 @@
+name = "atmos-ors-directions"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# Set the secret once (never commit the key):
+#   npx wrangler secret put ORS_API_KEY
+#
+# Optional: override upstream (defaults to HeiGIT ORS):
+#   [vars]
+#   ORS_UPSTREAM = "https://api.heigit.org/openrouteservice/v2/directions/driving-car/geojson"
+
+[vars]
+ORS_UPSTREAM = "https://api.heigit.org/openrouteservice/v2/directions/driving-car/geojson"

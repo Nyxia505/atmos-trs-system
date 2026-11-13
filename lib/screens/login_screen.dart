@@ -17,6 +17,7 @@ import 'package:atmos_trs_system/navigation/login_route_args.dart';
 import 'package:atmos_trs_system/navigation/trip_planner_access.dart';
 import 'package:atmos_trs_system/navigation/tripplan_entry_screen.dart';
 import 'package:atmos_trs_system/navigation/pending_checkin_navigation.dart';
+import 'package:atmos_trs_system/services/pending_establishment_registration_cache.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/landing_intent_service.dart';
@@ -377,13 +378,24 @@ class _LoginScreenState extends State<LoginScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Email is not verified. Enter the 6-digit code sent to your email.',
+              'Email is not verified. Open the verification message we sent, '
+              'then enter the 6-digit code or tap “I’ve Verified My Email”.',
             ),
             backgroundColor: Color(0xFFFF6B00),
           ),
         );
         if (!mounted) return;
-        Navigator.pushReplacementNamed(context, route);
+        await PendingEstablishmentRegistrationCache.hydrate();
+        final estPending =
+            PendingEstablishmentRegistrationCache.forUid(uid) != null;
+        Navigator.pushReplacementNamed(
+          context,
+          route,
+          arguments: {
+            'contactEmail': email,
+            if (estPending) 'accountType': 'tourism_establishment',
+          },
+        );
         return;
       }
       await _continueTouristNavigation(route);

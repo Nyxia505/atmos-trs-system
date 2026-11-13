@@ -5,6 +5,7 @@ import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
 import 'package:atmos_trs_system/services/qr_checkin_ui.dart';
 import 'package:atmos_trs_system/services/qr_location_prompt.dart';
+import 'package:atmos_trs_system/widgets/qr_web_app_install_prompt.dart';
 
 String? landingWelcomeMessageForPending({
   PendingSpotCheckIn? spot,
@@ -29,12 +30,52 @@ String? landingWelcomeMessageForPending({
   return null;
 }
 
-/// Opens the destination chooser when a scan is waiting. Does not check the tourist in.
+String pendingQrPlaceLabel({
+  PendingSpotCheckIn? spot,
+  PendingLguCheckIn? lgu,
+}) {
+  if (spot != null) {
+    final name = spot.spotName?.trim();
+    if (name != null && name.isNotEmpty) return name;
+    final mun = spot.municipality?.trim();
+    if (mun != null && mun.isNotEmpty) return mun;
+    return 'this destination';
+  }
+  if (lgu != null) {
+    final name = lgu.displayName.trim();
+    if (name.isNotEmpty) return name;
+  }
+  return 'this destination';
+}
+
+/// Opens the post-QR destination flow. Does not check the tourist in.
+///
+/// Web (no native app): Landing + install VR / Trip Planner popup (X = web only).
+/// Native app: `/qr-resume` destination chooser.
 Future<bool> openQrDestinationIfPending(BuildContext context) async {
   final spot = await PendingSpotCheckInStorage.peek();
   final lgu = await PendingLguCheckInStorage.peek();
   if (spot == null && lgu == null) return false;
   if (!context.mounted) return true;
+
+  if (kIsWeb) {
+    final place = pendingQrPlaceLabel(spot: spot, lgu: lgu);
+    QrWebAppInstallPrompt.resetForNewScan();
+    Navigator.pushNamedAndRemoveUntil(
+      context,
+      '/landing',
+      (route) => false,
+      arguments: <String, dynamic>{
+        'fromQrRegistration': true,
+        'showAppInstallPrompt': true,
+        'placeName': place,
+        'welcomeMessage':
+            'Welcome to $place! Install an app or continue on the website.',
+      },
+    );
+    return true;
+  }
+
   Navigator.pushNamedAndRemoveUntil(context, '/qr-resume', (route) => false);
   return true;
 }

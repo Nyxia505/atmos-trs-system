@@ -5,6 +5,7 @@ import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/navigation/guest_startup_routes.dart';
 import 'package:atmos_trs_system/navigation/login_route_args.dart';
+import 'package:atmos_trs_system/navigation/pending_checkin_navigation.dart';
 import 'package:atmos_trs_system/services/qr_welcome_destination_context.dart';
 import 'package:atmos_trs_system/widgets/atmos_brand_logo.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -43,11 +44,8 @@ class _QrEntryGateScreenState extends State<QrEntryGateScreen> {
       final role = await SessionStorage.getStoredRole();
       if (!mounted) return;
       if (role == UserRole.tourist) {
-        Navigator.pushNamedAndRemoveUntil(
-          context,
-          GuestStartupRoutes.qrResume,
-          (r) => false,
-        );
+        // Web → Landing + install popup; native → Your destination.
+        await openQrDestinationIfPending(context);
         return;
       }
     }

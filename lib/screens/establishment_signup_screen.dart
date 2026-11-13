@@ -1,4 +1,4 @@
-import 'dart:async' show unawaited;
+import 'dart:async' show TimeoutException, unawaited;
 import 'dart:typed_data';
 
 import 'package:firebase_auth/firebase_auth.dart';
@@ -20,6 +20,7 @@ import 'package:atmos_trs_system/services/otp_service.dart';
 import 'package:atmos_trs_system/services/pending_establishment_registration_cache.dart';
 import 'package:atmos_trs_system/services/push_notification_service.dart';
 import 'package:atmos_trs_system/services/registration_rollback_service.dart';
+import 'package:atmos_trs_system/services/supabase_storage_upload.dart';
 import 'package:atmos_trs_system/services/username_registry_service.dart';
 import 'package:atmos_trs_system/utils/email_utils.dart';
 import 'package:atmos_trs_system/utils/establishment_capability.dart';
@@ -118,6 +119,7 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
     unawaited(_loadOfficialCategories());
   }
 
+
   Future<void> _loadOfficialCategories() async {
     final extras = await EstablishmentCategoryService.loadApprovedExtras();
     if (!mounted) return;
@@ -176,15 +178,36 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
     super.dispose();
   }
 
+  static const int _maxPermitBytes = 8 * 1024 * 1024; // 8 MB
+
   Future<void> _pickBusinessPermitPhoto() async {
     try {
       final picked = await ImagePicker().pickImage(
         source: ImageSource.gallery,
-        imageQuality: 85,
-        maxWidth: 2000,
+        // Keep readable document detail; still cap dimensions for upload size.
+        imageQuality: 92,
+        maxWidth: 2400,
       );
       if (picked == null) return;
+      final name = picked.name.toLowerCase();
+      final okType = name.endsWith('.jpg') ||
+          name.endsWith('.jpeg') ||
+          name.endsWith('.png') ||
+          name.endsWith('.webp') ||
+          name.isEmpty;
+      if (!okType) {
+        _snack('Use a JPG, PNG, or WEBP photo of your Business Permit.');
+        return;
+      }
       final bytes = await picked.readAsBytes();
+      if (bytes.isEmpty) {
+        _snack('That file was empty. Choose another Business Permit photo.');
+        return;
+      }
+      if (bytes.length > _maxPermitBytes) {
+        _snack('Business Permit photo must be 8 MB or smaller.');
+        return;
+      }
       if (!mounted) return;
       setState(() {
         _permitImageBytes = bytes;
@@ -192,34 +215,172 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
       });
     } catch (e) {
       debugPrint('[EST-SIGNUP] permit pick failed: $e');
-      if (mounted) _snack('Could not attach permit photo. Try again.');
+      if (mounted) _snack('Could not attach Business Permit photo. Try again.');
     }
   }
 
-  Future<String?> _uploadPermitIfAny(String uid) async {
+  void _setSubmitPhase(String phase) {
+    if (!mounted) return;
+    setState(() => _submitPhase = phase);
+  }
+
+  /// Uploads the mandatory Business Permit.
+  ///
+  /// Tries Firebase Storage first; on quota / auth / billing failures falls
+  /// back to the same Supabase `uploads/establishments/` path used by AE gallery
+  /// (this project’s Firebase Storage bucket is often over free-tier quota).
+  Future<String> _uploadPermitRequired(String uid) async {
     final bytes = _permitImageBytes;
-    if (bytes == null || bytes.isEmpty) return null;
-    try {
-      final name = (_permitImageName ?? 'permit.jpg').toLowerCase();
-      final ext = name.endsWith('.png')
-          ? 'png'
-          : name.endsWith('.webp')
-              ? 'webp'
-              : 'jpg';
-      final contentType = ext == 'png'
-          ? 'image/png'
-          : ext == 'webp'
-              ? 'image/webp'
-              : 'image/jpeg';
-      final ref = FirebaseStorage.instance
-          .ref()
-          .child('establishment_permits/$uid/business_permit.$ext');
-      await ref.putData(bytes, SettableMetadata(contentType: contentType));
-      return await ref.getDownloadURL();
-    } catch (e) {
-      debugPrint('[EST-SIGNUP] permit upload failed (non-fatal): $e');
-      return null;
+    if (bytes == null || bytes.isEmpty) {
+      throw StateError('Business Permit photo is required.');
     }
+
+    final detected =
+        SupabaseStorageUpload.contentTypeForImageBytes(bytes);
+    final name = (_permitImageName ?? 'permit.jpg').toLowerCase();
+    final contentType = detected ??
+        (name.endsWith('.png')
+            ? 'image/png'
+            : name.endsWith('.webp')
+                ? 'image/webp'
+                : 'image/jpeg');
+    if (!SupabaseStorageUpload.allowedImageTypes.contains(contentType) ||
+        contentType == 'image/gif') {
+      throw StateError('Use a JPG, PNG, or WEBP photo of your Business Permit.');
+    }
+    final ext =
+        SupabaseStorageUpload.extensionForContentType(contentType);
+
+    // 1) Firebase Storage (preferred when quota allows).
+    try {
+      _setSubmitPhase('Uploading Business Permit…');
+      final ref = FirebaseStorage.instance.ref().child(
+            'establishment_applications/$uid/business_permit/permit.$ext',
+          );
+      final task = ref.putData(
+        bytes,
+        SettableMetadata(
+          contentType: contentType,
+          customMetadata: {
+            'purpose': 'business_permit',
+            'ownerUid': uid,
+          },
+        ),
+      );
+      task.snapshotEvents.listen((snap) {
+        final total = snap.totalBytes;
+        if (total <= 0) return;
+        final pct = ((snap.bytesTransferred / total) * 100).clamp(0, 100).round();
+        _setSubmitPhase('Uploading Business Permit – $pct%');
+      });
+      await task.timeout(const Duration(seconds: 45));
+      final url = await ref.getDownloadURL();
+      debugPrint('[EST-SIGNUP] permit uploaded to Firebase Storage');
+      return url;
+    } on FirebaseException catch (e, st) {
+      debugPrint(
+        '[EST-SIGNUP] Firebase Storage permit failed '
+        '(${e.code}): ${e.message}\n$st',
+      );
+      if (!_shouldFallbackPermitStorage(e)) {
+        throw StateError(_permitUploadUserMessage(e));
+      }
+      debugPrint(
+        '[EST-SIGNUP] falling back to Supabase for Business Permit '
+        '(${e.code})',
+      );
+    } on TimeoutException catch (e, st) {
+      debugPrint('[EST-SIGNUP] Firebase Storage permit timeout: $e\n$st');
+      // Fall through to Supabase.
+    } catch (e, st) {
+      debugPrint('[EST-SIGNUP] Firebase Storage permit unexpected: $e\n$st');
+      // Fall through — quota / network often surfaces as non-FirebaseException on web.
+      if (e.toString().toLowerCase().contains('quota')) {
+        // continue to Supabase
+      } else if (e is StateError) {
+        rethrow;
+      }
+    }
+
+    // 2) Supabase fallback (same bucket/policy as establishment gallery).
+    _setSubmitPhase('Uploading Business Permit…');
+    try {
+      final url = await SupabaseStorageUpload.uploadBytes(
+        objectKey: SupabaseStorageUpload.establishmentBusinessPermitObjectKey(
+          uid,
+          ext,
+        ),
+        bytes: bytes,
+        contentType: contentType,
+        onProgress: (p) {
+          final pct = (p * 100).clamp(0, 100).round();
+          _setSubmitPhase('Uploading Business Permit – $pct%');
+        },
+      );
+      debugPrint('[EST-SIGNUP] permit uploaded to Supabase');
+      return url;
+    } catch (e, st) {
+      debugPrint('[EST-SIGNUP] Supabase permit upload failed: $e\n$st');
+      if (e is StateError) rethrow;
+      throw StateError(
+        'Could not upload your Business Permit. Please try again in a moment.',
+      );
+    }
+  }
+
+  static bool _shouldFallbackPermitStorage(FirebaseException e) {
+    if (e.plugin != 'firebase_storage' && e.plugin.isNotEmpty) {
+      // Still treat known storage codes.
+    }
+    const fallback = {
+      'quota-exceeded',
+      'unauthorized',
+      'unauthenticated',
+      'retry-limit-exceeded',
+      'bucket-not-found',
+      'project-not-found',
+      'canceled',
+      'unavailable',
+      'unknown',
+    };
+    if (fallback.contains(e.code)) return true;
+    final m = (e.message ?? '').toLowerCase();
+    return m.contains('quota') ||
+        m.contains('billing') ||
+        m.contains('delinquent') ||
+        m.contains('402') ||
+        m.contains('payment');
+  }
+
+  static String _permitUploadUserMessage(Object error) {
+    if (error is FirebaseException) {
+      switch (error.code) {
+        case 'unauthorized':
+        case 'unauthenticated':
+          return 'Could not authorize the Business Permit upload. Please try again.';
+        case 'quota-exceeded':
+          return 'Storage is temporarily full. Please try again in a moment.';
+        case 'retry-limit-exceeded':
+          return 'Upload timed out. Check your connection and try again.';
+        case 'object-not-found':
+          return 'Uploaded file was not found. Please attach the permit again.';
+        case 'canceled':
+          return 'Upload was canceled. Please try again.';
+        default:
+          break;
+      }
+    }
+    final text = error.toString().toLowerCase();
+    if (text.contains('quota')) {
+      return 'Storage is temporarily full. Please try again in a moment.';
+    }
+    if (text.contains('network') || text.contains('socket')) {
+      return 'Unable to connect. Check your internet connection and try again.';
+    }
+    if (text.contains('supabase upload is not configured')) {
+      return 'Permit upload is not configured on this build. Contact support.';
+    }
+    return 'Could not upload your Business Permit. Please try again.';
   }
 
   TextStyle get _fieldTextStyle => TextStyle(
@@ -503,6 +664,17 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
       _snack('Check-in and check-out times must be different.');
       return;
     }
+    final permitNoEarly = _businessPermitNoController.text.trim();
+    if (permitNoEarly.isEmpty) {
+      _submitGuard = false;
+      _snack('Business Permit Number is required.');
+      return;
+    }
+    if (_permitImageBytes == null || _permitImageBytes!.isEmpty) {
+      _submitGuard = false;
+      _snack('Attach a clear Business Permit photo to continue.');
+      return;
+    }
 
     final email = normalizeEmail(_emailController.text);
     final username = _usernameController.text.trim();
@@ -553,22 +725,19 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
           debugPrint('[EST-SIGNUP] Firebase verification email: $e\n$st');
         }
       }());
-      final tokenFuture = FirestoreAuthGate.ensureFreshIdToken();
-      final permitFuture = _uploadPermitIfAny(uid).onError((Object e, StackTrace st) {
-        debugPrint('[EST-SIGNUP] permit upload: $e\n$st');
-        return null;
-      });
-      await tokenFuture;
-
-      final usernameError =
-          await UsernameRegistryService.checkAvailable(username);
-      if (usernameError != null) {
+      final authed = await FirestoreAuthGate.ensureFreshIdToken();
+      if (!authed) {
         await RegistrationRollbackService.rollback(uid);
         createdUid = null;
-        _snack(usernameError);
+        _snack(
+          'Could not secure your session. Please try Create account again.',
+        );
         return;
       }
 
+      if (mounted) {
+        setState(() => _submitPhase = 'Reserving your username...');
+      }
       try {
         await UsernameRegistryService.claim(
           username: username,
@@ -576,19 +745,15 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
           email: email,
         );
         usernameClaimed = true;
-      } catch (e) {
-        debugPrint('[EST-SIGNUP] username claim failed: $e');
+      } catch (e, st) {
+        final unwrapped = UsernameRegistryService.unwrapError(e);
+        debugPrint('[EST-SIGNUP] username claim failed: $unwrapped\n$st');
+        if (usernameClaimed) {
+          await UsernameRegistryService.release(username);
+        }
         await RegistrationRollbackService.rollback(uid);
         createdUid = null;
-        final taken = e is StateError && e.message == 'USERNAME_TAKEN';
-        _snack(
-          taken
-              ? 'This username was just taken. Choose another.'
-              : e is FirebaseException && e.code == 'permission-denied'
-                  ? 'Could not save your username (permission denied). '
-                      'Please try again in a moment.'
-                  : 'Could not save your username: $e',
-        );
+        _snack(UsernameRegistryService.userFacingClaimError(unwrapped));
         return;
       }
 
@@ -633,10 +798,26 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
 
       final municipalityId = getMunicipalityIdFromName(_municipality);
       final permitNo = _businessPermitNoController.text.trim();
-      if (mounted && _permitImageBytes != null) {
-        setState(() => _submitPhase = 'Uploading permit photo...');
+      if (mounted) {
+        setState(() => _submitPhase = 'Uploading Business Permit...');
       }
-      final permitUrl = await permitFuture;
+      final String permitUrl;
+      try {
+        permitUrl = await _uploadPermitRequired(uid);
+      } catch (e, st) {
+        debugPrint('[EST-SIGNUP] permit upload failed: $e\n$st');
+        if (usernameClaimed) {
+          await UsernameRegistryService.release(username);
+        }
+        await RegistrationRollbackService.rollback(uid);
+        createdUid = null;
+        _snack(
+          e is StateError
+              ? e.message
+              : _permitUploadUserMessage(e),
+        );
+        return;
+      }
       final lodging = EstablishmentCapability.isLodging(_category);
       final checkInStr = EstablishmentLodgingHours.format(_checkInTime);
       final checkOutStr = EstablishmentLodgingHours.format(_checkOutTime);
@@ -661,8 +842,8 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
         'latitude': lat,
         'longitude': lng,
         'yearEstablished': _yearEstablished,
-        if (permitNo.isNotEmpty) 'businessPermitNo': permitNo,
-        if (permitUrl != null) 'businessPermitUrl': permitUrl,
+        'businessPermitNo': permitNo,
+        'businessPermitUrl': permitUrl,
         if (lodging) ...{
           'checkInTime': checkInStr,
           'checkOutTime': checkOutStr,
@@ -693,8 +874,8 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
         'latitude': lat,
         'longitude': lng,
         'yearEstablished': _yearEstablished,
-        if (permitNo.isNotEmpty) 'businessPermitNo': permitNo,
-        if (permitUrl != null) 'businessPermitUrl': permitUrl,
+        'businessPermitNo': permitNo,
+        'businessPermitUrl': permitUrl,
         if (lodging) ...{
           'checkInTime': checkInStr,
           'checkOutTime': checkOutStr,
@@ -743,14 +924,26 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
       }
       _snack(_authErrorMessage(e));
     } catch (e, st) {
-      debugPrint('[EST-SIGNUP] failed: $e\n$st');
+      final unwrapped = UsernameRegistryService.unwrapError(e);
+      debugPrint('[EST-SIGNUP] failed: $unwrapped\n$st');
       if (createdUid != null) {
         if (usernameClaimed) {
           await UsernameRegistryService.release(username);
         }
         await RegistrationRollbackService.rollback(createdUid);
       }
-      _snack('Registration failed: $e');
+      if (unwrapped is FirebaseException) {
+        _snack(
+          unwrapped.code == 'permission-denied'
+              ? 'Registration could not be completed. Please try again or contact support.'
+              : unwrapped.code == 'unavailable' ||
+                      unwrapped.code == 'deadline-exceeded'
+                  ? 'Unable to connect. Please check your internet connection and try again.'
+                  : 'Registration could not be completed. Please try again.',
+        );
+      } else {
+        _snack('Registration could not be completed. Please try again.');
+      }
     } finally {
       _submitGuard = false;
       if (mounted) {
@@ -1193,7 +1386,7 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
                 (v == null || v.trim().isEmpty) ? 'Required' : null,
           ),
               const SizedBox(height: 12),
-              _fieldLabel('Business Permit Number'),
+              _fieldLabel('Business Permit Number', required: true),
               TextFormField(
             controller: _businessPermitNoController,
             focusNode: _businessPermitNoFocus,
@@ -1202,11 +1395,14 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
             textInputAction: TextInputAction.next,
             onFieldSubmitted: (_) => _contactFocus.requestFocus(),
             decoration: _dec(
-              hint: 'Permit number (optional)',
+              hint: 'Enter Business Permit Number',
               icon: Icons.article_outlined,
             ),
+            validator: (v) =>
+                (v == null || v.trim().isEmpty) ? 'Business Permit Number is required' : null,
           ),
           const SizedBox(height: 8),
+          _fieldLabel('Business Permit Photo', required: true),
           OutlinedButton.icon(
             onPressed: _submitting ? null : _pickBusinessPermitPhoto,
             icon: Icon(
@@ -1217,7 +1413,7 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
             ),
             label: Text(
               _permitImageBytes == null
-                  ? 'Attach Business Permit Photo (optional)'
+                  ? 'Attach Business Permit Photo *'
                   : 'Permit photo attached'
                       '${_permitImageName != null ? ' · $_permitImageName' : ''}',
             ),
@@ -1229,35 +1425,33 @@ class _EstablishmentSignupScreenState extends State<EstablishmentSignupScreen> {
               padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
             ),
           ),
+          if (_permitImageBytes == null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'Required — clear photo of your valid Business Permit (JPG/PNG, max 8 MB).',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: _isDesktopGlass
+                      ? Colors.orange.shade100
+                      : const Color(0xFFB45309),
+                ),
+              ),
+            ),
               if (_permitImageBytes != null) ...[
                 const SizedBox(height: 10),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: Image.memory(
-                    _permitImageBytes!,
-                    height: 140,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                  ),
-                ),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton(
-                    onPressed: _submitting
-                        ? null
-                        : () => setState(() {
-                              _permitImageBytes = null;
-                              _permitImageName = null;
-                            }),
-                    child: Text(
-                      'Remove photo',
-                      style: TextStyle(
-                        color: _isDesktopGlass
-                            ? Colors.white70
-                            : const Color(0xFF78716C),
-                      ),
-                    ),
-                  ),
+                _PermitImagePreview(
+                  bytes: _permitImageBytes!,
+                  fileName: _permitImageName,
+                  glass: _isDesktopGlass,
+                  onReplace: _submitting ? null : _pickBusinessPermitPhoto,
+                  onRemove: _submitting
+                      ? null
+                      : () => setState(() {
+                            _permitImageBytes = null;
+                            _permitImageName = null;
+                          }),
                 ),
               ],
             ],
@@ -1696,6 +1890,176 @@ class _SuggestCategoryDialogState extends State<_SuggestCategoryDialog> {
           child: const Text('Use this category'),
         ),
       ],
+    );
+  }
+}
+
+/// Business permit thumbnail: contain (no crop) + tap for fullscreen zoom.
+class _PermitImagePreview extends StatelessWidget {
+  const _PermitImagePreview({
+    required this.bytes,
+    required this.glass,
+    this.fileName,
+    this.onReplace,
+    this.onRemove,
+  });
+
+  final Uint8List bytes;
+  final bool glass;
+  final String? fileName;
+  final VoidCallback? onReplace;
+  final VoidCallback? onRemove;
+
+  void _openFullscreen(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => _PermitFullscreenViewer(
+          bytes: bytes,
+          fileName: fileName,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => _openFullscreen(context),
+            borderRadius: BorderRadius.circular(14),
+            child: Ink(
+              height: 220,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: glass
+                      ? Colors.white.withValues(alpha: 0.35)
+                      : const Color(0xFFE5E7EB),
+                ),
+              ),
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Image.memory(
+                        bytes,
+                        fit: BoxFit.contain,
+                        filterQuality: FilterQuality.high,
+                        gaplessPlayback: true,
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: 10,
+                    bottom: 10,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.62),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.zoom_in_rounded, size: 14, color: Colors.white),
+                          SizedBox(width: 4),
+                          Text(
+                            'Tap to enlarge',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        Row(
+          children: [
+            TextButton.icon(
+              onPressed: onReplace,
+              icon: Icon(
+                Icons.swap_horiz_rounded,
+                size: 18,
+                color: glass ? Colors.white : AppTheme.brandOrange,
+              ),
+              label: Text(
+                'Replace',
+                style: TextStyle(
+                  color: glass ? Colors.white : AppTheme.brandOrange,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: onRemove,
+              icon: Icon(
+                Icons.delete_outline_rounded,
+                size: 18,
+                color: glass ? Colors.white70 : const Color(0xFF78716C),
+              ),
+              label: Text(
+                'Remove',
+                style: TextStyle(
+                  color: glass ? Colors.white70 : const Color(0xFF78716C),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _PermitFullscreenViewer extends StatelessWidget {
+  const _PermitFullscreenViewer({required this.bytes, this.fileName});
+
+  final Uint8List bytes;
+  final String? fileName;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0F172A),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0F172A),
+        foregroundColor: Colors.white,
+        title: Text(
+          fileName?.trim().isNotEmpty == true
+              ? fileName!.trim()
+              : 'Business Permit',
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+        ),
+      ),
+      body: SafeArea(
+        child: InteractiveViewer(
+          minScale: 0.8,
+          maxScale: 5,
+          child: Center(
+            child: Image.memory(
+              bytes,
+              fit: BoxFit.contain,
+              filterQuality: FilterQuality.high,
+              gaplessPlayback: true,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

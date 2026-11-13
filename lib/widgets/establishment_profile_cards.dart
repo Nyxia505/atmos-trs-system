@@ -862,7 +862,7 @@ class EstablishmentHoursCard extends StatelessWidget {
       label: 'Check-out time',
       value: checkOutLabel == null ? 'Not set' : 'Out $checkOutLabel',
       onTap: saving ? null : onPickCheckOut,
-      iconColor: AeDashTokens.chartSecondary,
+      iconColor: AeDashTokens.brandDeep,
     );
     return AePanelCard(
       title: 'Check-in / check-out times',

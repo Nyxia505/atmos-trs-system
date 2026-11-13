@@ -4,7 +4,6 @@ import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/config/atmos_brand_typography.dart';
 import 'package:atmos_trs_system/navigation/guest_startup_routes.dart';
 import 'package:atmos_trs_system/services/mobile_onboarding_storage.dart';
-import 'package:atmos_trs_system/utils/logo_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -123,20 +122,6 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.94),
-                          borderRadius: BorderRadius.circular(18),
-                        ),
-                        child: const TransparentLogo(height: 28),
-                      ),
-                    ),
                     const Spacer(),
                     Text(
                       'Discover Misamis Occidental',

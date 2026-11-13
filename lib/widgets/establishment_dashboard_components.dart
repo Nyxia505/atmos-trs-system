@@ -1331,15 +1331,15 @@ class AeIllustratedEmpty extends StatelessWidget {
           color: AeDashTokens.secondary,
           left: Icons.person_rounded,
           right: Icons.person_rounded,
-          sideColor: const Color(0xFFA78BFA),
+          sideColor: AeDashTokens.brandDark,
         );
       case AeEmptyArt.globe:
         return _iconBlob(
-          blob: const Color(0xFFE0F2FE),
+          blob: const Color(0xFFFFEDD5),
           icon: Icons.public_rounded,
-          color: const Color(0xFF60A5FA),
+          color: AeDashTokens.brandDeep,
           right: Icons.location_on_rounded,
-          sideColor: AeDashTokens.accent,
+          sideColor: AeDashTokens.brand,
         );
       case AeEmptyArt.weekday:
         return SizedBox(
@@ -1379,7 +1379,7 @@ class AeIllustratedEmpty extends StatelessWidget {
                 child: Icon(
                   Icons.schedule_rounded,
                   size: 30,
-                  color: Color(0xFF8B5CF6),
+                  color: AeDashTokens.brandDeep,
                 ),
               ),
             ],
@@ -1449,7 +1449,7 @@ class AeIllustratedEmpty extends StatelessWidget {
                   width: 150,
                   height: 58,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFEDE9FE).withValues(alpha: 0.9),
+                    color: const Color(0xFFFFEDD5).withValues(alpha: 0.9),
                     borderRadius: BorderRadius.circular(40),
                   ),
                 ),
@@ -1459,7 +1459,7 @@ class AeIllustratedEmpty extends StatelessWidget {
                 child: Icon(
                   Icons.king_bed_rounded,
                   size: 58,
-                  color: Color(0xFFA78BFA),
+                  color: AeDashTokens.brand,
                 ),
               ),
               const Positioned(
@@ -1468,7 +1468,7 @@ class AeIllustratedEmpty extends StatelessWidget {
                 child: Icon(
                   Icons.local_florist_rounded,
                   size: 26,
-                  color: Color(0xFFC4B5FD),
+                  color: AeDashTokens.brandLight,
                 ),
               ),
               const Positioned(
@@ -1477,7 +1477,7 @@ class AeIllustratedEmpty extends StatelessWidget {
                 child: Icon(
                   Icons.light_rounded,
                   size: 22,
-                  color: Color(0xFFC4B5FD),
+                  color: AeDashTokens.brandAmber,
                 ),
               ),
             ],

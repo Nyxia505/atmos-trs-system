@@ -3,6 +3,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 
 import 'package:atmos_trs_system/firebase_options.dart';
+import 'package:atmos_trs_system/services/push_notification_service.dart';
 
 /// Must be a top-level function for [FirebaseMessaging.onBackgroundMessage].
 ///
@@ -16,6 +17,18 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   if (t == 'email_otp') {
     debugPrint(
       '[Push] background: ignoring email_otp (signup OTP is local-only)',
+    );
+    return;
+  }
+  if (t == 'new_vr_tour') {
+    await claimVrTourLocalNotification(
+      message.data['spotId']?.toString() ?? '',
+      message.data['vrLink']?.toString() ?? '',
+    );
+  }
+  if (t == 'new_spot') {
+    await claimNewSpotLocalNotification(
+      message.data['spotId']?.toString() ?? '',
     );
   }
 }

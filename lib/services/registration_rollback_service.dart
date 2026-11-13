@@ -36,6 +36,23 @@ class RegistrationRollbackService {
       } catch (e) {
         debugPrint('[REG] rollback Firestore: $e');
       }
+      // Free any username reserved by this uid (stale docs block re-signup).
+      try {
+        final owned = await FirebaseFirestore.instance
+            .collection('usernames')
+            .where('uid', isEqualTo: uid)
+            .limit(5)
+            .get();
+        for (final d in owned.docs) {
+          try {
+            await d.reference.delete();
+          } catch (e) {
+            debugPrint('[REG] rollback username ${d.id}: $e');
+          }
+        }
+      } catch (e) {
+        debugPrint('[REG] rollback usernames query: $e');
+      }
       try {
         await FirebaseStorage.instance
             .ref()

@@ -1,0 +1,15 @@
+{
+  "name": "atmos-ors-directions",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Cloudflare Worker proxy for OpenRouteService (keeps ORS API key off Flutter web)",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4.14.0"
+  }
+}

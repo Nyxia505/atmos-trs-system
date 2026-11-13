@@ -76,7 +76,8 @@ class StartupRouteResolver {
           route = await _lguOrTripPlannerAdminRoute();
           break;
         case UserRole.tourismEstablishment:
-          route = '/establishment-dashboard';
+          // Never trust session role alone — require verify + OPTACA status.
+          route = await _establishmentRouteForUid(firebaseUser.uid);
           break;
         case UserRole.tourist:
           route = '/dashboard';
@@ -103,6 +104,25 @@ class StartupRouteResolver {
       unawaited(LguOfficeRegistryService.syncForCurrentUser());
     }
     return _applyQrWelcomeIfNeeded(route, firebaseUser: firebaseUser);
+  }
+
+  /// Establishment cold start: OTP hold → OPTACA hold → dashboard only when active.
+  static Future<String> _establishmentRouteForUid(String uid) async {
+    if (uid.isEmpty) return '/verify-otp';
+    try {
+      final profile = await UserDirectoryService.getProfileByUid(
+        uid,
+        preferServer: true,
+      );
+      if (profile != null && profile.isTourismEstablishment) {
+        return RoleRouter.routeForEstablishment(profile);
+      }
+      // Session says establishment but profile not written yet (pre-OTP signup).
+      return '/verify-otp';
+    } catch (e) {
+      debugPrint('[Startup] establishment route: $e');
+      return '/establishment-pending-approval';
+    }
   }
 
   /// OPTACA / catalog admin: default to Trip Planner OPTACA portal; restore
@@ -144,13 +164,14 @@ class StartupRouteResolver {
       return route;
     }
     if (pendingSpot != null || pendingLgu != null) {
-      // Logged-in tourist with a camera/App-Link pending QR → resume fill-up.
+      // Logged-in tourist with a camera/App-Link pending QR:
+      // web → Landing (+ install popup); native → destination chooser.
       if (route == '/dashboard' ||
           route == '/verify-otp' ||
           route == '/landing' ||
           route == GuestStartupRoutes.login ||
           route == GuestStartupRoutes.qrEntry) {
-        return GuestStartupRoutes.qrResume;
+        return kIsWeb ? '/landing' : GuestStartupRoutes.qrResume;
       }
     }
     return route;

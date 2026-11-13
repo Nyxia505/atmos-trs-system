@@ -601,6 +601,28 @@ class _LguDashboardState extends State<LguDashboard>
         );
   }
 
+  /// Puts [spot] into the open list immediately so Save does not wait for a
+  /// full dashboard reload. The live `tourist_spots` stream reconciles after.
+  void _upsertLocalSpot(TouristSpot spot) {
+    if (!mounted || spot.id.isEmpty) return;
+    final all = List<TouristSpot>.from(_allTouristSpots);
+    final index = all.indexWhere((s) => s.id == spot.id);
+    if (index >= 0) {
+      all[index] = spot;
+    } else {
+      all.insert(0, spot);
+    }
+    final filtered = _filterSpotsByMunicipality(all, _storedMunicipalityId);
+    setState(() {
+      _allTouristSpots = all;
+      _touristSpots = filtered;
+      _activeSpots = TouristSpotMetrics.countModels(
+        filtered,
+        kind: SpotCountKind.active,
+      );
+    });
+  }
+
   List<TouristSpot> _filterSpotsByMunicipality(
     List<TouristSpot> spots,
     String? municipalityId,
@@ -6070,7 +6092,35 @@ class _LguDashboardState extends State<LguDashboard>
       longitude: spot.longitude,
     );
     if (!mounted) return;
-    if (ok) await _loadData();
+    if (ok) {
+      _upsertLocalSpot(
+        TouristSpot(
+          id: spot.id,
+          name: spot.name,
+          category: spot.category,
+          municipality: spot.municipality,
+          description: spot.description,
+          rating: spot.rating,
+          latitude: spot.latitude,
+          longitude: spot.longitude,
+          imageUrl: spot.imageUrl,
+          vrLink: spot.vrLink,
+          status: spot.status,
+          visitors: spot.visitors,
+          municipalityId: municipalityId,
+          qrValue: spot.id,
+          qrPayload: spotQrData(
+            municipalityId,
+            spot.id,
+            latitude: spot.latitude,
+            longitude: spot.longitude,
+          ),
+          createdAt: spot.createdAt,
+          dotAttractionCode: spot.dotAttractionCode,
+          gallery: spot.gallery,
+        ),
+      );
+    }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -6426,7 +6476,32 @@ class _LguDashboardState extends State<LguDashboard>
                         }
                         Navigator.pop(dialogContext);
                         if (!mounted) return;
-                        await _loadData();
+                        final createdId = result.id;
+                        if (createdId != null && createdId.isNotEmpty) {
+                          _upsertLocalSpot(
+                            TouristSpot(
+                              id: createdId,
+                              name: name,
+                              category: safeCategory,
+                              municipality: municipalityDisplayName,
+                              description: descriptionController.text.trim(),
+                              rating: 0,
+                              latitude: pinLat!,
+                              longitude: pinLng!,
+                              status: 'Active',
+                              visitors: 0,
+                              municipalityId: mid,
+                              qrValue: createdId,
+                              qrPayload: spotQrData(
+                                mid,
+                                createdId,
+                                latitude: pinLat,
+                                longitude: pinLng,
+                              ),
+                              createdAt: DateTime.now(),
+                            ),
+                          );
+                        }
                         if (!mounted) return;
                         final messenger = ScaffoldMessenger.of(this.context);
                         messenger
@@ -6698,6 +6773,8 @@ class _LguDashboardState extends State<LguDashboard>
     String selectedCategory = _categories.contains('Beach')
         ? 'Beach'
         : _categories.where((c) => c != 'All').firstOrNull ?? 'Beach';
+    var saving = false;
+    var saveError = '';
 
     showDialog(
       context: context,
@@ -6837,8 +6914,19 @@ class _LguDashboardState extends State<LguDashboard>
                       latController: latController,
                       lngController: lngController,
                       municipalityId: normalizedStored,
-                      autoLocate: true,
                     ),
+                    if (saveError.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        saveError,
+                        style: const TextStyle(
+                          color: Colors.redAccent,
+                          fontSize: 13,
+                          height: 1.35,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
                   ),
@@ -6846,14 +6934,16 @@ class _LguDashboardState extends State<LguDashboard>
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: saving ? null : () => Navigator.pop(context),
                   child: const Text(
                     'Cancel',
                     style: TextStyle(color: _textMuted),
                   ),
                 ),
                 ElevatedButton(
-                  onPressed: () async {
+                  onPressed: saving
+                      ? null
+                      : () async {
                     if (nameController.text.isEmpty ||
                         cityController.text.trim().isEmpty) {
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -6918,64 +7008,99 @@ class _LguDashboardState extends State<LguDashboard>
                       municipalityId: municipalityId,
                       dotAttractionCode: dotCodeController.text.trim(),
                     );
+                    setDialogState(() {
+                      saving = true;
+                      saveError = '';
+                    });
                     final result =
                         await TouristSpotsFirestoreService.addSpotDetailed(
                       spot,
                     );
+                    if (!context.mounted) return;
                     final docId = result.id;
-                    if (docId != null &&
-                        spot.vrLink != null &&
-                        spot.vrLink!.isNotEmpty) {
-                      await VrTourFirestoreService.syncAnalyticsDocForSpot(
-                        spotId: docId,
-                        spotName: spot.name,
-                        vrUrl: spot.vrLink!,
+                    if (docId == null || docId.isEmpty) {
+                      setDialogState(() {
+                        saving = false;
+                        saveError = result.error ??
+                            'Failed to add spot. Check Firebase.';
+                      });
+                      return;
+                    }
+                    final savedName = spot.name;
+                    final vr = spot.vrLink?.trim() ?? '';
+                    _upsertLocalSpot(
+                      TouristSpot(
+                        id: docId,
+                        name: spot.name,
+                        category: spot.category,
+                        municipality: spot.municipality,
+                        description: spot.description,
+                        rating: spot.rating,
+                        latitude: spot.latitude,
+                        longitude: spot.longitude,
+                        imageUrl: spot.imageUrl,
+                        vrLink: vr.isEmpty ? null : vr,
+                        status: spot.status,
+                        visitors: spot.visitors,
                         municipalityId: municipalityId,
+                        qrValue: docId,
+                        qrPayload: spotQrData(
+                          municipalityId,
+                          docId,
+                          latitude: lat,
+                          longitude: lng,
+                        ),
+                        createdAt: DateTime.now(),
+                        dotAttractionCode: spot.dotAttractionCode,
+                      ),
+                    );
+                    if (vr.isNotEmpty) {
+                      unawaited(
+                        VrTourFirestoreService.syncAnalyticsDocForSpot(
+                          spotId: docId,
+                          spotName: spot.name,
+                          vrUrl: vr,
+                          municipalityId: municipalityId,
+                        ),
                       );
                     }
-                    if (docId != null) await _loadData();
                     final messenger = ScaffoldMessenger.of(this.context);
                     Navigator.pop(context);
                     if (!mounted) return;
                     messenger.clearSnackBars();
-                    if (docId != null) {
-                      messenger.showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'Tourist spot added. A unique QR was created for "${nameController.text.trim()}".',
-                          ),
-                          backgroundColor: _primaryOrange,
-                          behavior: SnackBarBehavior.floating,
-                          duration: const Duration(seconds: 4),
-                          dismissDirection: DismissDirection.horizontal,
-                          action: SnackBarAction(
-                            label: 'View QR',
-                            textColor: Colors.white,
-                            onPressed: () {
-                              messenger.hideCurrentSnackBar();
-                              setState(() => _selectedIndex = _spotQRCodesIndex);
-                            },
-                          ),
+                    messenger.showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Tourist spot added. A unique QR was created for "$savedName".',
                         ),
-                      );
-                    } else {
-                      messenger.showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            result.error ??
-                                'Failed to add spot. Check Firebase.',
-                          ),
-                          backgroundColor: Colors.redAccent,
-                          behavior: SnackBarBehavior.floating,
-                          duration: const Duration(seconds: 8),
+                        backgroundColor: _primaryOrange,
+                        behavior: SnackBarBehavior.floating,
+                        duration: const Duration(seconds: 4),
+                        dismissDirection: DismissDirection.horizontal,
+                        action: SnackBarAction(
+                          label: 'View QR',
+                          textColor: Colors.white,
+                          onPressed: () {
+                            messenger.hideCurrentSnackBar();
+                            setState(() => _selectedIndex = _spotQRCodesIndex);
+                          },
                         ),
-                      );
-                    }
+                      ),
+                    );
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _primaryOrange,
                   ),
-                  child: const Text('Add'),
+                  child: saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('Add'),
                 ),
               ],
             );
@@ -7009,6 +7134,8 @@ class _LguDashboardState extends State<LguDashboard>
         categoryOptions.isNotEmpty) {
       selectedCategory = categoryOptions.first;
     }
+    var saving = false;
+    var saveError = '';
 
     final hostContext = context;
     showDialog(
@@ -7141,6 +7268,18 @@ class _LguDashboardState extends State<LguDashboard>
                       lngController: lngController,
                       printedSpot: spot,
                     ),
+                    if (saveError.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        saveError,
+                        style: const TextStyle(
+                          color: Colors.redAccent,
+                          fontSize: 13,
+                          height: 1.35,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
                   ),
@@ -7148,36 +7287,46 @@ class _LguDashboardState extends State<LguDashboard>
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(dialogContext),
+                  onPressed: saving ? null : () => Navigator.pop(dialogContext),
                   child: const Text(
                     'Cancel',
                     style: TextStyle(color: _textMuted),
                   ),
                 ),
                 ElevatedButton(
-                  onPressed: () async {
+                  onPressed: saving
+                      ? null
+                      : () async {
                     final coordError = _validateSpotCoordinates(
                       latController.text,
                       lngController.text,
                     );
                     if (coordError != null) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(coordError),
-                          backgroundColor: Colors.redAccent,
-                        ),
-                      );
+                      setDialogState(() => saveError = coordError);
                       return;
                     }
                     final lat = _tryParseCoord(latController.text)!;
                     final lng = _tryParseCoord(lngController.text)!;
 
                     final cityTrim = cityController.text.trim();
-                    var municipalityId = spot.municipalityId;
+                    var municipalityId = normalizeMunicipalityId(
+                      spot.municipalityId,
+                    );
                     if (cityTrim.isNotEmpty) {
                       final fromCity = getMunicipalityIdFromName(cityTrim);
                       if (fromCity.isNotEmpty) municipalityId = fromCity;
                     }
+                    if (municipalityId.isEmpty) {
+                      municipalityId = normalizeMunicipalityId(
+                        _storedMunicipalityId,
+                      );
+                    }
+                    final vr = vrLinkController.text.trim();
+                    final dotCode = dotCodeController.text.trim();
+                    setDialogState(() {
+                      saving = true;
+                      saveError = '';
+                    });
                     final ok =
                         await TouristSpotsFirestoreService.updateSpot(spot.id, {
                           'name': nameController.text.trim(),
@@ -7186,16 +7335,11 @@ class _LguDashboardState extends State<LguDashboard>
                           'description': descriptionController.text.trim(),
                           'latitude': lat,
                           'longitude': lng,
-                          'image_url': photos.isNotEmpty ? photos.first : null,
-                          'image': photos.isNotEmpty ? photos.first : null,
+                          if (photos.isNotEmpty) 'image_url': photos.first,
+                          if (photos.isNotEmpty) 'image': photos.first,
                           'gallery': photos.take(TouristSpot.maxImages).toList(),
-                          'vr_link': vrLinkController.text.trim().isNotEmpty
-                              ? vrLinkController.text.trim()
-                              : null,
-                          'dotAttractionCode':
-                              dotCodeController.text.trim().isNotEmpty
-                                  ? dotCodeController.text.trim()
-                                  : null,
+                          'vr_link': vr.isNotEmpty ? vr : null,
+                          'dotAttractionCode': dotCode.isNotEmpty ? dotCode : null,
                           if (municipalityId.isNotEmpty)
                             'municipalityId': municipalityId,
                           'qrValue': spot.id,
@@ -7205,57 +7349,95 @@ class _LguDashboardState extends State<LguDashboard>
                             latitude: lat,
                             longitude: lng,
                           ),
-                          'hasVR': vrLinkController.text.trim().isNotEmpty,
+                          'hasVR': vr.isNotEmpty,
                         });
-                    if (ok) {
-                      await SupabaseStorageUpload.deleteReplacedSpotPhotos(
-                        spotId: spot.id,
-                        previousUrls: originalPhotos,
-                        nextUrls: photos,
-                      );
-                      final vr = vrLinkController.text.trim();
-                      try {
-                        if (vr.isNotEmpty) {
-                          await VrTourFirestoreService.syncAnalyticsDocForSpot(
-                            spotId: spot.id,
-                            spotName: nameController.text.trim(),
-                            vrUrl: vr,
-                            municipalityId: municipalityId,
-                          );
-                        } else {
-                          await VrTourFirestoreService.clearVrLinkForSpot(
-                            spot.id,
-                          );
-                        }
-                      } catch (e) {
-                        debugPrint('[LguDashboard] VR sync after edit failed: $e');
+                    if (!ok) {
+                      if (dialogContext.mounted) {
+                        setDialogState(() {
+                          saving = false;
+                          saveError =
+                              TouristSpotsFirestoreService.lastUpdateError ??
+                                  'Failed to update. Check Firebase.';
+                        });
                       }
-                      await _loadData();
+                      return;
                     }
-                    final needsReprint = ok &&
-                        spotPinNeedsReprint(
-                          printedLatitude: spot.latitude,
-                          printedLongitude: spot.longitude,
+                    final savedName = nameController.text.trim();
+                    final gallery = photos.length > 1
+                        ? photos.sublist(1, math.min(photos.length, TouristSpot.maxImages))
+                        : const <String>[];
+                    _upsertLocalSpot(
+                      TouristSpot(
+                        id: spot.id,
+                        name: savedName,
+                        category: selectedCategory,
+                        municipality: cityTrim,
+                        description: descriptionController.text.trim(),
+                        rating: spot.rating,
+                        latitude: lat,
+                        longitude: lng,
+                        imageUrl: photos.isNotEmpty ? photos.first : null,
+                        vrLink: vr.isNotEmpty ? vr : null,
+                        status: spot.status,
+                        visitors: spot.visitors,
+                        municipalityId: municipalityId.isNotEmpty
+                            ? municipalityId
+                            : spot.municipalityId,
+                        qrValue: spot.id,
+                        qrPayload: spotQrData(
+                          municipalityId,
+                          spot.id,
                           latitude: lat,
                           longitude: lng,
-                        );
-                    Navigator.pop(dialogContext);
+                        ),
+                        createdAt: spot.createdAt,
+                        dotAttractionCode: dotCode,
+                        gallery: gallery,
+                      ),
+                    );
+                    final previousPhotos = List<String>.from(originalPhotos);
+                    final nextPhotos = List<String>.from(photos);
+                    unawaited(
+                      SupabaseStorageUpload.deleteReplacedSpotPhotos(
+                        spotId: spot.id,
+                        previousUrls: previousPhotos,
+                        nextUrls: nextPhotos,
+                      ),
+                    );
+                    if (vr.isNotEmpty) {
+                      unawaited(
+                        VrTourFirestoreService.syncAnalyticsDocForSpot(
+                          spotId: spot.id,
+                          spotName: savedName,
+                          vrUrl: vr,
+                          municipalityId: municipalityId,
+                        ),
+                      );
+                    } else if ((spot.vrLink ?? '').trim().isNotEmpty) {
+                      unawaited(VrTourFirestoreService.clearVrLinkForSpot(spot.id));
+                    }
+                    final needsReprint = spotPinNeedsReprint(
+                      printedLatitude: spot.latitude,
+                      printedLongitude: spot.longitude,
+                      latitude: lat,
+                      longitude: lng,
+                    );
+                    if (dialogContext.mounted) {
+                      Navigator.pop(dialogContext);
+                    }
                     if (mounted) {
                       ScaffoldMessenger.of(hostContext).showSnackBar(
                         SnackBar(
                           content: Text(
-                            !ok
-                                ? (TouristSpotsFirestoreService.lastUpdateError ??
-                                    'Failed to update. Check Firebase.')
-                                : needsReprint
-                                    ? 'Spot updated. The pin moved — download '
-                                        'and re-post the new QR (PNG/PDF); the '
-                                        'old printed QR will be rejected.'
+                            needsReprint
+                                ? 'Spot updated. The pin moved — download '
+                                    'and re-post the new QR (PNG/PDF); the '
+                                    'old printed QR will be rejected.'
+                                : vr.isNotEmpty
+                                    ? 'Tourist spot saved. VR link is stored.'
                                     : 'Tourist spot updated successfully',
                           ),
-                          backgroundColor: ok
-                              ? _primaryOrange
-                              : Colors.redAccent,
+                          backgroundColor: _primaryOrange,
                           duration: Duration(seconds: needsReprint ? 8 : 4),
                         ),
                       );
@@ -7264,7 +7446,16 @@ class _LguDashboardState extends State<LguDashboard>
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _primaryOrange,
                   ),
-                  child: const Text('Save'),
+                  child: saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('Save'),
                 ),
               ],
             );
@@ -9739,23 +9930,62 @@ class _LguDashboardState extends State<LguDashboard>
                   onTap: isLoading
                       ? null
                       : () async {
+                          final source = await showModalBottomSheet<ImageSource>(
+                            context: context,
+                            useRootNavigator: true,
+                            showDragHandle: true,
+                            builder: (sheetContext) {
+                              return SafeArea(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    ListTile(
+                                      leading: const Icon(Icons.photo_camera_outlined),
+                                      title: const Text('Take photo'),
+                                      onTap: () => Navigator.pop(
+                                        sheetContext,
+                                        ImageSource.camera,
+                                      ),
+                                    ),
+                                    ListTile(
+                                      leading: const Icon(
+                                        Icons.photo_library_outlined,
+                                      ),
+                                      title: const Text('Choose from gallery'),
+                                      onTap: () => Navigator.pop(
+                                        sheetContext,
+                                        ImageSource.gallery,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                  ],
+                                ),
+                              );
+                            },
+                          );
+                          if (source == null || !context.mounted) return;
                           final picker = ImagePicker();
                           try {
                             final picked = await picker.pickImage(
-                              source: ImageSource.gallery,
-                              maxWidth: 512,
-                              maxHeight: 512,
-                              imageQuality: 85,
+                              source: source,
+                              maxWidth: 720,
+                              maxHeight: 720,
+                              imageQuality: 72,
+                              preferredCameraDevice: CameraDevice.front,
                             );
-                            if (picked != null) {
-                              final bytes = await picked.readAsBytes();
-                              setDialogState(() {
-                                dialogPhotoBytes = bytes;
-                                dialogPhotoBase64 = base64Encode(bytes);
-                              });
-                            }
-                          } catch (_) {
-                            // ignore
+                            if (picked == null || !context.mounted) return;
+                            final bytes = await picked.readAsBytes();
+                            if (!context.mounted) return;
+                            dialogPhotoBase64 = base64Encode(bytes);
+                            setDialogState(() => dialogPhotoBytes = bytes);
+                          } catch (e) {
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(this.context).showSnackBar(
+                              SnackBar(
+                                content: Text('Could not use that photo. $e'),
+                                backgroundColor: Colors.redAccent,
+                              ),
+                            );
                           }
                         },
                   child: Stack(
@@ -9860,19 +10090,21 @@ class _LguDashboardState extends State<LguDashboard>
                   : () async {
                       setDialogState(() => isLoading = true);
 
-                      await Future.delayed(const Duration(seconds: 1));
-
+                      final savedName = nameController.text;
+                      final savedEmail = emailController.text;
+                      final savedBytes = dialogPhotoBytes;
+                      final savedPhoto = dialogPhotoBase64;
                       setState(() {
-                        _profileName = nameController.text;
-                        _profileEmail = emailController.text;
-                        _profilePhotoBytes = dialogPhotoBytes;
-                        _profilePhotoBase64 = dialogPhotoBase64;
+                        _profileName = savedName;
+                        _profileEmail = savedEmail;
+                        _profilePhotoBytes = savedBytes;
+                        _profilePhotoBase64 = savedPhoto;
                       });
-                      await _saveTourismSettings();
+                      unawaited(_saveTourismSettings());
 
                       if (!context.mounted) return;
                       Navigator.pop(context);
-                      ScaffoldMessenger.of(context).showSnackBar(
+                      ScaffoldMessenger.of(this.context).showSnackBar(
                         const SnackBar(
                           content: Text('Profile updated successfully'),
                           backgroundColor: _primaryOrange,

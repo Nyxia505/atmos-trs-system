@@ -207,21 +207,52 @@ class EstablishmentLocationCapture extends StatelessWidget {
         final media = MediaQuery.of(ctx);
         final height = media.size.height * 0.88;
         final accent = accentColor ?? AppTheme.brandOrange;
-        return Padding(
-          padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
-          child: SizedBox(
-            height: height,
-            child: _AdjustPinSheet(
-              initialLatitude: lat,
-              initialLongitude: lng,
-              accent: accent,
-              pinIcon: pinIcon,
-              municipalityId: municipalityId,
-              onSave: (pin) {
-                onChanged(pin);
-                Navigator.pop(ctx);
-              },
-              onClose: () => Navigator.pop(ctx),
+        // Force a light Material theme so Lat/Lng stay readable even when
+        // opened from the glass (dark-text) signup scaffold.
+        return Theme(
+          data: ThemeData(
+            brightness: Brightness.light,
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: accent,
+              brightness: Brightness.light,
+            ),
+            scaffoldBackgroundColor: Colors.white,
+            textTheme: ThemeData.light().textTheme.apply(
+                  bodyColor: const Color(0xFF1F2937),
+                  displayColor: const Color(0xFF1F2937),
+                ),
+            inputDecorationTheme: const InputDecorationTheme(
+              filled: true,
+              fillColor: Colors.white,
+              labelStyle: TextStyle(
+                color: Color(0xFF64748B),
+                fontWeight: FontWeight.w600,
+              ),
+              hintStyle: TextStyle(
+                color: Color(0xFF94A3B8),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          child: Padding(
+            padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+            child: SizedBox(
+              height: height,
+              child: SafeArea(
+                top: false,
+                child: _AdjustPinSheet(
+                  initialLatitude: lat,
+                  initialLongitude: lng,
+                  accent: accent,
+                  pinIcon: pinIcon,
+                  municipalityId: municipalityId,
+                  onSave: (pin) {
+                    onChanged(pin);
+                    Navigator.pop(ctx);
+                  },
+                  onClose: () => Navigator.pop(ctx),
+                ),
+              ),
             ),
           ),
         );
@@ -332,18 +363,37 @@ class EstablishmentLocationCapture extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(
-              _hasPin
-                  ? 'Pin: ${lat!.toStringAsFixed(5)}, ${lng!.toStringAsFixed(5)}'
-                  : _emptyText,
-              style: TextStyle(
-                fontSize: 13.5,
-                fontWeight: FontWeight.w600,
-                color: _hasPin
-                    ? const Color(0xFF334155)
-                    : const Color(0xFFC2410C),
-              ),
-            ),
+            child: _hasPin
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Latitude  ${lat!.toStringAsFixed(6)}',
+                        style: const TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF1F2937),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Longitude  ${lng!.toStringAsFixed(6)}',
+                        style: const TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF1F2937),
+                        ),
+                      ),
+                    ],
+                  )
+                : Text(
+                    _emptyText,
+                    style: const TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFFC2410C),
+                    ),
+                  ),
           ),
         ],
       ),
@@ -426,6 +476,54 @@ class EstablishmentLocationCapture extends StatelessWidget {
     );
   }
 
+  Widget _coordinateCards(Color accent, double lat, double lng) {
+    Widget card(String label, String value) {
+      return Expanded(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: accent.withValues(alpha: 0.45)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF64748B),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 15.5,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF1F2937),
+                  height: 1.2,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        card('Latitude', lat.toStringAsFixed(6)),
+        const SizedBox(width: 10),
+        card('Longitude', lng.toStringAsFixed(6)),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final accent = accentColor ?? AppTheme.brandOrange;
@@ -436,17 +534,17 @@ class EstablishmentLocationCapture extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (showStatus)
-          Text(
-            _hasPin
-                ? 'Pin: ${lat!.toStringAsFixed(5)}, ${lng!.toStringAsFixed(5)}'
-                : _emptyText,
-            style: TextStyle(
-              fontSize: 13,
-              height: 1.35,
-              color: _hasPin ? const Color(0xFF334155) : Colors.red.shade700,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
+          _hasPin
+              ? _coordinateCards(accent, lat!, lng!)
+              : Text(
+                  _emptyText,
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.35,
+                    color: Colors.red.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
         if (showMapPreview && _hasPin) ...[
           if (showStatus) const SizedBox(height: 10),
           _pinPreview(context, accent, lat!, lng!),
@@ -815,30 +913,57 @@ class _AdjustPinSheetState extends State<_AdjustPinSheet> {
     );
   }
 
+  static const _coordTextStyle = TextStyle(
+    fontSize: 15.5,
+    fontWeight: FontWeight.w600,
+    color: Color(0xFF1F2937),
+    height: 1.25,
+  );
+
   InputDecoration _coordDecoration({
     required String label,
     required String hint,
     String? errorText,
   }) {
+    final borderColor = errorText != null
+        ? Colors.redAccent
+        : widget.accent.withValues(alpha: 0.55);
     return InputDecoration(
       labelText: label,
+      floatingLabelBehavior: FloatingLabelBehavior.always,
+      labelStyle: const TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w600,
+        color: Color(0xFF64748B),
+      ),
+      floatingLabelStyle: TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w700,
+        color: errorText != null ? Colors.redAccent : widget.accent,
+      ),
       hintText: hint,
+      hintStyle: const TextStyle(
+        fontSize: 14.5,
+        fontWeight: FontWeight.w500,
+        color: Color(0xFF94A3B8),
+      ),
       errorText: errorText,
-      isDense: true,
+      isDense: false,
       filled: true,
-      fillColor: const Color(0xFFFFF7ED),
+      fillColor: Colors.white,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(
-          color: errorText != null
-              ? Colors.redAccent
-              : widget.accent.withValues(alpha: 0.35),
-        ),
+        borderSide: BorderSide(color: borderColor),
+      ),
+      disabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: widget.accent.withValues(alpha: 0.35)),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: widget.accent, width: 1.4),
+        borderSide: BorderSide(color: widget.accent, width: 1.6),
       ),
     );
   }
@@ -901,8 +1026,15 @@ class _AdjustPinSheetState extends State<_AdjustPinSheet> {
             focusNode: _searchFocus,
             onChanged: _onSearchChanged,
             textInputAction: TextInputAction.search,
+            style: _coordTextStyle,
+            cursorColor: widget.accent,
             decoration: InputDecoration(
               hintText: 'Search hotel, resort, or establishment...',
+              hintStyle: const TextStyle(
+                fontSize: 14.5,
+                fontWeight: FontWeight.w500,
+                color: Color(0xFF94A3B8),
+              ),
               prefixIcon: Icon(Icons.search_rounded, color: widget.accent),
               suffixIcon: _searching
                   ? const Padding(
@@ -927,22 +1059,23 @@ class _AdjustPinSheetState extends State<_AdjustPinSheet> {
                           },
                         )),
               filled: true,
-              fillColor: const Color(0xFFFFF7ED),
+              fillColor: Colors.white,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide(
-                  color: widget.accent.withValues(alpha: 0.35),
+                  color: widget.accent.withValues(alpha: 0.45),
                 ),
               ),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
                 borderSide: BorderSide(
-                  color: widget.accent.withValues(alpha: 0.35),
+                  color: widget.accent.withValues(alpha: 0.45),
                 ),
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: widget.accent, width: 1.4),
+                borderSide: BorderSide(color: widget.accent, width: 1.6),
               ),
             ),
           ),
@@ -1122,6 +1255,8 @@ class _AdjustPinSheetState extends State<_AdjustPinSheet> {
               Expanded(
                 child: TextField(
                   controller: _latController,
+                  style: _coordTextStyle,
+                  cursorColor: widget.accent,
                   keyboardType: const TextInputType.numberWithOptions(
                     signed: true,
                     decimal: true,
@@ -1138,6 +1273,8 @@ class _AdjustPinSheetState extends State<_AdjustPinSheet> {
               Expanded(
                 child: TextField(
                   controller: _lngController,
+                  style: _coordTextStyle,
+                  cursorColor: widget.accent,
                   keyboardType: const TextInputType.numberWithOptions(
                     signed: true,
                     decimal: true,
@@ -1154,48 +1291,51 @@ class _AdjustPinSheetState extends State<_AdjustPinSheet> {
           ),
         ),
         // —— Get Location / Save Location ——
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          child: Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _locating ? null : _getDeviceLocation,
-                  icon: _locating
-                      ? SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: widget.accent,
-                          ),
-                        )
-                      : Icon(Icons.my_location_rounded, color: widget.accent),
-                  label: Text(_locating ? 'Getting…' : 'Get Location'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: widget.accent,
-                    side: BorderSide(
-                      color: widget.accent.withValues(alpha: 0.55),
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _locating ? null : _getDeviceLocation,
+                    icon: _locating
+                        ? SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: widget.accent,
+                            ),
+                          )
+                        : Icon(Icons.my_location_rounded, color: widget.accent),
+                    label: Text(_locating ? 'Getting…' : 'Get Location'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: widget.accent,
+                      side: BorderSide(
+                        color: widget.accent.withValues(alpha: 0.55),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                 ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                flex: 2,
-                child: FilledButton.icon(
-                  onPressed: _trySave,
-                  icon: const Icon(Icons.check_rounded),
-                  label: const Text('Save Location'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: widget.accent,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 2,
+                  child: FilledButton.icon(
+                    onPressed: _trySave,
+                    icon: const Icon(Icons.check_rounded),
+                    label: const Text('Save Location'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: widget.accent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ],

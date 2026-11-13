@@ -1,5 +1,6 @@
 import 'package:atmos_trs_system/config/app_theme.dart';
 import 'package:atmos_trs_system/navigation/login_route_args.dart';
+import 'package:atmos_trs_system/navigation/pending_checkin_navigation.dart';
 import 'package:atmos_trs_system/config/atmos_brand_typography.dart';
 import 'package:atmos_trs_system/services/pending_lgu_checkin_storage.dart';
 import 'package:atmos_trs_system/services/pending_spot_checkin_storage.dart';
@@ -133,10 +134,13 @@ class _QrScanWelcomeScreenState extends State<QrScanWelcomeScreen>
   Future<void> _loadContext() async {
     if (FirebaseAuth.instance.currentUser != null) {
       if (mounted) {
-        Navigator.pushReplacementNamed(
-          context,
-          kIsWeb ? '/landing' : '/qr-resume',
-        );
+        final opened = await openQrDestinationIfPending(context);
+        if (!opened && mounted) {
+          Navigator.pushReplacementNamed(
+            context,
+            kIsWeb ? '/landing' : '/qr-resume',
+          );
+        }
       }
       return;
     }

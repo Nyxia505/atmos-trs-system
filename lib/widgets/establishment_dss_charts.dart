@@ -664,8 +664,8 @@ abstract final class EstablishmentDssCharts {
                   borderRadius:
                       const BorderRadius.vertical(top: Radius.circular(4)),
                   color: i == 0
-                      ? AeDashTokens.accent
-                      : AeDashTokens.chartSecondary,
+                      ? AeDashTokens.brand
+                      : AeDashTokens.brandDeep,
                 ),
               ],
             ),
@@ -736,12 +736,12 @@ abstract final class EstablishmentDssCharts {
           LineChartBarData(
             spots: spots,
             isCurved: true,
-            color: AeDashTokens.info,
+            color: AeDashTokens.brand,
             barWidth: 2.5,
             dotData: FlDotData(show: pctValues.length <= 14),
             belowBarData: BarAreaData(
               show: true,
-              color: AeDashTokens.info.withValues(alpha: 0.12),
+              color: AeDashTokens.brand.withValues(alpha: 0.12),
             ),
           ),
         ],

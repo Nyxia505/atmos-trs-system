@@ -83,6 +83,27 @@ class SupabaseStorageUpload {
     return '$establishmentPhotoFolder/establishments/$safeId/photo_$stamp.$ext';
   }
 
+  /// Business Permit for AE signup — same allowed `uploads/establishments/` prefix.
+  /// `uploads/establishments/{uid}/business_permit_{time}.ext`
+  static String establishmentBusinessPermitObjectKey(
+    String uid,
+    String extension,
+  ) {
+    final safeId = uid.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '');
+    if (safeId.isEmpty) {
+      throw StateError('Sign in to upload your Business Permit.');
+    }
+    final ext = extension.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+    const allowed = {'jpg', 'jpeg', 'png', 'webp'};
+    if (!allowed.contains(ext)) {
+      throw StateError('Use a JPG, PNG, or WEBP photo of your Business Permit.');
+    }
+    final normalized = ext == 'jpeg' ? 'jpg' : ext;
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+    return '$establishmentPhotoFolder/establishments/$safeId/'
+        'business_permit_$stamp.$normalized';
+  }
+
   /// Reads the real image type from file bytes. Flutter Web file names are often wrong.
   static String? contentTypeForImageBytes(Uint8List bytes) {
     if (bytes.length >= 3 &&

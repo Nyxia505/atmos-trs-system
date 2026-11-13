@@ -16,8 +16,8 @@ import 'package:atmos_trs_system/screens/forgot_password_screen.dart';
 import 'package:atmos_trs_system/screens/signup_screen.dart';
 import 'package:atmos_trs_system/screens/signup_account_type_screen.dart';
 import 'package:atmos_trs_system/screens/establishment_signup_screen.dart';
-import 'package:atmos_trs_system/screens/lgu_signup_screen.dart';
 import 'package:atmos_trs_system/screens/establishment_dashboard_screen.dart';
+import 'package:atmos_trs_system/screens/establishment_pending_approval_screen.dart';
 import 'package:atmos_trs_system/screens/governor_dashboard.dart';
 import 'package:atmos_trs_system/screens/tourism_dashboard.dart';
 import 'package:atmos_trs_system/screens/provincial_tourism_dashboard.dart';
@@ -230,6 +230,8 @@ class _MyAppState extends State<MyApp> {
           '/verify-otp': (context) => const VerifyOtpScreen(),
           '/establishment-dashboard': (context) =>
               const EstablishmentDashboardScreen(),
+          '/establishment-pending-approval': (context) =>
+              const EstablishmentPendingApprovalScreen(),
           '/dashboard': (context) {
             final args = ModalRoute.of(context)?.settings.arguments;
             final mapArgs = args is Map ? args : null;
@@ -266,7 +268,7 @@ class _MyAppState extends State<MyApp> {
                     const QrTouristBasicSignupScreen(),
                 '/signup-lgu' ||
                 '/signup-lgu-info' =>
-                  (_) => const LguSignupScreen(),
+                  (_) => const LguSignupInfoScreen(),
                 '/signup-establishment' => (_) =>
                     const EstablishmentSignupScreen(),
                 _ => null,

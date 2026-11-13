@@ -13,6 +13,7 @@ import 'package:atmos_trs_system/features/governor/widgets/governor_sidebar.dart
 import 'package:atmos_trs_system/features/provincial_tourism/widgets/provincial_quick_actions.dart';
 import 'package:atmos_trs_system/navigation/post_logout_navigation.dart';
 import 'package:atmos_trs_system/services/auth_service.dart';
+import 'package:atmos_trs_system/services/establishment_approval_service.dart';
 import 'package:atmos_trs_system/services/governor_firestore_service.dart';
 import 'package:atmos_trs_system/services/provincial_tourism_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
@@ -69,6 +70,8 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
   Set<String> _ackAlertIds = {};
   StreamSubscription<List<Map<String, dynamic>>>? _checkInsSubscription;
   StreamSubscription<List<Map<String, dynamic>>>? _spotsSubscription;
+  StreamSubscription<List<EstablishmentRegistryEntry>>? _establishmentsSubscription;
+  int _pendingEstablishmentRegistrations = 0;
 
   // Insights
   String _insightSearch = '';
@@ -139,6 +142,7 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
   void dispose() {
     _checkInsSubscription?.cancel();
     _spotsSubscription?.cancel();
+    _establishmentsSubscription?.cancel();
     _searchController.dispose();
     _currentPwController.dispose();
     _newPwController.dispose();
@@ -181,6 +185,22 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
     );
   }
 
+  void _startEstablishmentsListener() {
+    _establishmentsSubscription?.cancel();
+    _establishmentsSubscription =
+        EstablishmentApprovalService.watchAll().listen(
+      (entries) {
+        if (!mounted) return;
+        final pending =
+            entries.where((e) => e.isPending || e.needsRevision).length;
+        setState(() => _pendingEstablishmentRegistrations = pending);
+      },
+      onError: (Object e) {
+        debugPrint('[OPTACA] establishments stream: $e');
+      },
+    );
+  }
+
   Future<void> _bootstrap() async {
     unawaited(
       ModuleShellPrefs.setActiveShell(ModuleShellPrefs.provincialTourism),
@@ -204,6 +224,7 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
         _isLoading = false;
       });
     }
+    _startEstablishmentsListener();
     await _loadData();
   }
 
@@ -228,6 +249,7 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
       });
       _startCheckInsListener();
       _startSpotsListener();
+      _startEstablishmentsListener();
     } catch (e, st) {
       debugPrint('ProvincialTourism _loadData: $e\n$st');
       if (!mounted) return;
@@ -334,7 +356,9 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
             icon: _navItems[i].icon,
             badgeCount: i == _eventsIndex
                 ? _pendingEvents
-                : (i == _alertsIndex ? _alerts.length : 0),
+                : i == _establishmentsIndex
+                    ? _pendingEstablishmentRegistrations
+                    : (i == _alertsIndex ? _alerts.length : 0),
           ),
       ];
 
@@ -490,8 +514,15 @@ class _ProvincialTourismDashboardState extends State<ProvincialTourismDashboard>
               });
             },
             searchHint: 'Search tourists, municipalities...',
-            notificationCount: (_alerts.length + _pendingEvents).clamp(0, 99),
-            onNotifications: () => _go(_alertsIndex),
+            notificationCount: (_alerts.length +
+                    _pendingEvents +
+                    _pendingEstablishmentRegistrations)
+                .clamp(0, 99),
+            onNotifications: () => _go(
+              _pendingEstablishmentRegistrations > 0
+                  ? _establishmentsIndex
+                  : _alertsIndex,
+            ),
           ),
           Expanded(
             child: showSkeleton

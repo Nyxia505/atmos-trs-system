@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io' show Platform;
 import 'dart:ui' show Color;
 
@@ -11,6 +12,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:atmos_trs_system/services/announcement_notification_sync.dart';
 import 'package:atmos_trs_system/services/notification_badge_notifier.dart';
+import 'package:atmos_trs_system/models/tourist_spot_firestore.dart';
 import 'package:atmos_trs_system/services/tourist_spots_repository.dart';
 import 'package:atmos_trs_system/services/user_activity_service.dart' as activity;
 import 'package:atmos_trs_system/screens/event_detail_screen.dart';
@@ -25,7 +27,7 @@ const String kAndroidSpotsChannelId = 'tourism_spots_channel';
 const AndroidNotificationChannel _androidSpotsChannel = AndroidNotificationChannel(
   kAndroidSpotsChannelId,
   'Tourist spot updates',
-  description: 'Alerts when LGUs publish new tourist spots',
+  description: 'Alerts when LGUs publish new tourist spots and VR tours',
   importance: Importance.high,
 );
 
@@ -225,6 +227,237 @@ Future<void> _ensureLocalNotificationsCore() async {
     );
     _localNotificationsReady = true;
   }
+}
+
+const String _kNotifiedVrLinks = 'notified_vr_tour_links_v1';
+const String _kVrTourSeeded = 'notified_vr_tour_seeded_v1';
+bool _vrWatchStarted = false;
+final Set<String> _vrClaimInflight = <String>{};
+
+Map<String, String> _decodeVrLinkMap(String? raw) {
+  if (raw == null || raw.isEmpty) return <String, String>{};
+  try {
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map) return <String, String>{};
+    return decoded.map(
+      (key, value) => MapEntry(key.toString(), value?.toString() ?? ''),
+    );
+  } catch (_) {
+    return <String, String>{};
+  }
+}
+
+/// Records a VR URL as already announced so the live spot listener does not
+/// show a second banner for the same link.
+Future<bool> claimVrTourLocalNotification(String spotId, String vrLink) async {
+  final id = spotId.trim();
+  final link = vrLink.trim();
+  if (id.isEmpty || link.isEmpty) return false;
+  final gate = '$id|$link';
+  if (!_vrClaimInflight.add(gate)) return false;
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final known = _decodeVrLinkMap(prefs.getString(_kNotifiedVrLinks));
+    if (known[id] == link) return false;
+    known[id] = link;
+    await prefs.setString(_kNotifiedVrLinks, jsonEncode(known));
+    return true;
+  } catch (e) {
+    debugPrint('[Push] claim VR notify failed: $e');
+    return false;
+  } finally {
+    _vrClaimInflight.remove(gate);
+  }
+}
+
+void _startVrTourWatch() {
+  if (kIsWeb || _vrWatchStarted) return;
+  _vrWatchStarted = true;
+  TouristSpotsRepository.ensureRealtimeSync();
+  TouristSpotsRepository.revision.addListener(_onVrSpotsRevision);
+  _onVrSpotsRevision();
+}
+
+void _onVrSpotsRevision() {
+  unawaited(_notifyNewlyAddedVrTours(TouristSpotsRepository.peekCachedSpots()));
+}
+
+Future<void> _notifyNewlyAddedVrTours(List<TouristSpotFirestore> spots) async {
+  if (kIsWeb || spots.isEmpty) return;
+  if (!await _touristSpotPushesEnabled()) return;
+  if (!_localNotificationsReady) return;
+  final prefs = await SharedPreferences.getInstance();
+  final known = _decodeVrLinkMap(prefs.getString(_kNotifiedVrLinks));
+  if (prefs.getBool(_kVrTourSeeded) != true) {
+    for (final spot in spots) {
+      final link = spot.vrLink?.trim() ?? '';
+      if (link.isEmpty || known.containsKey(spot.id)) continue;
+      known[spot.id] = link;
+    }
+    await prefs.setString(_kNotifiedVrLinks, jsonEncode(known));
+    await prefs.setBool(_kVrTourSeeded, true);
+    return;
+  }
+
+  for (final spot in spots) {
+    final link = spot.vrLink?.trim() ?? '';
+    if (link.isEmpty) {
+      if (known.remove(spot.id) != null) {
+        await prefs.setString(_kNotifiedVrLinks, jsonEncode(known));
+      }
+      continue;
+    }
+    if (known[spot.id] == link) continue;
+    final claimed = await claimVrTourLocalNotification(spot.id, link);
+    if (!claimed) continue;
+    known[spot.id] = link;
+    final place = spot.municipality.trim().isEmpty
+        ? 'Misamis Occidental'
+        : spot.municipality.trim();
+    final name = spot.name.trim().isEmpty ? 'A tourist spot' : spot.name.trim();
+    await _showVrTourLocalNotification(
+      spotId: spot.id,
+      title: 'New VR Tour!',
+      body:
+          'A 360° VR tour is now available for "$name" in $place. Open ATMOS to look around.',
+    );
+  }
+}
+
+Future<void> _showVrTourLocalNotification({
+  required String spotId,
+  required String title,
+  required String body,
+}) async {
+  if (kIsWeb || !_localNotificationsReady) return;
+  final android = AndroidNotificationDetails(
+    kAndroidSpotsChannelId,
+    'Tourist spot updates',
+    channelDescription: 'Alerts when LGUs publish new tourist spots and VR tours',
+    importance: Importance.high,
+    priority: Priority.high,
+    icon: _kNotificationSmallIcon,
+    color: _kNotificationColor,
+    tag: 'tourist_vr_$spotId',
+  );
+  await _localNotifications.show(
+    id: 3100000 + (spotId.hashCode.abs() % 99991),
+    title: title,
+    body: body,
+    notificationDetails: NotificationDetails(android: android),
+  );
+}
+
+const String _kNotifiedNewSpotIds = 'notified_new_spot_ids_v1';
+const String _kNewSpotSeeded = 'notified_new_spot_seeded_v1';
+bool _newSpotWatchStarted = false;
+final Set<String> _newSpotClaimInflight = <String>{};
+
+/// Records a spot as already announced so a later snapshot or FCM copy does
+/// not show a second "new destination" banner.
+Future<bool> claimNewSpotLocalNotification(String spotId) async {
+  final id = spotId.trim();
+  if (id.isEmpty) return false;
+  if (!_newSpotClaimInflight.add(id)) return false;
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final known = prefs.getStringList(_kNotifiedNewSpotIds) ?? <String>[];
+    if (known.contains(id)) return false;
+    known.add(id);
+    await prefs.setStringList(_kNotifiedNewSpotIds, known);
+    return true;
+  } catch (e) {
+    debugPrint('[Push] claim new spot notify failed: $e');
+    return false;
+  } finally {
+    _newSpotClaimInflight.remove(id);
+  }
+}
+
+void _startNewSpotWatch() {
+  if (kIsWeb || _newSpotWatchStarted) return;
+  _newSpotWatchStarted = true;
+  TouristSpotsRepository.ensureRealtimeSync();
+  TouristSpotsRepository.revision.addListener(_onNewSpotsRevision);
+  _onNewSpotsRevision();
+}
+
+void _onNewSpotsRevision() {
+  unawaited(
+    _notifyNewlyAddedTouristSpots(TouristSpotsRepository.peekCachedSpots()),
+  );
+}
+
+Future<void> _notifyNewlyAddedTouristSpots(
+  List<TouristSpotFirestore> spots,
+) async {
+  if (kIsWeb || spots.isEmpty) return;
+  if (!await _touristSpotPushesEnabled()) return;
+  if (!_localNotificationsReady) return;
+  final prefs = await SharedPreferences.getInstance();
+  final known = (prefs.getStringList(_kNotifiedNewSpotIds) ?? <String>[]).toSet();
+  if (prefs.getBool(_kNewSpotSeeded) != true) {
+    for (final spot in spots) {
+      final id = spot.id.trim();
+      if (id.isEmpty) continue;
+      known.add(id);
+    }
+    await prefs.setStringList(_kNotifiedNewSpotIds, known.toList());
+    await prefs.setBool(_kNewSpotSeeded, true);
+    return;
+  }
+
+  for (final spot in spots) {
+    final id = spot.id.trim();
+    if (id.isEmpty || known.contains(id)) continue;
+    final link = spot.vrLink?.trim() ?? '';
+    if (link.isNotEmpty) {
+      // The VR watcher announces a first publish that already has a tour.
+      known.add(id);
+      await prefs.setStringList(_kNotifiedNewSpotIds, known.toList());
+      continue;
+    }
+    final claimed = await claimNewSpotLocalNotification(id);
+    if (!claimed) {
+      known.add(id);
+      continue;
+    }
+    known.add(id);
+    final place = spot.municipality.trim().isEmpty
+        ? 'Misamis Occidental'
+        : spot.municipality.trim();
+    final name = spot.name.trim().isEmpty ? 'A tourist spot' : spot.name.trim();
+    await _showNewSpotLocalNotification(
+      spotId: id,
+      title: 'New Tourist Destination!',
+      body:
+          'A new tourist spot, "$name", has been added in $place. Explore it now!',
+    );
+  }
+}
+
+Future<void> _showNewSpotLocalNotification({
+  required String spotId,
+  required String title,
+  required String body,
+}) async {
+  if (kIsWeb || !_localNotificationsReady) return;
+  final android = AndroidNotificationDetails(
+    kAndroidSpotsChannelId,
+    'Tourist spot updates',
+    channelDescription: 'Alerts when LGUs publish new tourist spots and VR tours',
+    importance: Importance.high,
+    priority: Priority.high,
+    icon: _kNotificationSmallIcon,
+    color: _kNotificationColor,
+    tag: 'tourist_spot_$spotId',
+  );
+  await _localNotifications.show(
+    id: 3200000 + (spotId.hashCode.abs() % 99991),
+    title: title,
+    body: body,
+    notificationDetails: NotificationDetails(android: android),
+  );
 }
 
 void _wireFcmTokenRefreshToFirestore() {
@@ -696,15 +929,33 @@ Future<void> _showForegroundNotification(RemoteMessage message) async {
     return;
   }
   final type = message.data['type']?.toString() ?? '';
-  if (type == 'new_spot' && !await _touristSpotPushesEnabled()) {
-    debugPrint('[Push] skip new_spot (spotUpdates off)');
+  final isSpotPush = type == 'new_spot' || type == 'new_vr_tour';
+  if (isSpotPush && !await _touristSpotPushesEnabled()) {
+    debugPrint('[Push] skip $type (spotUpdates off)');
     return;
+  }
+  if (type == 'new_vr_tour') {
+    final claimed = await claimVrTourLocalNotification(
+      message.data['spotId']?.toString() ?? '',
+      message.data['vrLink']?.toString() ?? '',
+    );
+    if (!claimed) return;
+  }
+  if (type == 'new_spot') {
+    final claimed = await claimNewSpotLocalNotification(
+      message.data['spotId']?.toString() ?? '',
+    );
+    if (!claimed) return;
   }
   final notification = message.notification;
   final aid = message.data['announcementId']?.toString() ?? '';
   final title = notification?.title ??
       message.data['title']?.toString() ??
-      (type == 'new_spot' ? 'New Tourist Destination!' : 'ATMOS-TRS');
+      (type == 'new_vr_tour'
+          ? 'New VR Tour!'
+          : type == 'new_spot'
+              ? 'New Tourist Destination!'
+              : 'ATMOS-TRS');
   final body = notification?.body ??
       message.data['notificationBody']?.toString() ??
       message.data['body']?.toString() ??
@@ -727,19 +978,21 @@ Future<void> _showForegroundNotification(RemoteMessage message) async {
   }
 
   final android = AndroidNotificationDetails(
-    type == 'new_spot' ? kAndroidSpotsChannelId : 'atmos_high_importance',
-    type == 'new_spot' ? 'Tourist spot updates' : 'ATMOS announcements',
-    channelDescription: type == 'new_spot'
-        ? 'Alerts when LGUs publish new tourist spots'
+    isSpotPush ? kAndroidSpotsChannelId : 'atmos_high_importance',
+    isSpotPush ? 'Tourist spot updates' : 'ATMOS announcements',
+    channelDescription: isSpotPush
+        ? 'Alerts when LGUs publish new tourist spots and VR tours'
         : 'Governor & tourism promos, events, and alerts',
     importance: Importance.high,
     priority: Priority.high,
     icon: _kNotificationSmallIcon,
-    largeIcon: _kNotificationLargeIcon,
+    largeIcon: isSpotPush ? null : _kNotificationLargeIcon,
     color: _kNotificationColor,
-    tag: type == 'new_spot'
-        ? 'tourist_spot_${message.data['spotId'] ?? ''}'
-        : null,
+    tag: type == 'new_vr_tour'
+        ? 'tourist_vr_${message.data['spotId'] ?? ''}'
+        : type == 'new_spot'
+            ? 'tourist_spot_${message.data['spotId'] ?? ''}'
+            : null,
   );
   final details = NotificationDetails(android: android);
 
@@ -806,6 +1059,8 @@ Future<void> registerTouristPushNotifications() async {
     if (spotsOn) {
       await messaging.subscribeToTopic(kTourismSpotsTopic);
       debugPrint('[Push] subscribed to topic $kTourismSpotsTopic');
+      _startVrTourWatch();
+      _startNewSpotWatch();
     } else {
       await messaging.unsubscribeFromTopic(kTourismSpotsTopic);
       debugPrint('[Push] spot-update notifications are off for this account');

@@ -1,8 +1,9 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 
-/// One OpenStreetMap place suggestion. No API key; Photon uses OSM data.
+/// One OpenStreetMap place suggestion. No API key.
 class OsmPlaceHit {
   const OsmPlaceHit({
     required this.label,
@@ -31,12 +32,13 @@ class OsmPlaceHit {
 const double kMisamisOccidentalBiasLat = 8.35;
 const double kMisamisOccidentalBiasLng = 123.84;
 
-/// Photon bbox: minLon,minLat,maxLon,maxLat (Misamis Occidental province).
-const String kMisamisOccidentalPhotonBbox = '123.40,8.05,124.05,8.75';
+/// Nominatim viewbox: left,top,right,bottom (Misamis Occidental).
+const String kMisamisOccidentalViewbox = '123.40,8.75,124.05,8.05';
 
-/// Searches places near an LGU / province anchor using the OSM Photon index.
+/// Searches places near an LGU using OpenStreetMap Nominatim.
 ///
-/// Uses Komoot Photon (OSM data) — not the public Nominatim autocomplete API.
+/// Photon (`photon.komoot.io`) was timing out, which left the map search on
+/// "Location search is unavailable" and never moved the pin.
 class OsmPlaceSearch {
   OsmPlaceSearch._();
 
@@ -44,81 +46,82 @@ class OsmPlaceSearch {
     required String query,
     double? biasLatitude,
     double? biasLongitude,
+    String? nearPlace,
     bool preferMisamisOccidental = true,
   }) async {
-    final q = query.trim();
-    if (q.length < 2) return const [];
+    final typed = query.trim();
+    if (typed.length < 2) return const [];
 
-    final biasLat = biasLatitude ??
-        (preferMisamisOccidental ? kMisamisOccidentalBiasLat : null);
-    final biasLng = biasLongitude ??
-        (preferMisamisOccidental ? kMisamisOccidentalBiasLng : null);
+    var q = typed;
+    final near = nearPlace?.trim() ?? '';
+    if (near.isNotEmpty && !typed.toLowerCase().contains(near.toLowerCase())) {
+      q = '$typed, $near, Misamis Occidental';
+    } else if (preferMisamisOccidental &&
+        !typed.toLowerCase().contains('misamis')) {
+      q = '$typed, Misamis Occidental';
+    }
 
     final params = <String, String>{
       'q': q,
-      'limit': '8',
-      'lang': 'en',
+      'format': 'jsonv2',
+      'limit': '6',
+      'addressdetails': '1',
+      'countrycodes': 'ph',
+      'accept-language': 'en',
     };
-    if (biasLat != null && biasLng != null) {
-      params['lat'] = biasLat.toString();
-      params['lon'] = biasLng.toString();
-    }
     if (preferMisamisOccidental) {
-      params['bbox'] = kMisamisOccidentalPhotonBbox;
+      params['viewbox'] = kMisamisOccidentalViewbox;
+      params['bounded'] = '0';
     }
 
-    final uri = Uri.https('photon.komoot.io', '/api/', params);
+    final headers = <String, String>{
+      'Accept': 'application/json',
+      if (!kIsWeb)
+        'User-Agent': 'ATMOS-TRS Misamis Occidental tourism office',
+    };
+
+    final uri = Uri.https('nominatim.openstreetmap.org', '/search', params);
     final response = await http
-        .get(
-          uri,
-          headers: const {
-            'User-Agent': 'ATMOS-TRS Misamis Occidental tourism office',
-            'Accept': 'application/json',
-          },
-        )
-        .timeout(const Duration(seconds: 8));
+        .get(uri, headers: headers)
+        .timeout(const Duration(seconds: 10));
     if (response.statusCode != 200) {
       throw StateError('Place search failed (${response.statusCode}).');
     }
     final decoded = jsonDecode(response.body);
-    if (decoded is! Map) return const [];
-    final features = decoded['features'];
-    if (features is! List) return const [];
+    if (decoded is! List) return const [];
 
     final hits = <OsmPlaceHit>[];
-    for (final feature in features) {
+    for (final feature in decoded) {
       if (feature is! Map) continue;
-      final geometry = feature['geometry'];
-      final properties = feature['properties'];
-      if (geometry is! Map || properties is! Map) continue;
-      final coords = geometry['coordinates'];
-      if (coords is! List || coords.length < 2) continue;
-      final lng = (coords[0] as num?)?.toDouble();
-      final lat = (coords[1] as num?)?.toDouble();
+      final lat = double.tryParse(feature['lat']?.toString() ?? '');
+      final lng = double.tryParse(feature['lon']?.toString() ?? '');
       if (lat == null || lng == null) continue;
-      final country = properties['country']?.toString().toLowerCase() ?? '';
+
+      final address = feature['address'];
+      final addressMap = address is Map ? address : const <String, dynamic>{};
+      final country =
+          addressMap['country']?.toString().toLowerCase() ?? 'philippines';
       if (country.isNotEmpty && country != 'philippines') continue;
 
-      final name = (properties['name']?.toString() ?? '').trim();
-      final street = (properties['street']?.toString() ?? '').trim();
-      final city = (properties['city']?.toString() ??
-              properties['county']?.toString() ??
+      final name = (feature['name']?.toString() ?? '').trim();
+      final display = (feature['display_name']?.toString() ?? '').trim();
+      final city = (addressMap['city']?.toString() ??
+              addressMap['town']?.toString() ??
+              addressMap['municipality']?.toString() ??
+              addressMap['village']?.toString() ??
               '')
           .trim();
-      final state = (properties['state']?.toString() ?? '').trim();
-      final addressParts =
-          [street, city, state].where((p) => p.isNotEmpty).toList();
-      final labelParts = [
-        if (name.isNotEmpty) name,
-        ...addressParts,
-      ];
-      if (labelParts.isEmpty) continue;
+      final state = (addressMap['state']?.toString() ?? '').trim();
+      final label = display.isNotEmpty
+          ? display
+          : [name, city, state].where((p) => p.isNotEmpty).join(', ');
+      if (label.isEmpty) continue;
 
       hits.add(
         OsmPlaceHit(
-          label: labelParts.join(', '),
-          name: name.isNotEmpty ? name : labelParts.first,
-          address: addressParts.join(', '),
+          label: label,
+          name: name.isNotEmpty ? name : label.split(',').first.trim(),
+          address: [city, state].where((p) => p.isNotEmpty).join(', '),
           state: state,
           latitude: lat,
           longitude: lng,
@@ -131,10 +134,19 @@ class OsmPlaceSearch {
         final aLocal = _isMisocc(a);
         final bLocal = _isMisocc(b);
         if (aLocal != bLocal) return aLocal ? -1 : 1;
-        return 0;
+        final anchorLat = biasLatitude ?? kMisamisOccidentalBiasLat;
+        final anchorLng = biasLongitude ?? kMisamisOccidentalBiasLng;
+        return _roughDistance(a, anchorLat, anchorLng)
+            .compareTo(_roughDistance(b, anchorLat, anchorLng));
       });
     }
     return hits;
+  }
+
+  static double _roughDistance(OsmPlaceHit hit, double lat, double lng) {
+    final dLat = hit.latitude - lat;
+    final dLng = hit.longitude - lng;
+    return dLat * dLat + dLng * dLng;
   }
 
   static bool _isMisocc(OsmPlaceHit hit) {

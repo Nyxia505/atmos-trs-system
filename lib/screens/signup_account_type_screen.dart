@@ -6,23 +6,13 @@ import 'package:atmos_trs_system/navigation/auth_navigation.dart';
 import 'package:atmos_trs_system/widgets/web_glass_auth_scaffold.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-/// Chooses Tourist, LGU, or Tourism Establishment before continuing signup.
+/// Public signup: Tourist or Tourism Establishment. LGU accounts are provisioned.
 class SignupAccountTypeScreen extends StatelessWidget {
   const SignupAccountTypeScreen({super.key});
 
   static const Color _heroOrange = Color(0xFFF97316);
   static const Color _textDark = Color(0xFF1F2937);
   static const Color _textMuted = Color(0xFF6B7280);
-
-  List<_SignupAccountOption> _visibleOptions(BuildContext context) {
-    final args = ModalRoute.of(context)?.settings.arguments;
-    final touristAndEstablishment =
-        args is Map && args[kSignupTouristAndEstablishmentArg] == true;
-    if (!touristAndEstablishment) return _options;
-    return _options
-        .where((option) => option.route != '/signup-lgu')
-        .toList(growable: false);
-  }
 
   static const _options = <_SignupAccountOption>[
     _SignupAccountOption(
@@ -31,13 +21,6 @@ class SignupAccountTypeScreen extends StatelessWidget {
       icon: Icons.luggage_rounded,
       route: '/signup-tourist',
       watermark: _AccountWatermark.tourist,
-    ),
-    _SignupAccountOption(
-      title: 'LGU',
-      subtitle: 'Local government tourism office',
-      icon: Icons.account_balance_rounded,
-      route: '/signup-lgu',
-      watermark: _AccountWatermark.lgu,
     ),
     _SignupAccountOption(
       title: 'Tourism Establishment',
@@ -98,7 +81,7 @@ class SignupAccountTypeScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 28),
-                for (final option in _visibleOptions(context)) ...[
+                for (final option in _options) ...[
                   _AccountTypeCard(
                     option: option,
                     glass: true,
@@ -330,7 +313,7 @@ class SignupAccountTypeScreen extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 26),
-                      for (final option in _visibleOptions(context)) ...[
+                      for (final option in _options) ...[
                         _AccountTypeCard(
                           option: option,
                           glass: false,
@@ -390,7 +373,7 @@ class SignupAccountTypeScreen extends StatelessWidget {
   }
 }
 
-enum _AccountWatermark { tourist, lgu, establishment }
+enum _AccountWatermark { tourist, establishment }
 
 class _SignupAccountOption {
   const _SignupAccountOption({
@@ -704,27 +687,6 @@ class _WatermarkPainter extends CustomPainter {
           paint,
         );
         break;
-      case _AccountWatermark.lgu:
-        // building + flag
-        final b = Path()
-          ..moveTo(size.width * 0.2, size.height * 0.85)
-          ..lineTo(size.width * 0.2, size.height * 0.4)
-          ..lineTo(size.width * 0.5, size.height * 0.22)
-          ..lineTo(size.width * 0.8, size.height * 0.4)
-          ..lineTo(size.width * 0.8, size.height * 0.85)
-          ..close();
-        canvas.drawPath(b, paint);
-        canvas.drawLine(
-          Offset(size.width * 0.5, size.height * 0.22),
-          Offset(size.width * 0.5, size.height * 0.08),
-          paint,
-        );
-        canvas.drawLine(
-          Offset(size.width * 0.5, size.height * 0.08),
-          Offset(size.width * 0.72, size.height * 0.14),
-          paint,
-        );
-        break;
       case _AccountWatermark.establishment:
         // resort house
         final h = Path()
@@ -903,7 +865,8 @@ class LguSignupInfoScreen extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         TextButton(
-          onPressed: () => Navigator.pop(context),
+          onPressed: () =>
+              Navigator.pushReplacementNamed(context, '/signup'),
           child: Text(
             'Back to account types',
             style: TextStyle(

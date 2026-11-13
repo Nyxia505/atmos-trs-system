@@ -25,6 +25,7 @@ import 'package:atmos_trs_system/widgets/hero_video_mute_control.dart';
 import 'package:atmos_trs_system/widgets/onboarding_hero_video.dart';
 import 'package:atmos_trs_system/config/app_store_links.dart';
 import 'package:atmos_trs_system/config/atmos_brand_typography.dart';
+import 'package:atmos_trs_system/config/auth_config.dart';
 import 'package:atmos_trs_system/config/module_shell_prefs.dart';
 import 'package:atmos_trs_system/config/session_storage.dart';
 import 'package:atmos_trs_system/config/supabase_storage_config.dart';
@@ -37,6 +38,7 @@ import 'package:atmos_trs_system/services/login_flow_service.dart';
 import 'package:atmos_trs_system/screens/vr_webview_screen.dart';
 import 'package:atmos_trs_system/widgets/vr_download_app_prompt.dart';
 import 'package:atmos_trs_system/widgets/qr_camera_get_app_banner.dart';
+import 'package:atmos_trs_system/widgets/qr_web_app_install_prompt.dart';
 import 'package:atmos_trs_system/utils/logo_utils.dart';
 import 'package:atmos_trs_system/widgets/spot_image.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -56,6 +58,7 @@ class _LandingPageState extends State<LandingPage> {
 
   String? _activeSection = 'home';
   bool _signupSuccessPromptShown = false;
+  bool _appInstallPromptScheduled = false;
   String? _qrWelcomeMessage;
   bool _highlightExperienceSection = false;
 
@@ -369,44 +372,73 @@ class _LandingPageState extends State<LandingPage> {
     if (!mounted) return;
     final args = ModalRoute.of(context)?.settings.arguments;
     final mapArgs = args is Map ? Map<String, dynamic>.from(args) : null;
-    if (mapArgs == null) return;
 
-    final fromQr = mapArgs['fromQrRegistration'] == true;
-    final fromQrGuest = mapArgs['fromQrWelcomeGuest'] == true;
-    final welcome = mapArgs['welcomeMessage'];
-    final welcomeText = welcome is String && welcome.trim().isNotEmpty
-        ? welcome.trim()
+    final showInstallPrompt = mapArgs?['showAppInstallPrompt'] == true;
+    final placeArg = mapArgs?['placeName'];
+    final placeName = placeArg is String && placeArg.trim().isNotEmpty
+        ? placeArg.trim()
         : null;
 
-    if ((fromQr || fromQrGuest) && welcomeText != null) {
-      setState(() {
-        _qrWelcomeMessage = welcomeText;
-        _highlightExperienceSection = true;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(welcomeText),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 6),
-          backgroundColor: _brandDark,
-        ),
-      );
-      Future<void>.delayed(const Duration(milliseconds: 500), () {
-        if (mounted) unawaited(_scrollToSection('chooseExperience'));
-      });
-      return;
+    if (mapArgs != null) {
+      final fromQr = mapArgs['fromQrRegistration'] == true;
+      final fromQrGuest = mapArgs['fromQrWelcomeGuest'] == true;
+      final welcome = mapArgs['welcomeMessage'];
+      final welcomeText = welcome is String && welcome.trim().isNotEmpty
+          ? welcome.trim()
+          : null;
+
+      if ((fromQr || fromQrGuest) && welcomeText != null) {
+        setState(() {
+          _qrWelcomeMessage = welcomeText;
+          _highlightExperienceSection = true;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(welcomeText),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 6),
+            backgroundColor: _brandDark,
+          ),
+        );
+        Future<void>.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) unawaited(_scrollToSection('chooseExperience'));
+        });
+      } else if (!_signupSuccessPromptShown) {
+        final shouldShow = mapArgs['showSignupSuccessPrompt'] == true;
+        if (shouldShow) {
+          _signupSuccessPromptShown = true;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Signup successful. Please sign in to continue.'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
     }
 
-    if (_signupSuccessPromptShown) return;
-    final shouldShow = mapArgs['showSignupSuccessPrompt'] == true;
-    if (!shouldShow) return;
-
-    _signupSuccessPromptShown = true;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Signup successful. Please sign in to continue.'),
-        behavior: SnackBarBehavior.floating,
+    unawaited(
+      _maybeShowQrAppInstallPrompt(
+        force: showInstallPrompt,
+        placeName: placeName,
       ),
+    );
+  }
+
+  /// Post-QR auth on web: VR Tour / Trip Planner install dialog (X = web only).
+  Future<void> _maybeShowQrAppInstallPrompt({
+    bool force = false,
+    String? placeName,
+  }) async {
+    if (!kIsWeb || !mounted || _appInstallPromptScheduled) return;
+    if (!force && FirebaseAuth.instance.currentUser == null) return;
+    _appInstallPromptScheduled = true;
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    if (!mounted) return;
+    await QrWebAppInstallPrompt.showIfNeeded(
+      context,
+      force: force,
+      placeName: placeName,
     );
   }
 
@@ -701,9 +733,23 @@ class _LandingPageState extends State<LandingPage> {
       UserRole.governor => '/governor-dashboard',
       UserRole.provincialTourism => '/trip-planner-admin',
       UserRole.tourism => '/lgu-dashboard',
-      UserRole.tourismEstablishment => '/establishment-dashboard',
+      UserRole.tourismEstablishment =>
+        await _establishmentRouteForUid(user.uid),
       UserRole.tourist => '/dashboard',
     };
+  }
+
+  Future<String> _establishmentRouteForUid(String uid) async {
+    try {
+      final profile = await UserDirectoryService.getProfileByUid(
+        uid,
+        preferServer: true,
+      );
+      if (profile != null && profile.isTourismEstablishment) {
+        return RoleRouter.routeForEstablishment(profile);
+      }
+    } catch (_) {}
+    return '/verify-otp';
   }
 
   void _openTripPlannerOrLogin() {
@@ -2366,7 +2412,9 @@ class _LandingPageState extends State<LandingPage> {
     }
     if (emailRole == UserRole.tourismEstablishment) {
       if (!mounted) return;
-      Navigator.of(context).pushNamed('/establishment-dashboard');
+      final route = await _establishmentRouteForUid(uid);
+      if (!mounted) return;
+      Navigator.of(context).pushNamed(route);
       return;
     }
 
@@ -2380,7 +2428,8 @@ class _LandingPageState extends State<LandingPage> {
           route == '/lgu-dashboard' ||
           route == '/tourism-dashboard' ||
           route == '/provincial-tourism-dashboard' ||
-          route == '/establishment-dashboard') {
+          route == '/establishment-dashboard' ||
+          route == '/establishment-pending-approval') {
         // OPTACA: Open Dashboard opens Trip Planner admin, not ATMOS provincial.
         if (route == '/provincial-tourism-dashboard') {
           Navigator.of(context).pushNamed('/trip-planner-admin');
@@ -2409,7 +2458,13 @@ class _LandingPageState extends State<LandingPage> {
         return;
       }
       if (storedRole == UserRole.tourismEstablishment) {
-        Navigator.of(context).pushNamed('/establishment-dashboard');
+        final route = await _establishmentRouteForUid(
+          AuthConfig.currentUserUid ??
+              FirebaseAuth.instance.currentUser?.uid ??
+              '',
+        );
+        if (!mounted) return;
+        Navigator.of(context).pushNamed(route);
         return;
       }
     }

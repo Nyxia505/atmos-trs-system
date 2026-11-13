@@ -3,13 +3,13 @@ import 'package:google_fonts/google_fonts.dart';
 
 /// Sleek establishment dashboard visual tokens (orange accent, cool slate chrome).
 abstract final class AeDashTokens {
-  static const Color background = Color(0xFFF5F7FA);
+  static const Color background = Color(0xFFF8FAFC);
   static const Color surface = Color(0xFFFFFFFF);
   static const Color card = surface;
   static const Color sidebar = Color(0xFF0F172A);
   static const Color sidebarMuted = Color(0xFF1E293B);
-  static const Color border = Color(0xFFE2E8F0);
-  static const Color text = Color(0xFF0F172A);
+  static const Color border = Color(0xFFE5E7EB);
+  static const Color text = Color(0xFF1F2937);
   static const Color muted = Color(0xFF64748B);
   static const Color subtitle = muted;
   static const Color mutedSurface = Color(0xFFF1F5F9);
@@ -38,6 +38,24 @@ abstract final class AeDashTokens {
   static const Color blue = Color(0xFF3B82F6);
   static const Color slate = Color(0xFF64748B);
   static const Color softBorder = Color(0xFFEEF2F6);
+
+  /// Same warm ladder as [sidebarRichGradient] — use for AE KPI cards / charts.
+  static const Color brandLight = Color(0xFFFB923C);
+  static const Color brand = accent; // #F97316
+  static const Color brandDeep = Color(0xFFEA580C);
+  static const Color brandDark = Color(0xFFC2410C);
+  static const Color brandAmber = Color(0xFFF59E0B);
+
+  static const List<Color> brandAccentLadder = [
+    brandLight,
+    brand,
+    brandDeep,
+    brandAmber,
+    brandDark,
+    Color(0xFF9A3412),
+    Color(0xFFD97706),
+    Color(0xFFFDBA74),
+  ];
 
   static List<BoxShadow> get softShadow => [
         BoxShadow(

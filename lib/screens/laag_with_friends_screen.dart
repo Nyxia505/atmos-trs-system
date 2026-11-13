@@ -3,6 +3,7 @@ import 'package:atmos_trs_system/models/tourist_group.dart';
 import 'package:atmos_trs_system/services/tourist_group_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 /// "Laag with Friends": travel as a barkada / family and check in with one scan.
@@ -138,39 +139,21 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
     return Scaffold(
       backgroundColor: AppTheme.scaffoldBackground,
       appBar: AppBar(
-        backgroundColor: AppTheme.cardBackground,
+        backgroundColor: AppTheme.scaffoldBackground,
+        surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
-        automaticallyImplyLeading: false,
-        leadingWidth: 80,
-        leading: Padding(
-          padding: const EdgeInsets.only(left: 12),
-          child: Center(
-            child: FilledButton(
-              onPressed: () => Navigator.of(context).maybePop(),
-              style: FilledButton.styleFrom(
-                backgroundColor: AppTheme.primary,
-                foregroundColor: AppTheme.onPrimary,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                minimumSize: const Size(0, 36),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-              child: const Text(
-                'Back',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-              ),
-            ),
-          ),
+        leading: IconButton(
+          onPressed: () => Navigator.of(context).maybePop(),
+          icon: Icon(Icons.arrow_back_rounded, color: AppTheme.textPrimary),
+          tooltip: 'Back',
         ),
         title: Text(
           'Laag with Friends',
           style: TextStyle(
             color: AppTheme.textPrimary,
             fontSize: 18,
-            fontWeight: FontWeight.w700,
+            fontWeight: FontWeight.w800,
           ),
         ),
       ),
@@ -179,33 +162,44 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
         builder: (context, inviteSnap) {
           final invites = inviteSnap.data ?? const <TouristGroup>[];
           return StreamBuilder<TouristGroup?>(
-        stream: _groupStream,
-        builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting &&
-              !snap.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final group = snap.data;
-          return Stack(
-            children: [
-              ListView(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+            stream: _groupStream,
+            builder: (context, snap) {
+              if (snap.connectionState == ConnectionState.waiting &&
+                  !snap.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              final group = snap.data;
+              return Stack(
                 children: [
-                  ..._buildInvites(invites),
-                  ...group == null ? _buildNoGroup() : _buildGroup(group),
-                ],
-              ),
-              if (_busy)
-                const Positioned.fill(
-                  child: ColoredBox(
-                    color: Color(0x33000000),
-                    child: Center(child: CircularProgressIndicator()),
+                  ListView(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 28),
+                    children: [
+                      ..._buildInvites(invites),
+                      ...group == null ? _buildNoGroup() : _buildGroup(group),
+                    ],
                   ),
-                ),
-            ],
+                  if (_busy)
+                    Positioned.fill(
+                      child: ColoredBox(
+                        color: Colors.black.withValues(alpha: 0.28),
+                        child: Center(
+                          child: Container(
+                            padding: const EdgeInsets.all(22),
+                            decoration: BoxDecoration(
+                              color: AppTheme.cardBackground,
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                            child: CircularProgressIndicator(
+                              color: AppTheme.primary,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
           );
-        },
-      );
         },
       ),
     );
@@ -217,31 +211,53 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
     return [
       for (final group in invites)
         Padding(
-          padding: const EdgeInsets.only(bottom: 16),
+          padding: const EdgeInsets.only(bottom: 14),
           child: _card(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Row(
+                  children: [
+                    _iconBadge(Icons.mail_rounded, accent),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'You have an invitation',
+                        style: TextStyle(
+                          color: accent,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 15,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
                 Text(
-                  'Invitation',
+                  '${group.members[group.leaderUid]?.name ?? 'A friend'} invited you to join ${group.name}.',
                   style: TextStyle(
-                    color: accent,
-                    fontWeight: FontWeight.w800,
+                    color: _textDark,
+                    height: 1.4,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  '${group.members[group.leaderUid]?.name ?? 'A friend'} invited you to ${group.name}.',
-                  style: TextStyle(color: _textDark, height: 1.4),
-                ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 14),
                 Row(
                   children: [
                     Expanded(
                       child: OutlinedButton(
                         onPressed: _busy
                             ? null
-                            : () => _run(() => TouristGroupService.declineInvite(group)),
+                            : () => _run(
+                                  () => TouristGroupService.declineInvite(group),
+                                ),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          side: BorderSide(color: AppTheme.border),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
                         child: const Text('Decline'),
                       ),
                     ),
@@ -254,6 +270,14 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
                                   await TouristGroupService.acceptInvite(group);
                                   _snack('You joined ${group.name}.');
                                 }),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: accent,
+                          foregroundColor: AppTheme.onPrimary,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
                         child: const Text('Accept'),
                       ),
                     ),
@@ -279,48 +303,172 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
     });
   }
 
+  Widget _iconBadge(IconData icon, Color color) {
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Icon(icon, color: color, size: 22),
+    );
+  }
+
   Widget _card({required Widget child}) => Container(
+        width: double.infinity,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: AppTheme.cardBackground,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(20),
           border: Border.all(color: AppTheme.border),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: AppTheme.isDark ? 0.18 : 0.04),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
+            ),
+          ],
         ),
         child: child,
       );
 
-  List<Widget> _buildNoGroup() {
+  Widget _step(int number, String title, String body) {
     final accent = AppTheme.primary;
-    return [
-      _card(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: Text(
+              '$number',
+              style: TextStyle(
+                color: accent,
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.groups_rounded, color: accent, size: 32),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Travel together, scan once',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                      color: _textDark,
-                    ),
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: _textDark,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  body,
+                  style: TextStyle(
+                    color: AppTheme.unselectedMuted,
+                    fontSize: 13,
+                    height: 1.35,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-            Text(
-              'Create a group for your barkada or family. Friends join by '
-              'scanning your group QR or typing your code. At a tourist spot, '
-              'the group leader scans the spot QR once and everyone is '
-              'checked in.',
-              style: TextStyle(color: AppTheme.unselectedMuted, height: 1.45),
+          ),
+        ],
+      ),
+    );
+  }
+
+  InputDecoration _fieldDecoration({
+    required String label,
+    required String hint,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      hintText: hint,
+      filled: true,
+      fillColor: AppTheme.surfaceMuted,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide.none,
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide(color: AppTheme.border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide(color: AppTheme.primary, width: 1.6),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+    );
+  }
+
+  List<Widget> _buildNoGroup() {
+    final accent = AppTheme.primary;
+    return [
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [accent, AppTheme.primaryDark],
+          ),
+          borderRadius: BorderRadius.circular(24),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Icon(Icons.groups_rounded, color: AppTheme.onPrimary, size: 28),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
+            Text(
+              'Travel together, scan once',
+              style: TextStyle(
+                color: AppTheme.onPrimary,
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                height: 1.15,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'One destination scan checks in your whole barkada or family.',
+              style: TextStyle(
+                color: AppTheme.onPrimary.withValues(alpha: 0.92),
+                height: 1.4,
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 14),
+      _card(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _step(1, 'Create a group', 'Name the trip. You become the leader.'),
+            _step(2, 'Friends join', 'They scan your group QR or type your code.'),
+            _step(3, 'Scan the spot once', 'Everyone who accepted is checked in together.'),
+            const SizedBox(height: 4),
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
@@ -329,64 +477,97 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
                 label: const Text('Create a group'),
                 style: FilledButton.styleFrom(
                   backgroundColor: accent,
+                  foregroundColor: AppTheme.onPrimary,
                   padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                 ),
               ),
             ),
           ],
         ),
       ),
-      const SizedBox(height: 16),
+      const SizedBox(height: 14),
       _card(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Join a friend\'s group',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w800,
-                color: _textDark,
-              ),
+            Row(
+              children: [
+                _iconBadge(Icons.qr_code_scanner_rounded, accent),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Join a friend\'s group',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: _textDark,
+                    ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 6),
             Text(
-              'Scan their group QR in the Scan tab, or type the code below.',
-              style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 13),
+              'Scan their group QR from the Scan tab, or type the 6-character code.',
+              style: TextStyle(
+                color: AppTheme.unselectedMuted,
+                fontSize: 13,
+                height: 1.35,
+              ),
             ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _codeCtrl,
-                    textCapitalization: TextCapitalization.characters,
-                    decoration: const InputDecoration(
-                      labelText: 'Group code',
-                      hintText: 'e.g. 4K2P9X',
-                      prefixText: 'LAAG-',
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                    onSubmitted: (_) => _joinWithCode(),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _codeCtrl,
+              textCapitalization: TextCapitalization.characters,
+              style: const TextStyle(
+                fontWeight: FontWeight.w800,
+                letterSpacing: 2,
+              ),
+              decoration: _fieldDecoration(
+                label: 'Group code',
+                hint: '4K2P9X',
+              ).copyWith(prefixText: 'LAAG-'),
+              onSubmitted: (_) => _joinWithCode(),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: _busy ? null : _joinWithCode,
+                style: FilledButton.styleFrom(
+                  backgroundColor: accent,
+                  foregroundColor: AppTheme.onPrimary,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
                   ),
                 ),
-                const SizedBox(width: 10),
-                FilledButton(
-                  onPressed: _busy ? null : _joinWithCode,
-                  child: const Text('Join'),
-                ),
-              ],
+                child: const Text('Join group'),
+              ),
             ),
           ],
         ),
       ),
-      const SizedBox(height: 16),
-      Text(
-        'Members share only what DOT tourism forms need: sex, nationality and '
-        'residence. Groups end automatically after 12 hours.',
-        style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 12),
-        textAlign: TextAlign.center,
+      const SizedBox(height: 14),
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.info_outline_rounded, size: 16, color: AppTheme.unselectedMuted),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Friends share only sex, nationality, and residence for tourism counts. Groups end automatically after 12 hours.',
+              style: TextStyle(
+                color: AppTheme.unselectedMuted,
+                fontSize: 12,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
       ),
     ];
   }
@@ -404,189 +585,320 @@ class _LaagWithFriendsScreenState extends State<LaagWithFriendsScreen> {
   List<Widget> _buildGroup(TouristGroup group) {
     final accent = AppTheme.primary;
     final leader = group.isLeader(_uid);
+    final people = [
+      ...group.orderedMembers,
+      ...group.pendingInvites.values,
+    ];
+    final code = 'LAAG-${group.joinCode}';
     return [
       _card(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.groups_rounded, color: accent, size: 28),
-                const SizedBox(width: 10),
+                _iconBadge(Icons.groups_rounded, accent),
+                const SizedBox(width: 12),
                 Expanded(
-                  child: Text(
-                    group.name,
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                      color: _textDark,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        group.name,
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                          color: _textDark,
+                          height: 1.15,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          _statusChip(
+                            leader ? 'Leader' : 'Member',
+                            accent,
+                          ),
+                          _statusChip(
+                            '${group.memberCount} ${group.memberCount == 1 ? 'member' : 'members'}',
+                            AppTheme.unselectedMuted,
+                          ),
+                          if (_expiresLabel(group).isNotEmpty)
+                            _statusChip(
+                              _expiresLabel(group),
+                              const Color(0xFFB45309),
+                            ),
+                        ],
+                      ),
+                    ],
                   ),
-                ),
-                Chip(
-                  label: Text(leader ? 'Leader' : 'Member'),
-                  visualDensity: VisualDensity.compact,
                 ),
               ],
             ),
-            const SizedBox(height: 4),
-            Text(
-              '${group.memberCount} member${group.memberCount == 1 ? '' : 's'}'
-              ' · ${_expiresLabel(group)}',
-              style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 13),
-            ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             Text(
               leader
-                  ? 'Scan a destination QR from the home screen. Each person '
-                      'who accepted gets their own check-in, visit, and notification.'
+                  ? 'Scan a destination QR from Home. Everyone who accepted gets their own check-in.'
                   : group.members[_uid]?.isAccepted == false
-                      ? 'Accept the invitation to be included when the leader scans.'
-                      : 'Your group leader checks you in when they scan a destination QR from the home screen.',
-              style: TextStyle(color: _textDark, height: 1.4),
+                      ? 'Accept the invitation so the leader can check you in.'
+                      : 'Your leader checks the group in when they scan a destination QR.',
+              style: TextStyle(
+                color: AppTheme.unselectedMuted,
+                height: 1.4,
+                fontSize: 13.5,
+              ),
             ),
           ],
         ),
       ),
-      const SizedBox(height: 16),
+      const SizedBox(height: 14),
       _card(
         child: Column(
           children: [
             Text(
-              'Friends scan this in the ATMOS app',
-              style: TextStyle(fontWeight: FontWeight.w700, color: _textDark),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(10),
-              color: Colors.white,
-              child: QrImageView(
-                data: group.qrPayload,
-                size: 200,
-                backgroundColor: Colors.white,
-              ),
-            ),
-            const SizedBox(height: 10),
-            SelectableText(
-              'LAAG-${group.joinCode}',
+              'Share this with your friends',
               style: TextStyle(
-                fontSize: 22,
                 fontWeight: FontWeight.w800,
-                letterSpacing: 2,
-                color: accent,
+                color: _textDark,
+                fontSize: 16,
               ),
             ),
             const SizedBox(height: 4),
             Text(
-              'Or type this code in Laag with Friends → Join',
-              style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 12),
+              'They scan it in the ATMOS app, or type the code.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppTheme.unselectedMuted, fontSize: 13),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: const Color(0xFFE5E7EB)),
+              ),
+              child: QrImageView(
+                data: group.qrPayload,
+                size: 196,
+                backgroundColor: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Material(
+              color: AppTheme.surfaceMuted,
+              borderRadius: BorderRadius.circular(14),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () async {
+                  await Clipboard.setData(ClipboardData(text: code));
+                  _snack('Group code copied.');
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          code,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1.6,
+                            color: accent,
+                          ),
+                        ),
+                      ),
+                      Icon(Icons.copy_rounded, size: 18, color: accent),
+                    ],
+                  ),
+                ),
+              ),
             ),
             if (leader) ...[
-              const SizedBox(height: 16),
-              Text(
-                'Invite with Tourist ID',
-                style: TextStyle(fontWeight: FontWeight.w700, color: _textDark),
+              const SizedBox(height: 18),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Invite with Tourist ID',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: _textDark,
+                  ),
+                ),
               ),
               const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _touristIdCtrl,
-                      textCapitalization: TextCapitalization.characters,
-                      decoration: const InputDecoration(
-                        labelText: 'Tourist ID',
-                        hintText: 'e.g. MO-B1CFA9DD',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                      onSubmitted: (_) => _inviteByTouristId(group),
+              TextField(
+                controller: _touristIdCtrl,
+                textCapitalization: TextCapitalization.characters,
+                decoration: _fieldDecoration(
+                  label: 'Tourist ID',
+                  hint: 'MO-B1CFA9DD',
+                ),
+                onSubmitted: (_) => _inviteByTouristId(group),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _busy ? null : () => _inviteByTouristId(group),
+                  icon: const Icon(Icons.send_rounded, size: 18),
+                  label: const Text('Send invitation'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: accent,
+                    foregroundColor: AppTheme.onPrimary,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  FilledButton(
-                    onPressed: _busy ? null : () => _inviteByTouristId(group),
-                    child: const Text('Invite'),
-                  ),
-                ],
+                ),
               ),
             ],
           ],
         ),
       ),
-      const SizedBox(height: 16),
+      const SizedBox(height: 14),
       _card(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Members',
+              'Who\'s coming',
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w800,
                 color: _textDark,
               ),
             ),
-            const SizedBox(height: 6),
-            for (final m in [
-              ...group.orderedMembers,
-              ...group.pendingInvites.values,
-            ])
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: CircleAvatar(
-                  backgroundColor: accent.withValues(alpha: 0.12),
-                  child: Text(
-                    m.name.isNotEmpty ? m.name[0].toUpperCase() : '?',
-                    style: TextStyle(color: accent, fontWeight: FontWeight.w800),
-                  ),
-                ),
-                title: Text(
-                  m.name.isNotEmpty ? m.name : 'Tourist',
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                subtitle: Text(
-                  [
-                    if (m.uid == group.leaderUid) 'Leader',
-                    if (m.uid == _uid) 'You',
-                    m.isAccepted ? 'Accepted' : 'Waiting to accept',
-                  ].join(' · '),
-                ),
-                trailing: leader && m.uid != _uid
-                    ? IconButton(
-                        tooltip: m.isInvited ? 'Cancel invite' : 'Remove',
-                        icon: const Icon(Icons.person_remove_alt_1_rounded),
-                        onPressed: _busy
-                            ? null
-                            : () => m.isInvited
-                                ? _run(() => TouristGroupService.cancelInvite(
-                                      group,
-                                      m.uid,
-                                    ))
-                                : _removeMember(group, m),
-                      )
-                    : null,
-              ),
+            const SizedBox(height: 10),
+            for (final m in people) _memberRow(group, m, leader, accent),
           ],
         ),
       ),
       const SizedBox(height: 16),
-      OutlinedButton.icon(
-        onPressed: _busy ? null : () => _leaveOrEnd(group),
-        icon: Icon(
-          leader ? Icons.stop_circle_outlined : Icons.logout_rounded,
-          color: Colors.red.shade700,
-        ),
-        label: Text(
-          leader ? 'End group' : 'Leave group',
-          style: TextStyle(color: Colors.red.shade700),
-        ),
-        style: OutlinedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          side: BorderSide(color: Colors.red.shade200),
+      SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: _busy ? null : () => _leaveOrEnd(group),
+          icon: Icon(
+            leader ? Icons.stop_circle_outlined : Icons.logout_rounded,
+            color: Colors.red.shade700,
+          ),
+          label: Text(
+            leader ? 'End group' : 'Leave group',
+            style: TextStyle(
+              color: Colors.red.shade700,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          style: OutlinedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            side: BorderSide(color: Colors.red.shade200),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+          ),
         ),
       ),
     ];
+  }
+
+  Widget _statusChip(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 11.5,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Widget _memberRow(
+    TouristGroup group,
+    TouristGroupMember m,
+    bool leader,
+    Color accent,
+  ) {
+    final waiting = !m.isAccepted;
+    final tags = [
+      if (m.uid == group.leaderUid) 'Leader',
+      if (m.uid == _uid) 'You',
+      waiting ? 'Waiting to accept' : 'Ready',
+    ];
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+        decoration: BoxDecoration(
+          color: AppTheme.surfaceMuted,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 18,
+              backgroundColor: accent.withValues(alpha: 0.14),
+              child: Text(
+                m.name.isNotEmpty ? m.name[0].toUpperCase() : '?',
+                style: TextStyle(color: accent, fontWeight: FontWeight.w800),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    m.name.isNotEmpty ? m.name : 'Tourist',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: _textDark,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    tags.join(' · '),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: waiting
+                          ? const Color(0xFFB45309)
+                          : AppTheme.unselectedMuted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (leader && m.uid != _uid)
+              IconButton(
+                tooltip: m.isInvited ? 'Cancel invite' : 'Remove',
+                icon: const Icon(Icons.person_remove_alt_1_rounded),
+                color: Colors.red.shade700,
+                onPressed: _busy
+                    ? null
+                    : () => m.isInvited
+                        ? _run(
+                            () => TouristGroupService.cancelInvite(group, m.uid),
+                          )
+                        : _removeMember(group, m),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -679,15 +991,22 @@ class _CreateGroupDialogState extends State<_CreateGroupDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       title: const Text('Create a group'),
       content: TextField(
         controller: _nameCtrl,
         autofocus: true,
         maxLength: 60,
         textCapitalization: TextCapitalization.words,
-        decoration: const InputDecoration(
+        decoration: InputDecoration(
           labelText: 'Group name',
           hintText: 'e.g. Barkada Oroquieta Trip',
+          filled: true,
+          fillColor: AppTheme.surfaceMuted,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide.none,
+          ),
         ),
         onSubmitted: (value) => Navigator.pop(context, value),
       ),
@@ -697,6 +1016,10 @@ class _CreateGroupDialogState extends State<_CreateGroupDialog> {
           child: const Text('Cancel'),
         ),
         FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: AppTheme.primary,
+            foregroundColor: AppTheme.onPrimary,
+          ),
           onPressed: () => Navigator.pop(context, _nameCtrl.text),
           child: const Text('Create'),
         ),

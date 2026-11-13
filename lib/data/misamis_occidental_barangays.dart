@@ -528,6 +528,28 @@ const Map<String, List<String>> kMisamisOccidentalBarangaysByCity = {
   ],
 };
 
+/// Signup order for the 17 Misamis Occidental cities and municipalities.
+/// Barangay names stay in [kMisamisOccidentalBarangaysByCity].
+const List<String> kMisamisOccidentalSignupCities = [
+  'Aloran',
+  'Baliangao',
+  'Bonifacio',
+  'Calamba',
+  'Clarin',
+  'Concepcion',
+  'Don Victoriano Chiongbian',
+  'Jimenez',
+  'Lopez Jaena',
+  'Oroquieta City',
+  'Ozamiz City',
+  'Panaon',
+  'Plaridel',
+  'Sapang Dalaga',
+  'Sinacaban',
+  'Tangub City',
+  'Tudela',
+];
+
 List<String> barangaysForMisamisOccidentalCity(String? city) {
   if (city == null || city.trim().isEmpty) return const [];
   return List<String>.from(

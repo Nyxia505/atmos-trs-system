@@ -106,6 +106,7 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
   DotReportPreviewTable? _preview;
   List<DotReportPreviewTable> _previewTables = const [];
   bool _previewLoading = false;
+  bool _gapsExpanded = false;
   int _previewSeq = 0;
   /// Last portal summary dataset used for preview. Excel and PDF reuse this
   /// so all three outputs share the same filtered rows.
@@ -679,20 +680,92 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
 
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.all(widget.isMobile ? 14 : 16),
+      padding: EdgeInsets.all(widget.isMobile ? 16 : 20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: widget.borderColor),
-        boxShadow: const [
+        boxShadow: [
           BoxShadow(
-            color: Color(0x08000000),
-            blurRadius: 12,
-            offset: Offset(0, 4),
+            color: const Color(0xFF0F172A).withValues(alpha: 0.045),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
       child: body,
+    );
+  }
+
+  Widget _sectionCard({
+    required String title,
+    String? subtitle,
+    IconData? icon,
+    required List<Widget> children,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        widget.isMobile ? 14 : 16,
+        14,
+        widget.isMobile ? 14 : 16,
+        16,
+      ),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: widget.borderColor.withValues(alpha: 0.9)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              if (icon != null) ...[
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: widget.primaryColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(icon, size: 18, color: widget.primaryColor),
+                ),
+                const SizedBox(width: 10),
+              ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        color: widget.textDark,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                    if (subtitle != null && subtitle.trim().isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        style: TextStyle(
+                          color: widget.textMuted,
+                          fontSize: 12,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ...children,
+        ],
+      ),
     );
   }
 
@@ -702,87 +775,153 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         ? (_entityKind == DotReportEntityKind.eventsAnnouncements
             ? 'Scheduled events and public notices. Pick a form type and date range, then preview and download Excel or PDF.'
             : 'Municipality transport fees and hub to tourist spot fares. Pick a form type, then preview and download Excel or PDF.')
-        : widget.isProvincial
-            ? 'Province-wide best-effort fill: preview every form, then download Excel or PDF. Gaps update as data grows.'
-            : 'Search any DOT / DAE / MICE form — preview filled data (with gaps), then download Excel or PDF.';
+        : _locked
+            ? 'Choose a DAE form, set the month range, preview filled data from your Daily Register, then download Excel or PDF.'
+            : widget.isProvincial
+                ? 'Province-wide best-effort fill: preview every form, then download Excel or PDF. Gaps update as data grows.'
+                : 'Search any DOT / DAE / MICE form — preview filled data (with gaps), then download Excel or PDF.';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          widget.isProvincial
-              ? 'DOT templates (province-wide)'
-              : 'Official forms',
-          style: TextStyle(
-            color: widget.textDark,
-            fontSize: widget.isProvincial ? 14.5 : 13.5,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        if (!widget.compactChrome) ...[
-          const SizedBox(height: 4),
-          Text(
-            scopeHint,
-            style: TextStyle(
-              color: widget.textMuted,
-              fontSize: 12,
-              height: 1.35,
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFFED7AA)),
+              ),
+              child: Icon(
+                Icons.description_outlined,
+                color: widget.primaryColor,
+                size: 22,
+              ),
             ),
-          ),
-        ],
-        const SizedBox(height: 14),
-        Text(
-          'Form type',
-          style: TextStyle(
-            color: widget.textDark,
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-          ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.isProvincial
+                        ? 'DOT templates (province-wide)'
+                        : _locked
+                            ? 'Official DAE forms'
+                            : 'Official forms',
+                    style: TextStyle(
+                      color: widget.textDark,
+                      fontSize: widget.isMobile ? 17 : 18,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                  if (!widget.compactChrome) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      scopeHint,
+                      style: TextStyle(
+                        color: widget.textMuted,
+                        fontSize: 12.5,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 8),
-        _buildFormTypeDropdown(),
-        if (!widget.compactChrome) ...[
-          const SizedBox(height: 10),
-          _buildSelectedFormMeta(),
-        ],
-        const SizedBox(height: 14),
-        if (_locked)
-          Text(
-            'Filled from your own register: ${widget.lockedEstablishment!.name}',
-            style: TextStyle(color: widget.textMuted, fontSize: 12),
-          )
-        else
-          _buildEntityScopeSection(),
-        if (!extra && _isCus) ...[
+        if (_locked) ...[
           const SizedBox(height: 14),
-          _buildCusOptions(),
-        ],
-        const SizedBox(height: 14),
-        Text(
-          'Custom date range',
-          style: TextStyle(
-            color: widget.textDark,
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        if (extra && _entityKind == DotReportEntityKind.matrixFares) ...[
-          const SizedBox(height: 4),
-          Text(
-            'Fare amounts are the current published matrix. The date range is written on the export header and does not change values.',
-            style: TextStyle(
-              color: widget.textMuted,
-              fontSize: 12,
-              height: 1.35,
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF7ED),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFFED7AA)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.storefront_rounded, size: 18, color: widget.primaryColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Filled from your register · ${widget.lockedEstablishment!.name}',
+                    style: TextStyle(
+                      color: widget.textDark,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
-        const SizedBox(height: 8),
-        widget.isMobile ? _buildControlsStacked() : _buildControlsRow(),
         const SizedBox(height: 16),
-        _buildFilledPreviewSection(),
+        _sectionCard(
+          title: 'Form type',
+          subtitle: 'Search and select the official DOT / DAE workbook to fill.',
+          icon: Icons.list_alt_rounded,
+          children: [
+            _buildFormTypeDropdown(),
+            if (!widget.compactChrome) ...[
+              const SizedBox(height: 10),
+              _buildSelectedFormMeta(),
+            ],
+            if (!_locked) ...[
+              const SizedBox(height: 12),
+              _buildEntityScopeSection(),
+            ],
+            if (!extra && _isCus) ...[
+              const SizedBox(height: 12),
+              _buildCusOptions(),
+            ],
+          ],
+        ),
+        const SizedBox(height: 14),
+        _sectionCard(
+          title: 'Date range & download',
+          subtitle: extra && _entityKind == DotReportEntityKind.matrixFares
+              ? 'Fare amounts are the current published matrix. Dates appear on the export header only.'
+              : 'Inclusive start and end dates. DAE forms use whole calendar months that overlap this range.',
+          icon: Icons.calendar_month_rounded,
+          children: [
+            widget.isMobile ? _buildControlsStacked() : _buildControlsRow(),
+          ],
+        ),
+        const SizedBox(height: 14),
+        _sectionCard(
+          title: 'Filled data preview',
+          subtitle: _preview?.summaryLine ??
+              (_locked
+                  ? 'Live preview from your Daily Register for ${_selected.title}.'
+                  : _isExtraFillScope
+                      ? 'Rows that will be written into ${_selected.title} from current Events, Announcements, or Matrix Fares data.'
+                      : 'Rows that will be written into ${_selected.title} (best effort from current data).'),
+          icon: Icons.table_view_rounded,
+          children: [
+            if (_previewLoading)
+              Align(
+                alignment: Alignment.centerRight,
+                child: SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: widget.primaryColor,
+                  ),
+                ),
+              ),
+            _buildPreviewTable(),
+          ],
+        ),
         if (_preview != null && _preview!.gaps.isNotEmpty) ...[
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           _buildLiveGapsCard(_preview!.gaps),
         ],
         if (_lastGapsPreview != null) ...[
@@ -1197,16 +1336,19 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
       textDark: widget.textDark,
       textMuted: widget.textMuted,
       borderColor: widget.borderColor,
-      onSelected: _onFormSelected,
+      onSelected: (f) {
+        _gapsExpanded = false;
+        _onFormSelected(f);
+      },
     );
   }
 
   Widget _buildSelectedFormMeta() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       decoration: BoxDecoration(
-        color: widget.primaryColor.withValues(alpha: 0.07),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: widget.primaryColor.withValues(alpha: 0.28),
@@ -1216,9 +1358,9 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
             decoration: BoxDecoration(
-              color: widget.primaryColor.withValues(alpha: 0.14),
+              color: widget.primaryColor.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Text(
@@ -1237,8 +1379,8 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
               _selected.subtitle,
               style: TextStyle(
                 color: widget.textMuted,
-                fontSize: 11.5,
-                height: 1.35,
+                fontSize: 12.5,
+                height: 1.4,
               ),
             ),
           ),
@@ -1247,90 +1389,74 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
     );
   }
 
-  Widget _buildFilledPreviewSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Filled data preview',
-                style: TextStyle(
-                  color: widget.textDark,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            if (_previewLoading)
-              SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: widget.primaryColor,
-                ),
-              ),
-          ],
-        ),
-        if (!widget.compactChrome) ...[
-          const SizedBox(height: 4),
-          Text(
-            _preview?.summaryLine ??
-                (_isExtraFillScope
-                    ? 'Rows that will be written into ${_selected.title} from current Events, Announcements, or Matrix Fares data.'
-                    : 'Rows that will be written into ${_selected.title} (best effort from current data).'),
-            style: TextStyle(
-              color: widget.textMuted,
-              fontSize: 11.5,
-              height: 1.35,
-            ),
-          ),
-        ],
-        const SizedBox(height: 10),
-        _buildPreviewTable(),
-      ],
-    );
-  }
-
   Widget _buildLiveGapsCard(List<String> gaps) {
+    final showAll = _gapsExpanded || gaps.length <= 3;
+    final visible = showAll ? gaps : gaps.take(3).toList();
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       decoration: BoxDecoration(
         color: const Color(0xFFFFFBEB),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: const Color(0xFFFDE68A)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'ATMOS gaps (will fill as fields / hotel registers arrive)',
-            style: TextStyle(
-              color: widget.textDark,
-              fontSize: 11.5,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 6),
-          for (final g in gaps.take(6))
-            Padding(
-              padding: const EdgeInsets.only(bottom: 3),
-              child: Text(
-                '• $g',
-                style: TextStyle(
-                  color: widget.textMuted,
-                  fontSize: 11.5,
-                  height: 1.35,
+          Row(
+            children: [
+              const Icon(Icons.info_outline_rounded, size: 18, color: Color(0xFFB45309)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Notes & gaps (${gaps.length})',
+                  style: TextStyle(
+                    color: widget.textDark,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
-            ),
-          if (gaps.length > 6)
-            Text(
-              '• …and ${gaps.length - 6} more',
-              style: TextStyle(color: widget.textMuted, fontSize: 11),
+              if (gaps.length > 3)
+                TextButton(
+                  onPressed: () => setState(() => _gapsExpanded = !_gapsExpanded),
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFFB45309),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: Text(
+                    _gapsExpanded ? 'Show less' : 'Show all',
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          for (final g in visible)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.only(top: 6),
+                    child: Icon(Icons.circle, size: 6, color: Color(0xFFF59E0B)),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      g,
+                      style: TextStyle(
+                        color: widget.textMuted,
+                        fontSize: 12.5,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
         ],
       ),
@@ -1359,36 +1485,62 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
         : (preview == null ? const <DotReportPreviewTable>[] : [preview]);
     final anyRows = tables.any((t) => t.rows.isNotEmpty);
     if (!anyRows) {
+      final title = _isExtraFillScope
+          ? 'No records for this form, date range, and municipality'
+          : _locked
+              ? 'No register rows for this form and date range'
+              : 'No check-in rows for this form and date range';
+      final hint = _isExtraFillScope
+          ? 'Adjust the form type, dates, or LGU filter. Empty periods stay at zero.'
+          : _locked
+              ? 'Add stays in Daily Register for this month, or widen the date range. Preview updates automatically.'
+              : 'Adjust the dates or seed visits, then preview updates automatically.';
       return Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 28),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 36),
         decoration: BoxDecoration(
-          color: const Color(0xFFF8FAFC),
-          borderRadius: BorderRadius.circular(12),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(color: widget.borderColor),
         ),
         child: Column(
           children: [
-            Icon(Icons.table_chart_outlined, color: widget.textMuted, size: 28),
-            const SizedBox(height: 8),
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFFFED7AA)),
+              ),
+              child: Icon(
+                _locked ? Icons.hotel_rounded : Icons.table_chart_outlined,
+                color: widget.primaryColor,
+                size: 26,
+              ),
+            ),
+            const SizedBox(height: 12),
             Text(
-              _isExtraFillScope
-                  ? 'No records for this form, date range, and municipality'
-                  : 'No check-in rows for this form and date range',
+              title,
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: widget.textDark,
-                fontWeight: FontWeight.w600,
-                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                fontSize: 14,
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              _isExtraFillScope
-                  ? 'Adjust the form type, dates, or LGU filter. Empty periods stay at zero.'
-                  : 'Adjust the dates or seed visits, then preview updates automatically.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: widget.textMuted, fontSize: 12),
+            const SizedBox(height: 6),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Text(
+                hint,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: widget.textMuted,
+                  fontSize: 12.5,
+                  height: 1.4,
+                ),
+              ),
             ),
           ],
         ),
@@ -1814,27 +1966,26 @@ class _DotReportExportPanelState extends State<DotReportExportPanel> {
     if (_isAttractionScope) {
       return AeRegisterReportData.empty;
     }
-    try {
-      final oneAe = _entityKind == DotReportEntityKind.establishment && _selectedEntity != null;
-      return await fetchAeRegisterReportData(
-        startDate: start,
-        endDate: end,
-        aeId: oneAe ? _selectedEntity!.id : null,
-        municipalityId: oneAe
-            ? null
-            : widget.isProvincial
-                ? (normalizeMunicipalityId(_entityMunicipalityFilter).isEmpty
-                    ? null
-                    : _entityMunicipalityFilter)
-                : widget.municipalityId,
-        includeRows: form.id == 'dae1a_manual' ||
-            form.id == 'dae1b2' ||
-            form.id == 'dae1b2_domestic',
-      );
-    } catch (e) {
-      debugPrint('[DotReportExportPanel] AE registers: $e');
-      return AeRegisterReportData.empty;
-    }
+    final oneAe =
+        _entityKind == DotReportEntityKind.establishment && _selectedEntity != null;
+    // fetchAeRegisterReportData catches failures and sets fetchError — never
+    // collapse that into an empty "confirmed zero" period.
+    return fetchAeRegisterReportData(
+      startDate: start,
+      endDate: end,
+      aeId: oneAe ? _selectedEntity!.id : null,
+      municipalityId: oneAe
+          ? null
+          : widget.isProvincial
+              ? (normalizeMunicipalityId(_entityMunicipalityFilter).isEmpty
+                  ? null
+                  : _entityMunicipalityFilter)
+              : widget.municipalityId,
+      includeRows: form.id == 'dae1a_manual' ||
+          form.id == 'dae1b2' ||
+          form.id == 'dae1b2_domestic' ||
+          oneAe,
+    );
   }
   /// Venue MICE event logs for the CUS form only.
   Future<MiceReportData> _resolveMiceForCus({

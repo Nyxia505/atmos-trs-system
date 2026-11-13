@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -10,6 +12,10 @@ import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/utils/spot_qr_helper.dart';
 
 const String _collectionId = 'tourist_spots';
+
+/// Direct Firestore write budget. A forced token refresh and a full dashboard
+/// reload used to keep the Save button on "Saving…" for much longer than this.
+const Duration _kSpotWriteTimeout = Duration(seconds: 12);
 
 /// Result of [TouristSpotsFirestoreService.addSpot].
 class AddTouristSpotResult {
@@ -147,15 +153,6 @@ class TouristSpotsFirestoreService {
       );
     }
 
-    try {
-      await user.getIdToken(true);
-    } catch (e) {
-      debugPrint('[TouristSpots] getIdToken failed: $e');
-      return const AddTouristSpotResult(
-        error: 'Could not refresh your login. Please sign in again.',
-      );
-    }
-
     Future<AddTouristSpotResult> writeOnce() async {
       final ref = _firestore.collection(_collectionId).doc();
       final payload = <String, dynamic>{
@@ -201,39 +198,25 @@ class TouristSpotsFirestoreService {
     }
 
     try {
-      return await writeOnce();
+      return await writeOnce().timeout(_kSpotWriteTimeout);
+    } on TimeoutException {
+      return const AddTouristSpotResult(
+        error: 'Save timed out. Check your connection and try again.',
+      );
     } on FirebaseException catch (e) {
       debugPrint('[TouristSpots] addSpot FirebaseException: ${e.code} ${e.message}');
       if (e.code == 'permission-denied') {
-        try {
-          await user.reload();
-          await FirebaseAuth.instance.currentUser?.getIdToken(true);
-          return await writeOnce();
-        } on FirebaseException catch (e2) {
-          debugPrint(
-            '[TouristSpots] addSpot retry failed: ${e2.code} ${e2.message}',
-          );
-          final viaCf = await _addSpotViaCloudFunction(spot, mid, name, user);
-          if (viaCf.ok) return viaCf;
-          return AddTouristSpotResult(
-            error: viaCf.error ?? _friendlyFirestoreWriteError(e2),
-          );
-        } catch (e2) {
-          debugPrint('[TouristSpots] addSpot retry failed: $e2');
-          final viaCf = await _addSpotViaCloudFunction(spot, mid, name, user);
-          if (viaCf.ok) return viaCf;
-          return AddTouristSpotResult(
-            error: viaCf.error ?? _friendlyFirestoreWriteError(e),
-          );
-        }
+        final viaCf = await _addSpotViaCloudFunction(spot, mid, name, user);
+        if (viaCf.ok) return viaCf;
+        return AddTouristSpotResult(
+          error: viaCf.error ?? _friendlyFirestoreWriteError(e),
+        );
       }
       return AddTouristSpotResult(error: _friendlyFirestoreWriteError(e));
     } catch (e) {
       debugPrint('[TouristSpots] addSpot failed: $e');
-      final viaCf = await _addSpotViaCloudFunction(spot, mid, name, user);
-      if (viaCf.ok) return viaCf;
       return AddTouristSpotResult(
-        error: viaCf.error ?? 'Could not save tourist spot. $e',
+        error: 'Could not save tourist spot. $e',
       );
     }
   }
@@ -248,7 +231,7 @@ class TouristSpotsFirestoreService {
       final functions = FirebaseFunctions.instanceFor(region: 'asia-southeast1');
       final callable = functions.httpsCallable(
         'createLguTouristSpot',
-        options: HttpsCallableOptions(timeout: const Duration(seconds: 30)),
+        options: HttpsCallableOptions(timeout: const Duration(seconds: 8)),
       );
       final response = await callable.call<Map<String, dynamic>>({
         'name': name,
@@ -481,20 +464,26 @@ class TouristSpotsFirestoreService {
       lastUpdateError = 'Your session expired. Please sign in again.';
       return false;
     }
-    try {
-      await user.getIdToken(true);
-    } catch (e) {
-      debugPrint('[TouristSpots] update getIdToken failed: $e');
-      lastUpdateError = 'Could not refresh your login. Please sign in again.';
-      return false;
+    // Web Firestore rejects a whole update when any value is null, so an empty
+    // optional field (DOT code, photo) was blocking the VR link from saving.
+    final direct = <String, dynamic>{};
+    for (final entry in fields.entries) {
+      direct[entry.key] = entry.value ?? FieldValue.delete();
     }
 
     try {
-      await _firestore.collection(_collectionId).doc(id).update(fields);
+      await _firestore
+          .collection(_collectionId)
+          .doc(id)
+          .update(direct)
+          .timeout(_kSpotWriteTimeout);
       return true;
+    } on TimeoutException {
+      lastUpdateError = 'Save timed out. Check your connection and try again.';
+      return false;
     } on FirebaseException catch (e) {
       debugPrint('[TouristSpots] updateSpot ${e.code} ${e.message}');
-      if (e.code == 'permission-denied') {
+      if (e.code == 'permission-denied' || e.code == 'invalid-argument') {
         final viaCf = await _updateSpotViaCloudFunction(id, fields);
         if (viaCf) return true;
       }
@@ -502,8 +491,6 @@ class TouristSpotsFirestoreService {
       return false;
     } catch (e) {
       debugPrint('[TouristSpots] updateSpot failed: $e');
-      final viaCf = await _updateSpotViaCloudFunction(id, fields);
-      if (viaCf) return true;
       lastUpdateError = 'Could not update tourist spot. $e';
       return false;
     }
@@ -517,7 +504,7 @@ class TouristSpotsFirestoreService {
       final callable = FirebaseFunctions.instanceFor(region: 'asia-southeast1')
           .httpsCallable(
         'updateLguTouristSpot',
-        options: HttpsCallableOptions(timeout: const Duration(seconds: 30)),
+        options: HttpsCallableOptions(timeout: _kSpotWriteTimeout),
       );
       final payload = <String, dynamic>{'spotId': id, ...fields};
       payload.removeWhere((key, value) => value is FieldValue);
@@ -554,13 +541,17 @@ class TouristSpotsFirestoreService {
     double? lat = latitude;
     double? lng = longitude;
     try {
-      await user.getIdToken(true);
       final ref = _firestore.collection(_collectionId).doc(spotId.trim());
-      final snap = await ref.get();
-      if (!snap.exists) return false;
-      final data = snap.data() ?? <String, dynamic>{};
-      lat ??= (data['latitude'] as num?)?.toDouble();
-      lng ??= (data['longitude'] as num?)?.toDouble();
+      var createdMissing = false;
+      if (lat == null || lng == null) {
+        final snap = await ref.get().timeout(_kSpotWriteTimeout);
+        if (!snap.exists) return false;
+        final data = snap.data() ?? <String, dynamic>{};
+        lat ??= (data['latitude'] as num?)?.toDouble();
+        lng ??= (data['longitude'] as num?)?.toDouble();
+        createdMissing =
+            data['createdAt'] == null && data['created_at'] == null;
+      }
       await ref.set({
         'qrValue': spotId.trim(),
         'qr_payload': spotQrData(
@@ -571,9 +562,8 @@ class TouristSpotsFirestoreService {
         ),
         'municipalityId': mid,
         'updatedAt': FieldValue.serverTimestamp(),
-        if (data['createdAt'] == null && data['created_at'] == null)
-          'createdAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+        if (createdMissing) 'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true)).timeout(_kSpotWriteTimeout);
       return true;
     } catch (e) {
       debugPrint('[TouristSpots] ensureSpotQrMetadata failed: $e');

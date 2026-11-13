@@ -34,7 +34,7 @@ class EstablishmentInsightsBoard extends StatefulWidget {
 
 class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard> {
   static const double _chartHeight = 210;
-  static const Color _female = Color(0xFFEC4899);
+  static const Color _female = Color(0xFFC2410C);
 
   late int _year;
   late int _month;
@@ -226,7 +226,7 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
           'Occupancy$mtd',
           a.occupancyPct == null ? '—' : '${a.occupancyPct!.toStringAsFixed(1)}%',
           Icons.donut_large_rounded,
-          AeDashTokens.purple,
+          AeDashTokens.brand,
           delta: _delta(a.occupancyPct, p?.occupancyPct, points: true),
           hint: a.totalRooms > 0 ? '${t.roomsOccupied} of ${a.totalRooms * a.daysElapsed} room-nights' : 'Set total rooms',
         ),
@@ -234,7 +234,7 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
           'ALOS (nights)',
           t.alos == null ? '—' : t.alos!.toStringAsFixed(2),
           Icons.hotel_rounded,
-          AeDashTokens.success,
+          AeDashTokens.brandDeep,
           delta: _delta(t.alos, p?.totals.alos),
           hint: 'Guest-nights ÷ check-ins',
         ),
@@ -242,7 +242,7 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
           'Guest-nights',
           '${t.guestNights}',
           Icons.nights_stay_rounded,
-          AeDashTokens.accent,
+          AeDashTokens.brandLight,
           delta: _delta(t.guestNights.toDouble(), p?.totals.guestNights.toDouble()),
         ),
       ],
@@ -250,7 +250,7 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
         _rooms ? 'Check-ins' : 'Guests served',
         '${t.checkIns}',
         Icons.login_rounded,
-        AeDashTokens.info,
+        AeDashTokens.brandAmber,
         delta: _delta(t.checkIns.toDouble(), p?.totals.checkIns.toDouble()),
       ),
       if (_rooms)
@@ -258,14 +258,14 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
           'Persons / room',
           t.avgPersonsPerRoom == null ? '—' : t.avgPersonsPerRoom!.toStringAsFixed(2),
           Icons.group_rounded,
-          AeDashTokens.chartSecondary,
+          AeDashTokens.brandDark,
         ),
       if (_rooms) ...[
         _Kpi(
           'ADR',
           a.adr == null ? '—' : _peso(a.adr!),
           Icons.sell_rounded,
-          AeDashTokens.chartTertiary,
+          AeDashTokens.brand,
           delta: _delta(a.adr, p?.adr),
           hint: 'Room revenue ÷ rooms sold',
         ),
@@ -273,7 +273,7 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
           'RevPAR',
           a.revpar == null ? '—' : _peso(a.revpar!),
           Icons.trending_up_rounded,
-          AeDashTokens.blue,
+          AeDashTokens.brandDeep,
           delta: _delta(a.revpar, p?.revpar),
           hint: 'Room revenue ÷ available rooms',
         ),
@@ -282,17 +282,17 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
           'Spend / guest',
           a.spendPerGuest == null ? '—' : _peso(a.spendPerGuest!),
           Icons.sell_rounded,
-          AeDashTokens.chartTertiary,
+          AeDashTokens.brand,
         ),
       _Kpi(
         'Total sales',
         _peso(t.grandTotalSales),
         Icons.payments_rounded,
-        AeDashTokens.warning,
+        AeDashTokens.brandAmber,
         delta: _delta(t.grandTotalSales, p?.totals.grandTotalSales),
       ),
     ];
-    return AeResponsiveGrid(minItemWidth: 170, maxColumns: 4, spacing: 12, children: items);
+    return AeResponsiveGrid(minItemWidth: 200, maxColumns: 4, spacing: 12, children: items);
   }
 
   Widget _completenessCard(AeRegisterInsights a) {
@@ -359,7 +359,7 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
           ? 'Rooms occupied ÷ total rooms, per day'
           : 'Guests recorded per day',
       icon: Icons.show_chart_rounded,
-      iconColor: AeDashTokens.info,
+      iconColor: AeDashTokens.brand,
       height: _chartHeight,
       child: ChartTransition(
         swapKey: ('daily', a.year, a.month, a.totals.rowCount),
@@ -390,7 +390,7 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
       title: 'Weekday pattern',
       subtitle: hasRooms ? 'Average occupancy by day of week' : 'Average guests by day of week',
       icon: Icons.calendar_view_week_rounded,
-      iconColor: AeDashTokens.chartSecondary,
+      iconColor: AeDashTokens.brandDeep,
       height: _chartHeight,
       child: ChartTransition(
         swapKey: ('wd', a.year, a.month, a.totals.rowCount),
@@ -399,7 +399,7 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
           labels: AeRegisterInsightsBuilder.weekdayShort,
           suffix: hasRooms ? '%' : '',
           maxY: hasRooms ? 100 : null,
-          color: AeDashTokens.chartSecondary,
+          color: AeDashTokens.brandDeep,
           highlightIndex: values.every((v) => v <= 0) ? null : best,
           emptyMessage: 'No guest load recorded this month yet.',
           progress: progress,
@@ -416,14 +416,14 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
       title: hasRooms ? 'Occupancy by month' : 'Guests by month',
       subtitle: 'Last ${h.length} month(s) with register data',
       icon: Icons.stacked_line_chart_rounded,
-      iconColor: AeDashTokens.purple,
+      iconColor: AeDashTokens.brand,
       height: _chartHeight,
       child: ChartTransition(
         swapKey: ('m', a.year, a.month, h.length),
         builder: (context, progress) => hasRooms
             ? EstablishmentDssCharts.multiLine(
                 series: [
-                  (label: 'Occupancy %', values: [for (final p in h) p.occupancyPct], color: AeDashTokens.purple),
+                  (label: 'Occupancy %', values: [for (final p in h) p.occupancyPct], color: AeDashTokens.brand),
                 ],
                 labels: labels,
                 suffix: '%',
@@ -434,7 +434,7 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
             : EstablishmentDssCharts.valueBars(
                 values: [for (final p in h) p.totals.checkIns.toDouble()],
                 labels: labels,
-                color: AeDashTokens.purple,
+                color: AeDashTokens.brand,
                 emptyMessage: 'No monthly guests yet.',
                 progress: progress,
               ),
@@ -448,17 +448,17 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
       title: 'Length of stay & party size',
       subtitle: 'ALOS vs persons per room by month',
       icon: Icons.timeline_rounded,
-      iconColor: AeDashTokens.success,
+      iconColor: AeDashTokens.brandDeep,
       height: _chartHeight,
       child: ChartTransition(
         swapKey: ('alos', a.year, a.month, h.length),
         builder: (context, progress) => EstablishmentDssCharts.multiLine(
           series: [
-            (label: 'ALOS (nights)', values: [for (final p in h) p.totals.alos], color: AeDashTokens.success),
+            (label: 'ALOS (nights)', values: [for (final p in h) p.totals.alos], color: AeDashTokens.brand),
             (
               label: 'Persons / room',
               values: [for (final p in h) p.totals.avgPersonsPerRoom],
-              color: AeDashTokens.chartSecondary,
+              color: AeDashTokens.brandDark,
             ),
           ],
           labels: [for (final p in h) p.label],
@@ -475,7 +475,7 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
       title: 'Guests by residence',
       subtitle: 'Domestic vs foreign by month',
       icon: Icons.timeline_rounded,
-      iconColor: AeDashTokens.success,
+      iconColor: AeDashTokens.brand,
       height: _chartHeight,
       child: ChartTransition(
         swapKey: ('res-m', a.year, a.month, h.length),
@@ -484,12 +484,12 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
             (
               label: 'Domestic',
               values: [for (final p in h) p.totals.domesticArrivals.toDouble()],
-              color: AeDashTokens.accent,
+              color: AeDashTokens.brand,
             ),
             (
               label: 'Foreign',
               values: [for (final p in h) p.totals.foreignArrivals.toDouble()],
-              color: AeDashTokens.chartSecondary,
+              color: AeDashTokens.brandDark,
             ),
           ],
           labels: [for (final p in h) p.label],
@@ -506,13 +506,13 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
       title: 'Residence mix',
       subtitle: '${_rooms ? 'Check-ins' : 'Guests'} by DOT residence group',
       icon: Icons.public_rounded,
-      iconColor: AeDashTokens.blue,
+      iconColor: AeDashTokens.brandDeep,
       height: _chartHeight,
       child: EstablishmentDssCharts.multiPie(
         slices: [
-          (label: 'PH residents', value: t.domesticArrivals, color: AeDashTokens.accent),
-          (label: 'Foreign', value: t.foreignArrivals, color: AeDashTokens.chartSecondary),
-          (label: 'Overseas Filipinos', value: t.overseasFilipinoArrivals, color: AeDashTokens.chartTertiary),
+          (label: 'PH residents', value: t.domesticArrivals, color: AeDashTokens.brand),
+          (label: 'Foreign', value: t.foreignArrivals, color: AeDashTokens.brandDeep),
+          (label: 'Overseas Filipinos', value: t.overseasFilipinoArrivals, color: AeDashTokens.brandAmber),
           (label: 'Unspecified', value: t.unknownArrivals, color: AeDashTokens.slate),
         ],
         emptyMessage: 'No check-ins recorded this month yet.',
@@ -526,12 +526,12 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
       title: 'Guest sex mix',
       subtitle: 'Female / male on check-in rows',
       icon: Icons.wc_rounded,
-      iconColor: AeDashTokens.chartSecondary,
+      iconColor: AeDashTokens.brandDark,
       height: _chartHeight,
       child: EstablishmentDssCharts.mixPie(
         aLabel: 'Male',
         aValue: t.maleArrivals,
-        aColor: AeDashTokens.info,
+        aColor: AeDashTokens.brandLight,
         bLabel: 'Female',
         bValue: t.femaleArrivals,
         bColor: _female,
@@ -548,7 +548,7 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          AeSectionHeader(title: title, hint: '$total arrival(s) · nights in brackets', icon: icon, color: AeDashTokens.blue),
+          AeSectionHeader(title: title, hint: '$total arrival(s) · nights in brackets', icon: icon, color: AeDashTokens.brand),
           const SizedBox(height: 12),
           if (top.isEmpty)
             Padding(
@@ -577,7 +577,7 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
                           value: o.totals.arrivals / max,
                           minHeight: 8,
                           backgroundColor: AeDashTokens.border,
-                          color: AeDashTokens.blue,
+                          color: AeDashTokens.brand,
                         ),
                       ),
                     ),
@@ -711,14 +711,14 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
       title: 'ADR & RevPAR (₱)',
       subtitle: 'Average daily rate vs revenue per available room',
       icon: Icons.trending_up_rounded,
-      iconColor: AeDashTokens.chartTertiary,
+      iconColor: AeDashTokens.brandDeep,
       height: _chartHeight,
       child: ChartTransition(
         swapKey: ('adr', a.year, a.month, h.length),
         builder: (context, progress) => EstablishmentDssCharts.multiLine(
           series: [
-            (label: 'ADR', values: [for (final p in h) p.adr], color: AeDashTokens.chartTertiary),
-            (label: 'RevPAR', values: [for (final p in h) p.revpar], color: AeDashTokens.blue),
+            (label: 'ADR', values: [for (final p in h) p.adr], color: AeDashTokens.brand),
+            (label: 'RevPAR', values: [for (final p in h) p.revpar], color: AeDashTokens.brandDark),
           ],
           labels: [for (final p in h) p.label],
           emptyMessage: 'Enter room rates to see ADR and RevPAR.',
@@ -734,7 +734,7 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
       title: 'Spend per guest (₱)',
       subtitle: 'Sales ÷ guests by month',
       icon: Icons.trending_up_rounded,
-      iconColor: AeDashTokens.chartTertiary,
+      iconColor: AeDashTokens.brandAmber,
       height: _chartHeight,
       child: ChartTransition(
         swapKey: ('spend', a.year, a.month, h.length),
@@ -746,7 +746,7 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
                 for (final p in h)
                   p.totals.checkIns > 0 ? p.totals.grandTotalSales / p.totals.checkIns : null,
               ],
-              color: AeDashTokens.chartTertiary,
+              color: AeDashTokens.brandAmber,
             ),
           ],
           labels: [for (final p in h) p.label],
@@ -800,7 +800,7 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
             title: 'Month-over-month & year-over-year',
             hint: 'Compare with the previous month and the same month last year',
             icon: Icons.compare_arrows_rounded,
-            color: AeDashTokens.purple,
+            color: AeDashTokens.brand,
           ),
           const SizedBox(height: 10),
           AtmosResponsiveTable(
@@ -825,7 +825,7 @@ class _EstablishmentInsightsBoardState extends State<EstablishmentInsightsBoard>
     final locked = a.dss == AeInsightsDssLevel.locked;
     (Color, IconData) tone(AeInsightTone t) => switch (t) {
           AeInsightTone.positive => (AeDashTokens.success, Icons.trending_up_rounded),
-          AeInsightTone.info => (AeDashTokens.info, Icons.lightbulb_outline_rounded),
+          AeInsightTone.info => (AeDashTokens.brand, Icons.lightbulb_outline_rounded),
           AeInsightTone.warning => (AeDashTokens.warning, Icons.warning_amber_rounded),
           AeInsightTone.action => (AeDashTokens.accent, Icons.edit_note_rounded),
         };
@@ -915,44 +915,128 @@ class _Kpi extends StatelessWidget {
     final d = delta;
     final up = d != null && d.startsWith('+');
     final flat = d != null && RegExp(r'^\+?0(\.0+)?( pts|%)$').hasMatch(d);
-    final dColor = flat ? AeDashTokens.muted : (up ? AeDashTokens.success : AeDashTokens.danger);
+    final dColor =
+        flat ? AeDashTokens.muted : (up ? AeDashTokens.success : AeDashTokens.danger);
+    final wash = Color.lerp(Colors.white, color, 0.06)!;
+    final chip = Color.lerp(Colors.white, color, 0.12)!;
+
     return Container(
-      padding: const EdgeInsets.all(12),
+      constraints: const BoxConstraints(minHeight: 98),
       decoration: BoxDecoration(
-        color: AeDashTokens.surface,
-        borderRadius: BorderRadius.circular(14),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AeDashTokens.border),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
-            child: Icon(icon, color: color, size: 20),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0F172A).withValues(alpha: 0.045),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: AeDashTokens.body(size: 11)),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Flexible(
-                      child: Text(value,
-                          maxLines: 1, overflow: TextOverflow.ellipsis, style: AeDashTokens.number(size: 18)),
-                    ),
-                    if (d != null) ...[
-                      const SizedBox(width: 6),
-                      Text(d, style: AeDashTokens.body(size: 11, weight: FontWeight.w700, color: dColor)),
-                    ],
-                  ],
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [wash, Colors.white],
                 ),
-                if (hint != null)
-                  Text(hint!, maxLines: 1, overflow: TextOverflow.ellipsis, style: AeDashTokens.body(size: 10.5)),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 4,
+            child: ColoredBox(color: color),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: chip,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: color.withValues(alpha: 0.22)),
+                  ),
+                  child: Icon(icon, color: color, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        label.toUpperCase(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AeDashTokens.body(
+                          size: 10.5,
+                          color: AeDashTokens.muted,
+                          weight: FontWeight.w700,
+                        ).copyWith(letterSpacing: 0.35),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              value,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AeDashTokens.number(size: 19),
+                            ),
+                          ),
+                          if (d != null) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: dColor.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                d,
+                                style: AeDashTokens.body(
+                                  size: 10.5,
+                                  weight: FontWeight.w800,
+                                  color: dColor,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      if (hint != null) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          hint!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AeDashTokens.body(
+                            size: 10.5,
+                            color: const Color(0xFF94A3B8),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
               ],
             ),
           ),

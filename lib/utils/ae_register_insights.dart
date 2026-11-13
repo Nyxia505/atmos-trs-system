@@ -39,13 +39,17 @@ class AeMonthPoint {
   double? get occupancyPct =>
       totals.occupancyRate == null ? null : totals.occupancyRate! * 100;
 
-  /// Average daily rate: room revenue ÷ rooms occupied.
+  /// Average daily rate: room + charges revenue ÷ rooms occupied (matches Sales KPI).
   double? get adr =>
-      totals.roomsOccupied > 0 && totals.totalSales > 0 ? totals.totalSales / totals.roomsOccupied : null;
+      totals.roomsOccupied > 0 && totals.grandTotalSales > 0
+          ? totals.grandTotalSales / totals.roomsOccupied
+          : null;
 
-  /// Revenue per available room: room revenue ÷ (rooms × days).
+  /// Revenue per available room: total sales ÷ (rooms × days).
   double? get revpar =>
-      totalRooms > 0 && days > 0 && totals.totalSales > 0 ? totals.totalSales / (totalRooms * days) : null;
+      totalRooms > 0 && days > 0 && totals.grandTotalSales > 0
+          ? totals.grandTotalSales / (totalRooms * days)
+          : null;
 }
 
 class AeRoomUsage {
@@ -133,11 +137,13 @@ class AeRegisterInsights {
       totalRooms > 0 && daysElapsed > 0 ? totals.roomsOccupied / (totalRooms * daysElapsed) * 100 : null;
 
   double? get adr =>
-      totals.roomsOccupied > 0 && totals.totalSales > 0 ? totals.totalSales / totals.roomsOccupied : null;
+      totals.roomsOccupied > 0 && totals.grandTotalSales > 0
+          ? totals.grandTotalSales / totals.roomsOccupied
+          : null;
 
   double? get revpar =>
-      totalRooms > 0 && daysElapsed > 0 && totals.totalSales > 0
-          ? totals.totalSales / (totalRooms * daysElapsed)
+      totalRooms > 0 && daysElapsed > 0 && totals.grandTotalSales > 0
+          ? totals.grandTotalSales / (totalRooms * daysElapsed)
           : null;
 
   /// Spend per arriving guest (non-lodging packs).

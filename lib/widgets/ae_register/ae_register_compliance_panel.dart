@@ -11,6 +11,7 @@ import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/widgets/ae_register/ae_register_viewer_screen.dart';
 import 'package:atmos_trs_system/widgets/ae_register/ae_sheet_kit.dart';
 import 'package:atmos_trs_system/widgets/atmos_table_kit.dart';
+import 'package:atmos_trs_system/widgets/establishment_dash_tokens.dart';
 
 enum _RegStatus { submitted, draft, missing }
 
@@ -463,28 +464,28 @@ class _AeRegisterCompliancePanelState extends State<AeRegisterCompliancePanel> {
         label: 'Submitted',
         value: '$submitted / ${lines.length}',
         icon: Icons.check_circle_rounded,
-        color: const Color(0xFF34D399),
+        color: AeDashTokens.success,
         onTap: () => setState(() => _filter = _StatusFilter.submitted),
       ),
       (
         label: 'Draft',
         value: '$draft',
         icon: Icons.description_rounded,
-        color: const Color(0xFFFB923C),
+        color: AeDashTokens.brandLight,
         onTap: () => setState(() => _filter = _StatusFilter.draft),
       ),
       (
         label: 'Missing',
         value: '$missing',
         icon: Icons.error_rounded,
-        color: const Color(0xFFFB7185),
+        color: AeDashTokens.danger,
         onTap: () => setState(() => _filter = _StatusFilter.missing),
       ),
       (
         label: 'Rooms',
         value: '$rooms',
         icon: Icons.king_bed_rounded,
-        color: const Color(0xFFA78BFA),
+        color: AeDashTokens.brand,
         onTap: null,
       ),
       (
@@ -494,28 +495,28 @@ class _AeRegisterCompliancePanelState extends State<AeRegisterCompliancePanel> {
           digits: 1,
         ),
         icon: Icons.star_rounded,
-        color: const Color(0xFFFBBF24),
+        color: AeDashTokens.brandAmber,
         onTap: null,
       ),
       (
         label: 'ALOS',
         value: AeRegisterCalculator.dec(t.alos),
         icon: Icons.person_rounded,
-        color: const Color(0xFF38BDF8),
+        color: AeDashTokens.brandDeep,
         onTap: null,
       ),
       (
         label: 'Guest-nights',
         value: '${t.guestNights}',
         icon: Icons.groups_rounded,
-        color: const Color(0xFF2DD4BF),
+        color: AeDashTokens.brandDark,
         onTap: null,
       ),
       (
         label: 'Sales',
         value: _peso(t.grandTotalSales),
         icon: Icons.account_balance_wallet_rounded,
-        color: const Color(0xFF4ADE80),
+        color: AeDashTokens.brand,
         onTap: null,
       ),
       if (miceVenues.isNotEmpty) ...[
@@ -523,14 +524,14 @@ class _AeRegisterCompliancePanelState extends State<AeRegisterCompliancePanel> {
           label: 'MICE submitted',
           value: '$miceSubmitted / ${miceVenues.length}',
           icon: Icons.celebration_rounded,
-          color: const Color(0xFFF472B6),
+          color: AeDashTokens.brandDeep,
           onTap: () => setState(() => _filter = _StatusFilter.miceMissing),
         ),
         (
           label: 'MICE events',
           value: '$miceEvents',
           icon: Icons.event_rounded,
-          color: const Color(0xFFC084FC),
+          color: AeDashTokens.brandAmber,
           onTap: null,
         ),
       ],
@@ -679,7 +680,7 @@ class _AeRegisterCompliancePanelState extends State<AeRegisterCompliancePanel> {
           _StatusFilter.miceMissing,
           'MICE not submitted',
           miceVenues.where((l) => l.miceStatus != _RegStatus.submitted).length,
-          const Color(0xFFDB2777),
+          AeDashTokens.brandDeep,
         ),
     ];
     return Wrap(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import 'package:atmos_trs_system/models/sign_off.dart';
 import 'package:atmos_trs_system/services/sign_off_service.dart';
@@ -41,7 +42,7 @@ class SignOffHistoryPanel extends StatefulWidget {
     this.liveContentHash,
     this.title = 'Sign-offs',
     this.periodLabel,
-    this.description = 'Track signed entries and authorized changes.',
+    this.description = 'Track signed reports and authorized changes.',
     this.emptyText = 'No signed saves yet.',
   });
 
@@ -63,8 +64,11 @@ class _SignOffHistoryPanelState extends State<SignOffHistoryPanel> {
   Stream<List<SignOffRecord>>? _stream;
   String _key = '';
 
-  static const _pageBg = Color(0xFFF8FAFC);
+  static const _primary = Color(0xFFF97316);
+  static const _lightOrange = Color(0xFFFFF7ED);
+  static const _border = Color(0xFFE5E7EB);
   static const _darkText = Color(0xFF1F2937);
+  static const _mutedText = Color(0xFF64748B);
 
   Stream<List<SignOffRecord>> get _records {
     final k = '${widget.ownerId}|${widget.subjectType}|${widget.subjectId}';
@@ -82,63 +86,68 @@ class _SignOffHistoryPanelState extends State<SignOffHistoryPanel> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
       decoration: BoxDecoration(
-        color: _pageBg,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AeDashTokens.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          StreamBuilder<List<SignOffRecord>>(
-            stream: _records,
-            builder: (context, snap) {
-              final list = snap.data ?? const <SignOffRecord>[];
-              final count = snap.hasData ? list.length : null;
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _header(count),
-                  const SizedBox(height: 12),
-                  _integrity(),
-                  if (snap.hasError)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Text(
-                        'Could not load sign-offs: ${snap.error}',
-                        style: AeDashTokens.body(color: AeDashTokens.danger),
-                      ),
-                    )
-                  else if (!snap.hasData)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 28),
-                      child: Center(child: CircularProgressIndicator()),
-                    )
-                  else if (list.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 20),
-                      child: AeEmptyState(
-                        message: widget.emptyText,
-                        icon: Icons.draw_outlined,
-                        boxed: false,
-                      ),
-                    )
-                  else
-                    Column(
-                      children: [
-                        for (var i = 0; i < list.length; i++)
-                          _SignOffCard(
-                            record: list[i],
-                            isLatest: _isLatest(list[i], i),
-                          ),
-                      ],
-                    ),
-                ],
-              );
-            },
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _border),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0F172A).withValues(alpha: 0.04),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
           ),
         ],
+      ),
+      child: StreamBuilder<List<SignOffRecord>>(
+        stream: _records,
+        builder: (context, snap) {
+          final list = snap.data ?? const <SignOffRecord>[];
+          final count = snap.hasData ? list.length : null;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _header(count),
+              const SizedBox(height: 12),
+              _integrity(),
+              if (snap.hasError)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    'Could not load sign-offs: ${snap.error}',
+                    style: AeDashTokens.body(color: AeDashTokens.danger),
+                  ),
+                )
+              else if (!snap.hasData)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 28),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (list.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: AeEmptyState(
+                    message: widget.emptyText,
+                    icon: Icons.draw_outlined,
+                    boxed: false,
+                  ),
+                )
+              else
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (var i = 0; i < list.length; i++)
+                      _SignOffCard(
+                        record: list[i],
+                        isLatest: _isLatest(list[i], i),
+                      ),
+                  ],
+                ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -151,6 +160,8 @@ class _SignOffHistoryPanelState extends State<SignOffHistoryPanel> {
 
   Widget _header(int? count) {
     final period = (widget.periodLabel ?? '').trim();
+    final titleText = period.isEmpty ? widget.title : '${widget.title} | $period';
+
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -158,49 +169,34 @@ class _SignOffHistoryPanelState extends State<SignOffHistoryPanel> {
           width: 40,
           height: 40,
           decoration: BoxDecoration(
-            color: AeDashTokens.softAccent,
+            color: _lightOrange,
             borderRadius: BorderRadius.circular(11),
-            border: Border.all(color: const Color(0xFFFDBA74).withValues(alpha: 0.55)),
+            border: Border.all(color: const Color(0xFFFED7AA)),
           ),
-          child: const Icon(Icons.draw_rounded, size: 20, color: AeDashTokens.accent),
+          child: const Icon(Icons.draw_rounded, size: 20, color: _primary),
         ),
         const SizedBox(width: 12),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Wrap(
-                crossAxisAlignment: WrapCrossAlignment.center,
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  Text(
-                    widget.title,
-                    style: AeDashTokens.heading(size: 17, color: _darkText),
-                  ),
-                  if (period.isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: AeDashTokens.border),
-                      ),
-                      child: Text(
-                        period,
-                        style: AeDashTokens.body(
-                          size: 11.5,
-                          color: _darkText,
-                          weight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                ],
+              Text(
+                titleText,
+                style: GoogleFonts.inter(
+                  fontSize: 16.5,
+                  fontWeight: FontWeight.w800,
+                  color: _darkText,
+                  letterSpacing: -0.2,
+                ),
               ),
               const SizedBox(height: 3),
               Text(
                 widget.description,
-                style: AeDashTokens.body(size: 12.5, color: AeDashTokens.muted),
+                style: GoogleFonts.inter(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w500,
+                  color: _mutedText,
+                ),
               ),
             ],
           ),
@@ -210,24 +206,41 @@ class _SignOffHistoryPanelState extends State<SignOffHistoryPanel> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: const Color(0xFFF8FAFC),
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: AeDashTokens.border),
+              border: Border.all(color: _border),
             ),
             child: Text(
               '$count',
-              style: AeDashTokens.body(
-                size: 12,
+              style: GoogleFonts.inter(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
                 color: _darkText,
-                weight: FontWeight.w800,
               ),
             ),
           ),
         ],
+        const SizedBox(width: 6),
+        Tooltip(
+          message:
+              'Every save on the register requires a fresh signature. '
+              'This list is append-only — signed records cannot be edited or deleted here.',
+          child: Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              shape: BoxShape.circle,
+              border: Border.all(color: _border),
+            ),
+            child: const Icon(Icons.help_outline_rounded, size: 15, color: _mutedText),
+          ),
+        ),
       ],
     );
   }
 
+  /// Promotes unsigned mismatches only. Verified state stays quiet.
   Widget _integrity() {
     final latest = widget.latest;
     final live = widget.liveContentHash;
@@ -235,24 +248,33 @@ class _SignOffHistoryPanelState extends State<SignOffHistoryPanel> {
       return const SizedBox.shrink();
     }
     final ok = latest.contentHash == live;
-    final color = ok ? AeDashTokens.success : AeDashTokens.danger;
-    final softBg = ok ? const Color(0xFFF0FDF4) : const Color(0xFFFEF2F2);
+    if (ok) return const SizedBox.shrink();
+
+    final who = [
+      if (latest.name.trim().isNotEmpty) latest.name.trim(),
+      if (latest.position.trim().isNotEmpty) latest.position.trim(),
+    ].join(' — ');
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       decoration: BoxDecoration(
-        color: softBg,
-        borderRadius: BorderRadius.circular(11),
-        border: Border.all(color: color.withValues(alpha: 0.28)),
+        color: const Color(0xFFFEF2F2),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFECACA)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            ok ? Icons.verified_rounded : Icons.report_rounded,
-            color: color,
-            size: 20,
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(9),
+              border: Border.all(color: const Color(0xFFFECACA)),
+            ),
+            child: const Icon(Icons.report_rounded, color: Color(0xFFDC2626), size: 18),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -260,36 +282,44 @@ class _SignOffHistoryPanelState extends State<SignOffHistoryPanel> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  ok ? 'Latest Verified Sign-off' : 'Unsigned Changes Detected',
-                  style: AeDashTokens.body(
-                    size: 12.5,
-                    color: color,
-                    weight: FontWeight.w800,
+                  'Unsigned Changes Detected',
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: const Color(0xFFB91C1C),
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  [
-                    if (latest.name.trim().isNotEmpty) latest.name.trim(),
-                    if (latest.position.trim().isNotEmpty) latest.position.trim(),
-                  ].join(' · '),
-                  style: AeDashTokens.body(
-                    size: 12.5,
-                    color: _darkText,
-                    weight: FontWeight.w600,
-                  ),
-                ),
-                Text(
-                  formatSignOffDateTime(latest.at),
-                  style: AeDashTokens.body(size: 11.5, color: AeDashTokens.muted),
-                ),
-                if (!ok) ...[
-                  const SizedBox(height: 4),
+                if (who.isNotEmpty) ...[
+                  const SizedBox(height: 3),
                   Text(
-                    'Some data was edited outside a signed save — review before relying on these figures.',
-                    style: AeDashTokens.body(size: 11.5, color: AeDashTokens.muted),
+                    '$who | ${formatSignOffDateTime(latest.at)}',
+                    style: GoogleFonts.inter(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: _darkText,
+                    ),
+                  ),
+                ] else ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    formatSignOffDateTime(latest.at),
+                    style: GoogleFonts.inter(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: _darkText,
+                    ),
                   ),
                 ],
+                const SizedBox(height: 4),
+                Text(
+                  'Some data was edited outside a signed save — review before relying on these figures.',
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: _mutedText,
+                    height: 1.35,
+                  ),
+                ),
               ],
             ),
           ),
@@ -310,7 +340,12 @@ class _SignOffCard extends StatefulWidget {
 }
 
 class _SignOffCardState extends State<_SignOffCard> {
+  static const _primary = Color(0xFFF97316);
+  static const _lightOrange = Color(0xFFFFF7ED);
+  static const _border = Color(0xFFE5E7EB);
   static const _darkText = Color(0xFF1F2937);
+  static const _mutedText = Color(0xFF64748B);
+
   bool _expanded = false;
 
   @override
@@ -325,11 +360,11 @@ class _SignOffCardState extends State<_SignOffCard> {
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: widget.isLatest
               ? AeDashTokens.success.withValues(alpha: 0.35)
-              : AeDashTokens.border,
+              : _border,
         ),
         boxShadow: [
           BoxShadow(
@@ -342,12 +377,13 @@ class _SignOffCardState extends State<_SignOffCard> {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(14),
           onTap: () => setState(() => _expanded = !_expanded),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 10, 12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 if (narrow)
                   Column(
@@ -395,19 +431,19 @@ class _SignOffCardState extends State<_SignOffCard> {
   Widget _signaturePreview(SignOffRecord r) {
     return Container(
       width: 118,
-      height: 52,
+      height: 54,
       padding: const EdgeInsets.all(6),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: const Color(0xFFF8FAFC),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        border: Border.all(color: _border),
       ),
       child: r.signaturePng == null
           ? const Center(
               child: Icon(
-                Icons.image_not_supported_outlined,
-                color: AeDashTokens.muted,
-                size: 18,
+                Icons.visibility_off_outlined,
+                color: _mutedText,
+                size: 20,
               ),
             )
           : Image.memory(
@@ -421,10 +457,12 @@ class _SignOffCardState extends State<_SignOffCard> {
   }
 
   Widget _middle(SignOffRecord r, _SignOffMeta meta) {
+    final name = r.signerName.trim().isEmpty ? 'Unknown signer' : r.signerName.trim();
+    final position = r.signerPosition.trim();
+    final displayName = position.isEmpty ? name : '$name ($position)';
     final chips = <String>[
-      if (meta.room != null && meta.room!.isNotEmpty) 'Room ${meta.room}',
-      if (meta.guests != null && meta.guests!.isNotEmpty)
-        '${meta.guests} guest${meta.guests == '1' ? '' : 's'}',
+      if (meta.room != null && meta.room!.isNotEmpty) 'Room: ${meta.room}',
+      if (meta.guests != null && meta.guests!.isNotEmpty) 'Total: ${meta.guests}',
       if (meta.residence != null && meta.residence!.isNotEmpty) meta.residence!,
     ];
 
@@ -432,54 +470,51 @@ class _SignOffCardState extends State<_SignOffCard> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          r.signerName.trim().isEmpty ? 'Unknown signer' : r.signerName.trim(),
-          style: AeDashTokens.body(
-            size: 14,
+          displayName,
+          style: GoogleFonts.inter(
+            fontSize: 14,
+            fontWeight: FontWeight.w800,
             color: _darkText,
-            weight: FontWeight.w800,
           ),
         ),
-        if (r.signerPosition.trim().isNotEmpty) ...[
-          const SizedBox(height: 1),
-          Text(
-            r.signerPosition.trim(),
-            style: AeDashTokens.body(size: 12, color: AeDashTokens.muted),
-          ),
-        ],
         const SizedBox(height: 4),
         Text(
           r.actionLabel,
-          style: AeDashTokens.body(
-            size: 12.5,
+          style: GoogleFonts.inter(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
             color: _darkText,
-            weight: FontWeight.w600,
           ),
         ),
         const SizedBox(height: 2),
         Text(
           formatSignOffDateTime(r.createdAt),
-          style: AeDashTokens.body(size: 11.5, color: AeDashTokens.muted),
+          style: GoogleFonts.inter(
+            fontSize: 11.5,
+            fontWeight: FontWeight.w500,
+            color: _mutedText,
+          ),
         ),
         if (chips.isNotEmpty) ...[
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           Wrap(
             spacing: 6,
             runSpacing: 4,
             children: [
               for (final c in chips)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF8FAFC),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: AeDashTokens.border),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: _border),
                   ),
                   child: Text(
                     c,
-                    style: AeDashTokens.body(
-                      size: 11,
+                    style: GoogleFonts.inter(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
                       color: _darkText,
-                      weight: FontWeight.w600,
                     ),
                   ),
                 ),
@@ -498,43 +533,19 @@ class _SignOffCardState extends State<_SignOffCard> {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (widget.isLatest) ...[
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF0FDF4),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: AeDashTokens.success.withValues(alpha: 0.35),
-                  ),
-                ),
-                child: Text(
-                  'Latest',
-                  style: AeDashTokens.body(
-                    size: 10.5,
-                    color: AeDashTokens.success,
-                    weight: FontWeight.w800,
-                  ),
-                ),
+              _badge(
+                'Latest',
+                bg: const Color(0xFFF0FDF4),
+                fg: AeDashTokens.success,
+                border: AeDashTokens.success.withValues(alpha: 0.35),
               ),
               const SizedBox(width: 6),
             ],
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: AeDashTokens.softAccent,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: const Color(0xFFFDBA74).withValues(alpha: 0.55),
-                ),
-              ),
-              child: Text(
-                'Signed',
-                style: AeDashTokens.body(
-                  size: 10.5,
-                  color: const Color(0xFF9A3412),
-                  weight: FontWeight.w800,
-                ),
-              ),
+            _badge(
+              'Signed',
+              bg: _lightOrange,
+              fg: const Color(0xFF9A3412),
+              border: const Color(0xFFFDBA74).withValues(alpha: 0.55),
             ),
             const SizedBox(width: 2),
             AnimatedRotation(
@@ -543,7 +554,7 @@ class _SignOffCardState extends State<_SignOffCard> {
               child: const Icon(
                 Icons.expand_more_rounded,
                 size: 22,
-                color: AeDashTokens.muted,
+                color: _mutedText,
               ),
             ),
           ],
@@ -552,18 +563,40 @@ class _SignOffCardState extends State<_SignOffCard> {
     );
   }
 
+  Widget _badge(
+    String label, {
+    required Color bg,
+    required Color fg,
+    required Color border,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: border),
+      ),
+      child: Text(
+        label,
+        style: GoogleFonts.inter(
+          fontSize: 10.5,
+          fontWeight: FontWeight.w800,
+          color: fg,
+        ),
+      ),
+    );
+  }
+
   Widget _detailsPanel(SignOffRecord r, _SignOffMeta meta) {
     final rows = <(String, String)>[
       ('Action', r.actionLabel),
       if (meta.room != null && meta.room!.isNotEmpty) ('Room', meta.room!),
-      if (meta.guests != null && meta.guests!.isNotEmpty)
-        ('Guests', meta.guests!),
+      if (meta.guests != null && meta.guests!.isNotEmpty) ('Guests', meta.guests!),
       if (meta.residence != null && meta.residence!.isNotEmpty)
         ('Nationality / residence', meta.residence!),
       ('Date & time', formatSignOffDateTime(r.createdAt)),
       ('Signed by', r.signerName),
-      if (r.signerPosition.trim().isNotEmpty)
-        ('Position', r.signerPosition.trim()),
+      if (r.signerPosition.trim().isNotEmpty) ('Position', r.signerPosition.trim()),
       if (r.accountEmail.trim().isNotEmpty) ('Account', r.accountEmail.trim()),
       if (r.signatureSha256.length >= 12)
         ('Signature ref', '#${r.signatureSha256.substring(0, 12)}'),
@@ -580,29 +613,62 @@ class _SignOffCardState extends State<_SignOffCard> {
         decoration: BoxDecoration(
           color: const Color(0xFFF8FAFC),
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AeDashTokens.border),
+          border: Border.all(color: _border),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'Audit details',
-              style: AeDashTokens.body(
-                size: 12,
-                color: _darkText,
-                weight: FontWeight.w800,
-              ),
+            Row(
+              children: [
+                const Icon(Icons.info_outline_rounded, size: 14, color: _primary),
+                const SizedBox(width: 6),
+                Text(
+                  'Audit details',
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: _darkText,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
             for (final row in rows) _detailRow(row.$1, row.$2),
-            if (r.details.isNotEmpty) ...[
+            if (r.signaturePng != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Signature preview',
+                style: GoogleFonts.inter(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                  color: _mutedText,
+                ),
+              ),
               const SizedBox(height: 6),
+              Container(
+                height: 72,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _border),
+                ),
+                child: Image.memory(
+                  r.signaturePng!,
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                  filterQuality: FilterQuality.medium,
+                ),
+              ),
+            ],
+            if (r.details.isNotEmpty) ...[
+              const SizedBox(height: 8),
               Text(
                 'Notes',
-                style: AeDashTokens.body(
-                  size: 11.5,
-                  color: AeDashTokens.muted,
-                  weight: FontWeight.w700,
+                style: GoogleFonts.inter(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                  color: _mutedText,
                 ),
               ),
               const SizedBox(height: 4),
@@ -611,7 +677,7 @@ class _SignOffCardState extends State<_SignOffCard> {
                   padding: const EdgeInsets.only(bottom: 3),
                   child: Text(
                     '• $d',
-                    style: AeDashTokens.body(size: 12, color: _darkText),
+                    style: GoogleFonts.inter(fontSize: 12, color: _darkText),
                   ),
                 ),
             ],
@@ -619,10 +685,10 @@ class _SignOffCardState extends State<_SignOffCard> {
               const SizedBox(height: 8),
               Text(
                 'Recorded changes (${r.changes.length}${r.changesTruncated > 0 ? '+${r.changesTruncated}' : ''})',
-                style: AeDashTokens.body(
-                  size: 11.5,
-                  color: AeDashTokens.muted,
-                  weight: FontWeight.w700,
+                style: GoogleFonts.inter(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                  color: _mutedText,
                 ),
               ),
               const SizedBox(height: 6),
@@ -630,7 +696,7 @@ class _SignOffCardState extends State<_SignOffCard> {
               if (r.changesTruncated > 0)
                 Text(
                   '…and ${r.changesTruncated} more',
-                  style: AeDashTokens.body(size: 12),
+                  style: GoogleFonts.inter(fontSize: 12, color: _mutedText),
                 ),
             ],
           ],
@@ -651,18 +717,18 @@ class _SignOffCardState extends State<_SignOffCard> {
               children: [
                 Text(
                   label,
-                  style: AeDashTokens.body(
-                    size: 11.5,
-                    color: AeDashTokens.muted,
-                    weight: FontWeight.w600,
+                  style: GoogleFonts.inter(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: _mutedText,
                   ),
                 ),
                 Text(
                   value,
-                  style: AeDashTokens.body(
-                    size: 12.5,
+                  style: GoogleFonts.inter(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
                     color: _darkText,
-                    weight: FontWeight.w600,
                   ),
                 ),
               ],
@@ -675,20 +741,20 @@ class _SignOffCardState extends State<_SignOffCard> {
                 width: 148,
                 child: Text(
                   label,
-                  style: AeDashTokens.body(
-                    size: 11.5,
-                    color: AeDashTokens.muted,
-                    weight: FontWeight.w600,
+                  style: GoogleFonts.inter(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: _mutedText,
                   ),
                 ),
               ),
               Expanded(
                 child: Text(
                   value,
-                  style: AeDashTokens.body(
-                    size: 12.5,
+                  style: GoogleFonts.inter(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
                     color: _darkText,
-                    weight: FontWeight.w600,
                   ),
                 ),
               ),
@@ -703,7 +769,7 @@ class _SignOffCardState extends State<_SignOffCard> {
     final (icon, color) = switch (c.op) {
       'add' => (Icons.add_circle_outline_rounded, AeDashTokens.success),
       'delete' => (Icons.remove_circle_outline_rounded, AeDashTokens.danger),
-      _ => (Icons.edit_outlined, AeDashTokens.info),
+      _ => (Icons.edit_outlined, _primary),
     };
     final diffs = signOffDiffLines(c.before, c.after);
     return Padding(
@@ -719,15 +785,18 @@ class _SignOffCardState extends State<_SignOffCard> {
               children: [
                 Text(
                   c.label,
-                  style: AeDashTokens.body(
-                    size: 12.5,
+                  style: GoogleFonts.inter(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
                     color: _darkText,
-                    weight: FontWeight.w600,
                   ),
                 ),
                 if (c.op == 'edit' || c.op == 'set')
                   for (final d in diffs)
-                    Text(d, style: AeDashTokens.body(size: 12)),
+                    Text(
+                      d,
+                      style: GoogleFonts.inter(fontSize: 12, color: _mutedText),
+                    ),
               ],
             ),
           ),

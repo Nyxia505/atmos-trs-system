@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import 'package:atmos_trs_system/config/qr_scan_geofence_config.dart';
+import 'package:atmos_trs_system/data/misamis_occidental_municipalities.dart';
 import 'package:atmos_trs_system/services/osm_place_search.dart';
 import 'package:atmos_trs_system/utils/municipality_helper.dart';
 import 'package:atmos_trs_system/widgets/atmos_osm_tile_layer.dart';
@@ -140,9 +141,18 @@ class _SpotLocationPickerState extends State<SpotLocationPicker> {
       });
       return;
     }
-    _searchDebounce = Timer(const Duration(milliseconds: 400), () {
+    _searchDebounce = Timer(const Duration(milliseconds: 650), () {
       unawaited(_runSearch(query));
     });
+  }
+
+  String? get _nearPlaceName {
+    final mid = normalizeMunicipalityId(widget.municipalityId);
+    if (mid.isEmpty) return null;
+    for (final municipality in getMisamisOccidentalMunicipalities()) {
+      if (municipality.id == mid) return municipality.name;
+    }
+    return null;
   }
 
   Future<void> _runSearch(String query) async {
@@ -154,6 +164,7 @@ class _SpotLocationPickerState extends State<SpotLocationPicker> {
     try {
       final hits = await OsmPlaceSearch.search(
         query: query,
+        nearPlace: _nearPlaceName,
         biasLatitude: anchor?.lat ?? _lat ?? widget.fallbackLatitude,
         biasLongitude: anchor?.lng ?? _lng ?? widget.fallbackLongitude,
       );
@@ -172,6 +183,15 @@ class _SpotLocationPickerState extends State<SpotLocationPicker> {
                     null,
               )
               .toList();
+      if (localHits.isNotEmpty) {
+        final best = localHits.first;
+        _placePin(
+          best.latitude,
+          best.longitude,
+          'Pinned at ${best.name}. Choose another result or drag the pin.',
+        );
+      }
+      if (!mounted) return;
       setState(() {
         _searching = false;
         _hits = localHits;
@@ -405,6 +425,11 @@ class _SpotLocationPickerState extends State<SpotLocationPicker> {
           controller: _searchController,
           focusNode: _searchFocus,
           onChanged: _onSearchChanged,
+          onSubmitted: (value) {
+            _searchDebounce?.cancel();
+            final query = value.trim();
+            if (query.length >= 2) unawaited(_runSearch(query));
+          },
           textInputAction: TextInputAction.search,
           decoration: InputDecoration(
             hintText: 'Search tourist spot or location...',

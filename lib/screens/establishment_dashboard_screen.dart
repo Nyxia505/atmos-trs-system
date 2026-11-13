@@ -14,6 +14,7 @@ import 'package:atmos_trs_system/services/sign_off_service.dart';
 import 'package:atmos_trs_system/services/establishment_gallery_service.dart';
 import 'package:atmos_trs_system/services/establishment_firestore_write.dart';
 import 'package:atmos_trs_system/services/establishment_map_pin_store.dart';
+import 'package:atmos_trs_system/services/establishment_approval_service.dart';
 import 'package:atmos_trs_system/services/establishment_registration_service.dart';
 import 'package:atmos_trs_system/services/firestore_auth_gate.dart';
 import 'package:atmos_trs_system/utils/dot_report_entity_scope.dart';
@@ -203,13 +204,31 @@ class _EstablishmentDashboardScreenState
           ? aeTypeRaw
           : AeTypeCatalog.typeForCategory(category);
       final codeRaw = (est['classificationCode'] ?? '').toString().trim();
+      final nextStatus = (user['status'] ?? est['status'] ?? '')
+          .toString()
+          .toLowerCase();
+      final verified = user['isVerified'] == true;
+      // Defense in depth: never keep a pending/rejected AE on the dashboard.
+      if (!EstablishmentRegistryStatus.allowsDashboardAccess(
+        isVerified: verified,
+        status: nextStatus,
+      )) {
+        if (!mounted) return;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          Navigator.of(context).pushReplacementNamed(
+            verified
+                ? '/establishment-pending-approval'
+                : '/verify-otp',
+          );
+        });
+        return;
+      }
       setState(() {
         _uid = uid;
         _businessName = businessName;
         _category = category;
-        _status = (user['status'] ?? est['status'] ?? 'pending')
-            .toString()
-            .toLowerCase();
+        _status = nextStatus.isEmpty ? 'active' : nextStatus;
         _municipality =
             (user['municipality'] ?? est['municipality'] ?? '').toString();
         _municipalityId = municipalityId;
@@ -719,25 +738,101 @@ class _EstablishmentDashboardScreenState
   Widget _buildTopHeader({required bool isMobile}) {
     // Orange brand header on every establishment feature (Register, Events,
     // Insights, Reports, Profile, Settings).
-    final title = _currentTab == _AeTab.register
-        ? '$_businessName — DOT Register'
-        : '$_businessName — ${_tabTitle(_currentTab)}';
-    final subtitle = [
-      if (_aeType.isNotEmpty) '$_aeType ($_classificationCode)',
-      if (_municipality.isNotEmpty) _municipality,
-      if (_schema.tracksRooms) '$_roomCount rooms',
-    ].join(' · ');
+    final title = _businessName.isNotEmpty ? _businessName : 'Establishment';
+    final subtitle = _currentTab == _AeTab.register
+        ? [
+            'DOT Register',
+            if (_municipality.isNotEmpty) _municipality,
+            if (_schema.tracksRooms) '$_roomCount rooms',
+          ].join(' · ')
+        : [
+            _tabTitle(_currentTab),
+            if (_aeType.isNotEmpty)
+              _classificationCode.isNotEmpty ? '$_aeType ($_classificationCode)' : _aeType,
+            if (_municipality.isNotEmpty) _municipality,
+            if (_schema.tracksRooms) '$_roomCount rooms',
+          ].join(' · ');
+    final registerIdx = _tabs.indexOf(_AeTab.register);
+    final insightsIdx = _tabs.indexOf(_AeTab.insights);
+
+    Widget buildingMark() => Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: const Icon(Icons.apartment_rounded, color: Color(0xFFF97316), size: 22),
+        );
+
+    Widget headerNavPill({
+      required IconData icon,
+      required String label,
+      required bool selected,
+      required VoidCallback onTap,
+    }) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Ink(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              color: selected ? Colors.white : Colors.white.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: selected ? Colors.white : Colors.white.withValues(alpha: 0.45),
+              ),
+              boxShadow: selected
+                  ? [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.08),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  icon,
+                  size: 16,
+                  color: selected ? const Color(0xFFF97316) : Colors.white,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: AeDashTokens.body(
+                    size: 12.5,
+                    weight: FontWeight.w700,
+                    color: selected ? const Color(0xFF1F2937) : Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return Container(
       width: double.infinity,
       clipBehavior: Clip.antiAlias,
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFFFF8A30), Color(0xFFF5660B)],
-        ),
-        borderRadius: BorderRadius.vertical(bottom: Radius.circular(18)),
-        boxShadow: [
+      decoration: BoxDecoration(
+        // Match sidebar orange so header + nav feel like one brand surface.
+        gradient: AeDashTokens.bannerGradient,
+        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(18)),
+        boxShadow: const [
           BoxShadow(
             color: Color(0x33EA580C),
             blurRadius: 16,
@@ -752,47 +847,117 @@ class _EstablishmentDashboardScreenState
             bottom: false,
             child: Padding(
               padding: EdgeInsets.fromLTRB(
-                isMobile ? 12 : 24,
+                isMobile ? 12 : 20,
                 12,
                 isMobile ? 12 : 20,
                 14,
               ),
-              child: Row(
-                children: [
-                  if (isMobile)
-                    IconButton(
-                      tooltip: 'Menu',
-                      onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-                      icon: const Icon(Icons.menu_rounded, color: Colors.white),
-                    ),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
+              child: LayoutBuilder(
+                builder: (context, c) {
+                  final compact = isMobile || c.maxWidth < 760;
+                  final titleBlock = Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        title,
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: AeDashTokens.heading(
+                          size: compact ? 17 : 20,
+                          color: Colors.white,
+                        ),
+                      ),
+                      if (subtitle.isNotEmpty) ...[
+                        const SizedBox(height: 4),
                         Text(
-                          title,
+                          subtitle,
+                          textAlign: TextAlign.center,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: AeDashTokens.heading(
-                            size: isMobile ? 17 : 20,
-                            color: Colors.white,
+                          style: AeDashTokens.body(
+                            size: 12.5,
+                            color: Colors.white.withValues(alpha: 0.92),
                           ),
                         ),
-                        if (subtitle.isNotEmpty)
-                          Text(
-                            subtitle,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: AeDashTokens.body(
-                              size: 12.5,
-                              color: Colors.white.withValues(alpha: 0.92),
-                            ),
-                          ),
+                      ],
+                    ],
+                  );
+
+                  final left = Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (isMobile)
+                        IconButton(
+                          tooltip: 'Menu',
+                          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                          icon: const Icon(Icons.menu_rounded, color: Colors.white),
+                        )
+                      else
+                        buildingMark(),
+                    ],
+                  );
+
+                  final right = Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    alignment: WrapAlignment.end,
+                    children: [
+                      if (registerIdx >= 0)
+                        headerNavPill(
+                          icon: Icons.folder_outlined,
+                          label: 'Register',
+                          selected: _currentTab == _AeTab.register,
+                          onTap: () => _selectTab(registerIdx),
+                        ),
+                      if (insightsIdx >= 0)
+                        headerNavPill(
+                          icon: Icons.show_chart_rounded,
+                          label: 'Insights',
+                          selected: _currentTab == _AeTab.insights,
+                          onTap: () => _selectTab(insightsIdx),
+                        ),
+                      _statusPill(compact: true, onOrange: true),
+                    ],
+                  );
+
+                  if (compact) {
+                    return Column(
+                      children: [
+                        Row(
+                          children: [
+                            left,
+                            const Spacer(),
+                            Flexible(child: right),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        titleBlock,
+                      ],
+                    );
+                  }
+
+                  return SizedBox(
+                    height: 56,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 200),
+                          child: titleBlock,
+                        ),
+                        Row(
+                          children: [
+                            left,
+                            const Spacer(),
+                            right,
+                          ],
+                        ),
                       ],
                     ),
-                  ),
-                  _statusPill(compact: true, onOrange: true),
-                ],
+                  );
+                },
               ),
             ),
           ),
@@ -919,6 +1084,12 @@ class _EstablishmentDashboardScreenState
           roomLabels: _roomLabels,
           banner: _statusBannerDismissed ? null : _statusBanner(),
           onOpenProfile: () => _selectTab(_tabs.indexOf(_AeTab.profile)),
+          onOpenReports: _tabs.contains(_AeTab.reports)
+              ? () {
+                  final i = _tabs.indexOf(_AeTab.reports);
+                  if (i >= 0) _selectTab(i);
+                }
+              : null,
           onRoomsChanged: _onRoomsInventoryChanged,
         );
       case _AeTab.events:

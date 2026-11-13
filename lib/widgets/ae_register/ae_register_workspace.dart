@@ -8,6 +8,7 @@ import 'package:atmos_trs_system/models/sign_off.dart';
 import 'package:atmos_trs_system/services/ae_register_service.dart';
 import 'package:atmos_trs_system/services/ae_room_inventory_service.dart';
 import 'package:atmos_trs_system/utils/ae_register_calculator.dart';
+import 'package:atmos_trs_system/utils/ae_register_reconciler.dart';
 import 'package:atmos_trs_system/widgets/ae_register/ae_country_matrix_table.dart';
 import 'package:atmos_trs_system/widgets/ae_register/ae_dae2_summary_card.dart';
 import 'package:atmos_trs_system/widgets/ae_register/ae_daily_register_table.dart';
@@ -30,6 +31,8 @@ class AeRegisterWorkspace extends StatefulWidget {
     this.readOnly = false,
     this.banner,
     this.onOpenProfile,
+    this.onOpenReports,
+    this.onBack,
     this.onRoomsChanged,
     this.roomLabels = const [],
     this.initialYear,
@@ -41,6 +44,12 @@ class AeRegisterWorkspace extends StatefulWidget {
   final bool readOnly;
   final Widget? banner;
   final VoidCallback? onOpenProfile;
+
+  /// Opens the establishment Reports tab (official DOT PDF/Excel).
+  final VoidCallback? onOpenReports;
+
+  /// Shown before the month selector when set (e.g. LGU/OPTACA viewer).
+  final VoidCallback? onBack;
 
   /// Called when "+ Add New Room" persists a new inventory room.
   final ValueChanged<AeRoomInventory>? onRoomsChanged;
@@ -412,7 +421,7 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
                     final pad = c.maxWidth < 600 ? 12.0 : 20.0;
                     return ListView(
                       physics: const AlwaysScrollableScrollPhysics(),
-                      padding: EdgeInsets.fromLTRB(pad, 14, pad, 24),
+                      padding: EdgeInsets.fromLTRB(pad, 14, pad, 88),
                       children: [
                         if (widget.banner != null) ...[widget.banner!, const SizedBox(height: 12)],
                         if (rowsSnap.hasError)
@@ -448,60 +457,49 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
         liveHash != null &&
         signed.contentHash.isNotEmpty &&
         signed.contentHash != liveHash;
-    final kpis = <(String, String, IconData, Color, Color)>[
+    const orange = Color(0xFFF97316);
+    final kpis = <(String, String, IconData)>[
       if (s.tracksRooms)
         (
           'Occupancy',
           AeRegisterCalculator.pct(t.occupancyRate),
           Icons.hotel_rounded,
-          const Color(0xFFEA580C),
-          const Color(0xFFFFF1E7),
         ),
       if (s.tracksNights)
         (
           'ALOS',
           '${AeRegisterCalculator.dec(t.alos)} n',
-          Icons.nights_stay_rounded,
-          const Color(0xFF7C3AED),
-          const Color(0xFFF5F3FF),
+          Icons.person_outline_rounded,
         ),
       if (s.tracksNights)
         (
           'Guest Nights',
           '${t.guestNights}',
           Icons.bedtime_rounded,
-          const Color(0xFF0284C7),
-          const Color(0xFFEFF6FF),
         ),
       (
         s.tracksNights ? 'Check-ins' : 'Guests',
         '${t.checkIns}',
         Icons.login_rounded,
-        const Color(0xFF059669),
-        const Color(0xFFECFDF5),
       ),
       if (s.tracksRooms)
         (
           'Persons / Room',
           AeRegisterCalculator.dec(t.avgPersonsPerRoom),
           Icons.groups_rounded,
-          const Color(0xFF0891B2),
-          const Color(0xFFECFEFF),
         ),
       (
         'Sales',
         '₱${AeSheetKit.money(t.grandTotalSales)}',
         Icons.payments_rounded,
-        const Color(0xFFD97706),
-        const Color(0xFFFFFBEB),
       ),
     ];
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
       decoration: const BoxDecoration(
-        color: AeDashTokens.surface,
-        border: Border(bottom: BorderSide(color: AeDashTokens.border)),
+        color: Color(0xFFF8FAFC),
+        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -511,9 +509,10 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
             runSpacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
+              if (widget.onBack != null) _backButton(),
               Container(
                 decoration: BoxDecoration(
-                  color: AeDashTokens.softAccent,
+                  color: Colors.white,
                   border: Border.all(color: const Color(0xFFFDBA74)),
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -522,7 +521,7 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
                     onPressed: () => _shiftMonth(-1),
                     icon: const Icon(Icons.chevron_left_rounded),
                     tooltip: 'Previous month',
-                    color: AeDashTokens.accent,
+                    color: orange,
                   ),
                   InkWell(
                     onTap: _pickMonth,
@@ -531,7 +530,7 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                       child: Text(
                         '${AeSheetKit.monthName(_month)} $_year',
-                        style: AeDashTokens.section(size: 15, color: AeDashTokens.text),
+                        style: AeDashTokens.section(size: 15, color: const Color(0xFF1F2937)),
                       ),
                     ),
                   ),
@@ -539,28 +538,29 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
                     onPressed: () => _shiftMonth(1),
                     icon: const Icon(Icons.chevron_right_rounded),
                     tooltip: 'Next month',
-                    color: AeDashTokens.accent,
+                    color: orange,
                   ),
                 ]),
               ),
-              _pill(
+              _statusBadge(
                 submitted ? 'Submitted' : 'Draft',
-                submitted ? AeDashTokens.success : AeDashTokens.warning,
-                submitted ? Icons.verified_rounded : Icons.edit_note_rounded,
+                submitted ? const Color(0xFF16A34A) : AeDashTokens.warning,
+                submitted ? Icons.check_circle_rounded : Icons.edit_note_rounded,
+                solid: submitted,
               ),
               if (issueCount > 0)
-                _pill('$issueCount Issues', AeDashTokens.danger, Icons.error_outline_rounded),
-              _pill(
+                _statusBadge('$issueCount Issues', AeDashTokens.danger, Icons.error_outline_rounded),
+              _statusBadge(
                 '${t.filledDays}/${report.days} Days Filled',
-                AeDashTokens.info,
+                AeDashTokens.brandDeep,
                 Icons.event_available_rounded,
               ),
               if (tampered)
-                _pillButton('Changed After Signing', AeDashTokens.danger, Icons.report_rounded)
+                _pillButton('Changed After Signing', AeDashTokens.danger, Icons.warning_amber_rounded)
               else if (signed != null)
                 _pillButton(
                   'Signed: ${signed.name} · ${formatSignOffTime(signed.at)}',
-                  AeDashTokens.chartSecondary,
+                  AeDashTokens.brandDark,
                   Icons.draw_rounded,
                 )
               else if (rows.isNotEmpty)
@@ -578,7 +578,7 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
                 borderRadius: BorderRadius.circular(10),
                 child: ListTile(
                   dense: true,
-                  leading: const Icon(Icons.warning_amber_rounded, color: AeDashTokens.accent),
+                  leading: const Icon(Icons.warning_amber_rounded, color: orange),
                   title: const Text('Set your total available rooms to compute occupancy.'),
                   trailing: widget.onOpenProfile == null
                       ? null
@@ -586,29 +586,71 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
                 ),
               ),
             ),
+          if (_report != null && rows.isNotEmpty) ...[
+            Builder(builder: (_) {
+              final mismatches = AeRegisterReconciler.reconcileMonth(
+                rows: rows,
+                report: _report!,
+              );
+              final msg = AeRegisterReconciler.warningMessage(mismatches);
+              if (msg == null) return const SizedBox.shrink();
+              // Heal stale header totals once (LGU/OPTACA read the header).
+              final healKey =
+                  '${_report!.id}|${mismatches.map((m) => m.metric).join(',')}';
+              if (_touchedKey != 'reconcile|$healKey' && !widget.readOnly) {
+                _touchedKey = 'reconcile|$healKey';
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  AeRegisterService.touchHeader(widget.profile, _year, _month)
+                      .catchError((Object e) {
+                    debugPrint('[AeRegister] reconcile heal skipped: $e');
+                  });
+                });
+              }
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Material(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(10),
+                  child: ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.sync_problem_rounded, color: Color(0xFFB45309)),
+                    title: Text(msg, style: const TextStyle(fontSize: 13)),
+                    subtitle: const Text(
+                      'KPIs below use live Daily Register rows (authoritative). '
+                      'Saved month totals are being refreshed.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ],
           LayoutBuilder(
             builder: (context, constraints) {
-              final wide = constraints.maxWidth >= 980 && kpis.length >= 5;
+              final w = constraints.maxWidth;
+              final wide = w >= 980 && kpis.length >= 5;
               if (wide) {
                 return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     for (var i = 0; i < kpis.length; i++) ...[
-                      if (i > 0) const SizedBox(width: 10),
-                      Expanded(child: _kpiCard(kpis[i])),
+                      if (i > 0) const SizedBox(width: 12),
+                      Expanded(child: _kpiCard(kpis[i], index: i)),
                     ],
                   ],
                 );
               }
+              final cols = w < 420 ? 1 : (w < 720 ? 2 : 3);
+              final gap = 12.0;
+              final cardW = (w - gap * (cols - 1)) / cols;
               return Wrap(
-                spacing: 10,
-                runSpacing: 10,
+                spacing: gap,
+                runSpacing: gap,
                 children: [
-                  for (final k in kpis)
+                  for (var i = 0; i < kpis.length; i++)
                     SizedBox(
-                      width: constraints.maxWidth < 520
-                          ? (constraints.maxWidth - 10) / 2
-                          : 168,
-                      child: _kpiCard(k),
+                      width: cardW,
+                      child: _kpiCard(kpis[i], index: i),
                     ),
                 ],
               );
@@ -619,59 +661,113 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
     );
   }
 
-  Widget _kpiCard((String, String, IconData, Color, Color) k) {
+  Widget _backButton() {
+    return OutlinedButton.icon(
+      onPressed: widget.onBack,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: const Color(0xFFF97316),
+        backgroundColor: Colors.white,
+        side: const BorderSide(color: Color(0xFFF97316), width: 1.4),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        minimumSize: const Size(0, 42),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        // Avoid a permanently visible / sticky Material tooltip chip.
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      icon: const Icon(Icons.arrow_back_rounded, size: 18),
+      label: const Text(
+        'Back',
+        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5),
+      ),
+    );
+  }
+
+  Widget _kpiCard((String, String, IconData) k, {required int index}) {
+    // Same orange ladder as establishment sidebar / header.
+    final accent =
+        AeDashTokens.brandAccentLadder[index % AeDashTokens.brandAccentLadder.length];
+    final wash = Color.lerp(Colors.white, accent, 0.06)!;
+    final chip = Color.lerp(Colors.white, accent, 0.12)!;
+
     return Container(
-      constraints: const BoxConstraints(minHeight: 86),
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      constraints: const BoxConstraints(minHeight: 96),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: k.$4.withValues(alpha: 0.28)),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            k.$5,
-            Color.lerp(k.$5, Colors.white, 0.45)!,
-          ],
-        ),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
         boxShadow: [
           BoxShadow(
-            color: k.$4.withValues(alpha: 0.10),
-            blurRadius: 12,
+            color: const Color(0xFF0F172A).withValues(alpha: 0.045),
+            blurRadius: 16,
             offset: const Offset(0, 4),
           ),
         ],
       ),
-      child: Row(
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
         children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.85),
-              borderRadius: BorderRadius.circular(11),
-              border: Border.all(color: k.$4.withValues(alpha: 0.18)),
-            ),
-            child: Icon(k.$3, size: 18, color: k.$4),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  k.$1,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AeDashTokens.body(size: 11, color: AeDashTokens.muted, weight: FontWeight.w600),
+          // Soft wash + left accent bar.
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [wash, Colors.white],
                 ),
-                const SizedBox(height: 3),
-                Text(
-                  k.$2,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AeDashTokens.number(size: 17, color: AeDashTokens.text),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 4,
+            child: ColoredBox(color: accent),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: chip,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: accent.withValues(alpha: 0.22)),
+                  ),
+                  child: Icon(k.$3, size: 20, color: accent),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        k.$1.toUpperCase(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AeDashTokens.body(
+                          size: 10.5,
+                          color: const Color(0xFF64748B),
+                          weight: FontWeight.w700,
+                        ).copyWith(letterSpacing: 0.4),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        k.$2,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AeDashTokens.number(
+                          size: 19,
+                          color: const Color(0xFF1F2937),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -681,24 +777,31 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
     );
   }
 
-  Widget _pill(String label, Color color, IconData icon) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+  Widget _statusBadge(String label, Color color, IconData icon, {bool solid = false}) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
+          color: solid ? color : color.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color.withValues(alpha: 0.3)),
+          border: Border.all(color: color.withValues(alpha: solid ? 0.0 : 0.3)),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 14, color: color),
+          Icon(icon, size: 14, color: solid ? Colors.white : color),
           const SizedBox(width: 5),
-          Text(label, style: AeDashTokens.body(size: 12, color: color, weight: FontWeight.w800)),
+          Text(
+            label,
+            style: AeDashTokens.body(
+              size: 12,
+              color: solid ? Colors.white : color,
+              weight: FontWeight.w800,
+            ),
+          ),
         ]),
       );
 
   Widget _pillButton(String label, Color color, IconData icon) => InkWell(
         borderRadius: BorderRadius.circular(20),
         onTap: () => setState(() => _sheet = AeRegisterSheet.signoffs),
-        child: _pill(label, color, icon),
+        child: _statusBadge(label, color, icon),
       );
 
   Widget _sheetBody(
@@ -752,6 +855,7 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
           busy: _busy,
           onSubmit: () => _setSubmitted(true, report, totals),
           onWithdraw: () => _setSubmitted(false, report, totals),
+          onOpenReports: widget.onOpenReports,
         );
       case AeRegisterSheet.signoffs:
         return SignOffHistoryPanel(
@@ -762,6 +866,7 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
           liveContentHash: liveHash,
           title: 'Sign-offs',
           periodLabel: '${AeSheetKit.monthName(_month)} $_year',
+          description: 'Track signed reports and authorized changes.',
           emptyText: 'No signed saves for this month yet.',
         );
       case AeRegisterSheet.country:
@@ -836,67 +941,73 @@ class _AeRegisterWorkspaceState extends State<AeRegisterWorkspace> {
   }
 
   Widget _sheetTabs() {
+    const orange = Color(0xFFF97316);
     const labels = {
-      AeRegisterSheet.daily: ('Daily Register', Icons.edit_calendar_rounded),
-      AeRegisterSheet.monthly: ('Monthly Record', Icons.calendar_view_month_rounded),
-      AeRegisterSheet.dae2: ('Monthly Report (DAE-2)', Icons.summarize_rounded),
-      AeRegisterSheet.country: ('By Country', Icons.public_rounded),
-      AeRegisterSheet.signoffs: ('Sign-offs', Icons.draw_rounded),
+      AeRegisterSheet.daily: ('Daily Register', Icons.edit_calendar_outlined),
+      AeRegisterSheet.monthly: ('Monthly Record', Icons.calendar_view_month_outlined),
+      AeRegisterSheet.dae2: ('Monthly Report (DAE-2)', Icons.summarize_outlined),
+      AeRegisterSheet.country: ('By Country', Icons.public_outlined),
+      AeRegisterSheet.signoffs: ('Sign-offs', Icons.draw_outlined),
     };
-    return Container(
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-      decoration: const BoxDecoration(
-        color: Color(0xFFF8FAFC),
-        border: Border(top: BorderSide(color: AeDashTokens.border)),
-      ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(children: [
-          for (final e in labels.entries) ...[
-            if (e.key != labels.keys.first) const SizedBox(width: 6),
-            InkWell(
-              borderRadius: BorderRadius.circular(11),
-              onTap: () => setState(() => _sheet = e.key),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                curve: Curves.easeOut,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                decoration: BoxDecoration(
-                  color: _sheet == e.key ? AeDashTokens.accent : Colors.white,
-                  borderRadius: BorderRadius.circular(11),
-                  border: Border.all(
-                    color: _sheet == e.key ? AeDashTokens.accent : AeDashTokens.border,
-                  ),
-                  boxShadow: _sheet == e.key
-                      ? [
-                          BoxShadow(
-                            color: AeDashTokens.accent.withValues(alpha: 0.22),
-                            blurRadius: 8,
-                            offset: const Offset(0, 2),
-                          ),
-                        ]
-                      : null,
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        child: Align(
+          alignment: Alignment.center,
+          child: Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF0F172A).withValues(alpha: 0.06),
+                  blurRadius: 18,
+                  offset: const Offset(0, 6),
                 ),
-                child: Row(children: [
-                  Icon(
-                    e.value.$2,
-                    size: 16,
-                    color: _sheet == e.key ? Colors.white : AeDashTokens.muted,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    e.value.$1,
-                    style: AeDashTokens.body(
-                      size: 12.5,
-                      color: _sheet == e.key ? Colors.white : AeDashTokens.muted,
-                      weight: _sheet == e.key ? FontWeight.w800 : FontWeight.w600,
+              ],
+            ),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                for (final e in labels.entries) ...[
+                  if (e.key != labels.keys.first) const SizedBox(width: 4),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () => setState(() => _sheet = e.key),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOut,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: _sheet == e.key ? orange : Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(children: [
+                        Icon(
+                          e.value.$2,
+                          size: 16,
+                          color: _sheet == e.key ? Colors.white : const Color(0xFF64748B),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          e.value.$1,
+                          style: AeDashTokens.body(
+                            size: 12.5,
+                            color: _sheet == e.key ? Colors.white : const Color(0xFF64748B),
+                            weight: _sheet == e.key ? FontWeight.w800 : FontWeight.w600,
+                          ),
+                        ),
+                      ]),
                     ),
                   ),
-                ]),
-              ),
+                ],
+              ]),
             ),
-          ],
-        ]),
+          ),
+        ),
       ),
     );
   }

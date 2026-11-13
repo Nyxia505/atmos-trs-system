@@ -16,7 +16,8 @@ import 'package:atmos_trs_system/services/pending_registration_cache.dart';
 import 'package:atmos_trs_system/services/otp_delivery_service.dart';
 import 'package:atmos_trs_system/services/user_directory_service.dart';
 import 'package:uuid/uuid.dart';
-import 'package:atmos_trs_system/data/misamis_occidental_barangays.dart';
+import 'package:atmos_trs_system/data/ph_address_catalog.dart';
+import 'package:atmos_trs_system/widgets/anchored_option_field.dart';
 import 'package:atmos_trs_system/navigation/auth_navigation.dart';
 import 'package:atmos_trs_system/screens/verify_otp_screen.dart';
 import 'package:atmos_trs_system/navigation/login_route_args.dart';
@@ -140,6 +141,7 @@ class _SignupScreenState extends State<SignupScreen> {
   final _confirmPasswordFocus = FocusNode();
   final _confirmPasswordFieldKey = GlobalKey<FormFieldState<String>>();
   final _barangayController = TextEditingController();
+  final _otherCityController = TextEditingController();
   final _foreignCityController = TextEditingController();
   final _foreignRegionController = TextEditingController();
 
@@ -155,6 +157,10 @@ class _SignupScreenState extends State<SignupScreen> {
   String? _selectedProvince;
   String? _selectedCity;
   String? _selectedBarangay;
+  List<String> _barangayOptions = const [];
+  bool _barangayLoading = false;
+  bool _barangayResolved = false;
+  int _barangayRequest = 0;
 
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
@@ -497,17 +503,6 @@ class _SignupScreenState extends State<SignupScreen> {
     'Zambia',
     'Zimbabwe',
   ];
-  final List<String> _provinces = [
-    'Misamis Occidental',
-    'Misamis Oriental',
-    'Bukidnon',
-    'Lanao del Norte',
-    'Lanao del Sur',
-    'Zamboanga del Norte',
-    'Zamboanga del Sur',
-    'Other',
-  ];
-
   final List<String> _months = [
     'January',
     'February',
@@ -581,13 +576,18 @@ class _SignupScreenState extends State<SignupScreen> {
       ? _countries
       : _countries.where((c) => c != 'Philippines').toList();
 
-  bool get _useSelectableBarangay =>
+  bool get _provinceIsOther =>
+      _selectedProvince == PhilippineAddressCatalog.other;
+
+  /// Listed barangays for the selected city. "Other", or a city with no
+  /// published barangays, stays free text.
+  bool get _useListedBarangay =>
       _showPhilippineSubdivisions &&
-      _selectedProvince == 'Misamis Occidental' &&
-      isMisamisOccidentalSignupCity(_selectedCity);
+      !_provinceIsOther &&
+      _barangayOptions.isNotEmpty;
 
   String _resolvedBarangay() {
-    if (_useSelectableBarangay) {
+    if (_useListedBarangay) {
       return _selectedBarangay?.trim() ?? '';
     }
     return _barangayController.text.trim();
@@ -595,11 +595,88 @@ class _SignupScreenState extends State<SignupScreen> {
 
   String? _validateBarangayField(String? _) {
     if (!_showPhilippineSubdivisions) return null;
+    if (_selectedProvince == null || _resolvedCityForSave().isEmpty) {
+      return 'Select province and city first';
+    }
+    if (_barangayLoading &&
+        (_selectedBarangay == null || _selectedBarangay!.trim().isEmpty)) {
+      return 'Barangay list is still loading';
+    }
     final v = _resolvedBarangay();
-    if (_useSelectableBarangay) {
-      return v.isEmpty ? 'Select your barangay' : null;
+    if (_useListedBarangay) {
+      if (v.isEmpty) return 'Select your barangay';
+      if (_barangayOptions.isNotEmpty && !_barangayOptions.contains(v)) {
+        return 'Select your barangay';
+      }
+      return null;
     }
     return validatePhilippineBarangay(v);
+  }
+
+  List<String> _provinceChoices() {
+    final provinces = PhilippineAddressCatalog.signupProvinces();
+    final selected = _selectedProvince?.trim() ?? '';
+    if (selected.isNotEmpty && !provinces.contains(selected)) {
+      final copy = [...provinces];
+      final otherAt = copy.indexOf(PhilippineAddressCatalog.other);
+      copy.insert(otherAt < 0 ? copy.length : otherAt, selected);
+      return copy;
+    }
+    return provinces;
+  }
+
+  List<String> _cityChoices() {
+    final cities = PhilippineAddressCatalog.citiesFor(_selectedProvince);
+    final selected = _selectedCity?.trim() ?? '';
+    if (selected.isNotEmpty && !cities.contains(selected)) {
+      return [selected, ...cities];
+    }
+    return cities;
+  }
+
+  Future<void> _refreshBarangays() async {
+    final province = _selectedProvince;
+    final city = _selectedCity?.trim() ?? '';
+    final request = ++_barangayRequest;
+    if (!_showPhilippineSubdivisions ||
+        province == null ||
+        province == PhilippineAddressCatalog.other ||
+        city.isEmpty) {
+      if (!mounted || request != _barangayRequest) return;
+      setState(() {
+        _barangayLoading = false;
+        _barangayResolved = province == PhilippineAddressCatalog.other;
+        _barangayOptions = const [];
+      });
+      return;
+    }
+    setState(() => _barangayLoading = true);
+    try {
+      final list = await PhilippineAddressCatalog.barangaysFor(province, city);
+      if (!mounted || request != _barangayRequest) return;
+      setState(() {
+        _barangayLoading = false;
+        _barangayResolved = true;
+        _barangayOptions = list;
+        if (list.isEmpty) {
+          final saved = _selectedBarangay?.trim() ?? '';
+          if (saved.isNotEmpty && _barangayController.text.trim().isEmpty) {
+            _barangayController.text = saved;
+          }
+          _selectedBarangay = null;
+        } else if (_selectedBarangay != null &&
+            !list.contains(_selectedBarangay)) {
+          _selectedBarangay = null;
+        }
+      });
+    } catch (_) {
+      if (!mounted || request != _barangayRequest) return;
+      setState(() {
+        _barangayLoading = false;
+        _barangayResolved = true;
+        _barangayOptions = const [];
+      });
+    }
   }
 
   void _onNationalityChanged(String? nationality) {
@@ -642,7 +719,11 @@ class _SignupScreenState extends State<SignupScreen> {
     _selectedProvince = null;
     _selectedCity = null;
     _selectedBarangay = null;
+    _barangayOptions = const [];
+    _barangayLoading = false;
+    _barangayResolved = false;
     _barangayController.clear();
+    _otherCityController.clear();
   }
 
   void _clearInternationalAddressFields() {
@@ -662,6 +743,7 @@ class _SignupScreenState extends State<SignupScreen> {
 
   String _resolvedCityForSave() {
     if (_showPhilippineSubdivisions) {
+      if (_provinceIsOther) return _otherCityController.text.trim();
       return _selectedCity?.trim() ?? '';
     }
     if (_showInternationalAddressFields) {
@@ -687,37 +769,21 @@ class _SignupScreenState extends State<SignupScreen> {
     });
   }
 
-  List<String> _getCitiesForProvince(String? province) {
-    if (province == 'Misamis Occidental') {
-      return const [
-        'Aloran',
-        'Baliangao',
-        'Bonifacio',
-        'Calamba',
-        'Clarin',
-        'Concepcion',
-        'Don Victoriano Chiongbian',
-        'Jimenez',
-        'Lopez Jaena',
-        'Oroquieta City',
-        'Ozamiz City',
-        'Panaon',
-        'Plaridel',
-        'Sapang Dalaga',
-        'Sinacaban',
-        'Tangub City',
-        'Tudela',
-      ];
-    }
-    return const ['Select province first'];
-  }
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(_maybeRestorePendingEdit());
+      unawaited(_prepareSignupAddress());
     });
+  }
+
+  Future<void> _prepareSignupAddress() async {
+    await PhilippineAddressCatalog.ensureCitiesLoaded();
+    if (!mounted) return;
+    setState(() {});
+    await _maybeRestorePendingEdit();
+    if (!mounted) return;
+    await _refreshBarangays();
   }
 
   bool get _pendingEmailChanged {
@@ -817,13 +883,15 @@ class _SignupScreenState extends State<SignupScreen> {
     final barangay = (local?.barangay.isNotEmpty == true)
         ? local!.barangay
         : (t['barangay']?.toString() ?? '');
-    if (_selectedProvince == 'Misamis Occidental' &&
-        isMisamisOccidentalSignupCity(_selectedCity)) {
-      _selectedBarangay = barangay.isEmpty ? null : barangay;
-      _barangayController.clear();
-    } else {
+    if (_selectedProvince == PhilippineAddressCatalog.other) {
+      _otherCityController.text = _selectedCity ?? '';
+      _selectedCity = null;
       _selectedBarangay = null;
       _barangayController.text = barangay;
+    } else {
+      _otherCityController.clear();
+      _selectedBarangay = barangay.isEmpty ? null : barangay;
+      _barangayController.clear();
     }
 
     if (_selectedCountry != null && _selectedCountry != 'Philippines') {
@@ -893,6 +961,7 @@ class _SignupScreenState extends State<SignupScreen> {
     _confirmPasswordController.dispose();
     _confirmPasswordFocus.dispose();
     _barangayController.dispose();
+    _otherCityController.dispose();
     _foreignCityController.dispose();
     _foreignRegionController.dispose();
     _parentGuardianController.dispose();
@@ -1512,7 +1581,7 @@ class _SignupScreenState extends State<SignupScreen> {
       return 'Please select your country (Step 1).';
     }
     if (_showPhilippineSubdivisions) {
-      if (_selectedProvince == null || _selectedCity == null) {
+      if (_selectedProvince == null || _resolvedCityForSave().isEmpty) {
         return 'Please select province and city/municipality (Step 1).';
       }
       final barangayErr = _validateBarangayField(_selectedBarangay);
@@ -2871,9 +2940,18 @@ class _SignupScreenState extends State<SignupScreen> {
     final bottomPad = MediaQuery.paddingOf(context).bottom;
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
     final screenH = MediaQuery.sizeOf(context).height;
+    final textScaler = MediaQuery.textScalerOf(context);
     final compactHeader = screenH < 720;
     final logoSize = compactHeader ? 68.0 : 76.0;
-    final heroH = compactHeader ? 198.0 : (screenH * 0.24).clamp(210.0, 232.0);
+    final titleSize = compactHeader ? 22.0 : 26.0;
+    final heroContent = logoSize +
+        (compactHeader ? 4.0 : 8.0) +
+        (textScaler.scale(titleSize) * 1.35) +
+        2 +
+        (textScaler.scale(14) * 1.4);
+    // Grow with the status bar and text scale so the header column cannot
+    // paint past the orange hero.
+    final heroH = topPad + 2 + heroContent + 36;
 
     return PopScope(
       canPop: false,
@@ -2930,6 +3008,7 @@ class _SignupScreenState extends State<SignupScreen> {
                     Padding(
                       padding: EdgeInsets.fromLTRB(8, topPad + 2, 8, 24),
                       child: Column(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
                           SizedBox(
                             height: logoSize,
@@ -3661,114 +3740,25 @@ class _SignupScreenState extends State<SignupScreen> {
                       ),
               ),
               if (_showPhilippineSubdivisions) ...[
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _buildFormField(
-                        label: 'Province',
-                        required: true,
-                        child: DropdownButtonFormField<String>(
-                          value: _selectedProvince,
-                          isExpanded: true,
-                          dropdownColor: Colors.white,
-                          icon: const SizedBox.shrink(),
-                          iconSize: 0,
-                          style: _formValueTextStyle.copyWith(fontSize: 14),
-                          selectedItemBuilder: (context) =>
-                              _stringSelectedLabels(_provinces, fontSize: 14),
-                          hint: _dropdownHint('Province', fontSize: 14),
-                          decoration: _inputDecoration(hint: 'Province'),
-                          items: _stringDropdownItems(_provinces, fontSize: 14),
-                          validator: (v) => v == null ? 'Required' : null,
-                          onChanged: (v) {
-                            setState(() {
-                              _selectedProvince = v;
-                              _selectedCity = null;
-                              _selectedBarangay = null;
-                              _barangayController.clear();
-                            });
-                          },
-                        ),
+                _buildProvinceField(),
+                if (PhilippineAddressCatalog.loadError != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      'Full province list could not be loaded. Misamis Occidental is still available.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.3,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.red.shade700,
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _buildFormField(
-                        label: 'City/Municipality',
-                        required: true,
-                        child: DropdownButtonFormField<String>(
-                          value: _selectedCity,
-                          isExpanded: true,
-                          dropdownColor: Colors.white,
-                          icon: const SizedBox.shrink(),
-                          iconSize: 0,
-                          style: _formValueTextStyle.copyWith(fontSize: 14),
-                          selectedItemBuilder: (context) =>
-                              _stringSelectedLabels(
-                            _getCitiesForProvince(_selectedProvince),
-                            fontSize: 14,
-                          ),
-                          hint: _dropdownHint('City', fontSize: 14),
-                          decoration: _inputDecoration(hint: 'City'),
-                          items: _stringDropdownItems(
-                            _getCitiesForProvince(_selectedProvince),
-                            fontSize: 14,
-                          ),
-                          validator: (v) =>
-                              v == null || v == 'Select province first'
-                              ? 'Required'
-                              : null,
-                          onChanged: (v) {
-                            setState(() {
-                              _selectedCity = v;
-                              _selectedBarangay = null;
-                              _barangayController.clear();
-                            });
-                          },
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
+                  ),
+                _buildCityField(),
                 _buildFormField(
                   label: 'Barangay',
                   required: true,
-                  child: _useSelectableBarangay
-                      ? DropdownButtonFormField<String>(
-                          value: _selectedBarangay,
-                          isExpanded: true,
-                          dropdownColor: Colors.white,
-                          icon: const SizedBox.shrink(),
-                          iconSize: 0,
-                          style: _formValueTextStyle.copyWith(fontSize: 14),
-                          selectedItemBuilder: (context) =>
-                              _stringSelectedLabels(
-                            barangaysForMisamisOccidentalCity(_selectedCity),
-                            fontSize: 14,
-                          ),
-                          hint: _dropdownHint('Select barangay', fontSize: 14),
-                          decoration: _inputDecoration(hint: 'Select barangay'),
-                          items: _stringDropdownItems(
-                            barangaysForMisamisOccidentalCity(_selectedCity),
-                            fontSize: 14,
-                          ),
-                          validator: _validateBarangayField,
-                          onChanged: (v) =>
-                              setState(() => _selectedBarangay = v),
-                        )
-                      : TextFormField(
-                          controller: _barangayController,
-                          textInputAction: TextInputAction.done,
-                          onFieldSubmitted: (_) =>
-                              _submitCurrentStepFromKeyboard(),
-                          onEditingComplete: _submitCurrentStepFromKeyboard,
-                          style: _formValueTextStyle.copyWith(fontSize: 14),
-                          decoration: _inputDecoration(hint: 'e.g. Poblacion'),
-                          textCapitalization: TextCapitalization.words,
-                          validator: _validateBarangayField,
-                        ),
+                  child: _buildBarangayField(),
                 ),
               ],
               if (_showInternationalAddressFields) ...[
@@ -3875,8 +3865,8 @@ class _SignupScreenState extends State<SignupScreen> {
       backgroundColor: TouristSignupChrome.heroOrange,
       foregroundColor: Colors.white,
       elevation: 0,
-      minimumSize: const Size(128, 48),
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+      minimumSize: const Size(0, 48),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     );
 
@@ -3886,45 +3876,46 @@ class _SignupScreenState extends State<SignupScreen> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SizedBox(
-                width: 24,
-                height: 24,
-                child: Checkbox(
-                  value: _receiveUpdates,
-                  onChanged: (v) =>
-                      setState(() => _receiveUpdates = v ?? false),
-                  activeColor: AppTheme.brandOrange,
-                  checkColor: Colors.white,
-                  fillColor: WidgetStateProperty.resolveWith((states) {
-                    if (states.contains(WidgetState.selected)) {
-                      return AppTheme.brandOrange;
-                    }
-                    return _isDesktopGlass
-                        ? Colors.white.withValues(alpha: 0.2)
-                        : null;
-                  }),
-                  side: BorderSide(
-                    color: _isDesktopGlass
-                        ? Colors.white.withValues(alpha: 0.75)
-                        : _inputBorder,
-                    width: 1.5,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(4),
-                  ),
+              Checkbox(
+                value: _receiveUpdates,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity.compact,
+                onChanged: (v) =>
+                    setState(() => _receiveUpdates = v ?? false),
+                activeColor: AppTheme.brandOrange,
+                checkColor: Colors.white,
+                fillColor: WidgetStateProperty.resolveWith((states) {
+                  if (states.contains(WidgetState.selected)) {
+                    return AppTheme.brandOrange;
+                  }
+                  return _isDesktopGlass
+                      ? Colors.white.withValues(alpha: 0.2)
+                      : null;
+                }),
+                side: BorderSide(
+                  color: _isDesktopGlass
+                      ? Colors.white.withValues(alpha: 0.75)
+                      : _inputBorder,
+                  width: 1.5,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(4),
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  'I would like to receive updates and promotions (optional)',
-                  style: TextStyle(
-                    fontSize: 14,
-                    height: 1.4,
-                    fontWeight: FontWeight.w600,
-                    color: _isDesktopGlass
-                        ? Colors.white.withValues(alpha: 0.95)
-                        : _textDark,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    'I would like to receive updates and promotions (optional)',
+                    style: TextStyle(
+                      fontSize: 14,
+                      height: 1.4,
+                      fontWeight: FontWeight.w600,
+                      color: _isDesktopGlass
+                          ? Colors.white.withValues(alpha: 0.95)
+                          : _textDark,
+                    ),
                   ),
                 ),
               ),
@@ -3973,56 +3964,236 @@ class _SignupScreenState extends State<SignupScreen> {
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
                 ),
               ),
-            const Spacer(),
-            FilledButton(
-              onPressed: isRegistrationSubmit
-                  ? (_isSubmitting ? null : _submitForm)
-                  : _nextStep,
-              style: nextStyle,
-              child: isRegistrationSubmit && _isSubmitting
-                  ? Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const SizedBox(
-                          height: 18,
-                          width: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor:
-                                AlwaysStoppedAnimation<Color>(Colors.white),
-                          ),
-                        ),
-                        if (_submitPhase != null) ...[
-                          const SizedBox(width: 10),
-                          Flexible(
-                            child: Text(
-                              _submitPhase!,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
+            const SizedBox(width: 8),
+            Flexible(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton(
+                  onPressed: isRegistrationSubmit
+                      ? (_isSubmitting ? null : _submitForm)
+                      : _nextStep,
+                  style: nextStyle,
+                  child: isRegistrationSubmit && _isSubmitting
+                      ? Row(
+                          children: [
+                            const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.white,
+                                ),
                               ),
                             ),
+                            if (_submitPhase != null) ...[
+                              const SizedBox(width: 10),
+                              Flexible(
+                                child: Text(
+                                  _submitPhase!,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        )
+                      : Text(
+                          isRegistrationSubmit
+                              ? (_editingPendingSignup
+                                  ? 'Save & continue verification'
+                                  : 'Submit Registration')
+                              : 'Next',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
                           ),
-                        ],
-                      ],
-                    )
-                  : Text(
-                      isRegistrationSubmit
-                          ? (_editingPendingSignup
-                              ? 'Save & continue verification'
-                              : 'Submit Registration')
-                          : 'Next',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 15,
-                      ),
-                    ),
+                        ),
+                ),
+              ),
             ),
           ],
         ),
       ],
+    );
+  }
+
+  Widget _buildProvinceField() {
+    final waiting = !PhilippineAddressCatalog.citiesReady &&
+        PhilippineAddressCatalog.loadError == null;
+    if (waiting) {
+      return _buildFormField(
+        label: 'Province',
+        required: true,
+        child: TextFormField(
+          enabled: false,
+          style: _formValueTextStyle.copyWith(fontSize: 14),
+          decoration: _inputDecoration(hint: 'Loading provinces…'),
+          validator: (_) => 'Required',
+        ),
+      );
+    }
+    final provinces = _provinceChoices();
+    return _buildFormField(
+      label: 'Province',
+      required: true,
+      child: AnchoredOptionField(
+        options: provinces,
+        value: provinces.contains(_selectedProvince) ? _selectedProvince : null,
+        hintText: 'Select a province',
+        style: _formValueTextStyle.copyWith(fontSize: 14),
+        decoration: _inputDecoration(hint: 'Province'),
+        validator: (value) {
+          final typed = value?.trim() ?? '';
+          if (typed.isEmpty) return 'Required';
+          final known = provinces.any(
+            (option) => option.toLowerCase() == typed.toLowerCase(),
+          );
+          return known ? null : 'Select a province';
+        },
+        onChanged: (value) {
+          if (value == _selectedProvince) return;
+          setState(() {
+            _selectedProvince = value;
+            _selectedCity = null;
+            _selectedBarangay = null;
+            _barangayOptions = const [];
+            _barangayLoading = false;
+            _barangayResolved = value == PhilippineAddressCatalog.other;
+            _barangayController.clear();
+            _otherCityController.clear();
+          });
+          unawaited(_refreshBarangays());
+        },
+      ),
+    );
+  }
+
+  Widget _buildCityField() {
+    if (_provinceIsOther) {
+      return _buildFormField(
+        label: 'City/Municipality',
+        required: true,
+        child: TextFormField(
+          controller: _otherCityController,
+          textInputAction: TextInputAction.next,
+          style: _formValueTextStyle.copyWith(fontSize: 14),
+          decoration: _inputDecoration(hint: 'City or municipality'),
+          textCapitalization: TextCapitalization.words,
+          validator: (value) =>
+              value == null || value.trim().isEmpty ? 'Required' : null,
+        ),
+      );
+    }
+    final waiting = _selectedProvince != null &&
+        _selectedProvince != PhilippineAddressCatalog.misamisOccidental &&
+        !PhilippineAddressCatalog.citiesReady;
+    if (_selectedProvince == null || waiting) {
+      return _buildFormField(
+        label: 'City/Municipality',
+        required: true,
+        child: TextFormField(
+          enabled: false,
+          style: _formValueTextStyle.copyWith(fontSize: 14),
+          decoration: _inputDecoration(
+            hint: _selectedProvince == null
+                ? 'Select province first'
+                : 'Loading cities…',
+          ),
+          validator: (_) => 'Required',
+        ),
+      );
+    }
+    final cities = _cityChoices();
+    return _buildFormField(
+      label: 'City/Municipality',
+      required: true,
+      child: AnchoredOptionField(
+        key: ValueKey('ph-city|$_selectedProvince'),
+        options: cities,
+        value: cities.contains(_selectedCity) ? _selectedCity : null,
+        hintText: 'Select a city or municipality',
+        style: _formValueTextStyle.copyWith(fontSize: 14),
+        decoration: _inputDecoration(hint: 'Select city or municipality'),
+        validator: (value) {
+          final typed = value?.trim() ?? '';
+          if (typed.isEmpty) return 'Required';
+          final known = cities.any(
+            (option) => option.toLowerCase() == typed.toLowerCase(),
+          );
+          return known ? null : 'Select a city or municipality';
+        },
+        onChanged: (value) {
+          if (value == _selectedCity) return;
+          setState(() {
+            _selectedCity = value;
+            _selectedBarangay = null;
+            _barangayController.clear();
+            _barangayOptions = const [];
+            _barangayResolved = false;
+            _barangayLoading = value != null && value.trim().isNotEmpty;
+          });
+          unawaited(_refreshBarangays());
+        },
+      ),
+    );
+  }
+
+  Widget _buildBarangayField() {
+    if (_provinceIsOther ||
+        (_barangayResolved &&
+            !_barangayLoading &&
+            _barangayOptions.isEmpty &&
+            _selectedCity != null)) {
+      return TextFormField(
+        controller: _barangayController,
+        textInputAction: TextInputAction.done,
+        onFieldSubmitted: (_) => _submitCurrentStepFromKeyboard(),
+        onEditingComplete: _submitCurrentStepFromKeyboard,
+        style: _formValueTextStyle.copyWith(fontSize: 14),
+        decoration: _inputDecoration(
+          hint: _selectedProvince == null ? 'Select province first' : 'e.g. Poblacion',
+        ),
+        textCapitalization: TextCapitalization.words,
+        validator: _validateBarangayField,
+      );
+    }
+    if (_selectedProvince == null || _selectedCity == null || _barangayLoading) {
+      return TextFormField(
+        enabled: false,
+        style: _formValueTextStyle.copyWith(fontSize: 14),
+        decoration: _inputDecoration(
+          hint: _selectedCity == null ? 'Select city first' : 'Loading barangays…',
+        ),
+        validator: _validateBarangayField,
+      );
+    }
+    final options = _barangayOptions;
+    return AnchoredOptionField(
+      key: ValueKey('brgy|$_selectedProvince|$_selectedCity'),
+      options: options,
+      value: options.contains(_selectedBarangay) ? _selectedBarangay : null,
+      hintText: 'Select a barangay',
+      style: _formValueTextStyle.copyWith(fontSize: 14),
+      decoration: _inputDecoration(hint: 'Select barangay'),
+      validator: (value) {
+        final typed = value?.trim() ?? '';
+        if (typed.isEmpty) return 'Select your barangay';
+        final known = options.any(
+          (option) => option.toLowerCase() == typed.toLowerCase(),
+        );
+        return known ? null : 'Select your barangay';
+      },
+      onChanged: (value) {
+        if (value == _selectedBarangay) return;
+        setState(() => _selectedBarangay = value);
+      },
     );
   }
 

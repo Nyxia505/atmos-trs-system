@@ -43,6 +43,7 @@ abstract final class GuestStartupRoutes {
 
   static const Set<String> signedInDestinations = {
     '/dashboard',
+    '/landing',
     '/verify-otp',
     '/qr-resume',
     '/tourist-qr-success',
@@ -58,6 +59,7 @@ abstract final class GuestStartupRoutes {
   ///
   /// Phone-camera QR (no app installed) always opens [qrEntry] so the tourist
   /// can Log In or Create Account immediately — not the marketing landing.
+  /// After auth on web they continue to Landing + install popup (X = web only).
   static String unauthenticatedRoute({
     required bool isWeb,
     required bool hasPendingQr,

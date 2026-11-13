@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:convert';
 
 import 'package:atmos_trs_system/config/app_theme.dart';
@@ -46,6 +47,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
   bool _otpVerified = false;
   bool _verificationResolved = false;
   bool _uploadingPhoto = false;
+  bool _photoSaveInFlight = false;
   Uint8List? _pendingPhotoBytes;
   final ImagePicker _imagePicker = ImagePicker();
 
@@ -90,7 +92,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
   }
 
   Future<void> _changeProfilePhoto() async {
-    if (_uploadingPhoto) return;
+    if (_photoSaveInFlight) return;
     final uid =
         AuthConfig.currentUserUid ??
         FirebaseAuth.instance.currentUser?.uid ??
@@ -139,9 +141,9 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
       } else {
         final picked = await _imagePicker.pickImage(
           source: source,
-          maxWidth: 1200,
-          maxHeight: 1200,
-          imageQuality: 88,
+          maxWidth: 720,
+          maxHeight: 720,
+          imageQuality: 72,
           preferredCameraDevice: CameraDevice.front,
         );
         if (picked != null) bytes = await picked.readAsBytes();
@@ -161,33 +163,39 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
     await _uploadProfilePhoto(uid, bytes);
   }
 
+  /// Drops the in-memory preview once the saved photo is in the image cache.
+  Future<void> _releasePreviewAfterCache(String url) async {
+    try {
+      if (!mounted) return;
+      await precacheImage(NetworkImage(url), context)
+          .timeout(const Duration(seconds: 6));
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() => _pendingPhotoBytes = null);
+  }
+
   /// Shows [bytes] on the avatar right away, then saves in the background.
   Future<void> _uploadProfilePhoto(String uid, Uint8List bytes) async {
     final messenger = ScaffoldMessenger.of(context);
     messenger.hideCurrentSnackBar();
-    setState(() {
-      _pendingPhotoBytes = bytes;
-      _uploadingPhoto = true;
-    });
+    setState(() => _pendingPhotoBytes = bytes);
+    _photoSaveInFlight = true;
+    // Paint the new photo before compress and upload start.
+    await WidgetsBinding.instance.endOfFrame;
     try {
       final result = await TouristProfilePhotoService.uploadBytes(
         uid: uid,
         rawBytes: bytes,
       );
       final url = result.profilePhotoUrl;
-      if (url != null && url.isNotEmpty && mounted) {
-        // Keep the local preview until the network copy is ready (no flash).
-        try {
-          await precacheImage(NetworkImage(url), context)
-              .timeout(const Duration(seconds: 8));
-        } catch (_) {}
-      }
       if (!mounted) return;
       setState(() {
         _userProfile = UserProfileStorage.cachedProfile ?? _userProfile;
-        _pendingPhotoBytes = null;
-        _uploadingPhoto = false;
+        if (url == null || url.isEmpty) _pendingPhotoBytes = null;
       });
+      if (url != null && url.isNotEmpty) {
+        unawaited(_releasePreviewAfterCache(url));
+      }
       messenger.showSnackBar(
         SnackBar(
           content: const Text('Profile photo updated.'),
@@ -199,10 +207,7 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
     } catch (e) {
       debugPrint('[ProfilePhoto] save failed: $e');
       if (!mounted) return;
-      setState(() {
-        _pendingPhotoBytes = null;
-        _uploadingPhoto = false;
-      });
+      setState(() => _pendingPhotoBytes = null);
       final reason = e is StateError
           ? e.message
           : 'Could not save your photo. Check your internet connection.';
@@ -216,13 +221,15 @@ class _ProfileTabPageState extends State<ProfileTabPage> {
             label: 'Retry',
             textColor: Colors.white,
             onPressed: () {
-              if (mounted && !_uploadingPhoto) {
+              if (mounted && !_photoSaveInFlight) {
                 _uploadProfilePhoto(uid, bytes);
               }
             },
           ),
         ),
       );
+    } finally {
+      _photoSaveInFlight = false;
     }
   }
 

@@ -23,7 +23,7 @@ Until verified, Android may still offer “Open with ATMOS” / browser chooser.
 | Case | Behavior |
 |------|----------|
 | App installed | App Link → pending QR saved → `/qr-entry` (guest) or `/qr-resume` (signed-in tourist) |
-| No app | Browser opens `/checkin?…` → pending QR saved → **`/qr-entry` Log In / Create Account** (not marketing landing) → after auth, resume check-in |
+| No app | Browser opens `/checkin?…` → pending QR saved → **`/qr-entry` Log In / Create Account** → after auth → **Landing** + install popup (VR Tour / Trip Planner; **X** = continue on website only) |
 | In-app Scan tab | Unauthenticated scans go to `/qr-entry`; signed-in tourists continue check-in |
 
 Legacy `#/landing?…` QRs still parse on web.

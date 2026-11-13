@@ -231,13 +231,15 @@ String? vrUrlForSpotId(String? spotId, {String? spotName}) {
   return null;
 }
 
-/// Prefer canonical Clear Pano URL for known spots, then an explicit [vrLink].
+/// Saved [vrLink] wins. Known Clear Pano URLs are only the fallback.
 String? resolveVrTourUrl({String? vrLink, String? spotId, String? spotName}) {
-  final known = vrUrlForSpotId(spotId, spotName: spotName);
-  if (known != null) return known;
   final trimmed = vrLink?.trim();
-  if (trimmed != null && trimmed.isNotEmpty) return trimmed;
-  return null;
+  if (trimmed != null &&
+      trimmed.isNotEmpty &&
+      !isTiinyOwnerPreviewUrl(trimmed)) {
+    return trimmed;
+  }
+  return vrUrlForSpotId(spotId, spotName: spotName);
 }
 
 /// Merge Firestore spot rows with [kKnownVrDestinations] so OPTACA always lists

@@ -1,11 +1,23 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 
-/// Road directions via Firebase Cloud Function (web needs this for CORS).
+/// Cloudflare Worker that proxies OpenRouteService (primary road geometry).
 ///
-/// Web: set true after billing is linked and you deploy:
-/// `firebase deploy --only functions:getDirectionsHttp --project atmos-trs-system`
-/// Android uses Google Directions API directly (no Cloud Function needed).
-const bool directionsUseDeployedCloudFunction = false;
+/// Set after `npx wrangler deploy` in `cloudflare-workers/ors-directions`, e.g.
+/// `https://atmos-ors-directions.<account>.workers.dev/directions`
+/// Or pass `--dart-define=ORS_DIRECTIONS_PROXY_URL=…` at build time.
+/// Never put the ORS API key in Flutter — only this public Worker URL.
+const String kOrsDirectionsProxyUrl = String.fromEnvironment(
+  'ORS_DIRECTIONS_PROXY_URL',
+  defaultValue: '',
+);
+
+bool get kHasOrsDirectionsProxy => kOrsDirectionsProxyUrl.trim().isNotEmpty;
+
+/// Road directions via Firebase Cloud Function (optional Google fallback).
+///
+/// Web: used only after ORS proxy / OSRM fail. Needs Blaze + Google Billing.
+/// Deploy: `firebase deploy --only functions:getDirectionsHttp --project atmos-trs-system`
+const bool directionsUseDeployedCloudFunction = true;
 
 /// Trip Route map: when false, uses flutter_map (OpenStreetMap / CARTO).
 /// When true, uses Google Maps (requires Maps SDK + billing).
