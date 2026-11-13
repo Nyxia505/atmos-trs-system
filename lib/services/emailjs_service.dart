@@ -78,16 +78,18 @@ class EmailjsService {
           'lib/config/emailjs_config.dart (Account → API keys → Public Key).';
     }
 
-    // Soft transactional copy — avoid ALL-CAPS / “URGENT” / link bait (spam triggers).
-    // Inbox vs Spam still depends on EmailJS From-domain SPF/DKIM (see EmailjsConfig).
-    final subject = 'Your ATMOS-TRS verification code';
+    // Soft transactional copy — avoid "OTP" / ALL-CAPS / URGENT (spam triggers).
+    // Prefer Cloud Function SMTP path when available; EmailJS is fallback only.
+    final subject = 'Complete your ATMOS-TRS registration';
+    final safeName = toName.replaceAll('<', '').replaceAll('>', '');
     final message =
-        'Hi $toName,\n\n'
-        'Here is your ATMOS-TRS verification code:\n\n'
+        'Hi $safeName,\n\n'
+        'Thanks for registering with ATMOS-TRS Tourism. '
+        'Use this one-time number to finish signup:\n\n'
         '$otp\n\n'
-        'Enter this code in the app. It expires in 5 minutes.\n\n'
-        'If you did not request this, you can ignore this email.\n\n'
-        'Thanks,\n'
+        'Enter it in the app within 5 minutes.\n\n'
+        'If you did not start this, you can ignore this message.\n\n'
+        'Regards,\n'
         'ATMOS-TRS Tourism';
     final templateParams = <String, String>{
       'to_email': toEmail,
@@ -101,15 +103,19 @@ class EmailjsService {
       'reply_to': 'atmostrs@gmail.com',
       'message': message,
       'message_html':
-          '<p>Hi ${toName.replaceAll('<', '').replaceAll('>', '')},</p>'
-          '<p>Here is your ATMOS-TRS verification code:</p>'
-          '<p style="font-size:28px;font-weight:700;letter-spacing:6px;'
-          'font-family:monospace;">$otp</p>'
-          '<p>Enter this code in the app. It expires in 5 minutes.</p>'
-          '<p style="color:#666;font-size:13px;">If you did not request this, '
-          'you can ignore this email.</p>'
-          '<p>Thanks,<br/>ATMOS-TRS Tourism</p>',
-      'preheader': 'Your ATMOS-TRS code · expires in 5 minutes',
+          '<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;'
+          'color:#222;line-height:1.5;">'
+          '<p>Hi $safeName,</p>'
+          '<p>Thanks for registering with ATMOS-TRS Tourism. '
+          'Use this one-time number to finish signup:</p>'
+          '<p style="font-size:26px;font-weight:700;letter-spacing:4px;'
+          'font-family:Consolas,monospace;margin:18px 0;">$otp</p>'
+          '<p>Enter it in the app within 5 minutes.</p>'
+          '<p style="color:#666;font-size:13px;">If you did not start this, '
+          'you can ignore this message.</p>'
+          '<p>Regards,<br/>ATMOS-TRS Tourism</p>'
+          '</div>',
+      'preheader': 'Finish your registration in the app within 5 minutes.',
     };
 
     String? accessForPayload() {

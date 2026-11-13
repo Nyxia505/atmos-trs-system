@@ -2941,8 +2941,13 @@ class _SignupScreenState extends State<SignupScreen> {
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
     final screenH = MediaQuery.sizeOf(context).height;
     final textScaler = MediaQuery.textScalerOf(context);
-    final compactHeader = screenH < 720;
-    final logoSize = compactHeader ? 68.0 : 76.0;
+    final screenW = MediaQuery.sizeOf(context).width;
+    final compactHeader = screenH < 720 || screenW < 380;
+    final tripBrand = _tripPlannerSignup;
+    // Trip Plan brand is taller (logo + title + subtitle); give hero room.
+    final logoSize = tripBrand
+        ? (compactHeader ? 56.0 : 64.0)
+        : (compactHeader ? 68.0 : 76.0);
     final titleSize = compactHeader ? 22.0 : 26.0;
     final heroContent = logoSize +
         (compactHeader ? 4.0 : 8.0) +
@@ -2950,8 +2955,10 @@ class _SignupScreenState extends State<SignupScreen> {
         2 +
         (textScaler.scale(14) * 1.4);
     // Grow with the status bar and text scale so the header column cannot
-    // paint past the orange hero.
-    final heroH = topPad + 2 + heroContent + 36;
+    // paint past the orange hero. Trip Plan uses a taller fixed band.
+    final heroH = tripBrand
+        ? (compactHeader ? 236.0 : (screenH * 0.30).clamp(248.0, 280.0))
+        : (topPad + 2 + heroContent + 36);
 
     return PopScope(
       canPop: false,
@@ -3010,57 +3017,131 @@ class _SignupScreenState extends State<SignupScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          SizedBox(
-                            height: logoSize,
-                            child: Stack(
-                              alignment: Alignment.center,
-                              children: [
-                                Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: IconButton(
-                                    icon: const Icon(
-                                      Icons.arrow_back_ios_new_rounded,
-                                      color: Colors.white,
-                                      size: 18,
-                                    ),
-                                    onPressed: _onSignupBack,
-                                    tooltip: 'Back',
-                                    padding: EdgeInsets.zero,
-                                    constraints: const BoxConstraints(
-                                      minWidth: 44,
-                                      minHeight: 44,
+                          if (tripBrand)
+                            Expanded(
+                              child: Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  Align(
+                                    alignment: Alignment.topLeft,
+                                    child: IconButton(
+                                      icon: const Icon(
+                                        Icons.arrow_back_ios_new_rounded,
+                                        color: Colors.white,
+                                        size: 18,
+                                      ),
+                                      onPressed: _onSignupBack,
+                                      tooltip: 'Back',
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(
+                                        minWidth: 44,
+                                        minHeight: 44,
+                                      ),
                                     ),
                                   ),
-                                ),
-                                TouristSignupBrandRow(
-                                  onDark: true,
-                                  tripPlanner: _tripPlannerSignup,
-                                  height: logoSize,
-                                ),
-                              ],
+                                  Positioned.fill(
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 40,
+                                      ),
+                                      child: FittedBox(
+                                        fit: BoxFit.scaleDown,
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            TouristSignupBrandRow(
+                                              onDark: true,
+                                              tripPlanner: true,
+                                              height: compactHeader
+                                                  ? 118
+                                                  : 132,
+                                            ),
+                                            SizedBox(
+                                              height: compactHeader ? 6 : 10,
+                                            ),
+                                            Text(
+                                              'Step $_displayStepNumber',
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(
+                                                fontSize:
+                                                    compactHeader ? 22 : 26,
+                                                fontWeight: FontWeight.w800,
+                                                color: Colors.white,
+                                                letterSpacing: 0.2,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              'Registration',
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                color: Colors.white
+                                                    .withValues(alpha: 0.94),
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else ...[
+                            SizedBox(
+                              height: logoSize,
+                              child: Stack(
+                                alignment: Alignment.center,
+                                children: [
+                                  Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: IconButton(
+                                      icon: const Icon(
+                                        Icons.arrow_back_ios_new_rounded,
+                                        color: Colors.white,
+                                        size: 18,
+                                      ),
+                                      onPressed: _onSignupBack,
+                                      tooltip: 'Back',
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(
+                                        minWidth: 44,
+                                        minHeight: 44,
+                                      ),
+                                    ),
+                                  ),
+                                  TouristSignupBrandRow(
+                                    onDark: true,
+                                    tripPlanner: false,
+                                    height: logoSize,
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                          SizedBox(height: compactHeader ? 4 : 8),
-                          Text(
-                            'Step $_displayStepNumber',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: compactHeader ? 22 : 26,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.white,
-                              letterSpacing: 0.2,
+                            SizedBox(height: compactHeader ? 4 : 8),
+                            Text(
+                              'Step $_displayStepNumber',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: compactHeader ? 22 : 26,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white,
+                                letterSpacing: 0.2,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            'Registration',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Colors.white.withValues(alpha: 0.94),
-                              fontWeight: FontWeight.w600,
+                            const SizedBox(height: 2),
+                            Text(
+                              'Registration',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.white.withValues(alpha: 0.94),
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
-                          ),
+                          ],
                         ],
                       ),
                     ),

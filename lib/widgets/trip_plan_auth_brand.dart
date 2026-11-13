@@ -22,12 +22,16 @@ class TripPlanAuthBrand extends StatelessWidget {
     final subColor = onDark
         ? Colors.white.withValues(alpha: 0.92)
         : const Color(0xFF666666);
-    return Column(
+    final icon = compact ? 72.0 : logoSize;
+    final title = compact ? 32.0 : titleSize;
+    final sub = compact ? 12.0 : 13.0;
+
+    final content = Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         TripPlanAppIcon(
-          width: compact ? 72 : logoSize,
-          height: compact ? 72 : logoSize,
+          width: icon,
+          height: icon,
         ),
         SizedBox(height: compact ? 6 : 8),
         Text(
@@ -36,7 +40,7 @@ class TripPlanAuthBrand extends StatelessWidget {
           style: TextStyle(
             fontFamily: 'HolidayCalling',
             color: titleColor,
-            fontSize: compact ? 32 : titleSize,
+            fontSize: title,
             fontWeight: FontWeight.w400,
             height: 0.95,
           ),
@@ -47,11 +51,36 @@ class TripPlanAuthBrand extends StatelessWidget {
           textAlign: TextAlign.center,
           style: TextStyle(
             color: subColor,
-            fontSize: compact ? 12 : 13,
+            fontSize: sub,
             fontWeight: FontWeight.w600,
+            height: 1.15,
           ),
         ),
       ],
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final boundedH = constraints.hasBoundedHeight &&
+            constraints.maxHeight.isFinite &&
+            constraints.maxHeight < double.infinity;
+        final boundedW = constraints.hasBoundedWidth &&
+            constraints.maxWidth.isFinite &&
+            constraints.maxWidth < double.infinity;
+
+        if (!boundedH && !boundedW) return content;
+
+        return FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.center,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: boundedW ? constraints.maxWidth : 360,
+            ),
+            child: content,
+          ),
+        );
+      },
     );
   }
 }

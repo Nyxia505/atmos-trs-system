@@ -67,27 +67,32 @@ class OtpDeliveryService {
       if (Firebase.apps.isEmpty) {
         return 'Firebase not ready';
       }
+      // Deferred signup has no Auth — use public SMTP-first callable.
+      // Signed-in resend uses sendOtpEmail (also SMTP-first server-side).
+      final signedIn = FirebaseAuth.instance.currentUser != null;
+      final fnName = signedIn ? 'sendOtpEmail' : 'sendSignupOtpEmail';
       try {
         final callable = _functions.httpsCallable(
-          'sendOtpEmail',
+          fnName,
           options: HttpsCallableOptions(
-            timeout: const Duration(seconds: 12),
+            timeout: const Duration(seconds: 20),
           ),
         );
         final payload = <String, dynamic>{
           'toEmail': deliverTo,
           'toName': toName,
           'otp': otp,
+          'purpose': 'verification',
         };
-        if (authEmail.isNotEmpty && authEmail != deliverTo) {
+        if (signedIn && authEmail.isNotEmpty && authEmail != deliverTo) {
           payload['inboxEmail'] = deliverTo;
         }
         await callable.call<void>(payload);
-        debugPrint('[OTP] Email sent via Cloud Function to=$deliverTo');
+        debugPrint('[OTP] Email sent via Cloud Function $fnName to=$deliverTo');
         return null;
       } on FirebaseFunctionsException catch (e) {
         debugPrint(
-          '[OTP] Cloud Function sendOtpEmail failed: ${e.code} ${e.message}',
+          '[OTP] Cloud Function $fnName failed: ${e.code} ${e.message}',
         );
         return e.message ?? e.code;
       } catch (e, st) {
@@ -96,20 +101,17 @@ class OtpDeliveryService {
       }
     }
 
-    // Prefer EmailJS (works without Auth). Cloud Function needs signed-in user
-    // and is inbox-only (must never FCM-push OTP — that leaked to stale tokens).
+    // Prefer Cloud Function (Gmail SMTP → EmailJS) for Inbox placement.
+    // Client EmailJS alone often lands in Spam for free Gmail relays.
+    final cfErr = await tryCloudFunction();
+    if (cfErr == null) return null;
+    debugPrint('[OTP] Cloud Function failed: $cfErr — trying client EmailJS');
     final emailJsErr = await tryEmailJs();
     if (emailJsErr == null) {
       debugPrint('[OTP] Email sent via client EmailJS to=$deliverTo');
       return null;
     }
-    debugPrint('[OTP] EmailJS failed: $emailJsErr — trying Cloud Function');
-    if (FirebaseAuth.instance.currentUser == null) {
-      return emailJsErr;
-    }
-    final cfErr = await tryCloudFunction();
-    if (cfErr == null) return null;
-    return emailJsErr;
+    return cfErr;
   }
 
   /// SMS to the tourist's own number (Cloud Function + Semaphore when configured).

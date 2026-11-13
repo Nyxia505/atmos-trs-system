@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -59,6 +60,35 @@ class _LoginScreenState extends State<LoginScreen> {
         email: email,
         password: password,
       );
+
+      // Firestore status gate (used when Cloud Functions cannot disable Auth).
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null && uid.isNotEmpty) {
+        try {
+          final userSnap = await FirebaseFirestore.instance
+              .collection('users')
+              .doc(uid)
+              .get();
+          final status =
+              (userSnap.data()?['status'] ?? '').toString().trim().toLowerCase();
+          if (status == 'inactive' ||
+              status == 'disabled' ||
+              status == 'deactivated') {
+            await FirebaseAuth.instance.signOut();
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'This account is deactivated. Contact the Provincial Tourism Office.',
+                ),
+              ),
+            );
+            return;
+          }
+        } catch (_) {
+          // If profile read fails, continue — role gates still apply.
+        }
+      }
 
       final openAdminDashboard = await resolveOpenAdminDashboardAfterLogin();
 

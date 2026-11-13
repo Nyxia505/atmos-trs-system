@@ -31,7 +31,14 @@ OTP_INBOX_FROM_NAME=ATMOS-TRS Tourism
 firebase deploy --only functions:sendOtpEmail
 ```
 
-If SMTP is not configured, the function falls back to **EmailJS**. In the EmailJS dashboard, set your OTP template **Subject** to `Complete your ATMOS-TRS registration` and use `{{message}}` or `{{otp}}` in the body (avoid “OTP” in the subject — spam filters flag it).
+If SMTP is not configured, the function falls back to **EmailJS**. In the EmailJS dashboard:
+
+1. Set the template **Subject** to `{{subject}}` (app sends `Complete your ATMOS-TRS registration`).
+2. Use `{{message}}` / `{{message_html}}` / `{{otp}}` in the body.
+3. Avoid hard-coded “OTP CODE!!!” in the template — spam filters flag it.
+4. From Name: `{{from_name}}` or “ATMOS-TRS Tourism”.
+
+Deferred signup (no Auth yet) calls **`sendSignupOtpEmail`** (SMTP-first). Signed-in resend uses **`sendOtpEmail`**.
 
 ---
 

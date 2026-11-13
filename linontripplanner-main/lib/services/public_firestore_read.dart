@@ -39,7 +39,16 @@ Future<PublicFirestoreDocs> fetchPublicFirestoreCollection(
   var restAlreadyDenied = false;
   if (kIsWeb) {
     try {
-      return await _fetchPublicCollectionViaRest(collectionPath);
+      final restDocs = await _fetchPublicCollectionViaRest(collectionPath);
+      // Empty REST can be a false negative (API key / page edge). Prefer SDK
+      // so curated catalogs like featured_spots are not wiped mid-session.
+      if (restDocs.docs.isNotEmpty) return restDocs;
+      if (kDebugMode) {
+        debugPrint(
+          'fetchPublicFirestoreCollection: REST empty "$collectionPath" '
+          '— trying signed-in SDK',
+        );
+      }
     } catch (e) {
       restAlreadyDenied = e.toString().contains('permission-denied') ||
           e.toString().contains('403');

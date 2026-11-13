@@ -3289,6 +3289,12 @@ class _FeaturedListTabState extends State<AdminFeaturedSpotsTab> {
         featuredSpots.removeWhere((s) => s.name == spot.name);
       }
       deleteFeaturedSpotFromFirestoreByName(spot.name).catchError((_) {});
+      if (featuredSpots.isEmpty) {
+        clearStickyCuratedFeaturedSpots();
+      } else {
+        rememberCuratedFeaturedSpots(featuredSpots);
+      }
+      tourismCatalogRevision.value++;
       widget.onChanged();
       if (mounted) setState(() {});
     });
@@ -7149,6 +7155,8 @@ class _AdminFeaturedFormPageState extends State<AdminFeaturedFormPage> {
       } else {
         featuredSpots.add(spot);
       }
+      rememberCuratedFeaturedSpots(featuredSpots);
+      tourismCatalogRevision.value++;
       if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) {

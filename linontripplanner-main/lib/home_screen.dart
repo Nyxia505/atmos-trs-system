@@ -70,20 +70,25 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool get _isSearching => _searchQuery.trim().isNotEmpty;
 
-  /// Featured Spots — weighted popularity (not personal history).
+  /// Featured Spots — OPTACA admin catalog only (never swap to algo mid-session).
   List<TouristSpot> get _featuredTouristSpots {
+    if (hasCuratedFeaturedSpots) {
+      final out = <TouristSpot>[];
+      final seen = <String>{};
+      for (final f in recommendedFeaturedForBanner) {
+        final live = _authoritativeNamed(f.name) ?? touristSpotFromFeatured(f);
+        final key = normalizeTourismNameKey(live.name);
+        if (key.isEmpty || !seen.add(key)) continue;
+        out.add(live);
+      }
+      return out;
+    }
+    // Only when OPTACA has never curated Featured Destinations.
     final ranked =
         HomePersonalizationService.instance.featuredRanked(limit: 8);
     if (ranked.isNotEmpty) {
       return [
         for (final e in ranked) ?liveAuthoritativeTouristSpot(e.spot),
-      ];
-    }
-    // Warm-up fallback before first recompute finishes.
-    if (featuredSpots.isNotEmpty) {
-      return [
-        for (final f in recommendedFeaturedForBanner)
-          ?_authoritativeNamed(f.name),
       ];
     }
     return List<TouristSpot>.from(authoritativeHomeTouristSpots())

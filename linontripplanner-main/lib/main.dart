@@ -14,6 +14,7 @@ import 'services/tourism_session.dart';
 import 'services/trip_post_finish_rating.dart';
 import 'auth/login_screen.dart';
 import 'auth/registration_screen.dart';
+import 'auth/verify_otp_screen.dart';
 import 'home_screen.dart';
 import 'tourist_plan/tourist_trip_planner_screen.dart';
 import 'admin_dashboard_screen.dart';
@@ -188,6 +189,7 @@ class TourismApp extends StatelessWidget {
             ),
         LoginScreen.routeName: (_) => const LoginScreen(),
         RegistrationScreen.routeName: (_) => const RegistrationScreen(),
+        VerifyOtpScreen.routeName: (_) => const VerifyOtpScreen(),
       },
     );
   }

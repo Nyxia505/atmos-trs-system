@@ -105,22 +105,22 @@ class _TripTravelEventsDialogBody extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Events During Your Trip!',
+                            'Events on your dates',
                             style: TextStyle(
                               fontFamily: AppFonts.holidayCalling,
-                              fontSize: 24,
+                              fontSize: 20,
                               height: 1.1,
                               color: accent,
                             ),
                           ),
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 4),
                           Text(
                             events.length == 1
-                                ? 'We found 1 upcoming event happening during your selected travel dates. You might want to check it out!'
-                                : 'We found ${events.length} upcoming events happening during your selected travel dates. You might want to check them out!',
+                                ? '1 event during your trip'
+                                : '${events.length} events during your trip',
                             style: TextStyle(
-                              fontSize: 13.5,
-                              height: 1.35,
+                              fontSize: 13,
+                              height: 1.3,
                               color: AppColors.textGrey.withValues(alpha: 0.98),
                             ),
                           ),

@@ -5,6 +5,10 @@ import 'package:flutter/material.dart';
 /// Material [Icon] + [Shadow] can composite as a black silhouette on some
 /// Impeller/Skia release paths. [ColorFiltered] tints the glyph after layout
 /// so bus/stop/spot colors match the Map & Routes legend.
+///
+/// Do not wrap this in [DecoratedBox]/[BoxShadow]: Flutter paints box shadows
+/// as the child's rectangular bounds (not the glyph outline), which shows up
+/// as large black blurry rectangles behind every pin on Android release APKs.
 class OsmMapGlyph extends StatelessWidget {
   const OsmMapGlyph({
     super.key,
@@ -19,20 +23,9 @@ class OsmMapGlyph extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        boxShadow: [
-          BoxShadow(
-            color: Color(0x66000000),
-            blurRadius: 4,
-            offset: Offset(0, 1),
-          ),
-        ],
-      ),
-      child: ColorFiltered(
-        colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
-        child: Icon(icon, size: size, color: Colors.white),
-      ),
+    return ColorFiltered(
+      colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+      child: Icon(icon, size: size, color: Colors.white),
     );
   }
 }

@@ -40,6 +40,11 @@ Route<T> authSlideRoute<T>(Widget page) {
 }
 
 void pushRegistrationScreen(BuildContext context) {
+  final openShared = TripPlanHostBridge.openSharedSignup;
+  if (TripPlanHostBridge.embeddedInAtmos && openShared != null) {
+    openShared(context);
+    return;
+  }
   RegistrationFormCache.warmUp();
   Navigator.of(context).push(
     authSlideRoute(const RegistrationScreen()),
@@ -47,6 +52,11 @@ void pushRegistrationScreen(BuildContext context) {
 }
 
 void pushLoginScreen(BuildContext context) {
+  final openShared = TripPlanHostBridge.openSharedLogin;
+  if (TripPlanHostBridge.embeddedInAtmos && openShared != null) {
+    openShared(context);
+    return;
+  }
   Navigator.of(context).pushReplacement(
     authSlideRoute(const LoginScreen()),
   );

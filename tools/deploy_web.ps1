@@ -59,7 +59,12 @@ try {
 
   # Firebase Spark forbids hosting executable/APK files. Keep APKs on GitHub
   # Releases and never ship them under build/web/downloads.
-  $blockedApk = Join-Path $WebDir 'downloads\trip-planner.apk'
+  $blockedApk = Join-Path $WebDir 'downloads\tripplanner.apk'
+  $blockedApkLegacy = Join-Path $WebDir 'downloads\trip-planner.apk'
+  if (Test-Path $blockedApkLegacy) {
+    Remove-Item $blockedApkLegacy -Force
+    Write-Host "Removed $blockedApkLegacy (Spark plan cannot host APKs)"
+  }
   if (Test-Path $blockedApk) {
     Remove-Item $blockedApk -Force
     Write-Host "Removed $blockedApk (Spark plan cannot host APKs)"

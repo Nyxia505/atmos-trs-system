@@ -3,9 +3,10 @@
 /// **Setup:** In [EmailJS Dashboard](https://dashboard.emailjs.com):
 /// 1. **Email Services** → copy **Service ID** (Gmail: atmostrs@gmail.com).
 /// 2. **Email Templates** → open your OTP template → copy **Template ID**.
-///    Prefer Subject `{{subject}}` and body `{{message}}` / `{{otp}}` so the
-///    app controls wording (avoid hard-coded “OTP CODE!!!” in the template).
-///    From name: use `{{from_name}}` or set service default to “ATMOS-TRS Tourism”.
+///    Prefer Subject `{{subject}}` (app sends “Complete your ATMOS-TRS registration”)
+///    and body `{{message}}` / `{{message_html}}` / `{{otp}}`.
+///    Do NOT hard-code “OTP CODE!!!” — that pushes Gmail to Spam.
+///    From name: `{{from_name}}` or “ATMOS-TRS Tourism”.
 /// 3. **Account → API keys** → copy **Public Key** (safe for client apps).
 ///
 /// **Inbox vs Spam — what we can / cannot fix:**

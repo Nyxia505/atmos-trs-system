@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'admin_event_form_page.dart';
+import 'catalog_publisher.dart';
 import 'data.dart';
 import 'event_datetime_format.dart';
 import 'firestore_loader.dart';
@@ -15,6 +16,34 @@ import 'widgets/admin_bulk_selection_bar.dart';
 import 'widgets/municipality_image.dart';
 import 'widgets/optaca_portal_ui.dart';
 import 'widgets/tourism_plan_ui.dart';
+
+enum GovernorFeedPhase { upcoming, ongoing, expired }
+
+GovernorFeedPhase governorFeedPhase(DateTime when, DateTime now) {
+  return switch (governorBoardPhase(when, now)) {
+    GovernorBoardPhase.upcoming => GovernorFeedPhase.upcoming,
+    GovernorBoardPhase.ongoing => GovernorFeedPhase.ongoing,
+    GovernorBoardPhase.expired => GovernorFeedPhase.expired,
+  };
+}
+
+/// Upcoming first (soonest), then ongoing, then expired (most recently ended).
+List<TourismNewsFeedItem> sortGovernorEventsFeed(
+  List<TourismNewsFeedItem> items,
+  DateTime now,
+) {
+  final copy = List<TourismNewsFeedItem>.from(items);
+  copy.sort((a, b) {
+    final phaseA = governorFeedPhase(a.sortDate, now);
+    final phaseB = governorFeedPhase(b.sortDate, now);
+    if (phaseA != phaseB) return phaseA.index.compareTo(phaseB.index);
+    if (phaseA == GovernorFeedPhase.expired) {
+      return b.sortDate.compareTo(a.sortDate);
+    }
+    return a.sortDate.compareTo(b.sortDate);
+  });
+  return copy;
+}
 
 String _announcementImageFolderSlug(String title) {
   return title
@@ -109,7 +138,10 @@ class _AdminAnnouncementsTabState extends State<AdminAnnouncementsTab> {
   @override
   void initState() {
     super.initState();
-    _loading = buildNewsFeedItemsSorted().isEmpty;
+    _loading = sortGovernorEventsFeed(
+      buildNewsFeedItemsSorted(),
+      DateTime.now(),
+    ).isEmpty;
     _load(silent: !_loading);
   }
 
@@ -192,14 +224,19 @@ class _AdminAnnouncementsTabState extends State<AdminAnnouncementsTab> {
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_error != null && buildNewsFeedItemsSorted().isEmpty) {
+    if (_error != null &&
+        sortGovernorEventsFeed(buildNewsFeedItemsSorted(), DateTime.now())
+            .isEmpty) {
       return OptacaLoadError(
         title: 'Announcements could not be loaded',
         message: '$_error',
         onRetry: _load,
       );
     }
-    final feed = buildNewsFeedItemsSorted();
+    final feed = sortGovernorEventsFeed(
+      buildNewsFeedItemsSorted(),
+      DateTime.now(),
+    );
     final announcementCount = tourismAnnouncements.length;
     final selectedCount = _selectedIds.length;
     final allSelected =

@@ -1,0 +1,99 @@
+name: TripPlanner Release APK
+
+# Builds linontripplanner-main and uploads tripplanner.apk to the GitHub Release
+# so the website always downloads:
+#   https://github.com/Nyxia505/atmos-trs-system/releases/latest/download/tripplanner.apk
+#
+# Triggers:
+#   - publishing a release whose tag starts with tripplanner- (e.g. tripplanner-v1.0.5)
+#   - manual workflow_dispatch (uploads to an existing tag, or creates one)
+#
+# Signing: uses Flutter debug/signingConfig already in the Android project.
+# Optional keystore secrets (KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS,
+# KEY_PASSWORD) can be added later without changing the asset filename.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to update (e.g. v1.0.9 or tripplanner-v1.0.5)
+        required: true
+        default: v1.0.9
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.release.tag_name, 'tripplanner-') ||
+      startsWith(github.event.release.tag_name, 'trip-planner-')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: linontripplanner-main
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release --target-platform android-arm64
+
+      - name: Name asset tripplanner.apk
+        run: |
+          mkdir -p ../.ci-artifacts
+          cp build/app/outputs/flutter-apk/app-release.apk ../.ci-artifacts/tripplanner.apk
+          ls -lh ../.ci-artifacts/tripplanner.apk
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload tripplanner.apk to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: .
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG not found. Create it first (tag + GitHub Release)."
+            exit 1
+          fi
+          gh release upload "$TAG" .ci-artifacts/tripplanner.apk --clobber
+          echo "Uploaded tripplanner.apk to $TAG"
+
+          # Keep website /releases/latest/download/tripplanner.apk working even when
+          # a TripPlanner-tagged release is not marked as the repo "Latest".
+          LATEST="$(gh release view --json tagName -q .tagName 2>/dev/null || true)"
+          if [ -n "${LATEST}" ] && [ "${LATEST}" != "${TAG}" ]; then
+            gh release upload "${LATEST}" .ci-artifacts/tripplanner.apk --clobber
+            echo "Also uploaded tripplanner.apk to current latest release ${LATEST}"
+          fi
+          echo "Download URL: https://github.com/${{ github.repository }}/releases/latest/download/tripplanner.apk"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tripplanner-apk
+          path: .ci-artifacts/tripplanner.apk
+          if-no-files-found: error

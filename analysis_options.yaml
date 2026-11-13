@@ -16,6 +16,7 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+    - _restore_backups/**
 include: package:flutter_lints/flutter.yaml
 
 linter:

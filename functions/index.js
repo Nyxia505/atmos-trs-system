@@ -264,27 +264,33 @@ const OTP_INBOX_REPLY_TO =
 const OTP_INBOX_FROM_NAME = process.env.OTP_INBOX_FROM_NAME || 'ATMOS-TRS Tourism';
 
 function otpEmailSubject(purpose) {
-  // Soft, transactional subjects — avoid ALL-CAPS / "URGENT" / "!!!" (spam triggers).
+  // Soft transactional subjects — avoid "OTP", ALL-CAPS, "URGENT", "!!!" (spam triggers).
   if (purpose === 'password_reset') {
-    return 'Your ATMOS-TRS password reset code';
+    return 'Reset your ATMOS-TRS account access';
   }
-  return 'Your ATMOS-TRS verification code';
+  if (purpose === 'trip_planner') {
+    return 'Complete your Trip Planner registration';
+  }
+  return 'Complete your ATMOS-TRS registration';
 }
 
 function otpEmailPlainText({displayName, otp, purpose}) {
   const greeting = displayName ? `Hi ${displayName},` : 'Hi,';
+  const brand =
+    purpose === 'trip_planner'
+      ? 'Misamis Occidental Trip Planner'
+      : 'ATMOS-TRS Tourism';
   const intro =
     purpose === 'password_reset'
-      ? 'Here is your ATMOS-TRS password reset code:'
-      : 'Here is your ATMOS-TRS verification code:';
+      ? 'Use this one-time number to reset your ATMOS-TRS password:'
+      : `Thanks for registering with ${brand}. Use this one-time number to finish signup:`;
   return (
     `${greeting}\n\n` +
     `${intro}\n\n` +
     `${otp}\n\n` +
-    'Enter this code in the app. It expires in 5 minutes.\n\n' +
-    'If you did not request this, you can ignore this email.\n\n' +
-    'Thanks,\n' +
-    'ATMOS-TRS Tourism'
+    'Enter it in the app within 5 minutes.\n\n' +
+    'If you did not start this, you can ignore this message.\n\n' +
+    `Regards,\n${brand}`
   );
 }
 
@@ -293,19 +299,24 @@ function otpEmailHtml({displayName, otp, purpose}) {
     .replace(/</g, '')
     .replace(/>/g, '');
   const greeting = safeName ? `Hi ${safeName},` : 'Hi,';
+  const brand =
+    purpose === 'trip_planner'
+      ? 'Misamis Occidental Trip Planner'
+      : 'ATMOS-TRS Tourism';
   const intro =
     purpose === 'password_reset'
-      ? 'Here is your ATMOS-TRS password reset code:'
-      : 'Here is your ATMOS-TRS verification code:';
+      ? 'Use this one-time number to reset your ATMOS-TRS password:'
+      : `Thanks for registering with ${brand}. Use this one-time number to finish signup:`;
   return (
+    `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#222;line-height:1.5;">` +
     `<p>${greeting}</p>` +
     `<p>${intro}</p>` +
-    `<p style="font-size:28px;font-weight:700;letter-spacing:6px;` +
-    `font-family:monospace;margin:16px 0;">${otp}</p>` +
-    '<p>Enter this code in the app. It expires in 5 minutes.</p>' +
-    '<p style="color:#666;font-size:13px;">If you did not request this, ' +
-    'you can ignore this email.</p>' +
-    '<p>Thanks,<br/>ATMOS-TRS Tourism</p>'
+    `<p style="font-size:26px;font-weight:700;letter-spacing:4px;` +
+    `font-family:Consolas,monospace;margin:18px 0;">${otp}</p>` +
+    '<p>Enter it in the app within 5 minutes.</p>' +
+    '<p style="color:#666;font-size:13px;">If you did not start this, you can ignore this message.</p>' +
+    `<p>Regards,<br/>${brand}</p>` +
+    '</div>'
   );
 }
 
@@ -338,6 +349,7 @@ async function sendSmtpOtpIfConfigured({toEmail, toName, otp, purpose}) {
     auth: {user, pass},
   });
 
+  // No "high priority" headers — those increase Spam scores for cold mail.
   await transporter.sendMail({
     from: `"${OTP_INBOX_FROM_NAME}" <${user}>`,
     to: toEmail,
@@ -345,11 +357,6 @@ async function sendSmtpOtpIfConfigured({toEmail, toName, otp, purpose}) {
     subject,
     text,
     html,
-    headers: {
-      'X-Priority': '1',
-      'X-MSMail-Priority': 'High',
-      Importance: 'high',
-    },
   });
   console.log('[sendSmtpOtp] sent via Gmail SMTP to', toEmail);
   return true;
@@ -397,7 +404,8 @@ async function sendEmailJsOtp({toEmail, toName, otp, purpose}) {
       reply_to: OTP_INBOX_REPLY_TO,
       message,
       message_html: messageHtml,
-      preheader: `Your code is ${otp}. Expires in 5 minutes.`,
+      // Do not put digits in preheader — looks like phishing to spam filters.
+      preheader: 'Finish your registration in the app within 5 minutes.',
     },
   };
   if (accessToken) {
@@ -946,6 +954,43 @@ exports.sendPasswordResetLinkEmail = onCall(
  * Sends OTP to the user's inbox via EmailJS (server-side, supports private accessToken).
  * Optional: firebase functions:secrets:set EMAILJS_PRIVATE_KEY (Private Key from EmailJS).
  */
+async function assertOtpEmailRateLimit(email) {
+  const key = String(email || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9@._+-]/g, '_')
+    .slice(0, 180);
+  if (!key) {
+    throw new HttpsError('invalid-argument', 'Valid email is required.');
+  }
+  const ref = db.collection('otp_email_rate_limits').doc(key);
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1000;
+  const max = 8;
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const data = snap.exists ? snap.data() : {};
+    const stamps = (Array.isArray(data.sentAtMs) ? data.sentAtMs : [])
+      .map((t) => Number(t))
+      .filter((t) => Number.isFinite(t) && now - t < windowMs);
+    if (stamps.length >= max) {
+      throw new HttpsError(
+        'resource-exhausted',
+        'Too many verification emails. Please wait a few minutes and try again.',
+      );
+    }
+    stamps.push(now);
+    tx.set(
+      ref,
+      {
+        email: String(email).toLowerCase(),
+        sentAtMs: stamps,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      {merge: true},
+    );
+  });
+}
+
 exports.sendOtpEmail = onCall({region: 'asia-southeast1'}, async (request) => {
   if (!request.auth) {
     throw new HttpsError('unauthenticated', 'Must be signed in.');
@@ -958,6 +1003,11 @@ exports.sendOtpEmail = onCall({region: 'asia-southeast1'}, async (request) => {
     .toLowerCase();
   const toName = normalizeField(request.data && request.data.toName);
   const otp = normalizeField(request.data && request.data.otp);
+  const purposeRaw = normalizeField(request.data && request.data.purpose);
+  const purpose =
+    purposeRaw === 'password_reset' || purposeRaw === 'trip_planner'
+      ? purposeRaw
+      : 'verification';
 
   if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
     throw new HttpsError('invalid-argument', 'Valid toEmail is required.');
@@ -983,7 +1033,7 @@ exports.sendOtpEmail = onCall({region: 'asia-southeast1'}, async (request) => {
       toEmail: deliveryEmail,
       toName,
       otp,
-      purpose: 'verification',
+      purpose,
     });
     console.log('[sendOtpEmail] inbox channel=', delivery.channel);
 
@@ -1000,6 +1050,54 @@ exports.sendOtpEmail = onCall({region: 'asia-southeast1'}, async (request) => {
     );
   }
 });
+
+/**
+ * Deferred signup (no Auth yet): SMTP-first inbox delivery, then EmailJS.
+ * Prefer this over client EmailJS so Gmail is less likely to file as Spam.
+ */
+exports.sendSignupOtpEmail = onCall(
+  {region: 'asia-southeast1'},
+  async (request) => {
+    const toEmail = normalizeField(request.data && request.data.toEmail)
+      .toLowerCase();
+    const toName = normalizeField(request.data && request.data.toName);
+    const otp = normalizeField(request.data && request.data.otp);
+    const purposeRaw = normalizeField(request.data && request.data.purpose);
+    const purpose =
+      purposeRaw === 'trip_planner' ? 'trip_planner' : 'verification';
+
+    if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) {
+      throw new HttpsError('invalid-argument', 'Valid toEmail is required.');
+    }
+    if (!/^\d{6}$/.test(otp)) {
+      throw new HttpsError('invalid-argument', 'OTP must be 6 digits.');
+    }
+
+    await assertOtpEmailRateLimit(toEmail);
+
+    try {
+      const delivery = await sendOtpInboxEmail({
+        toEmail,
+        toName,
+        otp,
+        purpose,
+      });
+      console.log(
+        '[sendSignupOtpEmail] inbox channel=',
+        delivery.channel,
+        'to=',
+        toEmail,
+      );
+      return {ok: true, channel: delivery.channel};
+    } catch (err) {
+      console.error('[sendSignupOtpEmail]', err);
+      throw new HttpsError(
+        'internal',
+        'Email could not be sent. Check Gmail SMTP or EmailJS config in Firebase Functions.',
+      );
+    }
+  },
+);
 
 /**
  * Sends signup / resend OTP via SMS to the tourist's registered mobile (Philippines).

@@ -5,10 +5,10 @@ import 'package:image_picker/image_picker.dart';
 
 import 'catalog_targeting.dart';
 import 'data.dart';
-import 'event_datetime_format.dart';
 import 'event_schedule.dart';
 import 'firestore_loader.dart';
 import 'services/auth_roles.dart';
+import 'services/firestore_errors.dart';
 import 'services/governor_event_types_store.dart';
 import 'services/storage_image_upload.dart';
 import 'widgets/catalog_image_preview.dart';
@@ -113,52 +113,6 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
     _descriptionController.dispose();
     _imageController.dispose();
     super.dispose();
-  }
-
-  Future<void> _pickDate() async {
-    final d = await showDatePicker(
-      context: context,
-      initialDate: _dateTime,
-      firstDate: DateTime(2020),
-      lastDate: DateTime(2100),
-    );
-    if (d != null) {
-      setState(() {
-        _dateTime = DateTime(
-          d.year,
-          d.month,
-          d.day,
-          _dateTime.hour,
-          _dateTime.minute,
-        );
-        _rangeStart = eventCalendarDay(_dateTime);
-        _rangeEnd = _rangeStart;
-      });
-    }
-  }
-
-  Future<void> _pickTime() async {
-    final t = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.fromDateTime(_dateTime),
-      builder: (context, child) {
-        return MediaQuery(
-          data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
-          child: child ?? const SizedBox.shrink(),
-        );
-      },
-    );
-    if (t != null) {
-      setState(() {
-        _dateTime = DateTime(
-          _dateTime.year,
-          _dateTime.month,
-          _dateTime.day,
-          t.hour,
-          t.minute,
-        );
-      });
-    }
   }
 
   Future<void> _pickImage() async {
@@ -311,11 +265,12 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
     );
     try {
       await upsertTourismEventToFirestore(ev);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('upsertTourismEventToFirestore failed: $e\n$st');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to save event: $e'),
+            content: Text('Failed to save event: ${friendlyFirestoreError(e)}'),
             backgroundColor: Colors.redAccent,
           ),
         );
@@ -445,44 +400,6 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
     }
   }
 
-  Widget _scheduleButtons() {
-    final date = OutlinedButton.icon(
-      onPressed: _pickDate,
-      icon: const Icon(Icons.calendar_today, size: 18),
-      label: Text(
-        formatEventDateWords(_dateTime),
-        overflow: TextOverflow.ellipsis,
-      ),
-      style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
-    );
-    final time = OutlinedButton.icon(
-      onPressed: _pickTime,
-      icon: const Icon(Icons.schedule, size: 18),
-      label: Text(
-        formatEventTime12(_dateTime),
-        overflow: TextOverflow.ellipsis,
-      ),
-      style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44)),
-    );
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        if (constraints.maxWidth < 480) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [date, const SizedBox(height: 8), time],
-          );
-        }
-        return Row(
-          children: [
-            Expanded(child: date),
-            const SizedBox(width: 12),
-            Expanded(child: time),
-          ],
-        );
-      },
-    );
-  }
-
   Widget _posterPicker() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -580,8 +497,6 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
                   ),
                   const SizedBox(height: 22),
                   _section('Schedule'),
-                  _scheduleButtons(),
-                  const SizedBox(height: 12),
                   EventDateSchedulePicker(
                     timeSource: _dateTime,
                     rangeStart: _rangeStart,
@@ -606,14 +521,6 @@ class _AdminEventFormPageState extends State<AdminEventFormPage> {
                         _dateTime.minute,
                       );
                     }),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Selected: ${formatEventDateTimeDisplay(_dateTime)}',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: AppColors.textGrey,
-                    ),
                   ),
                   const SizedBox(height: 22),
                   _section('Location'),

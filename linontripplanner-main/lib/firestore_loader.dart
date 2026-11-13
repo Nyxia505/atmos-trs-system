@@ -515,9 +515,34 @@ Future<void> loadFeaturedSpotsFromFirestore() async {
     );
   }
 
+  // Never wipe a good OPTACA curated list with an empty/failed catalog read —
+  // that made Home Featured Spots flip to algorithm rankings mid-session.
+  if (loaded.isEmpty && featuredSpots.isNotEmpty) {
+    debugPrint(
+      'loadFeaturedSpotsFromFirestore: empty remote — keeping '
+      '${featuredSpots.length} curated featured',
+    );
+    rememberCuratedFeaturedSpots(featuredSpots);
+    return;
+  }
+  if (loaded.isEmpty && hasCuratedFeaturedSpots) {
+    debugPrint(
+      'loadFeaturedSpotsFromFirestore: empty remote — keeping sticky curated',
+    );
+    return;
+  }
   featuredSpots
     ..clear()
     ..addAll(loaded);
+  if (loaded.isNotEmpty) {
+    rememberCuratedFeaturedSpots(loaded);
+  }
+  if (kDebugMode) {
+    debugPrint(
+      'loadFeaturedSpotsFromFirestore: ${snapshot.docs.length} docs → '
+      '${loaded.length} curated',
+    );
+  }
   } catch (e) {
     if (_isNonPermissionRecoverableFirestoreError(e)) {
       logRecoverableFirestoreLoad('loadFeaturedSpotsFromFirestore', e);
@@ -1105,6 +1130,8 @@ Future<void> upsertTourismEventToFirestore(TourismEvent e) async {
   final col = FirebaseFirestore.instance.collection(kEventsCollection);
   final docRef = e.id.trim().isEmpty ? col.doc() : col.doc(e.id.trim());
   await _coalesceCatalogWrite('$kEventsCollection/${docRef.id}', () async {
+    // Plain get+set (not a transaction): Flutter web wraps transaction /
+    // FieldValue.delete failures as opaque "converted Future" errors.
     final existing = await docRef.get();
     if (existing.exists) {
       await _assertGovernorMayMutate(
@@ -1113,67 +1140,64 @@ Future<void> upsertTourismEventToFirestore(TourismEvent e) async {
         snapshot: existing,
       );
     }
+    final isNew = !existing.exists;
     final imageUrl = e.imagePath.trim();
-    final created = await FirebaseFirestore.instance.runTransaction<bool>((tx) async {
-      final snap = await tx.get(docRef);
-      final isNew = !snap.exists;
-      final names = e.locationNames;
-      final municipalityField = names.isEmpty
-          ? e.municipality
-          : names.length == 1
-              ? names.first
-              : names.join(', ');
-      final payload = <String, dynamic>{
-        'title': e.title,
-        // Binary lives in Supabase Storage; Firestore only stores the public URL.
-        'imagePath': imageUrl,
-        'image_url': imageUrl,
-        'imageUrl': imageUrl,
-        'venue': e.venue,
-        'municipality': municipalityField,
-        'municipalities': names,
-        'eventType': e.eventType,
-        'description': e.description,
-        'dateMode': e.dateMode.name,
-        'eventHour': e.dateTime.hour,
-        'eventMinute': e.dateTime.minute,
-        'startAt': Timestamp.fromDate(e.dateTime),
-        'clientSaveId': docRef.id,
-        'updatedAt': FieldValue.serverTimestamp(),
-        if (isNew) 'createdAt': FieldValue.serverTimestamp(),
-        'audienceScope': e.audienceScope.trim().isEmpty
-            ? (isProvinceWideTarget(municipality: municipalityField)
-                ? kProvinceWideScope
-                : kMunicipalityScope)
-            : e.audienceScope,
-        ...eventLguCompatFields(event: e),
-        ..._catalogOwnershipWrite(isNew: isNew),
-      };
-      if (e.dateMode == TourismEventDateMode.multiple) {
-        payload['eventDates'] = [
-          for (final d in e.eventDates) formatEventCalendarDateKey(d),
-        ];
-      } else {
-        payload['eventDates'] = FieldValue.delete();
-      }
-      if (e.dateMode == TourismEventDateMode.range) {
-        payload['rangeStartDate'] = formatEventCalendarDateKey(
-          e.rangeStart ?? e.dateTime,
-        );
-        payload['rangeEndDate'] = formatEventCalendarDateKey(
-          e.rangeEnd ?? e.rangeStart ?? e.dateTime,
-        );
-      } else {
-        payload['rangeStartDate'] = FieldValue.delete();
-        payload['rangeEndDate'] = FieldValue.delete();
-      }
-      tx.set(docRef, payload, SetOptions(merge: true));
-      return isNew;
-    });
+    final names = e.locationNames;
+    final municipalityField = names.isEmpty
+        ? e.municipality
+        : names.length == 1
+            ? names.first
+            : names.join(', ');
+    final payload = <String, dynamic>{
+      'title': e.title,
+      // Binary lives in Supabase Storage; Firestore only stores the public URL.
+      'imagePath': imageUrl,
+      'image_url': imageUrl,
+      'imageUrl': imageUrl,
+      'venue': e.venue,
+      'municipality': municipalityField,
+      'municipalities': names,
+      'eventType': e.eventType,
+      'description': e.description,
+      'dateMode': e.dateMode.name,
+      'eventHour': e.dateTime.hour,
+      'eventMinute': e.dateTime.minute,
+      'startAt': Timestamp.fromDate(e.dateTime),
+      'clientSaveId': docRef.id,
+      'updatedAt': FieldValue.serverTimestamp(),
+      if (isNew) 'createdAt': FieldValue.serverTimestamp(),
+      'audienceScope': e.audienceScope.trim().isEmpty
+          ? (isProvinceWideTarget(municipality: municipalityField)
+              ? kProvinceWideScope
+              : kMunicipalityScope)
+          : e.audienceScope,
+      ...eventLguCompatFields(event: e),
+      ..._catalogOwnershipWrite(isNew: isNew),
+    };
+    if (e.dateMode == TourismEventDateMode.multiple) {
+      payload['eventDates'] = [
+        for (final d in e.eventDates) formatEventCalendarDateKey(d),
+      ];
+    } else {
+      // Never FieldValue.delete on web — clear with empty list instead.
+      payload['eventDates'] = <String>[];
+    }
+    if (e.dateMode == TourismEventDateMode.range) {
+      payload['rangeStartDate'] = formatEventCalendarDateKey(
+        e.rangeStart ?? e.dateTime,
+      );
+      payload['rangeEndDate'] = formatEventCalendarDateKey(
+        e.rangeEnd ?? e.rangeStart ?? e.dateTime,
+      );
+    } else {
+      payload['rangeStartDate'] = '';
+      payload['rangeEndDate'] = '';
+    }
+    await docRef.set(payload, SetOptions(merge: true));
 
     // Spark-safe push: Supabase Edge Function → FCM topic `tourism_events`.
     // Non-fatal: event is already saved if this fails.
-    if (created) {
+    if (isNew) {
       try {
         await broadcastTourismEventPushViaSupabase(
           eventId: docRef.id,

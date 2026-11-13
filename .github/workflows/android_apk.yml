@@ -50,10 +50,14 @@ jobs:
       - name: Install Trip Planner dependencies
         run: flutter pub get
       - name: Build Trip Planner APK
-        run: flutter build apk --release
+        run: flutter build apk --release --target-platform android-arm64
+      - name: Name asset tripplanner.apk
+        run: |
+          mkdir -p ../.ci-artifacts
+          cp build/app/outputs/flutter-apk/app-release.apk ../.ci-artifacts/tripplanner.apk
       - name: Upload Trip Planner APK
         uses: actions/upload-artifact@v4
         with:
-          name: trip-planner-apk
-          path: linontripplanner-main/build/app/outputs/flutter-apk/app-release.apk
+          name: tripplanner-apk
+          path: .ci-artifacts/tripplanner.apk
           if-no-files-found: error

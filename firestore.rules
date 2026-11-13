@@ -773,9 +773,13 @@ service cloud.firestore {
       allow write: if isLguStaff() || provincialMayManageSpot();
     }
 
+    /// Trip Planner / OPTACA Events & Announcements catalog.
+    /// Same writers as announcements + tourist_spots (LGU + provincial/OPTACA).
     match /events/{docId} {
       allow read: if true;
-      allow write: if isLguStaff() || provincialMayManageSpot();
+      allow create, update, delete: if isLguTourismFromUserDoc()
+        || provincialMayManageSpot()
+        || isLguStaff();
     }
 
     match /transportation_fees/{docId} {

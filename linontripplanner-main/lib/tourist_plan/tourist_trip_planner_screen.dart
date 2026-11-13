@@ -92,15 +92,13 @@ class _TouristTripPlannerScreenState extends State<TouristTripPlannerScreen> {
               builder: (ctx) => AlertDialog(
                 title: const Text('Over budget'),
                 content: Text(
-                  'Estimated cost ${formatFarePhp(_w.estimatedTotalPhp)} '
-                  'exceeds your budget ${formatFarePhp(_w.budgetPhp.round())}.\n\n'
-                  'You can go back and adjust days, travelers, or budget - '
-                  'or finish anyway.',
+                  '${formatFarePhp(_w.estimatedTotalPhp)} exceeds '
+                  '${formatFarePhp(_w.budgetPhp.round())}.',
                 ),
                 actions: [
                   TextButton(
                     onPressed: () => Navigator.pop(ctx, false),
-                    child: const Text('Adjust trip'),
+                    child: const Text('Adjust'),
                   ),
                   FilledButton(
                     style: FilledButton.styleFrom(backgroundColor: _accent),
@@ -715,10 +713,9 @@ class _TripInfoStep extends StatelessWidget {
                   ),
                   subtitle: wizard.arrivalDate != null && wizard.departureDate != null
                       ? Text(
-                          '${wizard.tripDays} day${wizard.tripDays == 1 ? '' : 's'} to explore '
-                          '(inclusive)',
+                          '${wizard.tripDays} day${wizard.tripDays == 1 ? '' : 's'}',
                         )
-                      : const Text('Both start and end dates count as trip days'),
+                      : null,
                   onTap: () async {
                     final now = DateTime.now();
                     final initialStart = wizard.arrivalDate ?? now;
@@ -734,7 +731,7 @@ class _TripInfoStep extends StatelessWidget {
                             ? initialStart.add(const Duration(days: 3))
                             : initialEnd,
                       ),
-                      helpText: 'Trip dates (inclusive)',
+                      helpText: 'Travel dates',
                       saveText: 'Save',
                     );
                     if (range != null) {
@@ -1006,9 +1003,9 @@ class _ReviewStepState extends State<_ReviewStep> {
                 'Your plan',
                 style: TextStyle(
                   fontFamily: AppFonts.holidayCalling,
-                  fontSize: 28,
+                  fontSize: 22,
                   color: accent,
-                  height: 1.05,
+                  height: 1.1,
                 ),
               ),
               if (arrival != null) ...[
@@ -1023,7 +1020,7 @@ class _ReviewStepState extends State<_ReviewStep> {
                   ),
                 ),
               ],
-              const SizedBox(height: 14),
+              const SizedBox(height: 10),
               _reviewEndpoint(
                 Icons.trip_origin,
                 const Color(0xFF1565C0),
@@ -1061,21 +1058,21 @@ class _ReviewStepState extends State<_ReviewStep> {
             ],
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         _viewRouteOnMapButton(context),
-        const SizedBox(height: 18),
+        const SizedBox(height: 14),
         TourismPlanUi.sectionHeader(
           icon: Icons.calendar_month_rounded,
           title: 'Day plan',
-          badge: '${wizard.spotsByDay.length} day${wizard.spotsByDay.length == 1 ? '' : 's'}',
+          badge: '${wizard.spotsByDay.length}',
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 8),
         for (var d = 0; d < wizard.spotsByDay.length; d++)
           Padding(
-            padding: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.only(bottom: 8),
             child: Container(
               width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
               decoration: TourismPlanUi.planCardDecoration(),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1083,28 +1080,28 @@ class _ReviewStepState extends State<_ReviewStep> {
                   Row(
                     children: [
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
                           color: accent.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
                           'Day ${d + 1}',
                           style: TextStyle(
-                            fontWeight: FontWeight.w900,
+                            fontWeight: FontWeight.w800,
                             color: accent,
-                            fontSize: 13,
+                            fontSize: 12.5,
                           ),
                         ),
                       ),
                       if (arrival != null) ...[
-                        const SizedBox(width: 10),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: Text(
                             _fmtDate(arrival.add(Duration(days: d))),
                             style: const TextStyle(
                               fontWeight: FontWeight.w700,
-                              fontSize: 14,
+                              fontSize: 13,
                               color: AppColors.textDark,
                             ),
                           ),
@@ -1112,14 +1109,14 @@ class _ReviewStepState extends State<_ReviewStep> {
                       ],
                     ],
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 8),
                   if (wizard.spotsByDay[d].isEmpty)
                     Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.only(bottom: 6),
                       child: Text(
-                        'No spots on this day.',
+                        'No spots',
                         style: TextStyle(
-                          fontSize: 13,
+                          fontSize: 12.5,
                           color: AppColors.textGrey.withValues(alpha: 0.95),
                         ),
                       ),
@@ -1127,17 +1124,17 @@ class _ReviewStepState extends State<_ReviewStep> {
                   else
                     for (var i = 0; i < wizard.spotsByDay[d].length; i++)
                       Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
+                        padding: const EdgeInsets.only(bottom: 8),
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             _SpotThumb(
                               spot: wizard.spotsByDay[d][i],
-                              size: 64,
+                              size: 48,
                               badge: '${i + 1}',
                               accent: accent,
                             ),
-                            const SizedBox(width: 12),
+                            const SizedBox(width: 10),
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1146,17 +1143,20 @@ class _ReviewStepState extends State<_ReviewStep> {
                                     wizard.spotsByDay[d][i].name,
                                     style: const TextStyle(
                                       fontWeight: FontWeight.w800,
-                                      fontSize: 14.5,
+                                      fontSize: 13.5,
                                       color: AppColors.textDark,
                                     ),
                                   ),
-                                  Text(
-                                    wizard.spotsByDay[d][i].location,
-                                    style: TextStyle(
-                                      fontSize: 12.5,
-                                      color: AppColors.textGrey.withValues(alpha: 0.95),
+                                  if (wizard.spotsByDay[d][i].location.trim().isNotEmpty)
+                                    Text(
+                                      wizard.spotsByDay[d][i].location,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: AppColors.textGrey.withValues(alpha: 0.95),
+                                      ),
                                     ),
-                                  ),
                                 ],
                               ),
                             ),
@@ -1169,7 +1169,7 @@ class _ReviewStepState extends State<_ReviewStep> {
           ),
         Container(
           width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
           decoration: TourismPlanUi.planCardDecoration(),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1178,49 +1178,27 @@ class _ReviewStepState extends State<_ReviewStep> {
                 icon: Icons.receipt_long_rounded,
                 title: 'Estimated costs',
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               _costLine('Transportation', wizard.transportTotalPhp),
               _costLine('Entrance fees', wizard.entranceFeesTotal),
-              _costLine('Food (estimate)', wizard.foodEstimatePhp),
-              _costLine('Activities / souvenirs', wizard.activityEstimatePhp),
+              _costLine('Food', wizard.foodEstimatePhp),
+              _costLine('Activities', wizard.activityEstimatePhp),
               if (wizard.needsAccommodation)
-                _costLine('Accommodation (estimate)', wizard.accommodationEstimatePhp),
-              const Divider(height: 22),
+                _costLine('Accommodation', wizard.accommodationEstimatePhp),
+              const Divider(height: 18),
               _costLine('Estimated total', wizard.estimatedTotalPhp, bold: true),
-              _costLine('Your budget', wizard.budgetPhp.round(), bold: true),
+              _costLine('Budget', wizard.budgetPhp.round(), bold: true),
               const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: over ? const Color(0xFFFFEBEE) : const Color(0xFFE8F5E9),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  over
-                      ? 'Over budget by ${formatFarePhp(wizard.estimatedTotalPhp - wizard.budgetPhp.round())}. '
-                          'Remove stops, shorten the trip, or raise your budget before finishing.'
-                      : 'Within budget. Your day plan is ready to finish.',
-                  style: TextStyle(
-                    fontSize: 13,
-                    height: 1.35,
-                    fontWeight: FontWeight.w700,
-                    color: over ? Colors.red.shade800 : Colors.green.shade900,
-                  ),
+              Text(
+                over
+                    ? 'Over by ${formatFarePhp(wizard.estimatedTotalPhp - wizard.budgetPhp.round())}'
+                    : 'Within budget',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: over ? Colors.red.shade800 : Colors.green.shade800,
                 ),
               ),
-              if (over) ...[
-                const SizedBox(height: 8),
-                Text(
-                  'Ideas to reduce cost: fewer stops, Public Transport, '
-                  'fewer travelers for private vehicle, or a shorter stay.',
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    height: 1.35,
-                    color: AppColors.textGrey.withValues(alpha: 0.95),
-                  ),
-                ),
-              ],
             ],
           ),
         ),

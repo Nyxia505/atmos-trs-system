@@ -2,7 +2,7 @@ name: trip_plan
 description: "Misamis Occidental Tourism App"
 publish_to: 'none'
 
-version: 1.0.3+4
+version: 1.0.5+7
 
 environment:
   sdk: ^3.10.1
@@ -45,9 +45,10 @@ dev_dependencies:
   flutter_launcher_icons: ^0.14.3
 
 dependency_overrides:
-  # path_provider_android >=2.3.0 uses JNI internally, which is causing
-  # Windows file-lock failures in this environment during Android debug builds.
+  # path_provider_android >=2.3.0 and shared_preferences_android >=2.5 use JNI,
+  # which hits Windows file-lock failures during Android release builds here.
   path_provider_android: 2.2.23
+  shared_preferences_android: 2.4.28
 
 flutter:
   uses-material-design: true

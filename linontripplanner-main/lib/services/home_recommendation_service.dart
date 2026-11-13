@@ -111,6 +111,12 @@ class HomeRecommendationService {
                 '${s.firestoreDocId}|${s.name}|${s.location}|${s.imagePath}|${s.description}|${s.category}|${s.updatedAtMs}',
           )
           .join(';'),
+      hasCuratedFeaturedSpots
+          ? [
+              for (final f in recommendedFeaturedForBanner)
+                '${normalizeTourismNameKey(f.name)}|${f.rating}',
+            ].join(';')
+          : 'uncurated',
       profile?.pastDestinations.join(','),
       interests.join(','),
       history.revision.value,
@@ -134,33 +140,72 @@ class HomeRecommendationService {
         .fold<int>(0, (a, b) => a > b ? a : b);
     final now = DateTime.now().millisecondsSinceEpoch;
 
-    final featuredScored = <ScoredHomeSpot>[];
-    for (final spot in catalog) {
-      final ratingScore = computeRatingScore(
-        averageStars: spot.rating,
-        ratingCount: _effectiveRatingCount(spot),
-        maxRatingCount: maxRatingCount,
-      );
-      final popularity = _normalizeCount(spot.visitors, maxVisitors);
-      final recent = _recentEngagement(spot.updatedAtMs, now);
-      final quality = _qualityScore(spot);
-      final featuredScore = popularity * 0.40 +
-          ratingScore * 0.30 +
-          recent * 0.20 +
-          quality * 0.10;
-      featuredScored.add(
-        ScoredHomeSpot(
-          spot: spot,
-          score: featuredScore,
-          ratingScore: ratingScore,
-          popularity: popularity,
-          recentEngagement: recent,
-          quality: quality,
-        ),
-      );
+    // Prefer OPTACA-curated Featured Destinations when the admin catalog is set.
+    // Use [hasCuratedFeaturedSpots] — this class also has a [featuredSpots] method.
+    // Never fall back to popularity ranking while curated data exists; unmatched
+    // names still show via [touristSpotFromFeatured].
+    if (hasCuratedFeaturedSpots) {
+      final curatedFeatured = <ScoredHomeSpot>[];
+      final seen = <String>{};
+      for (final curated in recommendedFeaturedForBanner) {
+        if (curatedFeatured.length >= featuredLimit) break;
+        final key = normalizeTourismNameKey(curated.name);
+        if (key.isEmpty || !seen.add(key)) continue;
+        TouristSpot? match;
+        for (final spot in catalog) {
+          if (normalizeTourismNameKey(spot.name) == key) {
+            match = spot;
+            break;
+          }
+        }
+        match ??= findTouristSpotByNameFuzzy(curated.name);
+        final spot = match ?? touristSpotFromFeatured(curated);
+        final ratingScore = computeRatingScore(
+          averageStars: spot.rating > 0 ? spot.rating : curated.rating,
+          ratingCount: _effectiveRatingCount(spot),
+          maxRatingCount: maxRatingCount,
+        );
+        curatedFeatured.add(
+          ScoredHomeSpot(
+            spot: spot,
+            score: 1.0 - (curatedFeatured.length * 0.001),
+            ratingScore: ratingScore,
+            popularity: _normalizeCount(spot.visitors, maxVisitors),
+            recentEngagement: _recentEngagement(spot.updatedAtMs, now),
+            quality: _qualityScore(spot),
+          ),
+        );
+      }
+      _featured = curatedFeatured;
+    } else {
+      final featuredScored = <ScoredHomeSpot>[];
+      for (final spot in catalog) {
+        final ratingScore = computeRatingScore(
+          averageStars: spot.rating,
+          ratingCount: _effectiveRatingCount(spot),
+          maxRatingCount: maxRatingCount,
+        );
+        final popularity = _normalizeCount(spot.visitors, maxVisitors);
+        final recent = _recentEngagement(spot.updatedAtMs, now);
+        final quality = _qualityScore(spot);
+        final featuredScore = popularity * 0.40 +
+            ratingScore * 0.30 +
+            recent * 0.20 +
+            quality * 0.10;
+        featuredScored.add(
+          ScoredHomeSpot(
+            spot: spot,
+            score: featuredScore,
+            ratingScore: ratingScore,
+            popularity: popularity,
+            recentEngagement: recent,
+            quality: quality,
+          ),
+        );
+      }
+      featuredScored.sort((a, b) => b.score.compareTo(a.score));
+      _featured = featuredScored.take(featuredLimit).toList(growable: false);
     }
-    featuredScored.sort((a, b) => b.score.compareTo(a.score));
-    _featured = featuredScored.take(featuredLimit).toList(growable: false);
 
     final featuredKeys = {
       for (final s in _featured) normalizeTourismNameKey(s.spot.name),

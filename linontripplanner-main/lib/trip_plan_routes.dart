@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'admin_dashboard_screen.dart';
 import 'auth/login_screen.dart';
 import 'auth/registration_screen.dart';
+import 'auth/verify_otp_screen.dart';
 import 'tourist_plan/tourist_trip_planner_screen.dart';
 import 'widgets/admin_access_gate.dart';
 
@@ -15,4 +16,5 @@ Map<String, WidgetBuilder> tripPlanRoutes() => {
           ),
       LoginScreen.routeName: (_) => const LoginScreen(),
       RegistrationScreen.routeName: (_) => const RegistrationScreen(),
+      VerifyOtpScreen.routeName: (_) => const VerifyOtpScreen(),
     };

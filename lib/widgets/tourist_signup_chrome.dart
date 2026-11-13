@@ -98,7 +98,12 @@ class TouristSignupBrandRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (tripPlanner) {
-      return TripPlanAuthBrand(compact: true, onDark: onDark);
+      // Parent often gives a tight height (logo row). Scale brand to fit.
+      return SizedBox(
+        height: height,
+        width: double.infinity,
+        child: TripPlanAuthBrand(compact: true, onDark: onDark),
+      );
     }
 
     final inner = height - (_logoInset * 2);

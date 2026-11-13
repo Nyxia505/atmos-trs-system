@@ -2577,14 +2577,15 @@ class _LandingPageState extends State<LandingPage> {
   Future<void> _downloadTripPlannerApk() async {
     if (!kHasTripPlannerApkDownload) {
       _showApkDownloadMessage(
-        'The Trip Planner APK needs to be built or uploaded before it can be downloaded.',
+        'TripPlanner download is not configured. Try again later.',
       );
       return;
     }
     final opened = await openTripPlannerApkDownload();
     if (!opened && mounted) {
       _showApkDownloadMessage(
-        'The Trip Planner APK could not be opened. Confirm the download file is hosted.',
+        'Could not start the TripPlanner download. Check your connection '
+        'and try again, or open GitHub Releases manually.',
       );
     }
   }
@@ -5773,7 +5774,7 @@ class _HeroApkDownloadSectionState extends State<_HeroApkDownloadSection>
               onPressed: widget.onDownloadVrTour,
             ),
             _HeroApkDownloadButton(
-              label: 'Download Trip Planner App',
+              label: 'Download TripPlanner App',
               color: widget.color,
               compact: widget.compact,
               arrow: _arrow,
@@ -5785,7 +5786,7 @@ class _HeroApkDownloadSectionState extends State<_HeroApkDownloadSection>
         FadeTransition(
           opacity: CurvedAnimation(parent: _caption, curve: Curves.easeOut),
           child: Text(
-            'Download the app to get started',
+            'Download the latest TripPlanner Android App.',
             textAlign: widget.centered ? TextAlign.center : TextAlign.start,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.92),
@@ -5917,7 +5918,7 @@ class _HeroApkDownloadButtonState extends State<_HeroApkDownloadButton> {
                         );
                       },
                       child: const Icon(
-                        Icons.arrow_downward_rounded,
+                        Icons.download_rounded,
                         color: Colors.white,
                         size: 18,
                       ),

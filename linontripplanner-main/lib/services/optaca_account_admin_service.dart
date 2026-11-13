@@ -436,6 +436,132 @@ class OptacaAccountAdminService {
     }
   }
 
+  static bool _isProtectedOptacaAdmin(Map<String, dynamic> existing) {
+    final role = (existing['role'] ?? '').toString().trim().toLowerCase();
+    final email = (existing['email'] ?? '').toString().trim().toLowerCase();
+    return role == 'provincial_tourism' ||
+        role == 'tourism_province' ||
+        email == 'optaca@gmail.com' ||
+        email == 'provincial.tourism@misocc-demo.ph';
+  }
+
+  /// Activate / deactivate LGU, establishment, or tourist accounts.
+  /// Uses Admin SDK via Cloud Function when deployed; otherwise updates
+  /// Firestore `status` so login gates still block deactivated users (Spark).
+  static Future<Map<String, dynamic>> setAccountStatus({
+    required String uid,
+    required bool active,
+  }) async {
+    final targetUid = uid.trim();
+    if (targetUid.isEmpty) {
+      throw OptacaAccountException('Account UID is missing.');
+    }
+    final callerUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (callerUid.isNotEmpty && callerUid == targetUid) {
+      throw OptacaAccountException(
+        'Use Settings to change your own OPTACA account.',
+      );
+    }
+
+    try {
+      return await call({
+        'action': 'setStatus',
+        'uid': targetUid,
+        'active': active,
+      });
+    } on OptacaAccountException catch (e) {
+      if (!_looksLikeMissingCallable(e)) rethrow;
+    }
+
+    return _setAccountStatusClientSide(uid: targetUid, active: active);
+  }
+
+  static Future<Map<String, dynamic>> _setAccountStatusClientSide({
+    required String uid,
+    required bool active,
+  }) async {
+    final ref = FirebaseFirestore.instance.collection('users').doc(uid);
+    final snap = await ref.get();
+    if (!snap.exists) {
+      throw OptacaAccountException('Account was not found.');
+    }
+    final existing = snap.data() ?? <String, dynamic>{};
+    if (!active && _isProtectedOptacaAdmin(existing)) {
+      throw OptacaAccountException(
+        'This OPTACA administrator account cannot be deactivated.',
+      );
+    }
+
+    final role = (existing['role'] ?? '').toString();
+    final accountType = _isLguRole(role)
+        ? 'lgu'
+        : _isEstablishmentRole(role)
+            ? 'establishment'
+            : _isTouristRole(role)
+                ? 'tourist'
+                : '';
+    if (accountType.isEmpty) {
+      throw OptacaAccountException(
+        'OPTACA can manage LGU, establishment, and tourist accounts only.',
+      );
+    }
+
+    final status = active ? 'active' : 'inactive';
+    try {
+      await ref.set({
+        'status': status,
+        'updatedAt': FieldValue.serverTimestamp(),
+        // Auth disable needs Admin SDK; login still honors Firestore status.
+        'authDisablePending': !active,
+      }, SetOptions(merge: true));
+    } on FirebaseException catch (e) {
+      throw OptacaAccountException(
+        e.code == 'permission-denied'
+            ? 'Could not update account status (permission denied).'
+            : 'Could not update account status (${e.code}).',
+      );
+    }
+
+    if (_isEstablishmentRole(role)) {
+      try {
+        await FirebaseFirestore.instance
+            .collection('accommodation_establishments')
+            .doc(uid)
+            .set({
+          'status': status,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      } catch (_) {}
+    }
+
+    try {
+      final actor = FirebaseAuth.instance.currentUser;
+      await FirebaseFirestore.instance.collection('account_activity_logs').add({
+        'actorUid': actor?.uid ?? '',
+        'actorName': actor?.displayName ?? actor?.email ?? 'OPTACA',
+        'targetUid': uid,
+        'targetEmail': (existing['email'] ?? '').toString().toLowerCase(),
+        'accountType': accountType,
+        'action': active
+            ? (accountType == 'tourist'
+                ? 'User Account Reactivated'
+                : 'LGU Account Reactivated')
+            : (accountType == 'tourist'
+                ? 'User Account Deactivated'
+                : 'LGU Account Deactivated'),
+        'result': 'success',
+        'via': 'clientFirestoreFallback',
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {}
+
+    return {
+      'ok': true,
+      'status': status,
+      'via': 'client',
+    };
+  }
+
   /// Creates an LGU (or establishment) account. Uses the Cloud Function when
   /// available; otherwise creates Auth + Firestore via a secondary app so the
   /// signed-in OPTACA admin is not replaced.

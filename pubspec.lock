@@ -1403,7 +1403,7 @@ packages:
       path: linontripplanner-main
       relative: true
     source: path
-    version: "1.0.3+4"
+    version: "1.0.5+7"
   typed_data:
     dependency: transitive
     description:

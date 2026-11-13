@@ -1,15 +1,20 @@
+import 'dart:math';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../data.dart';
 import '../firestore_loader.dart';
-import '../services/storage_image_upload.dart';
-import '../services/tourism_session.dart';
+import '../services/otp_delivery_service.dart';
+import '../services/otp_service.dart';
+import '../services/pending_trip_registration_cache.dart';
 import 'auth_navigation.dart';
 import 'auth_widgets.dart';
 import 'registration_form_cache.dart';
+import 'verify_otp_screen.dart';
 
 class RegistrationScreen extends StatefulWidget {
   static const routeName = '/register';
@@ -165,44 +170,60 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     return '$_dobYear-$m-$d';
   }
 
-  Future<String?> _uploadPhoto(String uid) async {
-    final file = _facePhoto;
-    if (file == null) return null;
+  String _newPendingId() {
+    final r = Random.secure();
+    final bytes = List<int>.generate(16, (_) => r.nextInt(256));
+    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  Future<bool> _emailAlreadyRegistered(String email) async {
+    final normalized = email.trim().toLowerCase();
+    if (normalized.isEmpty) return false;
     try {
-      final bytes = await file.readAsBytes();
-      // Firebase Storage billing is closed — profile photos go to Supabase.
-      return await uploadUserProfileImage(bytes, 'user_profiles/$uid');
+      final snap = await FirebaseFirestore.instance
+          .collection(kTouristCollection)
+          .where('email', isEqualTo: normalized)
+          .limit(1)
+          .get(const GetOptions(source: Source.server));
+      if (snap.docs.isEmpty) return false;
+      final data = snap.docs.first.data();
+      return data['isVerified'] == true ||
+          (data['touristId']?.toString().trim().isNotEmpty ?? false) ||
+          (data['fullName']?.toString().trim().isNotEmpty ?? false);
     } catch (e) {
-      debugPrint('Face photo upload failed: $e');
-      return null;
+      debugPrint('[REG] email check: $e');
+      return false;
     }
   }
 
+  /// ATMOS-style deferred Auth: save OTP locally, email code, verify screen
+  /// creates Firebase Auth + tourist profile only after OTP succeeds.
   Future<void> _submit() async {
     if (!_validateUpload()) return;
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final email = _email.text.trim();
+      if (Firebase.apps.isEmpty) {
+        throw StateError('Firebase is not initialized.');
+      }
+
+      final email = _email.text.trim().toLowerCase();
       final password = _password.text;
       final displayName = _fullLegalName();
 
-      final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
+      try {
+        await FirebaseAuth.instance.signOut();
+      } catch (_) {}
 
-      final user = cred.user;
-      if (user == null) throw StateError('No user after registration');
-
-      if (displayName.isNotEmpty) {
-        await user.updateDisplayName(displayName);
-      }
-
-      final uid = user.uid;
-      final photoUrl = await _uploadPhoto(uid);
-      if (photoUrl != null && photoUrl.trim().isNotEmpty) {
-        await user.updatePhotoURL(photoUrl.trim());
+      if (await _emailAlreadyRegistered(email)) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('This email is already registered. Please sign in.'),
+          ),
+        );
+        pushLoginScreen(context);
+        return;
       }
 
       final childrenPayload = _children
@@ -242,31 +263,46 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         'marketingOptIn': _marketing,
         'termsAccepted': _terms,
         'termsAcceptedAt': DateTime.now().toIso8601String(),
+        'isVerified': false,
       };
 
-      await saveTouristRegistrationToFirestore(
-        uid: uid,
-        fullName: displayName.isNotEmpty ? displayName : email,
+      final faceBytes = await _facePhoto!.readAsBytes();
+      final pendingId = _newPendingId();
+      final otp = OtpService.generateSixDigitOtp();
+      await OtpService.saveOtpPreAuth(
+        pendingId: pendingId,
         email: email,
-        phone: _phone.text.trim().isEmpty ? null : _phone.text.trim(),
-        profilePhotoUrl: photoUrl,
-        registration: questionnaire,
+        otp: otp,
       );
 
-      try {
-        await syncAccountAfterLogin();
-        await loadTourismDataForSession();
-      } catch (e, st) {
-        debugPrint('Post-registration sync failed: $e\n$st');
-      }
+      await PendingTripRegistrationCache.save(
+        PendingTripRegistration(
+          pendingId: pendingId,
+          email: email,
+          password: password,
+          fullName: displayName.isNotEmpty ? displayName : email,
+          phone: _phone.text.trim().isEmpty ? null : _phone.text.trim(),
+          registration: questionnaire,
+          facePhotoBytes: faceBytes,
+        ),
+      );
+
+      final delivery = await OtpDeliveryService.deliverVerificationCode(
+        email: email,
+        displayName: displayName.isNotEmpty ? displayName : email,
+        otp: otp,
+        emailInBackground: true,
+      );
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Registration complete. Welcome!')),
+        SnackBar(content: Text(delivery.messageForUser(email))),
       );
-      if (Navigator.of(context).canPop()) {
-        Navigator.of(context).popUntil((route) => route.isFirst);
-      }
+      await Navigator.of(context).pushReplacement(
+        authSlideRoute(
+          VerifyOtpScreen(contactEmail: email),
+        ),
+      );
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -801,8 +837,8 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           }),
         ),
         _stepFooter(
-          forwardLabel: _busy ? 'Submitting…' : 'Submit Registration',
-          forwardIcon: Icons.check_rounded,
+          forwardLabel: _busy ? 'Sending code…' : 'Verify email & continue',
+          forwardIcon: Icons.mark_email_unread_outlined,
           onForward: _busy ? null : _submit,
         ),
       ],

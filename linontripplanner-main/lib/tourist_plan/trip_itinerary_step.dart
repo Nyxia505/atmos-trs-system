@@ -39,36 +39,36 @@ class TripItineraryStep extends StatelessWidget {
                   ),
                 ),
                 if (wizard.municipalitiesOnRoute.length >= 2) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 4),
                   Text(
-                    'Route by road: '
-                    '${wizard.municipalitiesOnRoute.map((m) => m.shortName.isNotEmpty ? m.shortName : m.name).join(' → ')}',
-                    style: const TextStyle(fontSize: 13, height: 1.4),
+                    wizard.municipalitiesOnRoute
+                        .map((m) => m.shortName.isNotEmpty ? m.shortName : m.name)
+                        .join(' → '),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12.5, height: 1.3),
                   ),
                   if (wizard.routeDistanceKm != null)
                     Text(
                       '${wizard.routeDistanceKm!.toStringAsFixed(1)} km'
-                      '${wizard.routeDrivingMinutes != null ? ' - ~${formatHoursMinutes(wizard.routeDrivingMinutes!)} driving' : ''}',
+                      '${wizard.routeDrivingMinutes != null ? ' · ${formatHoursMinutes(wizard.routeDrivingMinutes!)}' : ''}',
                       style: TextStyle(
-                        fontSize: 12.5,
+                        fontSize: 12,
                         fontWeight: FontWeight.w600,
                         color: AppColors.textGrey.withValues(alpha: 0.95),
                       ),
                     ),
                 ],
                 if (wizard.routeSpotPool.isNotEmpty) ...[
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
                   Builder(
                     builder: (context) {
                       final total = wizard.routeSpotPool.length;
                       final left = wizard.unvisitedSpotCount;
                       return Text(
-                        left == 0
-                            ? 'All $total spots planned.'
-                            : '${total - left} of $total planned.',
+                        '${total - left}/$total planned',
                         style: TextStyle(
-                          fontSize: 12.5,
-                          height: 1.35,
+                          fontSize: 12,
                           fontWeight: FontWeight.w600,
                           color: AppColors.textGrey.withValues(alpha: 0.95),
                         ),
@@ -77,54 +77,18 @@ class TripItineraryStep extends StatelessWidget {
                   ),
                 ],
                 if (wizard.dayCapacityWarning != null) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   Text(
                     wizard.dayCapacityWarning!,
                     style: TextStyle(
-                      fontSize: 13,
-                      height: 1.35,
-                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                      height: 1.3,
+                      fontWeight: FontWeight.w600,
                       color: Colors.orange.shade900,
                     ),
                   ),
                 ],
-                if (wizard.unassignedSpots.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: accent.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: accent.withValues(alpha: 0.25)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '${wizard.unassignedSpots.length} selected '
-                          '${wizard.unassignedSpots.length == 1 ? 'spot is' : 'spots are'} '
-                          'not on a day yet',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w700,
-                            color: accent,
-                            fontSize: 13.5,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          wizard.unassignedSpots.map((s) => s.name).join(', '),
-                          style: TextStyle(
-                            fontSize: 12.5,
-                            height: 1.35,
-                            color: AppColors.textGrey.withValues(alpha: 0.95),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
@@ -140,8 +104,8 @@ class TripItineraryStep extends StatelessWidget {
                                   SnackBar(
                                     content: Text(
                                       n == 0
-                                          ? 'No route spots found to suggest.'
-                                          : 'Suggested $n spots along your route.',
+                                          ? 'No spots to suggest.'
+                                          : 'Suggested $n spots.',
                                     ),
                                     backgroundColor: accent,
                                   ),
@@ -155,7 +119,7 @@ class TripItineraryStep extends StatelessWidget {
                       onPressed: wizard.loadingDayPlan
                           ? null
                           : () => wizard.clearAllDayAssignments(),
-                      child: const Text('Clear all days'),
+                      child: const Text('Clear all'),
                     ),
                   ],
                 ),
@@ -164,7 +128,7 @@ class TripItineraryStep extends StatelessWidget {
                     padding: EdgeInsets.only(top: 8),
                     child: LinearProgressIndicator(),
                   ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
               ],
             ),
           ),
@@ -174,7 +138,7 @@ class TripItineraryStep extends StatelessWidget {
           sliver: SliverList(
             delegate: SliverChildBuilderDelegate((context, d) {
               return Padding(
-                padding: const EdgeInsets.only(bottom: 14),
+                padding: const EdgeInsets.only(bottom: 10),
                 child: _DaySection(
                   dayIndex: d,
                   wizard: wizard,
@@ -186,7 +150,7 @@ class TripItineraryStep extends StatelessWidget {
           ),
         ),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
           sliver: SliverToBoxAdapter(
             child: _TripSummaryCard(wizard: wizard, accent: accent),
           ),
@@ -220,48 +184,41 @@ class _DaySection extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
-        boxShadow: [
-          BoxShadow(
-            color: accent.withValues(alpha: 0.07),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
-          ),
-        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
+            padding: const EdgeInsets.fromLTRB(12, 10, 8, 6),
             child: Row(
               children: [
                 Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
+                    horizontal: 8,
+                    vertical: 4,
                   ),
                   decoration: BoxDecoration(
                     color: accent.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
                     'Day ${dayIndex + 1}',
                     style: TextStyle(
-                      fontWeight: FontWeight.w900,
+                      fontWeight: FontWeight.w800,
                       color: accent,
-                      fontSize: 13,
+                      fontSize: 12.5,
                     ),
                   ),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     dateLabel.replaceFirst(RegExp(r'^Day \d+ - '), ''),
                     style: const TextStyle(
                       fontWeight: FontWeight.w700,
-                      fontSize: 14,
+                      fontSize: 13.5,
                       color: AppColors.textDark,
                     ),
                   ),
@@ -282,56 +239,37 @@ class _DaySection extends StatelessWidget {
           ),
           if (wizard.dayStartLabel(dayIndex).isNotEmpty)
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-              child: Row(
-                children: [
-                  Icon(Icons.trip_origin, size: 14, color: accent),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      dayIndex == 0
-                          ? 'Starts from your starting point: '
-                                '${wizard.dayStartLabel(dayIndex)}'
-                          : 'Starts from: ${wizard.dayStartLabel(dayIndex)}',
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textGrey.withValues(alpha: 0.95),
-                      ),
-                    ),
-                  ),
-                ],
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+              child: Text(
+                'From ${wizard.dayStartLabel(dayIndex)}',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textGrey.withValues(alpha: 0.95),
+                ),
               ),
             ),
           if (spots.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
               child: Wrap(
-                spacing: 8,
+                spacing: 6,
                 runSpacing: 6,
                 children: [
                   _chip('${spots.length} spot${spots.length == 1 ? '' : 's'}'),
                   if (route.totalDistanceKm > 0)
                     _chip('~${route.totalDistanceKm.toStringAsFixed(1)} km'),
                   if (route.totalTravelMinutes > 0)
-                    _chip(
-                      'Travel ${formatHoursMinutes(route.totalTravelMinutes)}',
-                    ),
-                  _chip(
-                    'Activities ${formatHoursMinutes(wizard.dayActivityMinutes(dayIndex))}',
-                  ),
-                  _chip(
-                    'Est. ${formatFarePhp(wizard.dayEstimatedExpensePhp(dayIndex))}',
-                  ),
+                    _chip(formatHoursMinutes(route.totalTravelMinutes)),
+                  _chip(formatFarePhp(wizard.dayEstimatedExpensePhp(dayIndex))),
                 ],
               ),
             ),
           if (spots.length >= TripWizardController.absoluteMaxSpotsPerDay)
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
               child: Text(
-                'This day is full (maximum ${TripWizardController.absoluteMaxSpotsPerDay} spots). '
-                '${dayIndex < wizard.tripDays - 1 ? 'Use "End day here" so the next day starts from its last spot.' : 'Spots that do not fit stay unassigned. Add travel days to place them.'}',
+                'Day full (max ${TripWizardController.absoluteMaxSpotsPerDay}).',
                 style: TextStyle(
                   fontSize: 12,
                   color: AppColors.textGrey.withValues(alpha: 0.95),
@@ -340,7 +278,7 @@ class _DaySection extends StatelessWidget {
             ),
           if (spots.isEmpty)
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 8, 14, 16),
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
               child: _EmptyDay(
                 accent: accent,
                 onAdd: () => _openAddSpotSheet(context),
@@ -388,7 +326,7 @@ class _DaySection extends StatelessWidget {
               },
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 4, 14, 14),
+              padding: const EdgeInsets.fromLTRB(12, 2, 12, 10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -400,31 +338,27 @@ class _DaySection extends StatelessWidget {
                       km: _nearestKm(),
                       onPressed: () => _addNearest(context),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 6),
                   ],
                   OutlinedButton.icon(
                     onPressed: () => _openAddSpotSheet(context),
-                    icon: Icon(Icons.add, color: accent),
+                    icon: Icon(Icons.add, color: accent, size: 18),
                     label: Text(
-                      'Add another spot',
+                      'Add spot',
                       style: TextStyle(
-                        fontWeight: FontWeight.w800,
+                        fontWeight: FontWeight.w700,
                         color: accent,
                       ),
                     ),
                     style: OutlinedButton.styleFrom(
                       side: BorderSide(color: accent.withValues(alpha: 0.45)),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  TextButton.icon(
+                  TextButton(
                     onPressed: () => wizard.endDayAt(dayIndex, spots.last),
-                    icon: Icon(Icons.flag_outlined, color: accent, size: 18),
-                    label: Text(
-                      'End day here (last spot: ${spots.last.name})',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    child: Text(
+                      'End day here',
                       style: TextStyle(
                         fontWeight: FontWeight.w700,
                         color: accent,
@@ -548,50 +482,34 @@ class _EmptyDay extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 16),
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
       decoration: BoxDecoration(
         color: AppColors.insetSurface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: accent.withValues(alpha: 0.2),
-          style: BorderStyle.solid,
-        ),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: accent.withValues(alpha: 0.18)),
       ),
-      child: Column(
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 8,
+        runSpacing: 8,
         children: [
-          Icon(
-            Icons.place_outlined,
-            size: 36,
-            color: accent.withValues(alpha: 0.7),
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            'No spots yet',
-            style: TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 16,
-              color: AppColors.textDark,
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: accent,
+              visualDensity: VisualDensity.compact,
             ),
+            onPressed: nearest == null ? null : onAddNearest,
+            icon: const Icon(Icons.near_me, size: 18),
+            label: const Text('Add nearest'),
           ),
-          const SizedBox(height: 14),
-          Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilledButton.icon(
-                style: FilledButton.styleFrom(backgroundColor: accent),
-                onPressed: nearest == null ? null : onAddNearest,
-                icon: const Icon(Icons.near_me),
-                label: const Text('Add nearest spot'),
-              ),
-              OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(foregroundColor: accent),
-                onPressed: onAdd,
-                icon: const Icon(Icons.add),
-                label: const Text('Add spot'),
-              ),
-            ],
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: accent,
+              visualDensity: VisualDensity.compact,
+            ),
+            onPressed: onAdd,
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('Add spot'),
           ),
         ],
       ),
@@ -666,10 +584,10 @@ class _ItinerarySpotCard extends StatelessWidget {
                 children: [
                   onReorderHandle(context),
                   ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(10),
                     child: SizedBox(
-                      width: 72,
-                      height: 72,
+                      width: 56,
+                      height: 56,
                       child: buildTouristSpotProfileImage(
                         spot,
                         fallback: Container(
@@ -677,12 +595,12 @@ class _ItinerarySpotCard extends StatelessWidget {
                           alignment: Alignment.center,
                           child: Icon(Icons.place, color: accent),
                         ),
-                        memCacheWidth: 144,
-                        memCacheHeight: 144,
+                        memCacheWidth: 112,
+                        memCacheHeight: 112,
                       ),
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -767,10 +685,6 @@ class _ItinerarySpotCard extends StatelessWidget {
                     onSelected: (v) => _onMenu(context, v),
                     itemBuilder: (_) => [
                       const PopupMenuItem(
-                        value: 'time',
-                        child: Text('Set time'),
-                      ),
-                      const PopupMenuItem(
                         value: 'last',
                         child: Text('Make last spot (end day here)'),
                       ),
@@ -831,8 +745,6 @@ class _ItinerarySpotCard extends StatelessWidget {
 
   Future<void> _onMenu(BuildContext context, String value) async {
     switch (value) {
-      case 'time':
-        await _editTime(context);
       case 'last':
         wizard.endDayAt(dayIndex, spot);
       case 'move':
@@ -847,7 +759,7 @@ class _ItinerarySpotCard extends StatelessWidget {
           context: context,
           builder: (ctx) => AlertDialog(
             title: const Text('Remove spot?'),
-            content: Text('Remove "${spot.name}" from Day ${dayIndex + 1}?'),
+            content: Text(spot.name),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
@@ -969,23 +881,11 @@ class _AddSpotSheetState extends State<_AddSpotSheet> {
                 Text(
                   'Add to Day ${widget.dayIndex + 1}',
                   style: const TextStyle(
-                    fontWeight: FontWeight.w900,
-                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 16,
                   ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  widget.dayIndex == 0
-                      ? 'Day 1 shows only the places nearest your starting '
-                            'point, closest first. Spots already used on another '
-                            'day stay hidden.'
-                      : 'Closest to ${widget.wizard.dayCurrentLabel(widget.dayIndex)} '
-                            'first. Spots already used on another day are hidden here.',
-                  style: TextStyle(
-                    color: AppColors.textGrey.withValues(alpha: 0.95),
-                  ),
-                ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 TextField(
                   controller: _search,
                   onChanged: (_) => setState(() {}),
@@ -1132,59 +1032,49 @@ class _TripSummaryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [accent.withValues(alpha: 0.12), Colors.white],
-        ),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: accent.withValues(alpha: 0.2)),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: accent.withValues(alpha: 0.22)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Trip summary',
+            'Summary',
             style: TextStyle(
-              fontWeight: FontWeight.w900,
-              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              fontSize: 15,
               color: accent,
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           _row('Days', '${wizard.tripDays}'),
-          _row('Spots on itinerary', '${wizard.assignedSpotCount}'),
+          _row('Spots', '${wizard.assignedSpotCount}'),
           _row(
-            'Total distance',
+            'Distance',
             wizard.totalAssignedDistanceKm > 0
                 ? '~${wizard.totalAssignedDistanceKm.toStringAsFixed(1)} km'
                 : '-',
           ),
           _row(
-            'Travel time',
+            'Travel',
             wizard.totalAssignedTravelMinutes > 0
                 ? formatHoursMinutes(wizard.totalAssignedTravelMinutes)
                 : '-',
           ),
-          if (wizard.needsAccommodation)
-            _row('Accommodation nights', '${wizard.nights}'),
-          _row(
-            'Transport (days)',
-            formatFarePhp(wizard.totalAssignedTransportPhp),
-          ),
+          _row('Transport', formatFarePhp(wizard.totalAssignedTransportPhp)),
           _row('Entrances', formatFarePhp(wizard.entranceFeesTotal)),
-          _row('Food (est.)', formatFarePhp(wizard.foodEstimatePhp)),
-          const Divider(height: 20),
+          const Divider(height: 16),
           _row(
-            'Estimated overall',
+            'Estimated total',
             formatFarePhp(
               wizard.estimatedTotalPhp - wizard.accommodationEstimatePhp,
             ),
             bold: true,
           ),
-          _row('Your budget', formatFarePhp(wizard.budgetPhp.round())),
+          _row('Budget', formatFarePhp(wizard.budgetPhp.round())),
         ],
       ),
     );

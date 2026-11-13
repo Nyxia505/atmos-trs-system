@@ -637,6 +637,45 @@ class TourismAnnouncement {
 // ─── Shared Data ──────────────────────────────────────────────────────
 
 final List<FeaturedSpot> featuredSpots = <FeaturedSpot>[];
+
+/// Last non-empty OPTACA curated list — survives empty/failed reloads.
+List<FeaturedSpot> _stickyCuratedFeaturedSpots = const [];
+
+/// True when OPTACA has curated Featured Destinations (live or sticky).
+bool get hasCuratedFeaturedSpots =>
+    featuredSpots.isNotEmpty || _stickyCuratedFeaturedSpots.isNotEmpty;
+
+/// Live admin list, or the last good curated snapshot if a reload wiped it.
+List<FeaturedSpot> get effectiveCuratedFeaturedSpots {
+  if (featuredSpots.isNotEmpty) {
+    return List<FeaturedSpot>.from(featuredSpots, growable: false);
+  }
+  return _stickyCuratedFeaturedSpots;
+}
+
+void rememberCuratedFeaturedSpots(List<FeaturedSpot> list) {
+  if (list.isEmpty) return;
+  _stickyCuratedFeaturedSpots = List<FeaturedSpot>.from(list, growable: false);
+}
+
+/// Clears sticky curated memory (admin intentionally removed every featured).
+void clearStickyCuratedFeaturedSpots() {
+  _stickyCuratedFeaturedSpots = const [];
+}
+
+/// Banner card when the curated name is not yet in [allSpots].
+TouristSpot touristSpotFromFeatured(FeaturedSpot featured) {
+  return TouristSpot(
+    name: featured.name,
+    priceRange: featured.priceRange,
+    imagePath: featured.imagePath,
+    location: '',
+    rating: featured.rating,
+    description: '',
+    type: 'spot',
+  );
+}
+
 final List<TourismEvent> tourismEvents = <TourismEvent>[];
 final List<TourismAnnouncement> tourismAnnouncements = <TourismAnnouncement>[];
 
@@ -889,10 +928,10 @@ List<TouristSpot> get recommendedSpots {
   return list;
 }
 
-/// Featured spots for home banner: from featuredSpots (sorted by rating) or top-rated from allSpots.
+/// Featured spots for home banner: admin `featured_spots` order, else top-rated.
 List<FeaturedSpot> get recommendedFeaturedForBanner {
-  if (featuredSpots.isNotEmpty) {
-    final list = featuredSpots.map((f) {
+  if (hasCuratedFeaturedSpots) {
+    final list = effectiveCuratedFeaturedSpots.map((f) {
       var linked = allSpots
           .where(
             (s) =>
@@ -923,33 +962,11 @@ List<FeaturedSpot> get recommendedFeaturedForBanner {
       );
     }).toList();
     final seen = <String>{};
-    final filtered = list
+    // Keep OPTACA admin order — do not re-rank or pad with non-curated spots.
+    return list
         .where((f) => f.name.trim().isNotEmpty)
         .where((f) => seen.add(normalizeTourismNameKey(f.name)))
-        .toList();
-    filtered.sort((a, b) => b.rating.compareTo(a.rating));
-    // Need 2+ slides for home auto-advance; pad with top-rated spots if admin only set one featured.
-    if (filtered.length >= 2) return filtered;
-    final inBanner = <String>{
-      for (final f in filtered) normalizeTourismNameKey(f.name),
-    };
-    final ranked = List<TouristSpot>.from(allSpots)
-      ..sort((a, b) => b.rating.compareTo(a.rating));
-    for (final s in ranked) {
-      if (filtered.length >= 6) break;
-      final key = normalizeTourismNameKey(s.name);
-      if (inBanner.contains(key)) continue;
-      inBanner.add(key);
-      filtered.add(
-        FeaturedSpot(
-          name: s.name,
-          priceRange: s.priceRange,
-          rating: s.rating,
-          imagePath: s.imagePath.trim(),
-        ),
-      );
-    }
-    return filtered;
+        .toList(growable: false);
   }
   final topSpots = List<TouristSpot>.from(allSpots)
     ..sort((a, b) => b.rating.compareTo(a.rating));

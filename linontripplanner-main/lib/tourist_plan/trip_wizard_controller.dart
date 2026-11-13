@@ -560,8 +560,7 @@ class TripWizardController extends ChangeNotifier {
     _lockedEndSpotNames[dayIndex] = last.name;
     if (dayIndex >= tripDays - 1 && unvisitedSpotCount > 0) {
       dayCapacityWarning =
-          'Some spots do not fit in $tripDays day${tripDays == 1 ? '' : 's'}. '
-          'They stay unassigned. Add travel days or remove destinations.';
+          'Some spots need more days or fewer destinations.';
     }
     notifyListeners();
   }
@@ -936,9 +935,7 @@ class TripWizardController extends ChangeNotifier {
     dayStartMinutes.removeWhere((day, _) => day >= days);
     if (removed > 0) {
       dayCapacityWarning =
-          '$removed spot${removed == 1 ? '' : 's'} from the removed days '
-          '${removed == 1 ? 'is' : 'are'} unassigned. '
-          'Place ${removed == 1 ? 'it' : 'them'} on Day 1–$days, or add travel days.';
+          '$removed spot${removed == 1 ? '' : 's'} need a day assignment.';
     }
   }
 
@@ -1055,16 +1052,13 @@ class TripWizardController extends ChangeNotifier {
       if (overflow.isNotEmpty) {
         dayCapacityWarning =
             '${overflow.length} spot${overflow.length == 1 ? '' : 's'} '
-            'do not fit in $userDays day${userDays == 1 ? '' : 's'}. '
-            'They are unassigned. Add travel days or remove destinations.';
+            'need more days or fewer destinations.';
       } else {
         dayCapacityWarning = null;
       }
       algorithmInsight = placed == 0
           ? null
-          : 'Planned $placed spot${placed == 1 ? '' : 's'} by nearest next stop '
-              'across $userDays day${userDays == 1 ? '' : 's'}. '
-              'Each day starts where the previous day ended.';
+          : 'Planned $placed spot${placed == 1 ? '' : 's'} across $userDays day${userDays == 1 ? '' : 's'}.';
     } finally {
       loadingDayPlan = false;
       notifyListeners();

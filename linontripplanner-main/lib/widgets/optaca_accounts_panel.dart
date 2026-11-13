@@ -802,11 +802,10 @@ class _LguAccountsTabState extends State<_LguAccountsTab> {
     );
     if (ok != true) return;
     await _run(
-      () => OptacaAccountAdminService.call({
-        'action': 'setStatus',
-        'uid': account['uid'],
-        'active': !active,
-      }),
+      () => OptacaAccountAdminService.setAccountStatus(
+        uid: (account['uid'] ?? '').toString(),
+        active: !active,
+      ),
       success: active ? 'Account deactivated.' : 'Account reactivated.',
     );
   }
@@ -1624,11 +1623,10 @@ class _UserAccountsTabState extends State<_UserAccountsTab> {
     );
     if (ok != true) return;
     await _run(
-      () => OptacaAccountAdminService.call({
-        'action': 'setStatus',
-        'uid': account['uid'],
-        'active': !active,
-      }),
+      () => OptacaAccountAdminService.setAccountStatus(
+        uid: (account['uid'] ?? '').toString(),
+        active: !active,
+      ),
       success: active ? 'User deactivated.' : 'User reactivated.',
     );
   }

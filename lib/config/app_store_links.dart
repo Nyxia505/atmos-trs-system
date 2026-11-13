@@ -21,28 +21,35 @@ const String kAndroidApkDownloadUrl =
 bool get kHasAndroidApkDownload => kAndroidApkDownloadUrl.trim().isNotEmpty;
 
 /// Trip Planner Android APK (linontripplanner-main release build).
-/// Points at GitHub Releases `latest` (Firebase Spark cannot host APKs).
-/// Bump [kTripPlannerApkVersion] whenever a new APK is uploaded so browsers
-/// do not reuse a cached download.
-const String kTripPlannerApkVersion = '1.0.3+4';
+/// Always points at GitHub Releases `latest` asset `tripplanner.apk`
+/// (Firebase Spark cannot host APKs). CI uploads that filename on each
+/// TripPlanner release so this URL never needs a hardcoded version bump.
+const String kTripPlannerGithubOwner = 'Nyxia505';
+const String kTripPlannerGithubRepo = 'atmos-trs-system';
+const String kTripPlannerApkAssetName = 'tripplanner.apk';
 const String kTripPlannerApkDownloadUrl =
-    'https://github.com/Nyxia505/atmos-trs-system/releases/latest/download/trip-planner.apk'
-    '?v=$kTripPlannerApkVersion';
+    'https://github.com/$kTripPlannerGithubOwner/$kTripPlannerGithubRepo'
+    '/releases/latest/download/$kTripPlannerApkAssetName';
 
 bool get kHasTripPlannerApkDownload =>
     kTripPlannerApkDownloadUrl.trim().isNotEmpty;
 
-/// Opens the hosted Trip Planner APK download. Returns false when URL is missing.
+/// Opens the hosted Trip Planner APK download. Returns false when URL is missing
+/// or the browser / OS cannot start the download.
 Future<bool> openTripPlannerApkDownload() async {
   final raw = kTripPlannerApkDownloadUrl.trim();
   if (raw.isEmpty) return false;
   final uri = Uri.tryParse(raw);
   if (uri == null || !uri.hasScheme) return false;
-  // Web: open download in a new tab. Mobile: open externally.
-  if (kIsWeb) {
-    return launchUrl(uri, webOnlyWindowName: '_blank');
+  try {
+    // Web: open download in a new tab. Mobile: open externally.
+    if (kIsWeb) {
+      return launchUrl(uri, webOnlyWindowName: '_blank');
+    }
+    return launchUrl(uri, mode: LaunchMode.externalApplication);
+  } catch (_) {
+    return false;
   }
-  return launchUrl(uri, mode: LaunchMode.externalApplication);
 }
 
 /// Play Store URL with install referrer so first open can resume the scanned QR.
